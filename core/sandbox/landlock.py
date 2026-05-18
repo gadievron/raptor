@@ -21,6 +21,7 @@ import os
 import platform
 
 from . import state
+from .exit_codes import SANDBOX_EXIT_LANDLOCK_DOWNGRADE
 
 logger = logging.getLogger(__name__)
 
@@ -316,12 +317,15 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
     # — reads were never restricted (READ_FILE was miscoded as EXECUTE)
     # and MAKE_SYM was never restricted (shifted off the end of the
     # write mask). Verified against the uapi header on kernel 6.x.
-    EXECUTE = 1 << 0
+    # EXECUTE, REMOVE_DIR, REMOVE_FILE retained as comments to document
+    # the bit positions even though we don't restrict them (see note
+    # below about unshare and importlib needing remove ops).
+    EXECUTE = 1 << 0  # noqa: F841 — kernel-ABI doc, not used
     WRITE_FILE = 1 << 1
     READ_FILE = 1 << 2
     READ_DIR = 1 << 3
-    REMOVE_DIR = 1 << 4
-    REMOVE_FILE = 1 << 5
+    REMOVE_DIR = 1 << 4  # noqa: F841 — kernel-ABI doc, not used
+    REMOVE_FILE = 1 << 5  # noqa: F841 — kernel-ABI doc, not used
     MAKE_CHAR = 1 << 6
     MAKE_DIR = 1 << 7
     MAKE_REG = 1 << 8
@@ -421,7 +425,14 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
                                handled_access_net=_net_access)
             fd = libc.syscall(SYS_create, ctypes.byref(attr), ctypes.sizeof(attr), 0)
             if fd < 0:
-                return  # Landlock unavailable — continue without
+                # Probe succeeded in the parent (check_landlock_available)
+                # so the kernel ABI is present. A post-fork syscall failure
+                # here means the ruleset cannot be installed at all — the
+                # child would proceed without filesystem-write or net-bind
+                # restrictions. Fail-closed: the parent expected an enforced
+                # sandbox, so silently downgrading is a contract violation.
+                _os_write(2, b"RAPTOR: landlock: SYS_landlock_create_ruleset failed post-fork\n")
+                os._exit(SANDBOX_EXIT_LANDLOCK_DOWNGRADE)
 
             try:
                 # Filesystem rules: allow writes (and if restrict_reads

@@ -22,7 +22,7 @@ design is documented at ``~/design/dataflow-sanitizer-bypass.md``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 from core.dataflow.finding import Finding
 from core.dataflow.llm_extractor import ExtractorFn, extract_from_files

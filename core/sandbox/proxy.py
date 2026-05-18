@@ -236,8 +236,16 @@ def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
         # if a future change makes it raise SystemExit, the gate-2 deny
         # path's `await self._write_error(...)` would be skipped because
         # the exception escapes this helper. Don't introduce that path.
-        logger.debug("_record_proxy_denial: record_denial failed",
-                     exc_info=True)
+        #
+        # WARNING (not DEBUG): operators rarely run with DEBUG enabled in
+        # production, so a regressed summary writer was effectively
+        # invisible — the audit-mode would-deny never lands in
+        # sandbox-summary.json and nobody knows. Mirrors the family-wide
+        # convention established in c5a4505 ("fix(scorecard): promote
+        # producer-error logs DEBUG -> WARNING") — same shape (best-
+        # effort recorder), same rationale (default-log visibility).
+        logger.warning("_record_proxy_denial: record_denial failed",
+                       exc_info=True)
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -366,7 +374,8 @@ class EgressProxy:
                  buffer_size: int = _DEFAULT_BUFFER_SIZE,
                  upstream_proxy: Optional[str] = None,
                  no_proxy: Optional[str] = None,
-                 audit_log_only: bool = False):
+                 audit_log_only: bool = False,
+                 audit_enforce: bool = False):
         self._hosts_lock = threading.Lock()
         self._allowed_hosts: Set[str] = {h.lower() for h in allowed_hosts}
         # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
@@ -387,6 +396,20 @@ class EgressProxy:
         # counting; concurrent mixed-profile sandbox correctness depends
         # on it.
         self._audit_log_only = audit_log_only
+        # When True, gate 1 in audit mode switches from log-and-allow to
+        # log-and-deny — the allowlist is enforced even in audit mode.
+        # Default False preserves the documented audit-permissive semantics
+        # (gate 1 audit mode is for diagnosis while building an allowlist;
+        # once the allowlist is mature, operators can set audit_enforce=True
+        # or set the RAPTOR_PROXY_AUDIT_ENFORCE env var to one of the
+        # accepted truthy spellings — case-insensitive, whitespace-stripped:
+        #     "1" / "true" / "yes" / "on"
+        # Any other value (including "0" / "false" / "no" / "off" / "" /
+        # the unset variable) leaves audit-mode in its default log-only
+        # behaviour. The env-var parse lives at the `get_proxy()` read
+        # below; this kwarg accepts the already-parsed bool.
+        # Gate 2 is always enforcing regardless of this flag.
+        self._audit_enforce = audit_enforce
         # Ref-count for concurrent acquire/release. Each audit-mode
         # sandbox via use_egress_proxy=True acquires on entry, releases
         # on exit. Gate 1 is in audit-log mode iff count > 0. Without
@@ -1104,25 +1127,29 @@ class EgressProxy:
             # consistent with the count value at the snapshot moment.
             with self._audit_lock:
                 _audit_now = self._audit_log_only
+                _enforce_now = self._audit_enforce
             if _audit_now:
-                # Audit mode: record the would-deny but proceed with the
-                # CONNECT. Use a distinct event result so consumers can
-                # tell audit-would-deny apart from real-deny in the same
-                # proxy-events.jsonl. The audit event captures intent;
-                # the later "allowed" event captures the actual outcome
-                # (so a single CONNECT in audit mode produces TWO event
-                # records — one would-deny, one allowed).
+                # Audit mode: record the would-deny event. When
+                # audit_enforce=False (default), fall through to allow —
+                # the allowlist is advisory while operators build it.
+                # When audit_enforce=True (RAPTOR_PROXY_AUDIT_ENFORCE=1),
+                # deny even in audit mode: log-AND-deny semantics.
+                _action = "denying" if _enforce_now else "allowing"
                 logger.warning(
                     f"egress proxy: AUDIT would-deny {host}:{port} — "
-                    f"not in allowlist (audit mode: allowing)"
+                    f"not in allowlist (audit mode: {_action})"
                 )
                 audit_event = {**event, "result": "would_deny_host",
                                "reason": "host not in allowlist (audit mode)",
-                               "duration": time.monotonic() - t_start}
+                               "duration": time.monotonic() - t_start,
+                               "audit_enforce": _enforce_now}
                 self._record(audit_event)
                 _record_proxy_denial(host, port, None,
                                      "host_not_in_allowlist")
-                # Fall through to the connect path.
+                if _enforce_now:
+                    await self._write_error(writer, 403, "Forbidden")
+                    return
+                # Fall through to the connect path (audit_enforce=False).
             else:
                 logger.warning(
                     f"egress proxy: DENY {host}:{port} — not in allowlist"
@@ -1481,9 +1508,24 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
                         or _os.environ.get("https_proxy"))
             no_proxy = (_os.environ.get("NO_PROXY")
                         or _os.environ.get("no_proxy"))
+            # bool(env_var) treats any non-empty string as truthy,
+            # so RAPTOR_PROXY_AUDIT_ENFORCE=0 / false / no / off all
+            # accidentally enabled strict mode. That's the fail-SAFE
+            # direction (the operator gets MORE security than they
+            # asked for), but it contradicts the standard env-var
+            # convention and confuses anyone scripting against the
+            # documented "=1" example. Whitelist the truthy spellings
+            # explicitly; everything else (including "0" / "false" /
+            # the absent var) leaves audit-mode in its default log-
+            # only behaviour.
+            _enforce_raw = _os.environ.get(
+                "RAPTOR_PROXY_AUDIT_ENFORCE", "",
+            ).strip().lower()
+            audit_enforce = _enforce_raw in ("1", "true", "yes", "on")
             _instance = EgressProxy(allowed_hosts,
                                     upstream_proxy=upstream,
-                                    no_proxy=no_proxy)
+                                    no_proxy=no_proxy,
+                                    audit_enforce=audit_enforce)
             atexit.register(_instance.stop)
             if upstream:
                 logger.info(

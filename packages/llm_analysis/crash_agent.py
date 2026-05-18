@@ -6,11 +6,10 @@ LLM-powered analysis of crashes from fuzzing.
 """
 
 import json
-import time
 from pathlib import Path
 
 from core.json import save_json
-from typing import Any, Dict, List
+from typing import Dict
 
 from core.llm.task_types import TaskType
 from core.logging import get_logger
@@ -22,7 +21,6 @@ from core.security.prompt_envelope import (
     build_prompt,
 )
 from packages.binary_analysis import CrashContext
-from packages.fuzzing import Crash
 from core.llm.client import LLMClient, _is_auth_error
 from core.llm.config import LLMConfig
 from core.llm.detection import detect_llm_availability

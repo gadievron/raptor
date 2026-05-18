@@ -6,7 +6,7 @@
 #   1. Merge core/sage/mcp-entry.json into ./.mcp.json (create or deep-merge).
 #   2. Merge SAGE_ENABLED=true into .claude/settings.local.json so Claude Code
 #      propagates it to RAPTOR subprocesses (Python pipeline opt-in).
-#   3. docker compose -f docker-compose.sage.yml up -d.
+#   3. docker compose -f core/sage/docker-compose.yml up -d.
 #   4. Wait for SAGE health.
 #   5. Seed institutional knowledge (core/sage/scripts/seed_sage_knowledge.py).
 #   6. Register RAPTOR agents (core/sage/scripts/register_agents.py).
@@ -140,7 +140,7 @@ done
 unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
-COMPOSE_FILE="$RAPTOR_DIR/docker-compose.sage.yml"
+COMPOSE_FILE="$RAPTOR_DIR/core/sage/docker-compose.yml"
 TEMPLATE="$RAPTOR_DIR/core/sage/mcp-entry.json"
 MCP="$RAPTOR_DIR/.mcp.json"
 SETTINGS_LOCAL="$RAPTOR_DIR/.claude/settings.local.json"
@@ -229,7 +229,7 @@ remove_mcp_entry() {
 
 wait_health() {
     printf "Waiting for SAGE health"
-    # SAGE serves /health (no /v1 prefix) — see docker-compose.sage.yml
+    # SAGE serves /health (no /v1 prefix) — see core/sage/docker-compose.yml
     # healthcheck and core/sage/client.py.
     # `for _ in {1..60}` instead of `seq 1 60`. Pre-fix `seq`
     # is GNU coreutils — present on Linux distros by default
@@ -371,7 +371,7 @@ install_sage() {
     enable_sage_env
     # `--remove-orphans` so containers from a PREVIOUS
     # compose config (e.g. the operator updated
-    # docker-compose.sage.yml between runs and the old config's
+    # core/sage/docker-compose.yml between runs and the old config's
     # containers are still running) get cleaned up too. Same
     # rationale as `down --remove-orphans` below: stale
     # containers from a prior config hold port bindings and
@@ -389,7 +389,7 @@ uninstall_sage() {
     need jq
     need docker
     # `--remove-orphans` so containers from PREVIOUS compose
-    # configs (e.g. operator updated docker-compose.sage.yml
+    # configs (e.g. operator updated core/sage/docker-compose.yml
     # between runs and the old config's containers are still
     # running) get cleaned up too. Pre-fix `docker compose
     # down` only removes containers defined in the CURRENT

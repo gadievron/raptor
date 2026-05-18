@@ -7,11 +7,9 @@ glue, so unit-level isolation is appropriate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-import pytest
 
 from packages.llm_analysis.annotation_emit import (
     _build_body,

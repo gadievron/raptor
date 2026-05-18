@@ -68,6 +68,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, Union
 
+from . import _reach_cache
 from .call_graph import (
     INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DUNDER_IMPORT,
@@ -210,6 +211,58 @@ def function_called(
                 if not chain:
                     continue
                 if _resolves_to(chain, imports, target_module, target_func):
+                    file_has_evidence = True
+                    evidence.append((path, int(call.get("line", 0) or 0)))
+
+        # Class-aware receiver_class fast-path: when the chain
+        # tail is the target_func AND the call carries a
+        # ``receiver_class``, synthesise the qualified name
+        # ``<file_package>.<receiver_class>.<tail>`` and compare
+        # against the target. This catches Java's implicit-this
+        # (``helper()`` inside a class method), Ruby's
+        # ``self.helper``, C#'s implicit-this, etc. — bare calls
+        # the import-map path can't resolve because their head
+        # isn't in imports.
+        if not file_has_evidence:
+            file_pkg = cg.get("package_name")
+            for call in calls:
+                chain = call.get("chain") or []
+                if not chain or chain[-1] != target_func:
+                    continue
+                rc = call.get("receiver_class")
+                if rc is None:
+                    continue
+                # Construct the resolved qualified name. For
+                # languages with a declared package_name the form
+                # is ``<pkg>.<Class>.<method>``. For languages
+                # where the file IS the module (Python / JS /
+                # Ruby class-less), fall back to path-derived form.
+                candidates: List[str] = []
+                if file_pkg:
+                    candidates.append(f"{file_pkg}.{rc}.{target_func}")
+                else:
+                    candidates.extend(
+                        _path_derived_module(path, rc, target_func),
+                    )
+                if qualified_name in candidates:
+                    file_has_evidence = True
+                    evidence.append((path, int(call.get("line", 0) or 0)))
+
+        # Fully-qualified-call fast-path: when the chain itself
+        # spells out the qualified name (e.g. C++ ``ns::Util::
+        # helper()`` → chain ``["ns", "Util", "helper"]``, or Java
+        # ``com.foo.Util.helper()``, or PHP ``\Foo\Bar::method()``),
+        # the import map is bypassed entirely in source. The
+        # import-map path can't see these; receiver_class isn't
+        # set either. Strict equality of the joined dotted form
+        # to the target catches them with no false-positive risk:
+        # if the chain literally spells the target, it IS the
+        # target. Most useful for C/C++ (no symbol-level imports)
+        # and any cross-language fully-qualified call shape.
+        if not file_has_evidence:
+            for call in calls:
+                chain = call.get("chain") or []
+                if len(chain) >= 2 and ".".join(chain) == qualified_name:
                     file_has_evidence = True
                     evidence.append((path, int(call.get("line", 0) or 0)))
 
@@ -534,12 +587,38 @@ class _AdjacencyIndex:
     uncertain_callers_by_tail: Dict[str, Set[Tuple[InternalFunction, str]]] = (
         field(default_factory=dict)
     )
-    method_match: Dict[str, Set[InternalFunction]] = field(default_factory=dict)
+    # ``method_match[tail]`` entries pair a candidate caller with an
+    # optional receiver-class name. The receiver class is set when
+    # the call site is a ``self.foo()`` / ``cls.foo()`` inside a
+    # class body; ``None`` means "unknown receiver, stay over-
+    # inclusive". ``callers_of`` narrows entries by class hierarchy
+    # before returning method_match_overinclusive.
+    method_match: Dict[
+        str, Set[Tuple[InternalFunction, Optional[str]]],
+    ] = field(default_factory=dict)
     uncertain_callees: Dict[InternalFunction, Set[str]] = field(default_factory=dict)
     has_method_dispatch: Dict[InternalFunction, bool] = field(default_factory=dict)
     definitions: Dict[Tuple[str, str], Set[InternalFunction]] = (
         field(default_factory=dict)
     )
+    # ``method → owning class name`` (None when method is module-
+    # level rather than inside a class body). Lets ``callers_of``
+    # narrow method_match by class hierarchy.
+    class_of_method: Dict[InternalFunction, str] = field(default_factory=dict)
+    # ``(file, class_name) → tuple of base class names`` as they
+    # appeared in the source. Used to compute the receiver's
+    # ancestor chain at query time, scoped to same-file classes.
+    class_bases: Dict[Tuple[str, str], Tuple[str, ...]] = field(
+        default_factory=dict,
+    )
+    # Functions whose decorators match a framework-dispatch
+    # registration pattern (``@app.route``, ``@router.get``,
+    # ``@cli.command``, ``@task.fixture``, etc.). These are reachable
+    # from outside the static graph — the framework invokes them
+    # via internal dispatch. ``callers_of`` may return an empty
+    # ``definitive`` set for these, but they are NOT dead code;
+    # consumers should treat them as entry points.
+    framework_callable: Set[InternalFunction] = field(default_factory=set)
     # ``qualified_name -> InternalFunction`` for project-defined
     # functions reachable via cross-package import. Used by
     # callers_of() to follow ExternalFunction → InternalFunction
@@ -602,12 +681,30 @@ def _get_or_build_index(
         # Stale slot — collision after eviction. Drop and rebuild.
         _INDEX_CACHE.pop(inv_id, None)
 
+    # Persistent on-disk cache lookup. Cold-start path otherwise pays
+    # the ~300ms build cost every time the operator launches a fresh
+    # raptor process against the same source tree. Fingerprint folds
+    # per-file sha256 + a schema version, so any inventory content
+    # change (or any index-shape change) auto-invalidates. When the
+    # inventory lacks sha256 (test fixtures), the fingerprint returns
+    # None and the persistent layer is a no-op.
+    persistent_fp = _reach_cache.compute_fingerprint(inventory)
+    persisted = _reach_cache.load_index(persistent_fp)
+    if persisted is not None:
+        _INDEX_CACHE[inv_id] = (inventory, persisted)
+        if len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
+            oldest = next(iter(_INDEX_CACHE))
+            _INDEX_CACHE.pop(oldest, None)
+        return persisted
+
     idx = _AdjacencyIndex()
     test_paths: Set[str] = set()
 
     # Pass 1: gather every project-defined function as an
     # InternalFunction and seed `definitions`.
     for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
         path = file_record.get("path") or ""
         if _is_test_file(path):
             test_paths.add(path)
@@ -626,6 +723,78 @@ def _get_or_build_index(
 
     idx.test_paths = frozenset(test_paths)
 
+    # Pass 1.3: scan decorator metadata for framework-callable
+    # functions. A decorator chain like ``@app.route(...)`` /
+    # ``@cli.command`` registers the function with a framework
+    # that will dispatch to it at runtime. Such functions look
+    # "uncalled" in the static graph, but they aren't dead code.
+    # Consumers (SCA reachability, /audit caller context, codeql
+    # pre-filter) check ``framework_callable`` to keep these on
+    # the entry-point list.
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        for df in cg.get("decorated_functions") or []:
+            df_name = df.get("name")
+            df_line = int(df.get("line", 0) or 0)
+            if not df_name:
+                continue
+            decorators = df.get("decorators") or []
+            if not _decorators_indicate_framework_dispatch(decorators):
+                continue
+            candidates = idx.definitions.get((path, df_name), set())
+            for fn in candidates:
+                if fn.line == df_line:
+                    idx.framework_callable.add(fn)
+                    break
+
+    # Pass 1.4: capture class metadata from call_graph data. Maps
+    # each method's InternalFunction to its owning class, and
+    # records same-file class hierarchies for ancestor resolution
+    # at query time. Cross-file inheritance isn't resolved here —
+    # the resolver's narrowing falls through to "stay over-
+    # inclusive" when a class's bases can't all be resolved
+    # within the same file (which is correct: we'd rather over-
+    # report callers than drop a real one).
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        for cls_data in cg.get("classes") or []:
+            cls_name = cls_data.get("name")
+            if not cls_name:
+                continue
+            if cls_data.get("nested"):
+                # Nested classes (inside another class or function)
+                # have shadow scoping the narrowing logic doesn't
+                # model. Skip — leave their methods unmarked and
+                # the resolver treats them as over-inclusive.
+                continue
+            bases = tuple(b for b in (cls_data.get("bases") or []) if b)
+            idx.class_bases[(path, cls_name)] = bases
+            for method_entry in cls_data.get("methods") or []:
+                if not isinstance(method_entry, (list, tuple)) \
+                        or len(method_entry) < 2:
+                    continue
+                m_name = str(method_entry[0])
+                m_line = int(method_entry[1] or 0)
+                # Look up the InternalFunction registered in pass 1.
+                # We match on (path, name) and pick the one whose
+                # line matches the method def line — handles same-
+                # name methods on multiple classes in one file.
+                candidates = idx.definitions.get((path, m_name), set())
+                for fn in candidates:
+                    if fn.line == m_line:
+                        idx.class_of_method[fn] = cls_name
+                        break
+
     # Pass 1.5: build a qualified-name → InternalFunction map so that
     # external edges resolving to project-defined physical functions
     # get rewritten into internal edges in pass 2.
@@ -643,16 +812,48 @@ def _get_or_build_index(
     #   * ``a/b/__init__.py`` → ``a.b``
     #   * ``src/a/b/c.py`` → also ``a.b.c`` (src-layout)
     #
-    # Limitations (documented; consumer should be aware):
-    #   * Non-Python files: file-path-to-module heuristic doesn't run;
-    #     no internal aliasing for JS/Go/Java/etc.
+    # For non-Python files the qualified-name shape isn't derivable
+    # from the file path alone:
+    #   * Go: ``package <name>`` in the source decides the dotted
+    #     prefix — directory name is NOT authoritative
+    #   * Java: ``package com.foo.bar;`` declared in the source
+    #   * Rust: chain of ``mod foo;`` declarations
+    #   * C#: ``namespace Foo.Bar``
+    #   * PHP: ``namespace Foo\Bar``
+    # Each non-Python extractor that knows its own package
+    # declaration writes it into ``FileCallGraph.package_name``;
+    # we read it here and combine with the function name to seed
+    # ``qualified_to_internal``.
+    file_packages: Dict[str, Optional[str]] = {}
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if cg:
+            pkg = cg.get("package_name")
+            if pkg:
+                file_packages[path] = pkg
+
     for (file_path, fn_name), fns in idx.definitions.items():
         # Pick the lowest-line def as canonical — typically the
         # module-level one, which is the only one externally
         # importable. Same-name nested defs aren't reachable from
         # outside; we don't disambiguate further.
         canonical = min(fns, key=lambda f: f.line)
-        for candidate in _candidate_qualified_names(file_path, fn_name):
+        # Class-qualified candidates — for Java / C# / PHP / Rust
+        # impl-blocks / JS classes the externally-visible name is
+        # ``<pkg>.<Class>.<method>`` (or ``<file_module>.<Class>.
+        # <method>`` for path-derived languages). ``class_of_method``
+        # is populated above (line ~743) from each FileCallGraph's
+        # classes[].methods list. Pass None when no class — the
+        # candidate function emits the module-level form.
+        cls_name = idx.class_of_method.get(canonical)
+        for candidate in _candidate_qualified_names(
+                file_path, fn_name,
+                package_name=file_packages.get(file_path),
+                class_name=cls_name,
+        ):
             idx.qualified_to_internal.setdefault(candidate, canonical)
 
     # Pass 1.6: ``__init__.py`` re-export aliasing.
@@ -693,6 +894,8 @@ def _get_or_build_index(
     # Pass 2: walk every call site, resolve to a callee FunctionId
     # (Internal or External), record forward + reverse edges.
     for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
         path = file_record.get("path") or ""
         cg = file_record.get("call_graph")
         if not cg:
@@ -735,6 +938,26 @@ def _get_or_build_index(
                 _record_call_line(idx, caller_node, callee, line)
                 continue
 
+            # Fully-qualified-call index path: when the chain itself
+            # spells out a project-defined function's qualified name
+            # (e.g. C++ ``ns::Util::helper()`` → chain ``["ns",
+            # "Util", "helper"]``), the import-map path can't see it
+            # because namespace names aren't in the imports dict.
+            # If the dotted-join matches a seeded
+            # ``qualified_to_internal`` entry, record a definitive
+            # internal edge — parity with the function_called
+            # fast-path. Strict equality keeps the rule
+            # over-conservative: chains that don't literally spell
+            # a known qualified name fall through to method_match.
+            if len(chain) >= 2:
+                dotted = ".".join(chain)
+                aliased = qualified_to_internal.get(dotted)
+                if aliased is not None:
+                    idx.forward.setdefault(caller_node, set()).add(aliased)
+                    idx.reverse.setdefault(aliased, set()).add(caller_node)
+                    _record_call_line(idx, caller_node, aliased, line)
+                    continue
+
             # Couldn't resolve via import map. Two sub-cases:
             #   (a) chain head is unbound — likely a method call
             #       (``self.foo()`` / ``obj.foo()``). Tail name is
@@ -764,8 +987,16 @@ def _get_or_build_index(
                 continue
 
             # Sub-case (a): unresolved attribute chain. Index for
-            # method-match over-inclusive caller lookup.
-            idx.method_match.setdefault(tail, set()).add(caller_node)
+            # method-match over-inclusive caller lookup. The
+            # extractor tagged ``self.foo()`` / ``cls.foo()`` calls
+            # with the enclosing class name so ``callers_of`` can
+            # narrow by hierarchy; other unresolved chains carry
+            # ``receiver_class=None`` and remain fully over-
+            # inclusive.
+            receiver_class = call.get("receiver_class")
+            idx.method_match.setdefault(tail, set()).add(
+                (caller_node, receiver_class),
+            )
             idx.has_method_dispatch[caller_node] = True
             # And surface it on the source's callee set as
             # uncertain-string so callees_of can flag it.
@@ -813,7 +1044,200 @@ def _get_or_build_index(
         # Drop the oldest entry. dict preserves insertion order.
         oldest = next(iter(_INDEX_CACHE))
         _INDEX_CACHE.pop(oldest, None)
+
+    # Persist for the next process. Best-effort: any IO failure is
+    # logged at debug and swallowed (the in-process cache is hot;
+    # next cold start re-pays the build cost but nothing else
+    # breaks).
+    _reach_cache.save_index(persistent_fp, idx)
     return idx
+
+
+# Decorator tails that indicate framework-dispatch registration.
+# A decorator chain like ``[app, route]`` ending in one of these
+# names is treated as registering the decorated function with a
+# framework that will invoke it at runtime. Curated against:
+# Flask/FastAPI/Starlette (route/get/post/put/patch/delete/...),
+# click/typer (command/group), Celery/RQ (task/periodic_task/
+# shared_task), Django signals (receiver/connect), pytest
+# (fixture/parametrize), generic event/registry shapes
+# (listener/handler/register/dispatch/subscribe/hook). Bare
+# pass-through decorators (``cache``, ``lru_cache``, ``property``,
+# ``staticmethod``, ``dataclass``) MUST NOT be in this set —
+# they don't register entry points.
+_FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
+    # HTTP route methods (Flask / FastAPI / Starlette / Bottle / etc.)
+    "route", "get", "post", "put", "patch", "delete", "head", "options",
+    "endpoint", "websocket", "errorhandler", "exception_handler",
+    "before_request", "after_request", "teardown_request",
+    "middleware", "on_event",
+    # CLI (click / typer)
+    "command", "group", "callback",
+    # Task queues (Celery / RQ / dramatiq / huey)
+    "task", "periodic_task", "shared_task", "actor",
+    # Signals / events (Django / blinker / pyee)
+    "receiver", "connect", "listener", "subscriber", "subscribe",
+    "on", "emit_handler",
+    # Generic registries / hooks
+    "register", "hook", "provider", "consumer", "handler", "dispatch",
+    "rule",
+    # Test frameworks
+    "fixture", "parametrize", "mark",
+    # GraphQL / RPC
+    "query", "mutation", "subscription", "field", "resolver",
+    # Build tools (e.g. nox, doit, pyinvoke)
+    "session", "module_task",
+})
+
+
+def _decorators_indicate_framework_dispatch(
+    decorators: Iterable[Any],
+) -> bool:
+    """True iff any decorator on the function matches the
+    framework-dispatch registration shape.
+
+    Heuristic: chain length >= 2 (decorator is a method on an
+    imported object, e.g. ``app.route``) AND the tail name is in
+    ``_FRAMEWORK_DISPATCH_TAILS``. Single-name decorators
+    (``@cache``, ``@property``) are pass-through and never flagged.
+
+    The chain-length-2 requirement excludes both pass-through
+    decorators AND naked dispatch tokens like a bare ``@register``
+    function — the latter could be either pass-through or
+    registration; we're conservative because flagging too many
+    things as framework-callable suppresses legitimate dead-code
+    warnings.
+    """
+    for chain in decorators:
+        if not isinstance(chain, (list, tuple)):
+            continue
+        if len(chain) < 2:
+            continue
+        tail = str(chain[-1])
+        if tail in _FRAMEWORK_DISPATCH_TAILS:
+            return True
+    return False
+
+
+def _resolved_ancestor_chain(
+    file_path: str,
+    class_name: str,
+    idx: _AdjacencyIndex,
+) -> Optional[FrozenSet[str]]:
+    """Return the set of class names reachable from ``class_name``
+    via base-class edges within ``file_path``, including
+    ``class_name`` itself.
+
+    Returns ``None`` if any base along the chain isn't defined in
+    the same file — the resolver treats unresolvable bases as "we
+    don't know the full hierarchy, don't narrow" rather than
+    silently truncating. Cross-file inheritance is a follow-on
+    project; today's narrowing only fires within a single file.
+    """
+    seen: Set[str] = {class_name}
+    stack: List[str] = [class_name]
+    # Guard against pathological recursive base claims (a class
+    # listing itself in its own bases, etc.). The stack-based walk
+    # already deduplicates via ``seen``; this is the loop bound.
+    iterations = 0
+    while stack:
+        iterations += 1
+        if iterations > 1000:
+            return None
+        current = stack.pop()
+        bases = idx.class_bases.get((file_path, current))
+        if bases is None:
+            # ``current == class_name`` and no class_bases entry
+            # means the class wasn't captured (perhaps a non-Python
+            # extractor or the extractor didn't emit). Skip when
+            # current is the receiver itself; for resolution of
+            # ancestors we need bases.
+            if current == class_name:
+                continue
+            # Mid-chain unresolved base — cross-file inheritance
+            # most likely. Bail out: we can't be confident the
+            # narrowing wouldn't drop a real caller.
+            return None
+        for b in bases:
+            # Bases stored as raw chain strings (e.g. ``A``,
+            # ``mixins.M``). For same-file narrowing we only handle
+            # bare class names. Dotted bases mean "imported from
+            # another module" — bail to over-inclusive.
+            if "." in b:
+                return None
+            if (file_path, b) not in idx.class_bases:
+                # Base name not defined in this file. Could be a
+                # builtin (``object``, ``Exception``) or imported
+                # class. For ``object`` and the common builtins
+                # narrowing is still safe — they have no project
+                # methods that ``self.foo()`` could resolve to.
+                # For imported classes we'd risk dropping real
+                # callers. Conservative path: bail out.
+                if b in _SAFE_BUILTIN_BASES:
+                    continue
+                return None
+            if b not in seen:
+                seen.add(b)
+                stack.append(b)
+    return frozenset(seen)
+
+
+# Builtins whose presence as a base doesn't add unknown methods to
+# the receiver's potential dispatch set. Safe to ignore when
+# computing the ancestor chain — they can't define a method that
+# a ``self.foo()`` could legitimately resolve to as far as project
+# code goes.
+_SAFE_BUILTIN_BASES: FrozenSet[str] = frozenset({
+    "object", "Exception", "BaseException", "ValueError", "TypeError",
+    "KeyError", "IndexError", "RuntimeError", "OSError", "IOError",
+    "FileNotFoundError", "NotImplementedError", "StopIteration",
+    "AttributeError", "ImportError", "ModuleNotFoundError",
+    "UnicodeError", "ZeroDivisionError", "ArithmeticError",
+    "LookupError", "MemoryError", "OverflowError", "NameError",
+    "ReferenceError", "SyntaxError", "SystemError", "GeneratorExit",
+    "KeyboardInterrupt", "SystemExit", "Warning", "Enum", "IntEnum",
+    "Flag", "IntFlag", "StrEnum", "NamedTuple", "Protocol",
+    "ABCMeta", "ABC",
+    # tuple/dict/list/set subclass bases for common patterns
+    "tuple", "list", "dict", "set", "frozenset", "str", "bytes",
+    "bytearray", "int", "float", "bool", "complex",
+})
+
+
+def _method_match_compatible(
+    *,
+    receiver_class: Optional[str],
+    receiver_file: str,
+    target_class: Optional[str],
+    idx: _AdjacencyIndex,
+) -> bool:
+    """True iff a ``self.foo()`` / ``cls.foo()`` call site whose
+    enclosing class is ``receiver_class`` could legitimately resolve
+    to a method ``foo`` defined on ``target_class``.
+
+    Returns True in any "we don't know enough to narrow" case — the
+    substrate prefers over-reporting callers to dropping real ones.
+    """
+    if receiver_class is None:
+        # Call site wasn't ``self.foo()`` / ``cls.foo()``; no
+        # narrowing possible (could be anything).
+        return True
+    if target_class is None:
+        # Target is module-level, not a method. But ``method_match``
+        # was already populated when the call's chain head was
+        # unresolved — receiver_class being set tells us the call
+        # was ``self.foo()`` against a class instance, which can't
+        # resolve to a module-level function named ``foo``. Drop.
+        return False
+    if receiver_class == target_class:
+        # Same class — definitely possible.
+        return True
+    chain = _resolved_ancestor_chain(receiver_file, receiver_class, idx)
+    if chain is None:
+        # Couldn't resolve the receiver's hierarchy (cross-file
+        # inheritance, dynamic bases). Stay over-inclusive.
+        return True
+    return target_class in chain
 
 
 def _resolve_caller(
@@ -886,6 +1310,8 @@ def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
         return 0
     added = 0
     for file_record in inv.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
         path = file_record.get("path") or ""
         if not (path.endswith("/__init__.py") or path == "__init__.py"):
             continue
@@ -983,35 +1409,150 @@ def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
     return added
 
 
-def _candidate_qualified_names(file_path: str, fn_name: str) -> List[str]:
-    """Heuristic: derive plausible Python qualified names for an
+def _path_derived_module(
+    file_path: str, class_name: str, fn_name: str,
+) -> List[str]:
+    """Synthesise candidate ``<file_module>.<class_name>.<fn_name>``
+    forms for languages where the file IS the module (Python / JS-TS
+    / Ruby where no top-level module declaration sets
+    ``package_name``).
+
+    Returns one or two candidates — the raw path-derived form, plus
+    a src-stripped form when the path starts with ``src/`` (the
+    common Python src-layout / JS-TS monorepo convention). Empty
+    list when the extension isn't recognised.
+    """
+    base = file_path
+    suffix_match = None
+    for suffix in (".pyi", ".py", ".tsx", ".jsx", ".mjs", ".cjs",
+                    ".ts", ".js", ".rb"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            suffix_match = suffix
+            break
+    if suffix_match is None:
+        return []
+    if base.endswith("/__init__"):
+        base = base[: -len("/__init__")]
+    elif base.endswith("/index"):
+        base = base[: -len("/index")]
+    if not base:
+        return []
+    out: List[str] = [f"{base.replace('/', '.')}.{class_name}.{fn_name}"]
+    if base.startswith("src/"):
+        stripped = base[len("src/"):]
+        if stripped:
+            out.append(
+                f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
+            )
+    return out
+
+
+def _candidate_qualified_names(
+    file_path: str,
+    fn_name: str,
+    *,
+    package_name: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> List[str]:
+    """Heuristic: derive plausible qualified names for an
     InternalFunction defined at ``(file_path, fn_name)``.
 
     Returns at most a handful of candidates (typically 1-2). Used by
     the index builder to canonicalise external callee edges that
     actually resolve to project-defined functions.
 
-    Non-Python files: returns empty list. Other-language internal
-    aliasing isn't modelled.
+    Path-based heuristics (Python, JS/TS, Ruby): the file path
+    encodes the module shape:
+      * ``a/b/c.py`` → ``a.b.c``
+      * ``a/b/__init__.py`` → ``a.b``
+      * ``src/a/b/c.py`` → ``a.b.c`` (src-layout)
+      * ``a/b/c.js`` → ``a.b.c`` / ``a/b/c``
+
+    Declaration-based languages (Go, Java, Rust, C#, PHP) need
+    the source's own package declaration to resolve correctly —
+    the dir name is NOT authoritative. Those languages populate
+    ``FileCallGraph.package_name`` from the extractor, and the
+    resolver threads it in via ``package_name``.
+
+    Returns an empty list when the file type isn't recognised and
+    no package_name was supplied. Multiple candidates are returned
+    in priority order; consumers do ``setdefault`` so the highest-
+    confidence form wins.
     """
-    if not (file_path.endswith(".py") or file_path.endswith(".pyi")):
-        return []
-    base = file_path
-    for suffix in (".pyi", ".py"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    if base.endswith("/__init__"):
-        base = base[: -len("/__init__")]
     candidates: List[str] = []
-    if base:
-        candidates.append(f"{base.replace('/', '.')}.{fn_name}")
-    # ``src/`` layout: ``src/mypkg/foo.py`` is imported as
-    # ``mypkg.foo``, not ``src.mypkg.foo``. Generate both candidates.
-    if base.startswith("src/"):
-        stripped = base[len("src/"):]
-        if stripped:
-            candidates.append(f"{stripped.replace('/', '.')}.{fn_name}")
+
+    # Declaration-based path: ``package_name`` from the extractor.
+    # The qualified form depends on whether the language allows
+    # module-level functions:
+    #   * Java: every function lives inside a class. ONLY the
+    #     class-qualified form ``<pkg>.<Class>.<method>`` is a
+    #     valid resolution; the module-level form would falsely
+    #     collide with another file declaring class ``<pkg>``.
+    #   * C# / PHP: methods live inside classes, but module-level
+    #     functions / global functions exist. Emit class-qualified
+    #     first; fall through to module-level when no class.
+    #   * Go / Rust: free functions are the norm; emit module-
+    #     level. (Class-qualified is added too when present —
+    #     Rust impl methods + Go method receivers benefit.)
+    class_required = file_path.endswith(".java")
+    if package_name and class_name:
+        candidates.append(f"{package_name}.{class_name}.{fn_name}")
+    if package_name and not (class_required and class_name is None):
+        # In Java, a method with no class context shouldn't exist
+        # — skip the module-level form to avoid colliding with
+        # other files' class-qualified candidates that happen to
+        # share the dotted prefix (e.g. ``com.example.Util.helper``
+        # where one file's package is ``com.example.Util`` and
+        # another's class is ``Util``).
+        if not class_required:
+            candidates.append(f"{package_name}.{fn_name}")
+
+    # Python path-based heuristic.
+    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+        base = file_path
+        for suffix in (".pyi", ".py"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if base.endswith("/__init__"):
+            base = base[: -len("/__init__")]
+        if base:
+            candidates.append(f"{base.replace('/', '.')}.{fn_name}")
+        # src-layout: ``src/mypkg/foo.py`` is imported as ``mypkg.foo``
+        if base.startswith("src/"):
+            stripped = base[len("src/"):]
+            if stripped:
+                candidates.append(
+                    f"{stripped.replace('/', '.')}.{fn_name}",
+                )
+
+    # JS/TS / Ruby: file IS the module. Cross-package call sites
+    # reference the file path (sans extension) or a stripped form.
+    # Both shapes feed the import map.
+    if file_path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+                            ".rb")):
+        base = file_path
+        for suffix in (".tsx", ".mjs", ".cjs", ".jsx", ".js", ".ts", ".rb"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if base.endswith("/index"):
+            base = base[: -len("/index")]
+        if base:
+            module_form = base.replace("/", ".")
+            # Class-qualified takes priority — JS / Ruby classes
+            # exported from the file appear as ``<module>.<Class>.
+            # <method>`` to importing callers that reference the
+            # method via the class.
+            if class_name:
+                candidates.append(
+                    f"{module_form}.{class_name}.{fn_name}",
+                )
+            # Dotted form (matches Ruby module nesting + JS's
+            # canonical import-path-to-dotted transform).
+            candidates.append(f"{module_form}.{fn_name}")
+
     return candidates
 
 
@@ -1108,10 +1649,28 @@ def callers_of(
     # internal (we're saying "any unresolved-head ...foo() chain
     # might call this target named foo"). For external targets,
     # method-match doesn't apply.
+    #
+    # Class-aware narrowing: each method_match entry carries the
+    # receiver's class name (None when unknown). If the target is
+    # a method of class T and the receiver's class R is known, we
+    # can drop the entry when T isn't in R's ancestor chain — a
+    # ``self.foo()`` inside ``class B`` can't possibly resolve to
+    # ``class C.foo`` when B and C are unrelated. Entries with
+    # ``receiver_class=None`` stay (the safe over-inclusive
+    # default).
     method_match_set: Set[InternalFunction] = set()
     if isinstance(target, InternalFunction):
         candidates = idx.method_match.get(target.name, set())
-        method_match_set = candidates - definitive_set - uncertain_set
+        target_class = idx.class_of_method.get(target)
+        narrowed: Set[InternalFunction] = set()
+        for caller, receiver_class in candidates:
+            if _method_match_compatible(
+                    receiver_class=receiver_class,
+                    receiver_file=caller.file_path,
+                    target_class=target_class,
+                    idx=idx):
+                narrowed.add(caller)
+        method_match_set = narrowed - definitive_set - uncertain_set
 
     if exclude_test_files:
         definitive_set = {fn for fn in definitive_set
@@ -1126,6 +1685,25 @@ def callers_of(
         uncertain=tuple(_sorted_internal(uncertain_set)),
         method_match_overinclusive=tuple(_sorted_internal(method_match_set)),
     )
+
+
+def is_framework_callable(
+    inventory: Dict[str, Any],
+    target: InternalFunction,
+    *,
+    exclude_test_files: bool = True,
+) -> bool:
+    """True iff ``target`` carries a framework-dispatch registration
+    decorator (``@app.route``, ``@cli.command``, ``@task.fixture``,
+    etc.). Such functions are reachable from outside the static call
+    graph — the framework invokes them at runtime via internal
+    dispatch — and consumers should treat them as live entry points
+    even when ``callers_of`` returns an empty definitive set.
+
+    See ``_FRAMEWORK_DISPATCH_TAILS`` for the heuristic.
+    """
+    idx = _get_or_build_index(inventory, exclude_test_files=exclude_test_files)
+    return target in idx.framework_callable
 
 
 def callees_of(
@@ -1683,6 +2261,8 @@ def _find_file_record(
     can pre-build a path→record map.
     """
     for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
         if file_record.get("path") == path:
             return file_record
     return None
@@ -1704,6 +2284,7 @@ __all__ = [
     "enclosing_function",
     "forward_closure",
     "function_called",
+    "is_framework_callable",
     "parse_evidence_entry",
     "reverse_closure",
     "shortest_path",

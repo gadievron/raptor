@@ -13,7 +13,6 @@ real kernel output, not invented.
 from __future__ import annotations
 
 import json
-import os
 
 from core.sandbox import seatbelt_audit
 from core.sandbox.seatbelt import SANDBOX_KEXT_SENDER
@@ -214,7 +213,7 @@ def test_log_streamer_uses_injected_budget_for_summary(tmp_path):
 def test_log_streamer_default_budget_is_cli_aware(tmp_path):
     """LogStreamer with no explicit budget pulls one from
     audit_budget.from_cli_state() — picks up --audit-budget."""
-    from core.sandbox import state, audit_budget
+    from core.sandbox import state
     state._cli_sandbox_audit_budget = 250
     try:
         streamer = seatbelt_audit.LogStreamer(tmp_path)

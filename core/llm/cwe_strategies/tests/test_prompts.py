@@ -8,7 +8,6 @@ content, content that looks like markdown injection).
 
 from __future__ import annotations
 
-import pytest
 
 from core.llm.cwe_strategies import (
     DEFAULT_MAX_BYTES,

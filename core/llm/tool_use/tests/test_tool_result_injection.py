@@ -13,10 +13,8 @@ See ``core/llm/tool_use/loop.py`` (dispatch hook) and
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 
 from core.llm.tool_use import (
-    Message,
     StopReason,
     TextBlock,
     ToolCall,
@@ -533,7 +531,6 @@ class TestXSourceExtraction:
         passes that SHA as a discovered field → must dispatch (in the
         allowlist), confirming the SHA was extracted from raw content
         and entered the known-values set."""
-        from core.llm.tool_use.types import LoopEvent
 
         # Tool 2 declares its ``sha`` input as discovered, so the loop
         # validates it against known_values before dispatch. If

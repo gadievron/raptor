@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from core.dataflow.adapters.codeql import from_sarif_result
-from core.dataflow.finding import Finding
+from core.dataflow.finding import Finding, Step
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
     GroundTruth,

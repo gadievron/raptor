@@ -1190,7 +1190,6 @@ def trace(target_pid: int, run_dir: Path,
 
     _signal_ready(sync_fd)
 
-    syscall_table = arch_info["syscall_table"]
     # Output routing: observe-mode records go to `.sandbox-observe.jsonl`
     # with a `"observe": True` stamp; audit-mode records go to
     # `.sandbox-denials.jsonl` with `"audit": True`. Resolved once

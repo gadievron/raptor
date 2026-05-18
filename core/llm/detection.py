@@ -11,7 +11,6 @@ instead of ad-hoc env var or PATH checks.
 
 import os
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -25,19 +24,19 @@ logger = get_logger()
 
 # SDK availability flags — canonical source, imported by other modules
 try:
-    import openai as _openai_module
+    import openai as _openai_module  # noqa: F401 — availability probe
     OPENAI_SDK_AVAILABLE = True
 except ImportError:
     OPENAI_SDK_AVAILABLE = False
 
 try:
-    import anthropic as _anthropic_module
+    import anthropic as _anthropic_module  # noqa: F401 — availability probe
     ANTHROPIC_SDK_AVAILABLE = True
 except ImportError:
     ANTHROPIC_SDK_AVAILABLE = False
 
 try:
-    from google import genai as _genai_module
+    from google import genai as _genai_module  # noqa: F401 — availability probe
     GENAI_SDK_AVAILABLE = True
 except ImportError:
     GENAI_SDK_AVAILABLE = False
@@ -196,8 +195,6 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
     except ImportError:
         return False
 
-    import json
-    from .model_data import PROVIDER_ENV_KEYS
 
     # Allowlist of providers RAPTOR's downstream code can handle.
     # LiteLLM supports a much wider set (vertex_ai, bedrock, sagemaker,
@@ -371,7 +368,6 @@ def _read_config_models() -> list:
     Shared config file parsing — used by both detection and config modules.
     Returns a list of model dicts, or empty list on any error.
     """
-    import json
     try:
         from core.json import load_json_with_comments
 

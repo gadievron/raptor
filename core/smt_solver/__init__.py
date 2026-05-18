@@ -46,7 +46,7 @@ from .rejection import (
     parse_literal_value,
     propagate,
 )
-from .session import DEFAULT_TIMEOUT_MS, new_solver, scoped
+from .session import DEFAULT_TIMEOUT_MS, new_optimizer, new_solver, scoped
 from .witness import bv_to_int, format_vars, format_witness
 
 __all__ = [
@@ -81,6 +81,7 @@ __all__ = [
     # Session
     "DEFAULT_TIMEOUT_MS",
     "new_solver",
+    "new_optimizer",
     "scoped",
     # Unsat-core explanation
     "track",

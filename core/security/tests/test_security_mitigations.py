@@ -1,12 +1,10 @@
 """Tests for Claude Code settings-based attack mitigations."""
 
-import json
 import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 # core/security/tests/test_security_mitigations.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -163,7 +161,6 @@ class TestRepoDefault:
 
     def test_env_var_used_as_default(self, tmp_path):
         """argparse picks up RAPTOR_CALLER_DIR when --repo not specified."""
-        import argparse
         with patch.dict(os.environ, {"RAPTOR_CALLER_DIR": str(tmp_path)}):
             default = os.environ.get("RAPTOR_CALLER_DIR")
             assert default == str(tmp_path)

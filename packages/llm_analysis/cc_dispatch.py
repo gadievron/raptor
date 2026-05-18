@@ -9,7 +9,6 @@ Transport concerns (command building, envelope parsing) are delegated to
 """
 
 import copy
-import json
 import logging
 import re
 import subprocess

@@ -220,6 +220,24 @@ useful for `/diagram` rendering and downstream consumers (audit
 prioritisation, validate Stage F). Idempotent. Skip if
 `$WORKDIR/checklist.json` doesn't exist or doesn't carry `target_path`.
 
+**[MAP-5c] Enrich entry points and sinks with per-function AST views**
+
+After normalisation, run the AST-view enricher. Uses the inventory to
+attach an `ast_view` field to each entry point and sink whose
+`(file, line)` resolves to an enclosing function: signature, calls
+made inside the body, explicit returns, inline-asm flag.
+
+```bash
+libexec/raptor-enrich-context-map-ast-view "$WORKDIR"
+```
+
+The enriched context-map.json carries machine-derived structure (what
+the function *is*) alongside the LLM's narrative (what the function
+*does*). Downstream consumers — `/audit` Phase A per-function review,
+`/validate` Stage B path enumeration, `/diagram` rendering — can read
+this without re-parsing source. Idempotent. Skip if
+`$WORKDIR/checklist.json` doesn't exist or doesn't carry `target_path`.
+
 **[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.

@@ -11,7 +11,6 @@ import hashlib
 import os
 import re
 import shutil
-import stat
 import subprocess
 
 import sys
@@ -788,6 +787,7 @@ class DatabaseManager:
         # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
             from core.sandbox import run as sandbox_run
+            from core.sandbox.fingerprint import HOST_CPU_COUNT
             result = sandbox_run(
                 cmd,
                 block_network=True,
@@ -803,6 +803,19 @@ class DatabaseManager:
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_TIMEOUT,
+                # `codeql database create` invokes the target repo's
+                # autobuild / --command build, which is where target-
+                # supplied build scripts execute. Sanitise identity
+                # surfaces so anti-analysis-aware build tooling can't
+                # detect the analysis environment.
+                #
+                # cpu_count=HOST_CPU_COUNT preserves real parallelism
+                # for Make/Maven/Gradle — the default cpu_count=4 would
+                # serialise to 4 threads regardless of host count and
+                # cause ~8x build slowdown on 32-core CI hosts,
+                # pushing long builds past CODEQL_TIMEOUT.
+                sanitise_host_fingerprint=True,
+                cpu_count=HOST_CPU_COUNT,
             )
 
             success = result.returncode == 0
@@ -1157,12 +1170,16 @@ class DatabaseManager:
     def _count_database_files(self, db_path: Path) -> int:
         """Count files in database (for statistics)."""
         try:
-            # Count files in src.zip if it exists
+            # Count files in src.zip if it exists. Use the substrate's
+            # EOCD pre-flight rather than opening the archive — for a
+            # typical CodeQL DB the result is the same as
+            # ``len(zf.namelist())`` but we avoid the central-directory
+            # materialisation cost and the implicit bomb-shape risk.
             src_zip = db_path / "src.zip"
             if src_zip.exists():
-                import zipfile
-                with zipfile.ZipFile(src_zip) as zf:
-                    return len(zf.namelist())
+                from core.zip import peek_total_entries
+                count = peek_total_entries(src_zip)
+                return count if count is not None else 0
             return 0
         except Exception:
             return 0

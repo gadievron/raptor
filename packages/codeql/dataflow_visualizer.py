@@ -11,9 +11,8 @@ Creates visual representations of CodeQL dataflow paths in multiple formats:
 
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 from html import escape
 
 # Add parent directory to path for imports
@@ -21,7 +20,7 @@ from html import escape
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
-from packages.codeql.dataflow_validator import DataflowPath, DataflowStep
+from packages.codeql.dataflow_validator import DataflowPath
 
 logger = get_logger()
 

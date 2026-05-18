@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from core.json import load_json as _load_json
 
@@ -39,8 +39,8 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     #     swallowed prose into a code span until the next
     #     unmatched backtick
     # `target` flows from the `--target` CLI flag in
-    # `generate_diagram.py` and is operator-controlled. Escape
-    # backticks to backslash-backtick so markdown renders them as
+    # `libexec/raptor-render-diagrams` and is operator-controlled.
+    # Escape backticks to backslash-backtick so markdown renders them as
     # literal characters; doesn't break valid targets that don't
     # contain backticks.
     safe_target = (target or "").replace("`", "\\`")

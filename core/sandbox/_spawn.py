@@ -56,12 +56,19 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Optional, Sequence
 
 from . import state
+from ._fork_safe_warn import warn_post_fork
 from .landlock import _make_landlock_preexec
 from .mount_ns import setup_mount_ns
 from .seccomp import _make_seccomp_preexec
+
+if TYPE_CHECKING:
+    # Persona referenced by run_sandboxed's signature only; lazily
+    # imported in the child branch to keep module-load cost the same
+    # for callers that never engage fingerprint sanitisation.
+    from .fingerprint import Persona
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +78,7 @@ logger = logging.getLogger(__name__)
 # hardcoded copy. Requires Python 3.12+ (already enforced by the
 # os.unshare() call below, which was also new in 3.12).
 CLONE_NEWNS   = getattr(os, "CLONE_NEWNS",   0x00020000)
+CLONE_NEWUTS  = getattr(os, "CLONE_NEWUTS",  0x04000000)
 CLONE_NEWIPC  = getattr(os, "CLONE_NEWIPC",  0x08000000)
 CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
 CLONE_NEWPID  = getattr(os, "CLONE_NEWPID",  0x20000000)
@@ -154,7 +162,12 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
 
 def _set_rlimits(limits: dict) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
-    designed to run before mount ops / Landlock / seccomp."""
+    designed to run before mount ops / Landlock / seccomp.
+
+    Each rlimit applies independently — a single failure no longer
+    aborts the rest. Failures surface via fork-safe stderr warning so
+    operators can spot when a documented cap silently became a no-op.
+    """
     import resource
     from .preexec import _DEFAULT_LIMITS
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
@@ -162,16 +175,29 @@ def _set_rlimits(limits: dict) -> None:
     cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
     mem_bytes = mem * 1024 * 1024
     file_bytes = file_mb * 1024 * 1024
-    try:
-        if mem > 0:
+    if mem > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        if file_mb > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_AS setrlimit failed -- memory cap not applied\n")
+    if file_mb > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-        if cpu > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_FSIZE setrlimit failed -- file-size cap not applied\n")
+    if cpu > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
+    # RLIMIT_CORE is unconditional — coredumps are always suppressed
+    # (no operator-tunable equivalent of memory_mb/file_mb/cpu_seconds).
+    # No surrounding `if … > 0:` is needed; the structure differs from
+    # the three siblings above only because the input doesn't.
+    try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
-        pass
+        warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CORE setrlimit failed -- coredump suppression relies on kernel core_pattern\n")
 
 
 def _kill_and_reap(pid: int) -> None:
@@ -339,6 +365,8 @@ def run_sandboxed(
     observe_mode: bool = False,
     observe_nonce: Optional[str] = None,
     restrict_reads: bool = False,
+    strict_env: bool = False,
+    persona: Optional["Persona"] = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -408,11 +436,24 @@ def run_sandboxed(
         # operator visibility.
         from .ptrace_probe import check_ptrace_available
         from .seccomp import check_seccomp_available
+        from . import summary as _summary_mod
         if not seccomp_profile:
             logger.debug(
                 "audit_mode=True but no seccomp filter active; "
                 "skipping tracer (b2/b3 audit are no-ops without "
                 "seccomp). Network audit (b1) is configured separately."
+            )
+            # F063a: surface the silent degrade to operators. Without
+            # this marker, the empty run dir is indistinguishable
+            # from "audit ran, found nothing."
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but no seccomp filter is active",
+                instructions=(
+                    "pass seccomp_profile= (e.g. \"full\") so b2/b3 "
+                    "audit can install SCMP_ACT_TRACE; or run without "
+                    "audit_mode if seccomp is intentionally disabled"
+                ),
             )
         elif not check_seccomp_available():
             # libseccomp missing — tracer would attach but never
@@ -421,6 +462,19 @@ def run_sandboxed(
             logger.debug(
                 "audit_mode=True but libseccomp unavailable; "
                 "skipping tracer (no filter would be installed)."
+            )
+            # F063b: same operator-visibility gap as F063a; the
+            # tracer is correctly skipped, but the run dir contains
+            # nothing to signal that fact.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but libseccomp is unavailable on this host",
+                instructions=(
+                    "install libseccomp (Debian/Ubuntu: apt install "
+                    "libseccomp2; Alpine: apk add libseccomp), or run "
+                    "without audit_mode on hosts where libseccomp is "
+                    "intentionally absent"
+                ),
             )
         elif check_ptrace_available():
             _audit_engaged = True
@@ -584,7 +638,20 @@ def run_sandboxed(
             # Probe already logged the once-per-process warning with
             # workaround pointers; nothing more to say here. Workflow
             # continues, just without b2/b3 audit signal.
-            pass
+            # F063c: per-run marker so operators inspecting the
+            # specific run dir see "audit didn't engage" rather than
+            # an empty (and ambiguous) audit output. Distinct from the
+            # process-wide warn-once; both are useful.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but ptrace is blocked on this host",
+                instructions=(
+                    "lower Yama scope (sysctl kernel.yama.ptrace_scope=1) "
+                    "or run with CAP_SYS_PTRACE; on container hosts ensure "
+                    "AppArmor / Yama policy permits PTRACE_SEIZE; or run "
+                    "without audit_mode"
+                ),
+            )
 
     # Track every fd we hold in the parent so a failure ANYWHERE from
     # pipe()/fork() through the newuidmap handshake closes the lot.
@@ -771,6 +838,12 @@ def run_sandboxed(
             ns_flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC
             if block_network:
                 ns_flags |= CLONE_NEWNET
+            if persona is not None:
+                # Fresh UTS namespace so sethostname/setdomainname only
+                # affect us, not the host. We have CAP_SYS_ADMIN in this
+                # UTS-ns post-newuidmap (we own it as ns-uid-0) — the
+                # actual sethostname call lives after step 7.
+                ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
             # Step 4.5 (audit mode): declare PR_SET_PTRACER_ANY so the
@@ -826,6 +899,27 @@ def run_sandboxed(
             # rlimits as early as possible so later setup is constrained.
             _set_rlimits(limits)
 
+            # Step 8.5 (fingerprint sanitisation): sethostname /
+            # setdomainname inside our fresh UTS namespace. Done before
+            # mount-ns so the persona's /etc/hostname (bind-mounted in
+            # step 9) and uname()'s nodename agree (gethostname() reads
+            # the UTS field, not /etc/hostname — both must be set
+            # consistently or a cross-check is a sandbox tell).
+            if persona is not None:
+                from .fingerprint import set_uts
+                try:
+                    set_uts(persona.hostname, persona.domainname)
+                except OSError as e:
+                    # Degrade silently — caller (context.py) already
+                    # gated on platform support; an unexpected runtime
+                    # failure here shouldn't take down the whole
+                    # sandbox, just leak hostname/domainname.
+                    warn_post_fork(
+                        b"sandbox: fingerprint set_uts failed (errno=%d)"
+                        b"; hostname/domainname remain host-real\n"
+                        % (e.errno or 0)
+                    )
+
             # Step 9: mount-ns pivot_root if target/output supplied.
             # readable_paths from the caller also get bind-mounted at
             # their original paths so they exist inside the pivoted
@@ -834,7 +928,31 @@ def run_sandboxed(
             if target or output:
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
-                               root_path=_root_dir)
+                               root_path=_root_dir,
+                               persona=persona)
+
+            # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
+            # to a mask of size persona.cpu_count. The persona's
+            # /proc/cpuinfo and /sys/devices/system/cpu/online already
+            # claim cpu_count processors; pinning the affinity mask to
+            # match means sched_getaffinity / os.cpu_count() /
+            # nproc / Go GOMAXPROCS / Rust num_cpus all agree with the
+            # cpuinfo view — no cross-check tell.
+            #
+            # Done AFTER mount_ns (no ordering dependency, but keeps the
+            # fingerprint-related calls grouped) and BEFORE Landlock
+            # (sched_setaffinity is allowed under seccomp/Landlock but
+            # grouping makes the audit trail clearer).
+            if persona is not None:
+                from .fingerprint import set_cpu_affinity
+                try:
+                    set_cpu_affinity(persona.cpu_count)
+                except (OSError, ValueError) as e:
+                    warn_post_fork(
+                        b"sandbox: fingerprint set_cpu_affinity failed "
+                        b"(errno=%d); affinity unchanged\n"
+                        % (getattr(e, "errno", 0) or 0)
+                    )
 
             # cwd — only now, after pivot_root. Match subprocess.run
             # semantics: if the caller specified a cwd that doesn't
@@ -885,6 +1003,20 @@ def run_sandboxed(
                 # Grandchild runs as PID 1 in the new pid-ns.
                 if env is not None:
                     exec_env = env
+                    # Defense-in-depth: context.py:run() already strips
+                    # DANGEROUS_ENV_VARS from the caller env when
+                    # strict_env=True, so this re-strip is a no-op on
+                    # the standard call path. The kwarg lives here for
+                    # parity with _macos_spawn.run_sandboxed and to
+                    # protect direct callers of this function that
+                    # bypass the run() wrapper (tests, future helpers).
+                    if strict_env:
+                        from core.config import RaptorConfig
+                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                        exec_env = {
+                            k: v for k, v in exec_env.items()
+                            if k not in _dangerous
+                        }
                 else:
                     exec_env = os.environ.copy()
                 # bounded fork count via RLIMIT_NPROC (prlimit).
@@ -894,7 +1026,7 @@ def run_sandboxed(
                         resource.setrlimit(resource.RLIMIT_NPROC,
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
-                        pass
+                        warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:

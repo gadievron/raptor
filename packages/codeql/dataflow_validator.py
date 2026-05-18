@@ -6,16 +6,14 @@ Validates CodeQL dataflow findings using LLM analysis to determine
 if dataflow paths are truly exploitable beyond theoretical detection.
 """
 
-import json
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from core.smt_solver import BVProfile
 from packages.codeql.smt_path_validator import (
     PathCondition,
-    PathSMTResult,
     check_path_feasibility,
 )
 

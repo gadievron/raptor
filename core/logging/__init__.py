@@ -10,7 +10,6 @@ import json
 import logging
 import sys
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.config import RaptorConfig
@@ -223,10 +222,8 @@ class RaptorLogger:
 
     def critical(self, message: str, **kwargs: Any) -> None:
         """Log critical message."""
-        # Extract reserved parameters that must not be in extra dict
-        exc_info = kwargs.pop('exc_info', False)
-        stack_info = kwargs.pop('stack_info', False)
-        self.logger.critical(message, extra=kwargs, exc_info=exc_info, stack_info=stack_info)
+        exc_info, stack_info, extra = self._split_kwargs(kwargs)
+        self.logger.critical(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
     def log_job_start(self, job_id: str, tool: str, arguments: Dict[str, Any]) -> None:
         """Log job start event."""

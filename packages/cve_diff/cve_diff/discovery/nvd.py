@@ -20,7 +20,6 @@ from typing import Any
 
 from packages.nvd import extract_patch_refs
 from packages.nvd.client import (
-    DEFAULT_CACHE_DIR,
     DEFAULT_TIMEOUT_S,
     NvdClient,
     _SENTINEL_USE_DEFAULT,

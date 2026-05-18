@@ -46,7 +46,7 @@ def test_analysis_task_user_prompt_quarantines_injection_in_envelope():
 def test_analysis_task_system_prompt_does_not_contain_untrusted_content():
     task = AnalysisTask()
     finding = _finding()
-    user_msg = task.build_prompt(finding)
+    task.build_prompt(finding)
     system_msg = task.get_system_prompt()
     assert _INJECTION not in system_msg
     # Smoke check the system message has the expected anchors
@@ -170,7 +170,6 @@ def test_exploit_task_user_prompt_quarantines_injection_in_envelope():
 
 
 def test_exploit_task_system_does_not_contain_prior_analysis():
-    finding = _exploit_finding()
     system_msg = ExploitTask().get_system_prompt()
     assert _INJECTION not in system_msg
     # System has the role definition + task instructions

@@ -21,18 +21,22 @@ from __future__ import annotations
 
 import importlib
 import io
-import os
 import sys
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 
-# Wire RAPTOR onto sys.path the same way other test modules do.
-_RAPTOR_DIR = os.environ["RAPTOR_DIR"]
-if _RAPTOR_DIR not in sys.path:
-    sys.path.insert(0, _RAPTOR_DIR)
+# parents[3] climbs:
+#   [0] core/llm/tests/  (this file's directory)
+#   [1] core/llm/
+#   [2] core/
+#   [3] <repo root>
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 
 @pytest.fixture

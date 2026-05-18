@@ -73,4 +73,8 @@ _SANDBOX_KWARGS = frozenset({
     # audit JSONL); passing it to inner run() would silently have no
     # effect — reject so the caller catches their mistake.
     "audit", "audit_verbose", "audit_run_dir",
+    # Fingerprint-sanitisation kwargs — sandbox-context-level because
+    # the persona is built once per context and reused across run()
+    # calls. Per-call override would silently no-op.
+    "sanitise_host_fingerprint", "cpu_count", "require_sanitisation",
 })

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from packages.code_understanding.dispatch.trace_dispatch import (
     _build_strategy_block,

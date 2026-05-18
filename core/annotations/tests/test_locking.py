@@ -11,7 +11,6 @@ process-level, and POSIX semantics are what we actually rely on.
 from __future__ import annotations
 
 import multiprocessing as mp
-import os
 import sys
 from pathlib import Path
 

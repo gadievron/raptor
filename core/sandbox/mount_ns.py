@@ -34,7 +34,17 @@ skipped — the per-ns mount already serves them.
 
 import ctypes
 import os
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
+
+from ._fork_safe_warn import warn_post_fork
+from .exit_codes import SANDBOX_EXIT_MOUNT_NS_BIND_FAIL
+
+if TYPE_CHECKING:
+    # Avoid runtime circular import: fingerprint.apply_overlay imports
+    # _mount + MS_BIND from this module, so we keep the Persona
+    # annotation as a forward reference and import apply_overlay
+    # lazily inside setup_mount_ns when a persona is provided.
+    from .fingerprint import Persona
 
 # Linux mount(2) flag bits (from <linux/mount.h>). Values match the
 # kernel UAPI — do not "fix" without checking <sys/mount.h> on target.
@@ -160,13 +170,22 @@ def _shadows_per_ns(path: str) -> bool:
 
 def setup_mount_ns(target: Optional[str], output: Optional[str],
                    extra_ro_paths: Optional[Iterable[str]] = None,
-                   root_path: Optional[str] = None) -> None:
+                   root_path: Optional[str] = None,
+                   persona: Optional["Persona"] = None) -> None:
     """Establish pivot_root'd tmpfs sandbox root.
 
     Must be called AFTER the child has entered the new user-ns and acquired
     CAP_SYS_ADMIN (via the parent's newuidmap setup), and BEFORE
     landlock_restrict_self() — Landlock blocks mount operations on kernel
     6.15+.
+
+    `persona` (Optional[Persona]): when provided, after pivot_root completes
+    every persona.files[target] is bind-mounted over its target path
+    (/proc/cpuinfo, /etc/os-release, ...). Built by
+    `core.sandbox.fingerprint.build_persona()` when the caller passed
+    `sanitise_host_fingerprint=True`. Imported lazily to avoid a circular
+    import (fingerprint.apply_overlay imports _mount/MS_BIND from this
+    module).
     """
     # Absolutize target/output BEFORE any bind-mount work. A relative
     # path here produces a malformed bind-target like
@@ -253,8 +272,12 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
         # flag is defence-in-depth rather than the primary control.
         try:
             _mount(target, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
-        except OSError:
-            pass
+        except OSError as exc:
+            warn_post_fork(
+                b"mount_ns: target remount-ro failed (errno=%d); "
+                b"relying on Landlock for read-only enforcement\n"
+                % (exc.errno or 0)
+            )
     if output and output != target and not _shadows_per_ns(output):
         inside = f"{root}{output}"
         os.makedirs(inside, exist_ok=True)
@@ -272,8 +295,21 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
             if not os.path.isdir(path) and not os.path.isfile(path):
                 continue
             inside = f"{root}{path}"
+            # _step names which sub-operation is running so the outer
+            # OSError handler can report the actual failing step
+            # ("makedirs" / "open mount-point" / "bind") instead of
+            # always saying "bind failed" — pre-fix `os.makedirs` /
+            # `os.open` failures (e.g. ENOENT on a malformed path)
+            # were reported as "bind failed (errno=2)", which an
+            # operator inspecting the kernel log could not match
+            # against the actual syscall that errored.
+            #
+            # ASCII-only short labels so the bytes concat in the
+            # except clause stays fork-safe + allocation-bounded.
+            _step = b"setup"
             try:
                 if os.path.isdir(path):
+                    _step = b"makedirs"
                     os.makedirs(inside, exist_ok=True)
                 else:
                     # File bind-mount: create an empty regular file to
@@ -289,23 +325,76 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     #     planted state we don't expect).
                     #   * mode 0o600 — the mount-point itself shouldn't
                     #     be world-readable (was 0o644 default via umask).
+                    _step = b"makedirs (parent)"
                     os.makedirs(os.path.dirname(inside), exist_ok=True)
+                    _step = b"open mount-point"
                     fd = os.open(
                         inside,
                         os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
                         0o600,
                     )
                     os.close(fd)
+                _step = b"bind"
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
+                except OSError as exc:
+                    # bytes(path) keeps the message fork-safe (no f-string
+                    # allocation pulling locks); fallback to a placeholder
+                    # if encoding ever fails. errno also encoded as integer.
+                    try:
+                        _path_b = path.encode("utf-8", errors="replace")
+                    except Exception:
+                        _path_b = b"<unencodable>"
+                    warn_post_fork(
+                        b"mount_ns: extra_ro_paths remount-ro failed for "
+                        + _path_b
+                        + b" (errno=%d); relying on Landlock\n"
+                        % (exc.errno or 0)
+                    )
+            except OSError as exc:
+                # Caller explicitly named this path via readable_paths
+                # in the public sandbox API — silently dropping it
+                # leaves a hole the caller did not authorise (the path
+                # is either missing from the sandbox, or worse, still
+                # writable when the caller asked for read-only). Fail-
+                # closed so the parent observes the failed setup
+                # instead of getting a degraded sandbox masquerading
+                # as the requested one.
+                #
+                # Per W35.C convention, fail-CLOSED sites use direct
+                # os.write(2, ...) + os._exit(N) rather than the
+                # warn_post_fork helper (helper is reserved for
+                # DiD warn-only sites).
+                try:
+                    _path_b = path.encode("utf-8", errors="replace")
+                except Exception:
+                    _path_b = b"<unencodable>"
+                try:
+                    os.write(
+                        2,
+                        b"RAPTOR: mount_ns: extra_ro_paths "
+                        + _step
+                        + b" failed for "
+                        + _path_b
+                        + b" (errno=%d), exiting\n" % (exc.errno or 0),
+                    )
                 except OSError:
                     pass
-            except OSError:
-                # Best-effort: skip any path that fails to bind. The
-                # caller's sandbox just won't see it — no harder than
-                # if the path didn't exist on the host.
-                continue
+                os._exit(SANDBOX_EXIT_MOUNT_NS_BIND_FAIL)
+
+    # 8c. Host-fingerprint overlay (opt-in via sanitise_host_fingerprint).
+    # MUST happen BEFORE pivot_root — the persona's source files live
+    # in the parent's /tmp, which becomes inaccessible after pivot_root
+    # (the per-sandbox tmpfs at {root}/tmp shadows it). The overlay
+    # targets `{root}{target}` paths (e.g. `{root}/proc/cpuinfo`),
+    # which exist because /proc, /etc, /sys have already been bind-
+    # mounted into {root} in steps 5-6. After pivot_root, those binds
+    # are visible at the unprefixed path (`/proc/cpuinfo`) — same
+    # mechanism as the system-dir bind-mounts in step 4.
+    if persona is not None:
+        from .fingerprint import apply_overlay
+        apply_overlay(persona, root_prefix=root)
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

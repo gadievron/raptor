@@ -7,10 +7,8 @@ from unittest import TestCase, mock
 
 from core.project.correlate import (
     INCONCLUSIVE_VERDICTS,
-    LLM_COMMAND_TYPES,
     NEGATIVE_VERDICTS,
     POSITIVE_VERDICTS,
-    SCAN_COMMAND_TYPES,
     correlate_project,
     get_finding_status,
     normalize_verdict,

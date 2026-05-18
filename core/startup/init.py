@@ -326,6 +326,70 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     if os.getuid() == 0:
         warnings.append("Running as root is strongly discouraged — RAPTOR executes untrusted build commands, compiles PoCs, and runs fuzzing targets")
 
+    # Python version. RAPTOR requires 3.10+: ``packages/
+    # exploitability_validation/schemas.py`` (and other sites)
+    # uses PEP 604 union syntax (``str | None``) at function-
+    # definition time without ``from __future__ import
+    # annotations``, so the module fails to import on 3.9 with
+    # a confusing ``TypeError: unsupported operand type(s) for |``.
+    # Surface the version mismatch early so the operator sees
+    # "wrong Python" instead of a deep import trace.
+    import platform
+    py_version_str = platform.python_version()
+    if sys.version_info < (3, 10):
+        parts.append(f"Python {py_version_str} ✗")
+        warnings.append(
+            f"Python {py_version_str} at {sys.executable} — RAPTOR "
+            f"requires Python 3.10+. PEP 604 union syntax used in "
+            f"packages/exploitability_validation/schemas.py fails "
+            f"to import on older versions."
+        )
+    else:
+        parts.append(f"Python {py_version_str} ✓")
+
+    # RAPTOR_DIR — defensive check for the "operator bypassed the
+    # wrapper" path. ``bin/raptor`` / ``libexec/*`` scripts set this
+    # automatically; ``CLAUDE_ENV_FILE`` propagates it into claude-
+    # spawned Bash tool calls. Only unset when someone runs
+    # ``python3 raptor.py …`` (or imports core/ modules) from a
+    # bare shell. Specific value computed from REPO_ROOT so the
+    # operator can copy-paste the right export line.
+    raptor_dir = os.environ.get("RAPTOR_DIR")
+    if not raptor_dir:
+        warnings.append(
+            f"RAPTOR_DIR not set in this process; expected "
+            f"{REPO_ROOT} based on checkout location. Affects "
+            f"direct ``python3 raptor.py …`` invocations only — "
+            f"bin/raptor and claude sessions set it automatically."
+        )
+    else:
+        resolved = Path(raptor_dir).resolve()
+        if not resolved.is_dir():
+            warnings.append(
+                f"RAPTOR_DIR={raptor_dir!r} does not resolve to a "
+                f"directory"
+            )
+        else:
+            missing = [
+                d for d in ("core", "packages", "libexec", "bin")
+                if not (resolved / d).is_dir()
+            ]
+            if missing:
+                warnings.append(
+                    f"RAPTOR_DIR={raptor_dir!r} is missing expected "
+                    f"directories: {', '.join(missing)}"
+                )
+
+    # No check on .claude/raptor.env or .claude/settings.json
+    # despite both being part of the SessionStart hook chain.
+    # Failure modes for either file missing are: operator wiped
+    # it (wilful — operator knows), hook script broken (RAPTOR
+    # ship-side bug, doctor advice doesn't help), claude using
+    # a different project's settings (operator-config; doctor
+    # advice doesn't help). None are both common-enough-to-
+    # design-for AND actionable-via-doctor-output. Dropping
+    # avoids noise without missing real signal.
+
     out_dir = RaptorConfig.get_out_dir()
     out_ok = out_dir.exists() and os.access(out_dir, os.W_OK)
     parts.append("out/ ✓" if out_ok else "out/ ✗")

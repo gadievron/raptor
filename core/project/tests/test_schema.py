@@ -2,7 +2,11 @@
 
 import unittest
 
-from core.project.schema import validate_project, validate_run_metadata, VALID_RUN_STATUSES
+from core.project.schema import (
+    _validate_project as validate_project,
+    _validate_run_metadata as validate_run_metadata,
+    VALID_RUN_STATUSES,
+)
 
 
 class TestValidateProject(unittest.TestCase):

@@ -2,7 +2,6 @@
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from packages.semgrep import models as smodels
 from packages.semgrep.runner import (
     build_cmd,
     is_available,

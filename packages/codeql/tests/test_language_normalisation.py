@@ -14,9 +14,8 @@ Both behaviours close ergonomic footguns in the CodeQL agent:
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 # packages/codeql/tests/test_language_normalisation.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -123,7 +122,7 @@ class TestExplicitLanguagesNormalised:
         # database_manager returns empty so workflow exits cleanly
         agent.database_manager.create_databases_parallel.return_value = {}
 
-        result = agent.run_autonomous_analysis(languages=["c"])
+        agent.run_autonomous_analysis(languages=["c"])
 
         # The agent should have passed "cpp" (canonical) to the
         # detector chain, NEVER the raw "c" string.

@@ -2,7 +2,7 @@
 
 from typing import List, Tuple
 
-from .spec import ReportSpec, ReportSection
+from .spec import ReportSpec
 
 
 def render_report(spec: ReportSpec, separator: str = "---") -> str:

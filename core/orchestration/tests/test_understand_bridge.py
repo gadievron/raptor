@@ -8,7 +8,6 @@ import time
 import unittest.mock
 from pathlib import Path
 
-import pytest
 
 # core/orchestration/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -199,7 +198,7 @@ class TestFindUnderstandOutput:
         validate_dir = project_dir / "validate-20260403-120000"
         validate_dir.mkdir(parents=True)
 
-        old = _make_understand_dir(project_dir, "understand-20260401-120000")
+        _make_understand_dir(project_dir, "understand-20260401-120000")
         time.sleep(0.01)
         new = _make_understand_dir(project_dir, "understand-20260402-120000")
 
@@ -435,7 +434,6 @@ class TestHashFreshness:
 
     def test_rank_returns_stale_set(self, tmp_path):
         """When best candidate has stale files, they are returned."""
-        import hashlib
         target = tmp_path / "target"
         target.mkdir()
         (target / "a.py").write_text("current")

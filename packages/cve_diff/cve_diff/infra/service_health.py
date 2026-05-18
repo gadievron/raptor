@@ -120,7 +120,7 @@ def probe_anthropic() -> HealthResult:
     body = json.dumps({"model": _health_model(), "max_tokens": 1,
                        "messages": [{"role": "user", "content": "x"}]}).encode()
     try:
-        resp = _client().request(
+        _client().request(
             "POST", "https://api.anthropic.com/v1/messages",
             body=body,
             headers={

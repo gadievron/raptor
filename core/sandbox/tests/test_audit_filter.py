@@ -9,11 +9,9 @@ count differs in the expected direction.
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
@@ -382,7 +380,6 @@ class TestAtFdcwdValue:
     available (skip otherwise)."""
 
     def test_at_fdcwd_matches_uapi_header(self):
-        import os
         import re
         import pytest
         candidate_paths = [
@@ -570,7 +567,6 @@ class TestTracerArgvContract:
     def test_argv_count_matches_documented_usage(self):
         # Module docstring + _cli_main docstring both document the
         # CLI shape. Keep them in sync with the actual implementation.
-        import inspect
         from core.sandbox import tracer
 
         # _cli_main's argument count matches what the module
@@ -671,7 +667,6 @@ class TestConftestSnapshotMatchesState:
     }
 
     def test_every_state_var_is_snapshotted_or_excluded(self):
-        import inspect
         import re
         from core.sandbox import state
         # Pull the snapshot list literal from conftest source.
@@ -1117,7 +1112,6 @@ class TestDecodeSockaddr:
 
     def test_decode_af_inet(self):
         import ctypes
-        import socket
         # Build a sockaddr_in: family=2 (AF_INET), port=443, addr=1.2.3.4
         # struct sockaddr_in: family (2), port (2 BE), addr (4)
         buf = bytes([2, 0]) + (443).to_bytes(2, "big") + bytes([1, 2, 3, 4])

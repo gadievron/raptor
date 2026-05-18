@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import functools
 import re
+from typing import TYPE_CHECKING
 
 from core.http import HttpError
-from core.http.urllib_backend import UrllibClient
+
+if TYPE_CHECKING:
+    from core.http.egress_backend import EgressClient
 
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path

@@ -9,7 +9,7 @@ Output is action-oriented: every section answers "what should I look at next?"
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from core.json import load_json
 from core.run import load_run_metadata

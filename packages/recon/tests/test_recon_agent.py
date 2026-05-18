@@ -1,10 +1,9 @@
 """Tests for packages/recon/agent.py."""
 
-import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

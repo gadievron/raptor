@@ -20,7 +20,7 @@ KEV-listed flag on any CVE-tagged finding.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Set
+from typing import Set
 
 from core.json import JsonCache
 from core.http import HttpClient, HttpError

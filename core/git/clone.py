@@ -89,7 +89,7 @@ from ._proxy_hosts import proxy_hosts_for_git as _proxy_hosts_for_git
 # tuple (no operator override applied) so existing semantics hold;
 # new call sites should use ``_proxy_hosts_for_git()`` to pick up the
 # operator override config.
-from ._proxy_hosts import _DEFAULT_GIT_HOSTS as _PROXY_HOSTS
+from ._proxy_hosts import _DEFAULT_GIT_HOSTS as _PROXY_HOSTS  # noqa: F401
 
 
 def get_safe_git_env() -> Dict[str, str]:

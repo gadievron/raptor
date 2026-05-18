@@ -7,7 +7,7 @@ alongside annotations and so picker tests have predictable equality.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 
 @dataclass(frozen=True)

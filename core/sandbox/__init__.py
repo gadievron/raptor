@@ -101,6 +101,78 @@ Fake HOME (fake_home=True):
   this, os.makedirs would resolve the symlink and create subdirs
   inside the attacker-chosen location outside `output`.
 
+Sanitised host fingerprint (sanitise_host_fingerprint=True):
+  Opt-in identity-surface masking. When engaged, the child sees
+  canonical "boring Debian 12 cloud VM on QEMU/KVM with Intel Xeon"
+  values for hostname (`localhost`), `/etc/os-release` (Debian 12
+  stub), `/etc/machine-id` (deterministic pseudo-random — looks
+  real, identical across operators), `/sys/class/dmi/id/*` (QEMU),
+  `/proc/cpuinfo` (canonical Xeon model + microcode + cache,
+  configurable processor count via cpu_count=N defaulting to 4),
+  `/proc/version` (trimmed to `Linux version <host-release>`), and
+  uname() nodename / domainname (via CLONE_NEWUTS + sethostname).
+  All hide-intent values — no "sandbox" / "raptor" / "Generic CPU"
+  / all-zero sentinels that anti-analysis-aware binaries can
+  trivially detect. Implemented in core/sandbox/fingerprint.py.
+
+  Preserved (capability surface, NOT identity):
+  - /proc/cpuinfo `flags` line — host-real. SMEP/SMAP detection in
+    packages/exploit_feasibility, SIMD dispatch in ASAN / glibc /
+    JITs, and pwntools all key off these.
+  - uname `release` and `machine` — host-real. exploit_feasibility's
+    `uname -r`, pwntools' context.arch, shellcode dispatch all
+    depend on the real values.
+  - /proc/sys/kernel/* (randomize_va_space, kptr_restrict,
+    yama/ptrace_scope) and /proc/sys/vm/mmap_min_addr — untouched.
+    exploit_feasibility's mitigation reads depend on accuracy.
+  - /proc/self/* (maps, exe, status, auxv) — untouched. ASAN, GDB,
+    pwntools context.aslr all depend on real values.
+
+  cpu_count=N (default 4 when sanitisation engaged) sets a
+  consistent N across /proc/cpuinfo blocks, /sys/devices/system/cpu/
+  {online,possible}, /proc/stat per-cpu lines, AND
+  sched_setaffinity (the kernel mask underlying os.cpu_count() /
+  sysconf(_SC_NPROCESSORS_ONLN) / Go GOMAXPROCS / Rust num_cpus).
+  Defaulting to 4 (typical cloud-VM size) rather than 1 avoids the
+  "exactly 1 CPU is an analysis sandbox" detection heuristic.
+
+  Soft-degrade with one-shot WARNING when prerequisites are missing
+  (Landlock-only mode, missing uidmap, apparmor_restrict_unpriv_
+  userns=1, macOS). `require_sanitisation=True` flips degradation
+  to hard-fail (RuntimeError at sandbox entry) for paranoid
+  callers. macOS has no functional equivalent — bind-mount and
+  UTS-namespace are Linux-only primitives, and most macOS host-
+  identity reads are sysctlbyname/IOKit-based (not file-based).
+
+  Residuals (documented; not addressed):
+  - CPUID asm bypass — direct cpuid execution reads real CPU.
+    Fix would need ptrace-based syscall rewriting + userspace
+    cpuid emulator (out of scope).
+  - AT_HWCAP auxiliary vector — kernel-supplied at exec; not
+    file-based. Side effect: glibc/Rust dispatch keeps working
+    even where flags-line is masked, but pure-asm fingerprinters
+    bypass our overlay.
+  - Vendor leakage via flags-line — Intel vs AMD distinguishable
+    by flag-set differences. Trade-off accepted for SIMD compat.
+  - /proc/meminfo, /sys/firmware/*, /dev/mem — host-real. UEFI/BIOS
+    + RAM size leakage. Out of v1 scope; meminfo masking deserves
+    its own audit (JVM heap auto-sizing, Postgres shared_buffers
+    consumers).
+  - /sys/class/dmi/id/{board_serial, product_uuid, chassis_*} —
+    only `sys_vendor` and `product_name` are bind-masked. Defended
+    by `restrict_reads=True`'s allowlist (DMI not on default
+    readable set); pass `restrict_reads=False` and the omitted
+    DMI identity files become host-real.
+  - sanitise_host_fingerprint=True with `target=None` AND
+    `output=None` produces partial coverage: UTS-ns + affinity
+    still apply (no mount-ns needed for those), but the file
+    overlays don't (mount-ns is skipped when neither target nor
+    output is set). Most callers pass at least one; pure
+    capability probes that don't would see this.
+
+  Default off everywhere; opt-in per caller. Once stable and
+  proven, `run_untrusted()` is a candidate to default-on.
+
 Log-output hygiene:
   RAPTOR logs attacker-influenced strings in several places (argv
   filenames from scanned repos, subprocess stderr / ASAN bug_type,
@@ -283,9 +355,15 @@ What the sandbox does NOT protect against:
   hostname-allowlisted outbound use `use_egress_proxy=True` which
   also blocks UDP via seccomp.
 - Host fingerprinting via /proc/version, /etc/os-release, /proc/cpuinfo,
-  /etc/machine-id, /sys/class/dmi/id/*. Tightening these would break
-  real PoCs (glibc CPU-feature detection, ASAN's /proc/self/maps,
-  dynamic linker's /etc/ld.so.cache). Accepted residual.
+  /etc/machine-id, /sys/class/dmi/id/* — accepted residual by default.
+  Opt-in masking via `sanitise_host_fingerprint=True`: presents a
+  canonical "Debian 12 cloud VM on QEMU/KVM with Intel Xeon" persona
+  while preserving capability surfaces (cpuinfo flags line, uname
+  release/machine, kernel mitigation sysctls). See the "Sanitised
+  host fingerprint" section above for the full surface list and
+  preserved-vs-masked policy. Two residuals remain even with the
+  flag on: CPUID asm reads bypass the file overlay; AT_HWCAP from
+  the kernel-supplied auxiliary vector at exec is not file-based.
 - Cross-PID-ns `/proc/<host_pid>/{cmdline,comm,status,stat}` —
   `/proc` stays host-shared under Landlock-only mode (no mount-ns);
   PID-ns isolation applies the kernel's ptrace-gated protection
@@ -365,6 +443,47 @@ Startup banner shows which layers are available:
   sandbox ✓ (net+landlock)        — common on Ubuntu 24.04
   sandbox ✓ (landlock)            — container without user namespaces
   sandbox ✗                       — no isolation available
+
+W36.B strict-mode controls (added W36.B, fully landed by W36.K.3):
+Four opt-in mechanisms turn previously-fail-OPEN security paths into
+fail-CLOSED contracts. All default-off — existing callers see no
+behaviour change. Operators wanting a hardened posture opt in.
+
+  - ``run_untrusted(strict_env=True)`` — default ON for this helper
+    (the security-sensitive entry point). Strips
+    ``RaptorConfig.DANGEROUS_ENV_VARS`` (LD_PRELOAD, AWS_*, GH_TOKEN,
+    etc.) from caller-supplied ``env=`` dicts even when the caller
+    didn't go through ``get_safe_env()``. The lower-level
+    ``sandbox()`` accepts ``strict_env=`` too; default off there.
+    Both Linux (``_spawn``) and macOS (``_macos_spawn``) backends
+    apply the strip as defense-in-depth.
+
+  - ``EgressProxy(audit_enforce=True)`` / env var
+    ``RAPTOR_PROXY_AUDIT_ENFORCE`` set to ``"1"`` / ``"true"`` /
+    ``"yes"`` / ``"on"`` (case-insensitive, whitespace-stripped) —
+    switches gate 1 (hostname allowlist) in audit mode from
+    log-and-allow to log-AND-deny. Default off preserves the
+    documented audit-permissive semantics for operators still
+    building their allowlist.
+
+  - ``probe_envelope_compatibility(strict=True)`` (core/security) —
+    raises ``RuntimeError`` instead of returning a failed
+    ``ProbeResult`` when the LLM cannot honour the defense envelope.
+    Covers BOTH failure paths uniformly: ``dispatch_fn`` raising,
+    AND the post-evaluate ``compatible=False`` branch. Used by the
+    orchestrator to refuse to silently downgrade defenses.
+
+  - ``preflight(strict=True)`` (core/security) — raises
+    ``RuntimeError`` when the injection-pattern corpus is empty at
+    call time. Default fail-open (returns ``confidence_haircut=1.0``)
+    is preserved by ``strict=False``; strict mode surfaces the
+    misconfiguration the operator wouldn't otherwise notice.
+
+The cost-gating circuit-breaker in
+``core/llm/multi_model/dispatch.py`` (F090) shipped alongside these
+under the same W36.B umbrella but is not operator-tunable — see that
+module's docstring for the transient-vs-permanent disable semantics
+and the "cost_gate: retrying budget_ratio()" recovery log signal.
 
 Sandboxing by tool type:
 - PoC execution, LLM-generated code: `run_untrusted()` — full sandbox
@@ -522,7 +641,16 @@ __all__ = [
     # Availability probes (exposed for the startup banner)
     "check_sandbox_available", "check_net_available",
     "check_mount_available", "check_landlock_available",
+    "check_seatbelt_available",
     "check_seccomp_available",
     # Named profiles
-    "PROFILES", "DEFAULT_PROFILE",
+    "PROFILES", "DEFAULT_PROFILE", "_SANDBOX_KWARGS",
+    # Private re-exports kept for backward compatibility — see the
+    # block comment above; tests + a few internal callers reach into
+    # these names directly so the public name stays stable.
+    "_get_landlock_abi",
+    "_BLOCKED_PATTERNS", "_check_blocked", "_interpret_result", "_path_within",
+    "OBSERVE_FILENAME", "ConnectTarget", "ObserveProfile", "parse_observe_log",
+    "_DEFAULT_LIMITS", "_load_user_limits", "_make_preexec_fn",
+    "_build_mount_script",
 ]

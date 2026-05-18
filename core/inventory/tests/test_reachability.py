@@ -11,14 +11,9 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from core.inventory.call_graph import (
-    INDIRECTION_DUNDER_IMPORT,
-    INDIRECTION_GETATTR,
-    INDIRECTION_IMPORTLIB,
-    INDIRECTION_WILDCARD_IMPORT,
     extract_call_graph_python,
 )
 from core.inventory.reachability import (
-    ReachabilityResult,
     Verdict,
     function_called,
 )

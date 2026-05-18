@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Enrich every flow-trace-*.json file in an /understand run dir with
+per-step structured AST views.
+
+Usage: raptor-enrich-flow-trace-ast-view <understand_dir>
+
+Wraps core.orchestration.flow_trace_ast_view.enrich_with_ast_view
+for invocation from skill markdown. For each ``flow-trace-*.json``
+file in the run directory, walks ``trace["steps"]`` and attaches
+an ``ast_view`` field to each step whose ``definition`` resolves
+to a function in the inventory. Idempotent — safe to re-run.
+
+Best-effort: missing checklist / inventory build failure / a
+single unparseable trace file all log warnings but never abort
+the run (other trace files in the same run continue to enrich).
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+from core.orchestration.flow_trace_ast_view import enrich_with_ast_view
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-enrich-flow-trace-ast-view",
+        description=(
+            "Enrich each flow-trace-*.json's steps with structured "
+            "per-function AST views (signature, calls, returns, "
+            "asm flag) for the function at each step's definition."
+        ),
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(
+            f"raptor-enrich-flow-trace-ast-view: {understand_dir} is "
+            "not a directory", file=sys.stderr,
+        )
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    if not target_path:
+        print(
+            "raptor-enrich-flow-trace-ast-view: checklist missing "
+            "target_path; skipping enrichment", file=sys.stderr,
+        )
+        return 0
+
+    # Build the inventory once and share across all trace files —
+    # the per-call default would rebuild for every file, painful
+    # when /understand --trace runs N times and emits N files.
+    try:
+        from core.inventory.builder import build_inventory
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            inventory = build_inventory(target_path, td)
+    except Exception as e:                                  # noqa: BLE001
+        print(
+            f"raptor-enrich-flow-trace-ast-view: inventory build "
+            f"failed ({e}); skipping enrichment", file=sys.stderr,
+        )
+        return 0
+
+    trace_files = sorted(understand_dir.glob("flow-trace-*.json"))
+    if not trace_files:
+        print(
+            "raptor-enrich-flow-trace-ast-view: no flow-trace-*.json "
+            "files in directory; nothing to enrich"
+        )
+        return 0
+
+    total_enriched = 0
+    total_files = 0
+    for trace_path in trace_files:
+        trace = load_json(trace_path)
+        if not isinstance(trace, dict):
+            print(
+                f"raptor-enrich-flow-trace-ast-view: skipping "
+                f"{trace_path.name} — not a JSON object",
+                file=sys.stderr,
+            )
+            continue
+        n = enrich_with_ast_view(
+            trace, Path(target_path), inventory=inventory,
+        )
+        if n:
+            save_json(trace_path, trace)
+            total_enriched += n
+            total_files += 1
+
+    if total_enriched:
+        print(
+            f"raptor-enrich-flow-trace-ast-view: enriched "
+            f"{total_enriched} step(s) across {total_files} trace "
+            f"file(s) (of {len(trace_files)} total)"
+        )
+    else:
+        print(
+            f"raptor-enrich-flow-trace-ast-view: no steps enriched "
+            f"across {len(trace_files)} trace file(s) "
+            "(no steps with resolvable definitions, or inventory "
+            "build skipped)"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -42,9 +42,7 @@ from __future__ import annotations
 import logging
 import sys
 import tarfile
-from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

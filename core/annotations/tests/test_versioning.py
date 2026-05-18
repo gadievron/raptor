@@ -9,14 +9,11 @@ without updating the reader.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-import pytest
 
 from core.annotations import (
     Annotation,
     annotation_path,
-    read_annotation,
     read_file_annotations,
     write_annotation,
 )

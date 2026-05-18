@@ -5,7 +5,7 @@ coverage-*.json records. Supports single-run and project-wide aggregation.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from core.json import load_json
 from .record import load_records, write_record
@@ -377,7 +377,6 @@ def format_detailed(summary: Dict[str, Any]) -> str:
         scanned_flags = []
         for abbrev, tool_name in tool_abbrevs:
             tool_key = tool_name.lower()
-            tool_info = tools.get(tool_key, {})
             # Check if this file was in the tool's examined list
             if pf.get(f"scanned_{tool_key}", False):
                 scanned_flags.append(abbrev)

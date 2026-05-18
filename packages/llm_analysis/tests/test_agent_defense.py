@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from packages.llm_analysis.prompts import (
     build_analysis_prompt_bundle,
-    build_analysis_schema,
     build_dataflow_validation_bundle,
 )
 from packages.llm_analysis.prompts.exploit import build_exploit_prompt_bundle

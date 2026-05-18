@@ -3,6 +3,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.dataflow_dispatch_client import DispatchClient
 from packages.llm_analysis.dataflow_validation import (
-    DEFAULT_BUDGET_THRESHOLD,
-    _any_match_at_finding_location,
     _attach_result,
     _budget_exhausted,
     _build_hypothesis,
@@ -702,7 +701,6 @@ class TestVerdictFromPrebuilt:
         codeql_db arg means we can't verify coverage. Refuse to refute
         and log a WARNING — closes the silent-FN backdoor where a
         caller drops the DB arg by accident."""
-        import logging
         from core.config import RaptorConfig
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         extras = tmp_path / "raptor-packs"

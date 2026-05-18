@@ -417,7 +417,6 @@ class TestSmtPreFlight:
     def test_smt_unavailable_no_check(self, tmp_path):
         """When the SMT substrate isn't importable, no_check (silent
         fallthrough) — exploit gen continues blind."""
-        from packages.llm_analysis import agent as agent_mod
         v = self._make_vuln_with_conditions(["x > 1"])
         with patch.dict("sys.modules",
                         {"packages.exploit_feasibility.smt_path": None}):

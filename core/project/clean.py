@@ -3,7 +3,7 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 def plan_clean(project, keep=1) -> Dict[str, Any]:

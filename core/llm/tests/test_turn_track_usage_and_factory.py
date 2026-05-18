@@ -154,7 +154,6 @@ def test_gemini_turn_tracks_via_delegated_generate() -> None:
 def test_claudecode_turn_tracks_via_delegated_generate(monkeypatch) -> None:
     """``ClaudeCodeLLMProvider.turn`` delegates to ``generate`` (no tools)
     or ``generate_structured`` (with tools); both call ``track_usage``."""
-    import json
     import subprocess
     from core.llm.providers import ClaudeCodeLLMProvider
     from core.llm.tool_use import Message, TextBlock, ToolDef

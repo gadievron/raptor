@@ -10,12 +10,11 @@ Fully autonomous analysis of CodeQL findings with:
 - Exploit validation and refinement
 """
 
-import json
 import sys
 from dataclasses import dataclass, asdict
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
 # packages/codeql/autonomous_analyzer.py -> repo root
@@ -236,9 +235,7 @@ class AutonomousCodeQLAnalyzer:
 
         try:
             from core.inventory.lookup import lookup_function
-            from core.inventory.reachability import (
-                Verdict, function_called,
-            )
+            from core.inventory.reachability import function_called
         except ImportError:
             return None
 
@@ -620,7 +617,6 @@ class AutonomousCodeQLAnalyzer:
             prefilter_decision,
             record_prefilter_outcome,
         )
-        from core.llm.config import PROVIDER_FAST_MODELS
 
         decision_class = f"codeql:{finding.rule_id}"
         # Resolve the fast model name from the config — the cheap

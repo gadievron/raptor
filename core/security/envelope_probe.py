@@ -168,6 +168,8 @@ def probe_envelope_compatibility(
     analysis_model: Any,
     profile: ModelDefenseProfile,
     dispatch_fn,
+    *,
+    strict: bool = False,
 ) -> ProbeResult:
     """Send a canary probe through the dispatch path.
 
@@ -187,6 +189,25 @@ def probe_envelope_compatibility(
 
     Returns a ProbeResult with .compatible indicating whether the model
     handled the envelope correctly.
+
+    When ``strict=True``, raises ``RuntimeError`` instead of returning a
+    failed ``ProbeResult``, so callers that do not check ``.compatible``
+    cannot silently continue. The strict contract applies UNIFORMLY to
+    both failure paths inside this function:
+
+    1. ``dispatch_fn(...)`` itself raises (e.g. ``TimeoutError``,
+       connection-refused, transient HTTP 5xx) — the underlying
+       exception is chained via ``raise ... from e`` so callers
+       introspecting the cause still see the original error.
+    2. ``dispatch_fn`` returns successfully but the response fails
+       envelope evaluation (probe canary leaked, tag forgery
+       detected, etc.) — raises with the evaluator's error message.
+
+    The original ``strict=True`` landed (W36.B / F058) covering only
+    path 2; path 1's coverage closed in W36.K.3 / F058-gap. A
+    ``strict=True`` caller can now treat the absence of an exception
+    as "envelope confirmed compatible" without separately checking
+    ``.compatible``.
     """
     system, user, nonce = build_canary_prompt(profile)
     model_name = getattr(analysis_model, "model_name", None) or str(analysis_model)
@@ -201,6 +222,19 @@ def probe_envelope_compatibility(
         else:
             raw = str(result)
     except Exception as e:
+        # F058 strict-contract gap: under strict=True the caller's
+        # contract is "envelope-probe failure raises so silent fallback
+        # cannot happen." The post-evaluate path (below) already raises
+        # when probe_result.compatible is False; the dispatch-failure
+        # path used to early-return a compatible=False ProbeResult,
+        # leaving strict=True callers with the SAME failed-but-non-
+        # raising outcome they were trying to opt out of. Honour the
+        # contract uniformly here.
+        if strict:
+            raise RuntimeError(
+                f"Envelope probe dispatch failed for {model_name} "
+                f"(profile: {profile.name}): {e}"
+            ) from e
         return ProbeResult(
             compatible=False,
             valid_json=False,
@@ -226,5 +260,10 @@ def probe_envelope_compatibility(
             "applies.",
             model_name, profile.name, probe_result.error,
         )
+        if strict:
+            raise RuntimeError(
+                f"Envelope probe failed for {model_name} (profile: {profile.name}): "
+                f"{probe_result.error}"
+            )
 
     return probe_result

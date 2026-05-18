@@ -10,8 +10,7 @@ content, and helper purity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterator, List
+from typing import List
 from unittest.mock import patch
 
 import pytest

@@ -47,7 +47,24 @@ def spawn_worker(
     """
     socket_path, token_fd = dispatcher.allocate_worker(label=label)
 
-    base_env = dict(env) if env is not None else {}
+    # When env=None, fall back to RaptorConfig.get_safe_env() rather
+    # than {}. A literally-empty env strips PATH, HOME, LANG, etc. —
+    # most child binaries fail catastrophically without them (wrapper
+    # binaries re-exec via PATH, Python text-mode I/O picks weird
+    # encodings without LANG, process-local config-file resolution
+    # explodes without HOME).
+    #
+    # Mirrors core/sandbox/context.py:890-906 — same treatment of
+    # env=None, same rationale: env=None means "default behaviour"
+    # (safe baseline shell env minus secrets), not "literally empty".
+    # The dispatcher's whole point is credential isolation — API keys
+    # are injected per-request from the in-memory secret store, not
+    # passed via env — so get_safe_env() is the right baseline.
+    if env is not None:
+        base_env = dict(env)
+    else:
+        from core.config import RaptorConfig
+        base_env = RaptorConfig.get_safe_env()
     base_env["RAPTOR_LLM_SOCKET"] = socket_path
     base_env["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
 

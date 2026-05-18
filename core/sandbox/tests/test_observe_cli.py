@@ -14,14 +14,12 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from core.sandbox.observe_cli import (
-    _build_parser,
     _cli_main,
     _format_summary,
     _profile_to_json,
@@ -72,13 +70,12 @@ class TestArgparse:
 
         # Monkeypatch sandbox import path. Lazy-imported, so we patch
         # at the module level.
-        from core.sandbox import observe_cli as mod
         # Force the parser to consume "--" then the cmd.
         # We won't actually spawn — fake_run + abort via early return
         # by saying observe log doesn't exist.
         with patch("core.sandbox.run", side_effect=fake_run), \
              patch("core.sandbox.parse_observe_log") as _parse:
-            rc = _cli_main(["--", "/usr/bin/true", "x"])
+            _cli_main(["--", "/usr/bin/true", "x"])
         # The spawn failed (no observe log), so rc is _SOFTWARE_EX.
         assert seen_cmd == [["/usr/bin/true", "x"]]
 
@@ -176,7 +173,6 @@ class TestCliDispatch:
 
     def _run_with_stubs(self, argv, *, profile, return_code,
                         observe_log_exists=True):
-        from core.sandbox import observe_cli as mod
 
         class _Result:
             def __init__(self, rc): self.returncode = rc
@@ -271,7 +267,6 @@ class TestCliDispatch:
         every downstream `jq` invocation."""
         seen = {}
 
-        from core.sandbox import observe_cli as mod
 
         class _Result:
             def __init__(self): self.returncode = 0

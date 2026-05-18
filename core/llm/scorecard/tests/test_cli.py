@@ -13,7 +13,6 @@ import datetime as _dt
 import io
 import os
 import subprocess
-import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace

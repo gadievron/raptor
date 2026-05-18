@@ -7,9 +7,7 @@ functions count as "examined" for coverage purposes.
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 
 from core.annotations import Annotation, write_annotation
 from core.coverage.record import build_from_annotations, load_records

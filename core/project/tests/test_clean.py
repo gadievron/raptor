@@ -1,6 +1,5 @@
 """Tests for project clean — delete old runs, keep latest N."""
 
-import json
 import time
 import unittest
 from pathlib import Path

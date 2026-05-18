@@ -10,17 +10,13 @@ from __future__ import annotations
 
 import json
 import threading
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.security.prompt_defense_profiles import (
-    ANTHROPIC_CLAUDE,
     CONSERVATIVE,
     PASSTHROUGH,
 )
-from core.security.prompt_envelope import ModelDefenseProfile
-from core.security.prompt_telemetry import DefenseTelemetry
 from packages.llm_analysis.dispatch import DispatchResult, DispatchTask, dispatch_task
 from packages.llm_analysis.orchestrator import CostTracker
 from packages.llm_analysis.tasks import (
@@ -449,7 +445,7 @@ class TestProbeProfileTaskChain:
 
     def _simulate_probe_and_select(self, model_id, probe_compatible):
         """Simulate what orchestrate() does: probe → cache → select profile."""
-        from core.security.envelope_probe import ProbeResult, probe_envelope_compatibility
+        from core.security.envelope_probe import probe_envelope_compatibility
         from core.security.prompt_defense_profiles import get_profile_for
         from core.security.prompt_telemetry import defense_telemetry
 

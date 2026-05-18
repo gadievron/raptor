@@ -5,7 +5,6 @@ Built from the reads manifest (populated by the PostToolUse hook),
 Semgrep JSON output, CodeQL SARIF, and findings.json.
 """
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional

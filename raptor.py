@@ -18,6 +18,7 @@ Available Modes:
     web                   - Web application security testing
     agentic               - Full autonomous workflow
     codeql                - CodeQL-only analysis
+    doctor                - Status report for local setup (no claude needed)
     prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
     verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
     help                  - Show detailed help for a specific mode
@@ -316,11 +317,26 @@ def _run_script(script_path: Path, args: list) -> int:
                 dispatcher,
                 cmd=cmd,
                 label=script_path.name,
-                env=RaptorConfig.get_llm_env(),
+                # F102b: preserve PYTHONUSERBASE for the child
+                # ``raptor_<mode>.py`` subprocess so its own opt-in
+                # at ``get_safe_env(include_python_user_base=True)``
+                # (e.g. ``raptor_agentic.py:757`` semgrep spawn)
+                # has the value to restore. Without this flag the
+                # parent strips PYTHONUSERBASE here, leaving the
+                # child's restoration a no-op for the canonical
+                # operator path. See W14-E3 §F102b.
+                env=RaptorConfig.get_llm_env(include_python_user_base=True),
             )
             return proc.wait()
         # Fallback: pre-Phase-B behaviour, env-direct.
-        result = subprocess.run(cmd, env=RaptorConfig.get_llm_env())
+        # F102b: same opt-in as the dispatcher path above — the
+        # canonical operator entry point must preserve
+        # PYTHONUSERBASE for the spawned ``raptor_<mode>.py``
+        # subprocess. See comment at the spawn_worker call site.
+        result = subprocess.run(
+            cmd,
+            env=RaptorConfig.get_llm_env(include_python_user_base=True),
+        )
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
@@ -450,6 +466,15 @@ def mode_llm_analysis(args: list) -> int:
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
 
+def mode_doctor(args: list) -> int:
+    """Run the on-demand status report.
+
+    Wraps :mod:`core.startup.doctor` — see its docstring for the
+    contract (no logo, failures-first, non-zero exit on real
+    failure). All flags pass through to ``doctor.main``.
+    """
+    from core.startup.doctor import main as doctor_main
+    return doctor_main(args)
 
 def mode_prove_exploit(args: list) -> int:
     """Generate a ZKPoX disclosure bundle for an exploit witness.
@@ -478,6 +503,7 @@ def mode_verify_exploit_proof(args: list) -> int:
         print(f"✗ ZKPoX script not found: {zkpox_script}")
         return 1
     return _run_script(zkpox_script, ["verify"] + args)
+
 
 
 def show_mode_help(mode: str) -> None:
@@ -517,6 +543,7 @@ def show_mode_help(mode: str) -> None:
     # blocks at import time would hang the operator's terminal)
     # doesn't pin the shell.
     try:
+        from core.config import RaptorConfig
         subprocess.run(
             [sys.executable, str(script_path), "--help"],
             env=RaptorConfig.get_safe_env(),
@@ -539,6 +566,7 @@ Available Modes:
   agentic               - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql                - CodeQL-only analysis
   analyze               - LLM-powered vulnerability analysis (requires SARIF input)
+  doctor                - Status report for local setup (no claude needed)
   prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
   verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
 
@@ -640,6 +668,7 @@ def main():
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'doctor': mode_doctor,
         'prove-exploit': mode_prove_exploit,
         'verify-exploit-proof': mode_verify_exploit_proof,
     }

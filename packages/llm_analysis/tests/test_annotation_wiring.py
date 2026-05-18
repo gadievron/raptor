@@ -18,12 +18,9 @@ unit tests.
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import pytest
 
 from core.annotations import read_annotation
 from packages.llm_analysis.agent import (
@@ -241,7 +238,6 @@ class TestNoAnnotationsOptOut:
 
     def test_emit_method_called_when_default(self, tmp_path, monkeypatch):
         """Default behaviour: emit method IS called inside the loop."""
-        from packages.llm_analysis import agent as agent_mod
         agent = _make_agent(tmp_path)
         (agent.repo_path / "src" / "foo.py").write_text(
             "\n" * 9 + "def login():\n    pass\n"

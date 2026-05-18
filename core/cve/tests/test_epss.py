@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-import pytest
 
 from core.cve.epss import EPSS_URL, EpssClient
 from core.http import HttpError

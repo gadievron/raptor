@@ -25,10 +25,8 @@ Why source-grep over functional spawn:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -106,7 +104,6 @@ class TestCodeqlAgentRegistersSandboxArgs:
         # Catches the case where someone removes the import but leaves
         # the rest of the wiring (the source-grep tests above would
         # still pass on a half-edit).
-        import importlib
         import sys
         agent_path = REPO_ROOT / "packages" / "codeql" / "agent.py"
         # Use subprocess to avoid main()'s sys.exit / global state.

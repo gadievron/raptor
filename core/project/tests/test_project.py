@@ -77,7 +77,6 @@ class TestProject(unittest.TestCase):
         """sweep skips runs whose session PID is still alive."""
         from core.run.metadata import RUN_METADATA_FILE
         from core.json import load_json, save_json
-        from unittest.mock import patch
         import os
         with TemporaryDirectory() as d:
             run = Path(d) / "scan-20260401"

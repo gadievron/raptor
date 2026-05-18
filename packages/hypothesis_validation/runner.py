@@ -20,7 +20,6 @@ inconclusive AND a refined rule is suggested, re-run the adapter with the
 refined rule, up to N iterations. Currently `iterations` is fixed at 1.
 """
 
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 from .adapters.base import ToolAdapter, ToolEvidence

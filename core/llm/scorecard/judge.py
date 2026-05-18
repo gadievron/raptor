@@ -31,14 +31,12 @@ only — judge events do NOT shift the prefilter gate.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
+from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
-
-
-_MAX_REASONING_CHARS = 500
 
 
 def record_judge_outcomes(

@@ -11,7 +11,6 @@ shapes end-to-end via fake clients.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 

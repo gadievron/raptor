@@ -205,7 +205,6 @@ def test_no_cross_family_checker_means_no_retry():
     llm_call=None and validate_response returns None on first failure.
     Pinning this so a future regression doesn't accidentally retry against
     a same-family checker (which would defeat the point)."""
-    from typing import Optional
     from pydantic import BaseModel
 
     from core.security.llm_response_schema import validate_response

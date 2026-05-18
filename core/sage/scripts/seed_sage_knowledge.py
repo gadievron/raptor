@@ -46,7 +46,6 @@ def extract_primitives() -> list[dict]:
 
     from packages.exploit_feasibility.primitives import (
         get_primitive_definitions,
-        PrimitiveID,
         MitigationID,
     )
 

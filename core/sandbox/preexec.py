@@ -13,10 +13,13 @@ restrict_self.
 
 import json
 import logging
+import os
 import resource
 from pathlib import Path
 
 from . import state
+from ._fork_safe_warn import warn_post_fork
+from .exit_codes import SANDBOX_EXIT_RLIMIT_CORE_FAIL
 from .landlock import check_landlock_available, _make_landlock_preexec
 from .seccomp import _make_seccomp_preexec
 
@@ -196,13 +199,23 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         if mem > 0:
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
+                warn_post_fork(
+                    b"preexec: RLIMIT_AS setrlimit failed (errno=%d); "
+                    b"process may exceed requested virtual-address bound\n"
+                    % _errno
+                )
         if file_mb > 0:
             try:
                 resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
+                warn_post_fork(
+                    b"preexec: RLIMIT_FSIZE setrlimit failed (errno=%d); "
+                    b"process may exceed requested max-file-size\n"
+                    % _errno
+                )
         if cpu > 0:
             try:
                 # Soft limit 1s before hard limit so the process gets SIGXCPU
@@ -210,8 +223,13 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
                 # With soft==hard, kernel sends both simultaneously and SIGKILL
                 # wins — making resource_exceeded permanently False.
                 resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
+                warn_post_fork(
+                    b"preexec: RLIMIT_CPU setrlimit failed (errno=%d); "
+                    b"process may exceed requested CPU-time bound\n"
+                    % _errno
+                )
 
         # Core dumps off. A sandboxed process can read anywhere in the
         # filesystem (Landlock's read-everywhere default covers ~/.ssh,
@@ -223,8 +241,28 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         # before the kernel writes it.
         try:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as exc:
+            # See block-comment above: without RLIMIT_CORE=0 the kernel
+            # may write a core dump that contains the full address-space
+            # of a sandboxed process — including ~/.ssh, ~/.aws, or any
+            # other secret the process read under Landlock's permissive
+            # default read policy. That turns any crash into a
+            # credential-exfiltration primitive. The parent has no way
+            # to recover from this post-fork, so fail-closed.
+            # Per W35.C convention, fail-CLOSED sites use direct
+            # os.write(2, ...) + os._exit(N) rather than the
+            # warn_post_fork helper (helper is reserved for DiD
+            # warn-only sites).
+            _errno = getattr(exc, "errno", 0) or 0
+            try:
+                os.write(
+                    2,
+                    b"RAPTOR: preexec: RLIMIT_CORE setrlimit failed "
+                    b"(errno=%d), exiting\n" % _errno,
+                )
+            except OSError:
+                pass
+            os._exit(SANDBOX_EXIT_RLIMIT_CORE_FAIL)
 
 
         # Apply Landlock filesystem restrictions after resource limits

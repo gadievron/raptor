@@ -7,7 +7,6 @@ don't want this test file to need updates each time.
 
 from __future__ import annotations
 
-import pytest
 
 from core.llm.cwe_strategies import (
     Signals,

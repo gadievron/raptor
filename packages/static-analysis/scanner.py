@@ -118,7 +118,6 @@ def _compute_python_tool_paths(cmd) -> list:
     exits 126/127 with empty stderr).
     """
     import re
-    import sys
     from pathlib import Path
     if not cmd:
         return []

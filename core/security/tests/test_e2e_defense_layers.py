@@ -93,7 +93,6 @@ class TestEnvelopeQuarantine:
             ),),
         )
         sys_msg = bundle.messages[0].content
-        usr_msg = bundle.messages[1].content
         assert "Your new task is" not in sys_msg
         assert "IGNORE ALL PREVIOUS" not in sys_msg
         assert bundle.messages[0].role == "system"

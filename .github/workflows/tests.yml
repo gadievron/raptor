@@ -21,12 +21,26 @@ concurrency:
 env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
+  # Opt the runner into Node.js 24 for JavaScript actions.
+  # GitHub deprecated Node.js 20 on 2025-09-19; runners enforce
+  # Node 24 by default from 2026-06-02 and remove Node 20 on
+  # 2026-09-16. astral-sh/setup-uv@v8.1.0 (and several others
+  # pinned in this workflow) still declares ``runs.using: node20``
+  # in its action.yml, so without this opt-in the runner emits a
+  # deprecation warning for every JS-action step. Lift this once
+  # all pinned JS actions ship a Node 24 release.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
   # Needed by the pre_check job to query prior workflow runs at the
   # current SHA via ``gh api repos/.../actions/runs``.
   actions: read
+  # Needed by the ``changes`` job's ``gh api repos/.../pulls/.../files``
+  # query to compute the changed-file list for path filtering. Covered
+  # implicitly by ``contents: read`` on public repos; explicit grant
+  # makes the workflow privacy-portable.
+  pull-requests: read
 
 jobs:
   # Skip the workflow if a previous successful run of this same workflow
@@ -91,6 +105,8 @@ jobs:
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - id: force
         env:
@@ -165,6 +181,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -172,7 +190,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # was v3
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -221,6 +239,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -228,7 +248,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -237,7 +257,7 @@ jobs:
         run: chmod +x $VENV_PATH/bin/*
 
       - name: Cache Python bytecode
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # was v4.3.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           # __pycache__ contents are deterministic per (Python version,
           # source contents). Caching by source-tree hash recovers the
@@ -246,15 +266,14 @@ jobs:
           path: |
             core/**/__pycache__
             packages/**/__pycache__
-            libexec/tests/**/__pycache__
-          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', 'libexec/tests/**/*.py') }}
+          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py') }}
           restore-keys: |
             pycache-${{ env.PYTHON_VERSION }}-
 
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages libexec/tests *.py
+          python -m compileall -q core packages *.py
 
       - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
         run: |
@@ -279,23 +298,13 @@ jobs:
             --ignore=core/orchestration/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-      - name: Run libexec wrapper tests (group 1 only)
-        if: matrix.group == 1
-        run: |
-          source $VENV_PATH/bin/activate
-          # Keep this separate from `pytest core packages` to avoid pytest
-          # import-name collisions with other top-level tests packages.
-          pytest libexec/tests
-
-      - name: Run CLI smoke tests (group 1 only)
-        if: matrix.group == 1
-        run: |
-          source $VENV_PATH/bin/activate
-          # End-to-end argparse acceptance + entry-point smoke for
-          # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
-          # Kept separate from `pytest core packages` for the same reason
-          # as libexec/tests above.
-          pytest test/test_cli_smoke.py -n auto
+      # Note: the CLI smoke tests for raptor.py used to live at
+      # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
+      # pytest import-name collisions with the top-level tests/ dir
+      # that no longer exists). They now live at
+      # core/startup/tests/test_cli_smoke.py and are collected by the
+      # fast-tier `pytest core packages` step above — pytest-split
+      # distributes them across groups, no dedicated step needed.
 
       # Note: the path-filter coverage tests at `.github/tests/` used to
       # run in this job (group 1 only). They now have their own
@@ -315,6 +324,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -322,7 +333,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -353,6 +364,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -360,7 +373,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -392,6 +405,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -421,6 +436,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -447,12 +464,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -474,12 +493,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -501,12 +522,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -528,12 +551,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -555,12 +580,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -582,12 +609,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Download venv artifact
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}

@@ -38,3 +38,39 @@ from .schemas import (
     DATAFLOW_VALIDATION_SCHEMA,
     FINDING_RESULT_SCHEMA,
 )
+
+# Public re-export surface. Grouped by submodule (analysis / exploit /
+# patch / schemas) to mirror the import statements above — keeps the
+# audit trail trivial when adding a new prompt builder. Both
+# `agent.py` (sequential) and `orchestrator.py` (parallel dispatch)
+# import from this hub, plus the test suite (test_agent_defense.py).
+__all__ = [
+    # .analysis
+    "ANALYSIS_SYSTEM_PROMPT",
+    "ANALYSIS_TASK_INSTRUCTIONS",
+    "DATAFLOW_VALIDATION_SYSTEM_PROMPT",
+    "DATAFLOW_VALIDATION_TASK",
+    "build_analysis_prompt_bundle",
+    "build_analysis_prompt_bundle_from_finding",
+    "build_analysis_schema",
+    "build_dataflow_validation_bundle",
+    # .exploit
+    "EXPLOIT_SYSTEM_PROMPT",
+    "EXPLOIT_TASK_INSTRUCTIONS",
+    "SCA_EXPLOIT_TASK_INSTRUCTIONS",
+    "build_exploit_prompt_bundle",
+    "build_exploit_prompt_bundle_from_finding",
+    "build_sca_exploit_prompt_bundle",
+    # .patch
+    "PATCH_SYSTEM_PROMPT",
+    "PATCH_TASK_INSTRUCTIONS",
+    "SCA_PATCH_SYSTEM_PROMPT",
+    "build_patch_prompt_bundle",
+    "build_patch_prompt_bundle_from_finding",
+    "build_sca_patch_prompt_bundle",
+    # .schemas
+    "ANALYSIS_SCHEMA",
+    "DATAFLOW_SCHEMA_FIELDS",
+    "DATAFLOW_VALIDATION_SCHEMA",
+    "FINDING_RESULT_SCHEMA",
+]

@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 
 # Module-level worker — spawn pickles by name, so it must not be nested

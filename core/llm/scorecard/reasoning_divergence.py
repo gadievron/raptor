@@ -51,14 +51,10 @@ from typing import Any, Dict, Optional
 
 from core.llm.semantic_entropy import divergence
 
+from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
-
-
-# Mirror the consensus producer's sample-text cap so on-disk sidecar
-# size grows predictably across the producer family.
-_MAX_REASONING_CHARS = 500
 
 # Default Jaccard mean-pairwise threshold above which the panel is
 # considered divergent. Sits between aligned (~0.67) and divergent

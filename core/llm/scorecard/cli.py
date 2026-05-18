@@ -21,7 +21,7 @@ import datetime as _dt
 import re
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional
 
 from .scorecard import (
     ALL_EVENT_TYPES,

@@ -30,7 +30,7 @@ should fail loudly, not silently disable a signal.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 

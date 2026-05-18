@@ -28,4 +28,10 @@ gcovr==8.4
 beautifulsoup4==4.14.3
 
 # test for Z3 solver
-z3-solver==4.16.0.0
+# Capped at 4.15.4.0 until the devcontainer base image moves to trixie:
+# z3-solver 4.15.5+ ships only manylinux_2_38_aarch64 wheels (glibc 2.38+),
+# but mcr.microsoft.com/devcontainers/python:1-3.12-bookworm has glibc 2.36.
+# 4.15.4.0 uses manylinux_2_34_aarch64 (glibc 2.34) and installs cleanly on
+# both x86_64 and aarch64. Move forward when bookworm -> trixie (glibc 2.41).
+# Our z3 surface (BitVec + Bool only) is unaffected by post-4.15.4 changes.
+z3-solver==4.15.4.0

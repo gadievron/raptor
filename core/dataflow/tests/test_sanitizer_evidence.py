@@ -9,7 +9,6 @@ from core.dataflow.sanitizer_evidence import (
     PROVENANCE_LLM,
     SCHEMA_VERSION,
     SEMANTICS_AUTH_CHECK,
-    SEMANTICS_OTHER,
     SEMANTICS_SQL_ESCAPE,
     SEMANTICS_URL_ALLOWLIST,
     CandidateValidator,

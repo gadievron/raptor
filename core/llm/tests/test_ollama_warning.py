@@ -4,7 +4,6 @@ import pytest
 import sys
 import os
 import logging
-from io import StringIO
 from pathlib import Path
 
 # Add parent directories to path for imports
@@ -79,7 +78,7 @@ class TestOllamaWarning:
             api_base=RaptorConfig.OLLAMA_HOST
         )
 
-        client = LLMClient(config)
+        LLMClient(config)
 
         # Find Ollama warning
         ollama_warnings = [
@@ -122,7 +121,7 @@ class TestOllamaWarning:
             model_name="gpt-4o-mini"
         )
 
-        client = LLMClient(config)
+        LLMClient(config)
 
         # Check for Ollama warnings (should be none)
         ollama_warnings = [
@@ -185,7 +184,7 @@ class TestOllamaWarning:
             api_base=RaptorConfig.OLLAMA_HOST
         )
 
-        client = LLMClient(config)
+        LLMClient(config)
 
         # Find Ollama warning
         ollama_warnings = [

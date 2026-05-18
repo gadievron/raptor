@@ -24,7 +24,6 @@ this module returns reference URLs untouched.
 from __future__ import annotations
 
 import functools
-import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field

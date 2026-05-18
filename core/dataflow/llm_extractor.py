@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.dataflow.sanitizer_evidence import (
     PROVENANCE_LLM,

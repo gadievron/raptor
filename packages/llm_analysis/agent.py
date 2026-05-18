@@ -38,6 +38,72 @@ from core.llm.providers import ClaudeCodeProvider
 logger = get_logger()
 
 
+def _enrich_finding_with_ast_view(
+    finding: Dict[str, Any], repo_path: Path,
+) -> None:
+    """Attach a compact per-function AST view to ``finding["ast_view"]``.
+
+    Mutates ``finding`` in-place. Idempotent — a pre-existing
+    ``ast_view`` is preserved (caller-supplied or earlier-run wins).
+    Best-effort: parse failure / unsupported language / function not
+    in inventory / file missing all leave ``finding["ast_view"]``
+    unset and the prompt builder's ``ast-view`` block is skipped.
+
+    Function name resolution order:
+      1. ``finding["metadata"]["name"]`` (set by the inventory
+         enrichment block that runs just before this).
+      2. ``finding["function"]`` (some scanners set this directly).
+      3. Otherwise → no enrichment.
+
+    File-path resolution:
+      * Absolute paths pass through.
+      * Relative paths resolve under ``repo_path``.
+
+    Runs once per finding before any LLM call sees it; the four
+    analysis-family tasks (Analysis, Consensus, Judge, Retry) all
+    share the result via
+    ``build_analysis_prompt_bundle_from_finding`` reading
+    ``finding["ast_view"]``.
+    """
+    if finding.get("ast_view"):
+        return
+    fpath = finding.get("file_path") or finding.get("file") or ""
+    fline = (
+        finding.get("start_line")
+        if finding.get("start_line") is not None
+        else finding.get("startLine", 0)
+    )
+    metadata = finding.get("metadata") or {}
+    function_name = (
+        metadata.get("name")
+        or finding.get("function")
+        or ""
+    )
+    if not (function_name and fpath):
+        return
+    try:
+        # Lazy-import keeps the agent.py module load light when
+        # core.ast / tree-sitter grammars aren't installed (the
+        # ImportError shouldn't break the whole agent).
+        from core.ast import view as _view
+    except ImportError:
+        logger.debug("ast_view enrichment: core.ast not importable")
+        return
+    try:
+        fp = Path(fpath)
+        if not fp.is_absolute():
+            fp = repo_path / fp
+        fv = _view(fp, function_name, at_line=fline)
+        if fv is not None:
+            finding["ast_view"] = fv.to_dict()
+    except Exception:                                       # noqa: BLE001
+        logger.debug(
+            "ast_view enrichment failed for %s:%s %s",
+            fpath, fline, function_name,
+            exc_info=True,
+        )
+
+
 def get_vuln_type(rule_id: str) -> Optional[str]:
     """Map SARIF rule_id to vulnerability type for mitigation checks."""
     try:
@@ -1348,6 +1414,13 @@ class AutonomousSecurityAgentV2:
                         if func.get("priority_reason"):
                             metadata["priority_reason"] = func["priority_reason"]
                         finding["metadata"] = metadata
+
+                # Per-function AST view enrichment. Sits outside the
+                # metadata-enrichment gate above so findings that
+                # arrive pre-populated with metadata (from upstream
+                # scanners) still get ast_view. See
+                # ``_enrich_finding_with_ast_view`` for the contract.
+                _enrich_finding_with_ast_view(finding, self.repo_path)
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 

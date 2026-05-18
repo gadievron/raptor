@@ -33,7 +33,6 @@ from core.dataflow.finding import Finding, Step
 from core.dataflow.label import (
     FP_DEAD_CODE,
     FP_FRAMEWORK_MITIGATION,
-    FP_MISSING_SANITIZER_MODEL,
     FP_TYPE_CONSTRAINT,
     GroundTruth,
     VERDICT_FALSE_POSITIVE,

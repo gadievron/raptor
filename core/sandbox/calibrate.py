@@ -49,7 +49,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -246,7 +245,7 @@ def _spawn_probe(
     # unit tests via mocked spawn).
     from core.sandbox import run as sandbox_run
     from core.sandbox.observe_profile import (
-        OBSERVE_FILENAME, parse_observe_log,
+        parse_observe_log,
     )
 
     with tempfile.TemporaryDirectory(prefix="raptor-calibrate-") as scratch:

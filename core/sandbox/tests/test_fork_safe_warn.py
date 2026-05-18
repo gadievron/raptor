@@ -1,0 +1,121 @@
+"""Tests for the fork-safe post-fork warn helper.
+
+Single entry point — ``warn_post_fork(message: bytes)`` — matching
+the W35.C precedent. Fail-CLOSED sites at landlock / mount_ns /
+preexec use direct ``os.write(2, ...) + os._exit(N)`` and are
+exercised by the per-site fix tests.
+"""
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+# Anchor the subprocess sys.path to the SAME tree these tests run from
+# rather than `os.environ["RAPTOR_DIR"]`. The env-var form silently
+# misbehaved when RAPTOR_DIR pointed at a different checkout — the
+# subprocess imported an unrelated version of core.sandbox._fork_safe_warn,
+# and the closed-fd-2 behaviour under test was attributed to the wrong
+# module.
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+
+
+def _read_fd(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    return b"".join(chunks)
+
+
+def test_warn_post_fork_writes_prefixed_line():
+    from core.sandbox._fork_safe_warn import warn_post_fork
+
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"RAPTOR: landlock: SYS_create returned -1\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out == b"RAPTOR: landlock: SYS_create returned -1\n"
+
+
+def test_warn_post_fork_auto_prepends_prefix_when_missing():
+    from core.sandbox._fork_safe_warn import warn_post_fork
+
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"bare_event\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out == b"RAPTOR: bare_event\n"
+
+
+def test_warn_post_fork_no_double_prefix():
+    from core.sandbox._fork_safe_warn import warn_post_fork
+
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"RAPTOR: already_prefixed\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out.count(b"RAPTOR: ") == 1
+
+
+def test_warn_post_fork_silent_when_fd2_closed():
+    script = (
+        "import sys; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "import os; "
+        "from core.sandbox._fork_safe_warn import warn_post_fork; "
+        "os.close(2); "
+        "warn_post_fork(b'should_not_raise\\n'); "
+        "print('OK')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script, _REPO_ROOT],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "OK" in proc.stdout
+
+
+def test_warn_post_fork_callable_from_preexec_fn():
+    def preexec():
+        from core.sandbox._fork_safe_warn import warn_post_fork
+        warn_post_fork(b"RAPTOR: preexec_test: from forked child\n")
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "pass"],
+        preexec_fn=preexec,
+        capture_output=True,
+    )
+    assert proc.returncode == 0

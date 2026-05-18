@@ -100,7 +100,7 @@ def check_binary(name: str, version_flag: str = "--version") -> Tuple[bool, str,
         return True, f"Found at {path}", version
     except subprocess.TimeoutExpired:
         return True, f"Found at {path} (version check timed out)", None
-    except Exception as e:
+    except Exception:
         return True, f"Found at {path}", None
 
 

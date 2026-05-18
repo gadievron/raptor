@@ -36,7 +36,6 @@ Limitations (also noted in :doc:`README`):
 
 from __future__ import annotations
 
-import io
 import logging
 import sqlite3
 import struct

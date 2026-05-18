@@ -4,7 +4,6 @@ GH Archive Collector.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 
 from ..clients.gharchive import GHArchiveClient
 from ..schema.common import EvidenceSource, VerificationInfo

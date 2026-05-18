@@ -1,7 +1,6 @@
 """Tests for core.smt_solver — Z3 dependency management."""
 
 import sys
-import unittest.mock
 from pathlib import Path
 import pytest
 

@@ -37,8 +37,8 @@ required strings, ``confidence`` in ``[0, 1]``, ``source_line >= 1``,
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, FrozenSet, Mapping, Tuple
 
 
 SCHEMA_VERSION = 1

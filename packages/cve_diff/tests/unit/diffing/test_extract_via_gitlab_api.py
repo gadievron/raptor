@@ -13,7 +13,6 @@ clone bundle.
 from __future__ import annotations
 
 import json as _json
-from typing import Any
 
 import pytest
 

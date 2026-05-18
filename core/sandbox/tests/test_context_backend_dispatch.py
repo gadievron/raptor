@@ -154,7 +154,6 @@ def test_use_seatbelt_does_not_depend_on_check_net_available(reset_caches):
     via check_seatbelt_available() on Darwin. This test asserts
     that with seatbelt available + net unavailable (the actual
     macOS state), the seatbelt backend IS used."""
-    fake_macos = mock.MagicMock()
     fake_macos_result = mock.MagicMock()
     fake_macos_result.returncode = 0
     fake_macos_result.stderr = b""

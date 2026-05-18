@@ -14,7 +14,6 @@ from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
 # Each call site specifies target+output for Landlock engagement.
-import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -539,6 +538,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                 )
         finally:
             # Clean up command file
@@ -618,6 +618,7 @@ class CrashAnalyser:
                         capture_output=True,
                         text=True,
                         timeout=60,  # Increased timeout
+                        sanitise_host_fingerprint=True,
                     )
             except subprocess.TimeoutExpired:
                 logger.warning("LLDB analysis timed out - trying fallback approach")
@@ -702,6 +703,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                 )
             return result.stdout
         except subprocess.TimeoutExpired:
@@ -1491,6 +1493,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                     # Use get_safe_env() as the base, NOT os.environ.
                     # Pre-fix `{**os.environ, "ASAN_OPTIONS": ...}`
                     # passed the operator's full env (LLM API keys,

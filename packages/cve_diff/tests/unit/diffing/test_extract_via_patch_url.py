@@ -7,7 +7,6 @@ second-source coverage for cgit (kernel.org), which has no JSON API.
 """
 from __future__ import annotations
 
-import pytest
 
 from core.http import HttpError, Response
 from cve_diff.core.models import RepoRef

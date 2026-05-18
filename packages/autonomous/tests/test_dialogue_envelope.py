@@ -11,9 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from core.security.prompt_envelope import PromptBundle
 

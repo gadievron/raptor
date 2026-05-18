@@ -249,7 +249,6 @@ class TestSandboxAuditKwarg:
     def test_audit_kwarg_engages_audit_mode(self, monkeypatch, tmp_path):
         # No CLI flag, but per-call audit=True. Should still engage.
         from core.sandbox import probes
-        from core.sandbox import ptrace_probe
         from core.sandbox import proxy as proxy_mod
         from core.sandbox.context import sandbox
 
@@ -265,7 +264,7 @@ class TestSandboxAuditKwarg:
                 audit=True,
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
-            ) as run:
+            ):
                 # Audit engaged via per-call kwarg → proxy acquired.
                 assert proxy_inst._audit_count == 1
             assert proxy_inst._audit_count == 0

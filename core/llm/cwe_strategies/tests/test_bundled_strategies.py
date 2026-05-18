@@ -55,7 +55,6 @@ class TestBundle:
 
     def test_no_unexpected_strategies(self, by_name):
         names = set(by_name)
-        unexpected = names - _EXPECTED_STRATEGIES
         # Allow extras in future without breaking; just flag for visibility.
         # Convert to a clear assertion the operator wants to see.
         assert names >= _EXPECTED_STRATEGIES

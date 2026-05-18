@@ -8,11 +8,9 @@ triage-aware filtering, and best-effort exception handling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-import pytest
 
 from packages.llm_analysis.checker_followup import (
     _build_variant_body,
@@ -175,9 +173,7 @@ def _patch_synth(monkeypatch, *, rule, matches, triage=()):
     canned ``CheckerSynthesisResult``."""
     from packages.checker_synthesis import (
         CheckerSynthesisResult,
-        SynthesisedRule,
     )
-    from packages.llm_analysis import checker_followup as mod
 
     def _fake(*args, **kwargs):
         return CheckerSynthesisResult(

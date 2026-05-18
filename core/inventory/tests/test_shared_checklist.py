@@ -1,6 +1,5 @@
 """Tests for project-level shared checklist via symlinks."""
 
-import json
 import os
 import sys
 import unittest

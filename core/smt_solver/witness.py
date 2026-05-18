@@ -7,7 +7,7 @@ high-bit-set values as two's-complement negatives when ``signed=True``.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Dict, Mapping, Union
 
 from .availability import z3
 

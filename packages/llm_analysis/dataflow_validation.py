@@ -1562,9 +1562,20 @@ def _db_indexed_files(db_path: Path) -> "frozenset[str]":
         return frozenset()
     try:
         import zipfile
+        from core.zip import UnsafeMemberReason, safe_member_reason
+        names = []
         with zipfile.ZipFile(src_zip) as zf:
-            return frozenset(name for name in zf.namelist()
-                             if not name.endswith("/"))
+            for info in zf.infolist():
+                if info.filename.endswith("/"):
+                    continue
+                # Substrate safety check. A maliciously-crafted source
+                # tree could land path-traversal / absolute entries
+                # in src.zip; downstream code reads these into the
+                # LLM prompt context, so filter at the index level.
+                if safe_member_reason(info) != UnsafeMemberReason.SAFE:
+                    continue
+                names.append(info.filename)
+        return frozenset(names)
     except (zipfile.BadZipFile, OSError) as e:
         logger.debug("could not read CodeQL src.zip at %s: %s", src_zip, e)
         return frozenset()
@@ -1631,8 +1642,17 @@ def _read_db_source(db_path: Path, indexed_path: str) -> Optional[str]:
         return None
     try:
         import zipfile
+        from core.zip import UnsafeMemberReason, safe_member_reason
         with zipfile.ZipFile(src_zip) as zf:
-            with zf.open(indexed_path) as f:
+            info = zf.getinfo(indexed_path)
+            # Substrate safety check. ``indexed_path`` came from
+            # ``_db_indexed_files`` which already filtered via
+            # ``safe_member_reason``, but re-check at the read site
+            # so a future caller that constructs ``indexed_path`` by
+            # other means is still gated.
+            if safe_member_reason(info) != UnsafeMemberReason.SAFE:
+                return None
+            with zf.open(info) as f:
                 return f.read().decode("utf-8", errors="replace")
     except (zipfile.BadZipFile, OSError, KeyError) as e:
         logger.debug("could not read %s from %s: %s", indexed_path, src_zip, e)

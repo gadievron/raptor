@@ -26,7 +26,6 @@ from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     TaintedString,
-    UntrustedBlock,
     build_prompt,
 )
 from core.security.redaction import redact_secrets
