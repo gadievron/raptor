@@ -10,8 +10,6 @@ continues to protect against stray manifests alone.
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from packages.codeql import language_detector as ld_mod
 from packages.codeql.language_detector import LanguageDetector
 
