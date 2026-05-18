@@ -1012,7 +1012,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 logger.warning(f"Build script crashed: {tail}")
                 return None
         except (subprocess.TimeoutExpired, Exception) as e:
-            logger.warning("Build script never ran (%r) — treating as 'didn't run'", e)
+            logger.warning(f"Build script never ran ({e!r}) — treating as 'didn't run'")
             return None
 
         # Parse gcc/g++ errors from stderr
@@ -1064,11 +1064,10 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         )
         if not any(real_claude.startswith(p) for p in allowed_prefixes):
             logger.info(
-                "  Skipping CC flag inference — `claude` resolves to %r "
+                f"  Skipping CC flag inference — `claude` resolves to {real_claude!r} "
                 "which is outside the install-location allowlist. "
                 "If this is a legitimate location, add it to "
-                "_cc_suggest_flags' `allowed_prefixes`.",
-                real_claude,
+                "_cc_suggest_flags' `allowed_prefixes`."
             )
             return None
 

@@ -97,6 +97,42 @@ def provider_of(model_id: str) -> str:
     return provider_for_family(family_of(model_id))
 
 
+def bare_model_id(model_id: str) -> str:
+    """Return the model identifier with any aggregator + provider
+    prefix peeled off.
+
+    Mirrors :func:`family_of`'s aggregator-peel loop and then strips a
+    single ``<provider>/`` prefix when the head matches one of the
+    known provider strings. Examples::
+
+        bare_model_id("anthropic/claude-haiku-4-5")
+            -> "claude-haiku-4-5"
+        bare_model_id("together/anthropic/claude-haiku-4-5")
+            -> "claude-haiku-4-5"
+        bare_model_id("claude-haiku-4-5")
+            -> "claude-haiku-4-5"
+
+    Used by call-sites that need to match user-supplied ``--model``
+    arguments against ``models.json`` entries (which store the bare
+    model under a separate ``provider`` key).
+    """
+    needle = model_id
+    for _ in range(4):
+        peeled = False
+        for prefix in _AGGREGATOR_PREFIXES:
+            if needle.lower().startswith(prefix):
+                needle = needle[len(prefix):]
+                peeled = True
+                break
+        if not peeled:
+            break
+    if "/" in needle:
+        head, rest = needle.split("/", 1)
+        if head.lower() in {v for v in _FAMILY_TO_PROVIDER.values()}:
+            needle = rest
+    return needle
+
+
 def family_of(model_id: str) -> Family:
     """Return the model family for a model identifier.
 

@@ -97,8 +97,19 @@ def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
     resolved = max(candidates)
     if resolved != name:
         pair = (name, resolved)
-        if pair not in _LOGGED_RESOLUTIONS:
-            _LOGGED_RESOLUTIONS.add(pair)
+        # Lock around the set check + add so two concurrent
+        # first-callers can't race past the membership test and
+        # double-log the same mapping. Re-use the inventory lock —
+        # the two pieces of dedupe state (cache + log set) move
+        # together at startup and locking them as one ensures no
+        # ordering window where one is populated and the other isn't.
+        with _INVENTORY_LOCK:
+            if pair not in _LOGGED_RESOLUTIONS:
+                _LOGGED_RESOLUTIONS.add(pair)
+                _emit = True
+            else:
+                _emit = False
+        if _emit:
             logger.info(
                 f"Resolved Anthropic model alias {name} -> {resolved} "
                 f"(from /v1/models inventory)"

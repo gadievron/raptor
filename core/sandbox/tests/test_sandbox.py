@@ -1714,6 +1714,23 @@ class TestSpeculativeToolPathsRetry(unittest.TestCase):
         self.assertIn("not _stderr_text.strip()", src,
                       "speculative-C retry must filter on empty stderr")
 
+    def test_raptor_prefix_lines_dont_block_retry(self):
+        """``RAPTOR:``-prefixed lines (sandbox-internal post-fork
+        diagnostics from ``warn_post_fork``) MUST be stripped before
+        the emptiness test — otherwise the benign mount-ns
+        ``remount-ro failed; relying on Landlock`` warning, which
+        fires on most Linux hosts, defeats the retry and Semgrep
+        runs out of the sandbox with no findings.
+
+        Pinned by source-grep so a refactor that drops the
+        prefix-filter doesn't silently regress."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        self.assertIn('startswith("RAPTOR:")', src,
+                      "speculative-C retry must skip RAPTOR:-prefixed "
+                      "sandbox diagnostics in the emptiness check")
+
 
 class TestSpeculativeFailureCache(unittest.TestCase):
     """The per-cmd speculative-failure cache prevents repeated mount-ns

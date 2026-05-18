@@ -194,28 +194,25 @@ def build_llm_config_from_flags(
     """
     from core.llm.config import LLMConfig, _model_config_from_entry, _get_configured_models
     from core.llm.model_data import PROVIDER_ENV_KEYS
-    from core.security.llm_family import provider_of
+    from core.security.llm_family import provider_of, bare_model_id
 
     models = models or []
     llm_config = None
 
     def _resolve_model(name: str, role: str):
+        # Operators may write any of ``--model claude-haiku-4-5``,
+        # ``--model anthropic/claude-haiku-4-5``, or an aggregator
+        # form like ``--model together/anthropic/claude-haiku-4-5``;
+        # ``models.json`` always stores the bare model under a
+        # separate ``provider`` key. Compute provider via
+        # ``provider_of`` (which peels aggregators) and bare model
+        # via ``bare_model_id`` so all three forms collapse to the
+        # same lookup. Leaving the prefix in the entry's ``model``
+        # field would produce ``anthropic/anthropic/claude-haiku-4-5``
+        # when downstream re-prepends the provider — the SDK ships
+        # that to Anthropic which 404s as an unknown model.
         provider = provider_of(name)
-        # Operators may write either ``--model claude-haiku-4-5`` or
-        # ``--model anthropic/claude-haiku-4-5``; ``models.json``
-        # always stores the bare model under a ``provider`` key. When
-        # the input carries a ``provider/`` prefix, also gate the
-        # entry match by provider so two same-named entries under
-        # different providers (e.g. an ``ollama/llama-3`` local entry
-        # and a ``together/llama-3`` cloud entry) don't collide.
-        # Strip the prefix in the constructed entry too — leaving it
-        # in produces ``anthropic/anthropic/claude-haiku-4-5`` when
-        # downstream re-prepends the provider, and the SDK ships that
-        # to Anthropic which rejects it as an unknown model.
-        if "/" in name:
-            req_provider, bare = name.split("/", 1)
-        else:
-            req_provider, bare = None, name
+        bare = bare_model_id(name)
         entry: Dict[str, Any] = {"model": bare, "provider": provider, "role": role}
         for cfg_entry in _get_configured_models():
             # Match against either the resolved model name or the
@@ -224,8 +221,10 @@ def build_llm_config_from_flags(
             # the alias in ``_configured_model``; without the alias
             # compare, an entry whose ``model`` is now
             # ``claude-haiku-4-5-20251001`` would miss ``--model
-            # claude-haiku-4-5``.
-            if req_provider and cfg_entry.get("provider") != req_provider:
+            # claude-haiku-4-5``. Gate by provider too so two
+            # same-named entries under different providers don't
+            # collide (e.g. ``ollama/llama-3`` vs ``together/llama-3``).
+            if provider and cfg_entry.get("provider") != provider:
                 continue
             cfg_name = cfg_entry.get("model")
             cfg_alias = cfg_entry.get("_configured_model")

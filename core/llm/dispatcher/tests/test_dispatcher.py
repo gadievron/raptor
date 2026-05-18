@@ -555,6 +555,21 @@ class TestRealAnthropicSDKThroughDispatcher:
             req_body = json.loads(upstream.captured["body"])
             assert req_body["model"] == "claude-3-haiku-20240307"
             assert req_body["messages"][0]["content"] == "ping"
+
+            # ---- upstream path is exactly ``/v1/messages`` ----
+            # Pins the contract that the worker base_url + dispatcher
+            # prefix-strip + SDK's own ``/v1/messages`` append produce
+            # the right upstream path. A regression that returns to
+            # the old doubled-``/v1/v1/messages`` shape would fail
+            # against the real Anthropic 404 in production without
+            # this assertion.
+            assert upstream.captured["path"] == "/v1/messages", (
+                f"upstream path = {upstream.captured['path']!r} "
+                "— expected '/v1/messages'. If this fails with "
+                "'/v1/v1/messages' the worker base_url has been "
+                "set to 'http://_/anthropic/v1' instead of "
+                "'http://_/anthropic' (SDK appends /v1 itself)."
+            )
         finally:
             upstream.shutdown()
             d.shutdown()
