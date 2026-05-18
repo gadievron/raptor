@@ -76,7 +76,18 @@ class AnalysisTask(DispatchTask):
         return [model] if model else []
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D PR1: inject source_intel structural evidence for
+        # memory-corruption findings. ``evidence_blocks_for_finding``
+        # returns ``()`` for irrelevant rule_ids OR when the
+        # orchestrator's pre-seed wasn't called / failed for this
+        # target — no LLM-cost overhead on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -261,7 +272,18 @@ class ConsensusTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D PR1: inject source_intel structural evidence for
+        # memory-corruption findings. ``evidence_blocks_for_finding``
+        # returns ``()`` for irrelevant rule_ids OR when the
+        # orchestrator's pre-seed wasn't called / failed for this
+        # target — no LLM-cost overhead on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 

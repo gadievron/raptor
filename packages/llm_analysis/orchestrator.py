@@ -381,6 +381,19 @@ def orchestrate(
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
 
+    # Phase D PR1: pre-seed source_intel for the target. One spatch
+    # invocation now serves every memory-corruption finding's
+    # evidence injection below (see source_intel_inject for
+    # per-finding fan-out). Best-effort — failures collapse to
+    # "no source_intel evidence this run" without affecting dispatch.
+    try:
+        from packages.llm_analysis.source_intel_inject import (
+            prepare_source_intel,
+        )
+        prepare_source_intel(repo_path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("source_intel pre-seed failed (%s); continuing", e)
+
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
         findings = findings[:max_findings]
