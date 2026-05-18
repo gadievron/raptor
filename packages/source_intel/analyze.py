@@ -1401,7 +1401,8 @@ def _parse_match_to_checked_allocation(
 # the body opener is on a separate line). Lines ending with `;` are
 # rejected upstream (declarations, not definitions).
 _FUNC_DEF_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*?\)\s*\{?",
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*[\s*&]+)*"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*?\)\s*\{?",
 )
 
 # Cheap-match prefix used by the multi-line walker — does the line
@@ -1410,8 +1411,17 @@ _FUNC_DEF_RE = re.compile(
 # re-tests against the full ``_FUNC_DEF_RE``. The prefix regex
 # deliberately doesn't require closing `)` — multi-line decls have
 # it on a later line.
+#
+# Type-prefix tokens accepted between the first identifier and the
+# function name: more identifiers (typedef chains like
+# `unsigned long`), pointer/reference sigils (`*`, `**`, `&`), and
+# whitespace. Required because pointer-returning functions like
+# `struct page *foo(void)` have a `*` interrupting the
+# type → name sequence and the simpler regex `<word>\s+<word>(`
+# misses them on kernel-style code.
 _FUNC_DEF_PREFIX_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)+[A-Za-z_][A-Za-z0-9_]*\s*\(",
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*[\s*&]+)+"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*\(",
 )
 
 #: C keywords that look like function names to the naive regex above.
