@@ -8,6 +8,7 @@ and harness generation.
 from .afl_runner import AFLRunner
 from .crash_collector import CrashCollector, Crash
 from .corpus_manager import CorpusManager
+from .seed_corpus import DEFAULT_MAX_FILE_SIZE, SeedCorpusOptions, prepare_seed_corpus
 from .capability import CapabilityReport, probe as probe_capabilities, select_fuzzer
 from .target_detector import TargetInfo, detect as detect_target
 from .orchestrator import FuzzingOrchestrator, CampaignPlan
@@ -26,6 +27,9 @@ __all__ = [
     "CrashCollector",
     "Crash",
     "CorpusManager",
+    "DEFAULT_MAX_FILE_SIZE",
+    "SeedCorpusOptions",
+    "prepare_seed_corpus",
     "CapabilityReport",
     "probe_capabilities",
     "select_fuzzer",

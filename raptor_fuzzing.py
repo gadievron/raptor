@@ -43,8 +43,28 @@ def main() -> None:
         description="RAPTOR Fuzzing Mode - Binary fuzzing with LLM analysis"
     )
 
-    ap.add_argument("--binary", required=True, help="Path to binary to fuzz")
+    ap.add_argument("--binary", help="Path to binary to fuzz")
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
+    ap.add_argument(
+        "--prepare-corpus",
+        metavar="PROJECT_DIR",
+        help="Prepare a deterministic seed corpus from project fixtures and exit",
+    )
+    ap.add_argument(
+        "--seed-out",
+        help="Output directory for --prepare-corpus (default: out/fuzz_seeds_<project>)",
+    )
+    ap.add_argument(
+        "--seed-max-size",
+        type=int,
+        default=1024 * 1024,
+        help="Maximum seed file size in bytes for --prepare-corpus (default: 1048576)",
+    )
+    ap.add_argument(
+        "--seed-include-lockfiles",
+        action="store_true",
+        help="Allow lockfiles such as package-lock.json in prepared seed corpora",
+    )
     ap.add_argument("--duration", type=int, default=3600, help="Fuzzing duration in seconds (default: 3600)")
     ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
@@ -74,6 +94,39 @@ def main() -> None:
     add_cli_args(ap)
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
+
+    if args.prepare_corpus:
+        from core.config import RaptorConfig
+        from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
+
+        source_dir = Path(args.prepare_corpus)
+        if args.seed_out:
+            seed_out = Path(args.seed_out)
+        else:
+            seed_out = RaptorConfig.get_out_dir() / f"fuzz_seeds_{source_dir.name}"
+        try:
+            manifest = prepare_seed_corpus(
+                SeedCorpusOptions(
+                    source_dir=source_dir,
+                    out_dir=seed_out,
+                    max_file_size=args.seed_max_size,
+                    include_lockfiles=args.seed_include_lockfiles,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to prepare seed corpus: {e}")
+            sys.exit(1)
+
+        print("Seed corpus prepared")
+        print(f"  source: {manifest['source_dir']}")
+        print(f"  output: {manifest['out_dir']}")
+        print(f"  seeds: {manifest['seed_count']}")
+        print(f"  skipped: {manifest['skipped_count']}")
+        print(f"  manifest: {Path(manifest['out_dir']) / 'manifest.json'}")
+        sys.exit(0)
+
+    if not args.binary:
+        ap.error("--binary is required unless --prepare-corpus is used")
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
