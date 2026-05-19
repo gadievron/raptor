@@ -103,7 +103,13 @@ def test_prepare_seed_corpus_ignores_output_directory_inside_source(tmp_path):
     (source / "seed.json").write_text("{}\n", encoding="utf-8")
 
     first = prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+    (source / "seed.json").unlink()
+    (source / "other.yaml").write_text("ok: true\n", encoding="utf-8")
+    (out / "notes.txt").write_text("operator note\n", encoding="utf-8")
     second = prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
 
     assert [seed["source"] for seed in first["seeds"]] == ["seed.json"]
-    assert [seed["source"] for seed in second["seeds"]] == ["seed.json"]
+    assert [seed["source"] for seed in second["seeds"]] == ["other.yaml"]
+    assert not (out / "json" / "seed-0001.json").exists()
+    assert (out / "yaml" / "seed-0001.yaml").is_file()
+    assert (out / "notes.txt").read_text(encoding="utf-8") == "operator note\n"
