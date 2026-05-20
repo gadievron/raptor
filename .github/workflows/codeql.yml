@@ -386,6 +386,16 @@ jobs:
           echo "Combined $(jq '.runs | length' combined.sarif) runs:"
           jq -r '.runs[] | "  - \(.automationDetails.id)  results=\(.results | length)"' combined.sarif
 
+      # Stamp suppressions on triaged FP flow classes (sandbox audit-
+      # log + denial-marker sinks). Source-side defences
+      # (paths-ignore for tests + path-typed variable renames) handle
+      # the bulk; this script is the defence-in-depth for residual
+      # results where the sink is in production code. Each entry in
+      # the script's KNOWN_FP_RULES table is reviewed in its own PR.
+      - name: Apply known-FP suppressions
+        run: |
+          python3 .github/scripts/sarif_known_fp_suppressions.py combined.sarif
+
       # Single upload, atomic delivery. The action sends one POST to
       # `/code-scanning/sarifs` containing all runs; GitHub processes
       # the multi-run file as one batch and the meta-check fires with
