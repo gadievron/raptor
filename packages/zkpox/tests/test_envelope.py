@@ -14,6 +14,9 @@ import shutil
 
 import pytest
 
+pytest.importorskip("cryptography")
+pytest.importorskip("cbor2")
+
 from packages.zkpox import envelope
 
 
