@@ -37,13 +37,15 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlencode, urlparse
 
-import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+
+from core.http import HttpClient, HttpError, default_client
 
 from .bundle import Bundle, Timestamp, bundle_hash_pre_timestamp, with_timestamp
 
@@ -56,6 +58,30 @@ DEFAULT_REKOR_URL = "https://rekor.sigstore.dev"
 
 def rekor_url() -> str:
     return os.environ.get("ZKPOX_REKOR_URL", DEFAULT_REKOR_URL).rstrip("/")
+
+
+def _rekor_host(log_url: str) -> str:
+    """Extract the hostname from a Rekor base URL for the egress allowlist.
+
+    Rekor URLs are always ``https://<host>[/path]``; the egress proxy's
+    allowlist is hostname-only. Parsing centrally keeps the public /
+    self-hosted / test-stub cases all going through the same shape.
+    """
+    host = urlparse(log_url).hostname
+    if not host:
+        raise AnchorError(f"could not parse hostname from rekor URL: {log_url!r}")
+    return host
+
+
+def _default_http_for(log_url: str) -> HttpClient:
+    """Build an egress-allowlisted HttpClient for a given Rekor URL.
+
+    Production path: every Rekor call goes through ``core.http`` with
+    the proxy backend constrained to the single hostname we're talking
+    to. Tests inject their own ``HttpClient`` stub via the ``http=``
+    kwarg on the public functions and never hit this.
+    """
+    return default_client(allowed_hosts=[_rekor_host(log_url)])
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +203,7 @@ def anchor_bundle(
     keypair: Ed25519Keypair | None = None,
     rekor: str | None = None,
     timeout_s: float = 30.0,
+    http: HttpClient | None = None,
 ) -> tuple[Bundle, Ed25519Keypair]:
     """Anchor `bundle` to Sigstore Rekor; return (bundle-with-timestamp,
     keypair-used).
@@ -188,9 +215,13 @@ def anchor_bundle(
 
     `rekor` overrides the log URL; default is `ZKPOX_REKOR_URL` env var
     or the public Sigstore Rekor instance.
+
+    `http` overrides the HTTP client; default builds an egress-proxied
+    client allowlisted to the Rekor host. Tests inject a stub here.
     """
     kp = keypair or gen_ed25519_keypair()
     log_url = (rekor or rekor_url()).rstrip("/")
+    client = http or _default_http_for(log_url)
 
     digest = bundle_hash_pre_timestamp(bundle)
     bundle_hash_hex = digest.hex()
@@ -202,17 +233,19 @@ def anchor_bundle(
         pubkey_pem_b64=base64.b64encode(kp.pem_public()).decode("ascii"),
     )
 
-    resp = requests.post(
-        f"{log_url}/api/v1/log/entries",
-        json=entry_body,
-        headers={"Content-Type": "application/json"},
-        timeout=timeout_s,
-    )
-    if resp.status_code != 201:
-        raise AnchorError(
-            f"Rekor returned {resp.status_code}: {resp.text[:512]}"
+    # ``retries=0``: posting an entry is not idempotent — a 5xx after
+    # partial server-side processing could double-anchor the bundle.
+    try:
+        body = client.post_json(
+            f"{log_url}/api/v1/log/entries",
+            entry_body,
+            timeout=int(timeout_s),
+            retries=0,
         )
-    ts = _parse_rekor_response(resp.json())
+    except HttpError as exc:
+        raise AnchorError(f"Rekor POST failed: {exc}") from exc
+
+    ts = _parse_rekor_response(body)
     return with_timestamp(bundle, ts), kp
 
 
@@ -221,22 +254,25 @@ def fetch_log_entry(
     *,
     rekor: str | None = None,
     timeout_s: float = 15.0,
+    http: HttpClient | None = None,
 ) -> dict:
     """Fetch a Rekor log entry by its index. Returns Rekor's raw JSON.
     Useful for the verifier path: GET an entry, compare its body's
     hashedrekord.data.hash to a locally-computed bundle hash.
+
+    `http` overrides the HTTP client; default builds an egress-proxied
+    client allowlisted to the Rekor host.
     """
     log_url = (rekor or rekor_url()).rstrip("/")
-    resp = requests.get(
-        f"{log_url}/api/v1/log/entries",
-        params={"logIndex": log_index},
-        timeout=timeout_s,
-    )
-    if resp.status_code != 200:
-        raise AnchorError(
-            f"Rekor GET {log_index} returned {resp.status_code}: {resp.text[:512]}"
-        )
-    return resp.json()
+    client = http or _default_http_for(log_url)
+    # HttpClient API doesn't take params= directly — encode the
+    # logIndex query manually. Rekor's GET endpoint is idempotent so
+    # the default retry budget is fine.
+    url = f"{log_url}/api/v1/log/entries?{urlencode({'logIndex': log_index})}"
+    try:
+        return client.get_json(url, timeout=int(timeout_s))
+    except HttpError as exc:
+        raise AnchorError(f"Rekor GET {log_index} failed: {exc}") from exc
 
 
 def confirm_anchor_matches(
@@ -244,6 +280,7 @@ def confirm_anchor_matches(
     *,
     rekor: str | None = None,
     timeout_s: float = 15.0,
+    http: HttpClient | None = None,
 ) -> bool:
     """Verifier-side structural check: does Rekor's recorded entry for
     `bundle.timestamp.rekor_log_index` match `bundle_hash_pre_timestamp`?
@@ -256,12 +293,16 @@ def confirm_anchor_matches(
     "weakest useful thing": Rekor records a hash that matches what we
     would have produced from the bundle, at the index the bundle
     claims.
+
+    `http` overrides the HTTP client; default builds an egress-proxied
+    client allowlisted to the Rekor host.
     """
     if bundle.timestamp is None:
         raise AnchorError("bundle has no timestamp to confirm")
 
     response = fetch_log_entry(
-        bundle.timestamp.rekor_log_index, rekor=rekor, timeout_s=timeout_s
+        bundle.timestamp.rekor_log_index,
+        rekor=rekor, timeout_s=timeout_s, http=http,
     )
     if not response:
         return False
