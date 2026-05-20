@@ -18,7 +18,11 @@ present so the bundle is self-contained for either decrypt path).
 
 External binaries: `tle` (`go install github.com/drand/tlock/cmd/tle`)
 and `age` + `age-keygen` (Homebrew / apt). Neither has stable Python
-bindings; subprocess is the pragmatic interop.
+bindings; subprocess is the pragmatic interop. Every invocation goes
+through `core.sandbox.run_untrusted` — Landlock + namespace network
+block + env hygiene; the tle paths additionally pin the egress proxy
+to `api.drand.sh` so attacker-crafted ciphertext can't smuggle the
+binary into reaching arbitrary hosts.
 """
 
 from __future__ import annotations
@@ -26,14 +30,18 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from core.config import RaptorConfig
+from core.sandbox import run_untrusted
+
+# Drand mainnet API — the only hostname `tle` reaches for the time-lock
+# rounds. Egress proxy is pinned to this host so a compromised `tle`
+# binary can't reach arbitrary network endpoints.
+_DRAND_HOST = "api.drand.sh"
 
 
 # Wide associated data so an attacker can't take a ciphertext from a
@@ -133,12 +141,17 @@ def gen_age_keypair() -> AgeKeypair:
     keygen = require(_which_age_keygen(), "age-keygen")
     tmpdir = Path(tempfile.mkdtemp(prefix="zkpox-age-"))
     sk_path = tmpdir / "secret.txt"
-    # Explicit get_safe_env() at the subprocess boundary — same posture
-    # as _run() below (see that function's comment).
-    out = subprocess.run(
+    # Sandboxed: Landlock-scope the writable area to ``tmpdir`` so a
+    # compromised age-keygen can only land its output file in this
+    # per-call temp dir. No network. ``tool_paths`` makes the keygen
+    # binary's parent dir readable in mount-ns hosts where Homebrew /
+    # /opt/homebrew/bin aren't on the default safe-bin path.
+    out = run_untrusted(
         [keygen, "-o", str(sk_path)],
+        output=str(tmpdir),
+        tool_paths=[str(Path(keygen).parent)],
+        caller_label="zkpox-age-keygen",
         capture_output=True, check=True, text=True,
-        env=RaptorConfig.get_safe_env(),
     )
     pub = ""
     for line in out.stderr.splitlines():
@@ -152,12 +165,20 @@ def gen_age_keypair() -> AgeKeypair:
 
 def age_encrypt_to(plaintext: bytes, recipient_pubkey: str) -> bytes:
     age = require(_which_age(), "age")
+    # age is local-only — no network.
     return _run([age, "-e", "-r", recipient_pubkey, "-o", "-"], plaintext)
 
 
 def age_decrypt_with(ciphertext: bytes, identity_file: Path) -> bytes:
     age = require(_which_age(), "age")
-    return _run([age, "-d", "-i", str(identity_file), "-o", "-"], ciphertext)
+    # age is local-only — no network. ``identity_file`` is the most
+    # attacker-facing input (vendor secret key paired with attacker-
+    # crafted ciphertext), so it's read-only-scoped via ``readable_paths``.
+    return _run(
+        [age, "-d", "-i", str(identity_file), "-o", "-"],
+        ciphertext,
+        readable_paths=[str(Path(identity_file).parent)],
+    )
 
 
 def tle_encrypt(plaintext: bytes, duration: str = "90d") -> bytes:
@@ -169,7 +190,10 @@ def tle_encrypt(plaintext: bytes, duration: str = "90d") -> bytes:
     wall-clock budget.
     """
     tle = require(_which_tle(), "tle")
-    return _run([tle, "-e", "-D", duration, "-o", "-"], plaintext)
+    # tle needs api.drand.sh to fetch the chain info; egress proxy
+    # pins it to that host only.
+    return _run([tle, "-e", "-D", duration, "-o", "-"], plaintext,
+                proxy_hosts=[_DRAND_HOST])
 
 
 def tle_decrypt(ciphertext: bytes) -> bytes:
@@ -179,7 +203,11 @@ def tle_decrypt(ciphertext: bytes) -> bytes:
     this — tle itself will retry-poll the Drand network.
     """
     tle = require(_which_tle(), "tle")
-    return _run([tle, "-d", "-o", "-"], ciphertext)
+    # tle polls Drand for the finalised round; egress proxy pins to
+    # api.drand.sh so attacker-crafted ciphertext can't be used to
+    # smuggle the binary into reaching arbitrary endpoints.
+    return _run([tle, "-d", "-o", "-"], ciphertext,
+                proxy_hosts=[_DRAND_HOST])
 
 
 def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d") -> Envelope:
@@ -215,15 +243,42 @@ def open_via_tlock(envelope: Envelope) -> bytes:
 # Internal helpers
 # -----------------------------------------------------------------------------
 
-def _run(cmd: list[str], stdin_bytes: bytes | None = None) -> bytes:
-    # Explicit get_safe_env() at every subprocess boundary. age / tle
-    # are Go binaries that don't honour LD_PRELOAD-style hijacks the way
-    # native loaders do, but the convention is per-site explicit so a
-    # future caller invoking these helpers directly (tests, integration
-    # scripts) cannot accidentally leak a parent's untrusted env
-    # through. Sanitising costs nothing here — these binaries don't
-    # depend on the caller's env.
-    return subprocess.run(
-        cmd, input=stdin_bytes, capture_output=True, check=True,
-        env=RaptorConfig.get_safe_env(),
-    ).stdout
+def _run(
+    cmd: list[str],
+    stdin_bytes: bytes | None = None,
+    *,
+    proxy_hosts: list[str] | None = None,
+    readable_paths: list[str] | None = None,
+) -> bytes:
+    """Route the age / tle invocation through ``core.sandbox.run_untrusted``.
+
+    These binaries process attacker-crafted ciphertext and (for the
+    vendor path) attacker-crafted age identity files. Plain
+    ``subprocess.run`` with ``get_safe_env()`` only sanitises env vars
+    — it doesn't isolate the filesystem or pin egress. ``run_untrusted``
+    adds Landlock (so the binary can only touch the per-call temp dir
+    plus any ``readable_paths``), namespace-level network block, and
+    optional hostname-allowlisted egress for the tle / Drand path.
+
+    ``proxy_hosts`` engages the egress proxy for tle's Drand fetch;
+    ``readable_paths`` extends the read allowlist when callers pass
+    file inputs (e.g. age identity file). With neither, the child sees
+    only system bins / libs, the per-call temp output dir, and stdin.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="zkpox-sb-")
+    try:
+        kwargs = dict(
+            output=tmpdir,
+            tool_paths=[str(Path(cmd[0]).parent)],
+            caller_label="zkpox-envelope",
+            input=stdin_bytes,
+            capture_output=True, check=True,
+        )
+        if proxy_hosts:
+            kwargs["use_egress_proxy"] = True
+            kwargs["proxy_hosts"] = list(proxy_hosts)
+        if readable_paths:
+            kwargs["readable_paths"] = list(readable_paths)
+        return run_untrusted(cmd, **kwargs).stdout
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
