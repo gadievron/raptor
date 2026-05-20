@@ -311,15 +311,26 @@ def evaluate(changed_files: list[str] | None) -> dict[str, bool]:
 
 
 def _read_changed_files() -> list[str] | None:
+    """Return the list of changed files, or ``None`` if unavailable.
+
+    A real PR always changes at least one file, so an *empty* list file
+    means the upstream diff fetch silently produced zero entries (e.g.
+    a fork-PR ``gh api .../pulls/N/files`` call that returned an empty
+    page on partial auth). Treat that as "diff base unavailable" and
+    force every filter on, rather than skipping all jobs.
+    """
     list_path = os.environ.get("CHANGED_FILES_LIST")
     if not list_path:
         return None
     p = Path(list_path)
     if not p.is_file():
         return None
-    return [
+    files = [
         line.strip() for line in p.read_text().splitlines() if line.strip()
     ]
+    if not files:
+        return None
+    return files
 
 
 def main() -> int:
@@ -336,7 +347,14 @@ def main() -> int:
             fh.write(f"{name}={'true' if hit else 'false'}\n")
 
     if changed is None:
-        print("No diff base available — forcing all filters to true.")
+        list_path = os.environ.get("CHANGED_FILES_LIST")
+        if list_path and Path(list_path).is_file():
+            print(
+                f"Diff base produced empty file list ({list_path}) — "
+                "treating as unavailable and forcing all filters to true."
+            )
+        else:
+            print("No diff base available — forcing all filters to true.")
     else:
         print(f"Changed files: {len(changed)}")
         for name, hit in results.items():
