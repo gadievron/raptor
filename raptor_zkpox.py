@@ -21,8 +21,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
+import shutil
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -32,8 +33,8 @@ from pathlib import Path
 # under symlinks / non-repo cwd. The launcher always sets RAPTOR_DIR.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.config import RaptorConfig
 from core.logging import get_logger
+from core.sandbox import run_untrusted
 from packages import zkpox
 
 logger = get_logger()
@@ -123,12 +124,19 @@ def cmd_prove(args: argparse.Namespace) -> int:
         "--tag", args.tag or f"zkpox-{args.wrap}",
     ]
     logger.info(f"[zkpox] proving via {prover.name} (--wrap={args.wrap})")
-    # Explicit get_safe_env() at the subprocess boundary even though
-    # raptor.py's lifecycle already sanitised the parent env — convention
-    # is "explicit at every spawn site" so a future direct caller can't
-    # accidentally leak a dirty env through.
-    rc = subprocess.run(
-        cmd, check=False, env=RaptorConfig.get_safe_env()
+    # Sandboxed: witness dir read-only via target=, out_dir writable
+    # via output= (proof.bin + prove-record.json land there), tool_paths
+    # to make the workspace-local prover binary visible inside mount-ns.
+    # No network — Rekor anchoring happens later in step 4 via the
+    # HTTPS client, not this subprocess.
+    witness_dir = Path(args.witness).resolve().parent
+    rc = run_untrusted(
+        cmd,
+        target=str(witness_dir),
+        output=str(out_dir),
+        readable_paths=[str(witness_dir)],
+        tool_paths=[str(prover.parent)],
+        caller_label="zkpox-prove",
     ).returncode
     if rc != 0:
         return rc
@@ -254,10 +262,23 @@ def cmd_verify(args: argparse.Namespace) -> int:
     cmd = [str(verifier), args.bundle]
     if args.json:
         cmd.append("--json")
-    # Explicit get_safe_env() at the subprocess boundary (see cmd_prove).
-    return subprocess.run(
-        cmd, check=False, env=RaptorConfig.get_safe_env()
-    ).returncode
+    # Sandboxed: bundle dir read-only, fresh tempdir for the verifier's
+    # scratch (SP1 SDK + Groth16 artifact cache), no network. The
+    # verifier emits its result on stdout — no FS writes back to the
+    # bundle dir, so the writable scope can be a throwaway tempdir.
+    bundle_dir = Path(args.bundle).resolve().parent
+    sandbox_workdir = tempfile.mkdtemp(prefix="zkpox-verify-")
+    try:
+        return run_untrusted(
+            cmd,
+            target=str(bundle_dir),
+            output=sandbox_workdir,
+            readable_paths=[str(bundle_dir)],
+            tool_paths=[str(verifier.parent)],
+            caller_label="zkpox-verify",
+        ).returncode
+    finally:
+        shutil.rmtree(sandbox_workdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
