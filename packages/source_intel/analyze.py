@@ -1500,17 +1500,41 @@ _C_KEYWORDS: FrozenSet[str] = frozenset({
 # care about the inventory. The cache lets analyze() seed the
 # tree-sitter path while leaving the function signature and
 # behaviour identical for downstream code.
-_INVENTORY_BY_TARGET: Dict[str, Any] = {}
+#
+# Each value is a ``(signature, inventory)`` tuple where signature
+# is produced by :func:`packages.source_intel.cache.compute_target_signature`.
+# Lookups recompute the signature and silently drop entries that
+# don't match — auto-invalidation across consecutive runs in the
+# same process. Two ``/agentic`` runs on the same path see a stale
+# inventory only if the source hasn't changed (correct), and see a
+# fresh build whenever any file's mtime/size or build-marker shifts.
+_INVENTORY_BY_TARGET: Dict[str, Tuple[str, Any]] = {}
 
 
 def _register_inventory(target: Path, inventory: Any) -> None:
     """Stash an inventory for later ``_enclosing_function`` lookups.
     Called by :func:`analyze` once per target before evidence
-    parsing. Idempotent — second call for the same target wins."""
+    parsing. Idempotent — second call for the same target overwrites
+    the entry (signature is recomputed)."""
     try:
-        _INVENTORY_BY_TARGET[str(target.resolve())] = inventory
+        from packages.source_intel.cache import compute_target_signature
+        resolved = str(target.resolve())
+        sig = compute_target_signature(target)
     except (OSError, ValueError):  # unresolvable path → skip cache
-        pass
+        return
+    _INVENTORY_BY_TARGET[resolved] = (sig, inventory)
+
+
+def clear_inventory_cache() -> None:
+    """Drop every cached inventory.
+
+    Public invalidation lever for orchestrators that know a fresh
+    start is wanted (e.g. between two ``/agentic`` runs on different
+    targets). Signature-based auto-invalidation already covers
+    same-path/content-changed cases — this is the explicit reset
+    for callers that don't want to rely on the implicit path.
+    """
+    _INVENTORY_BY_TARGET.clear()
 
 
 def _maybe_register_inventory(target: Path) -> None:
@@ -1551,6 +1575,11 @@ def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[st
 
     Deepest-match wins so nested ``analyze()`` calls on
     sub-projects route queries to the most specific inventory.
+
+    Stale entries — whose stored signature no longer matches the
+    target's on-disk state — are silently dropped during the walk
+    and treated as a miss. This is the production invalidation
+    path for cross-run reuse in a single process.
     """
     if not _INVENTORY_BY_TARGET:
         return None, None
@@ -1572,7 +1601,18 @@ def _lookup_cached_inventory(file_path: str) -> Tuple[Optional[Any], Optional[st
                 best_depth = depth
     if best_target is None:
         return None, None
-    return _INVENTORY_BY_TARGET[best_target], best_target
+
+    # Validate freshness — drop and miss if the target has changed.
+    from packages.source_intel.cache import compute_target_signature
+    stored_sig, inventory = _INVENTORY_BY_TARGET[best_target]
+    current_sig = compute_target_signature(Path(best_target))
+    if stored_sig != current_sig:
+        # Pop the stale entry so this code path doesn't repeat the
+        # signature compute on every subsequent lookup for the same
+        # target. Next lookup will register-or-rebuild via analyze.
+        _INVENTORY_BY_TARGET.pop(best_target, None)
+        return None, None
+    return inventory, best_target
 
 
 def _enclosing_function_via_inventory(

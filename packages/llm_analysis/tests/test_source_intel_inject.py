@@ -73,8 +73,12 @@ class TestPrepare:
         from packages.llm_analysis.source_intel_inject import (
             _SI_RESULT_CACHE,
         )
+        # Cache values are (signature, result) tuples — index [1]
+        # is the stored result. Signature is content-derived; the
+        # exact value isn't relevant to this test, only that it
+        # was stored alongside the result.
         assert str(tmp_path.resolve()) in _SI_RESULT_CACHE
-        assert _SI_RESULT_CACHE[str(tmp_path.resolve())] is result
+        assert _SI_RESULT_CACHE[str(tmp_path.resolve())][1] is result
 
     def test_idempotent_skips_second_call(self, tmp_path):
         result = _result_with_evidence()
@@ -101,7 +105,12 @@ class TestPrepare:
         from packages.llm_analysis.source_intel_inject import (
             _SI_RESULT_CACHE,
         )
-        assert _SI_RESULT_CACHE.get(str(tmp_path.resolve())) is None
+        # Cache stores (signature, None) on failure — the entry
+        # exists (so we don't retry this target this process) but
+        # its result-slot is None.
+        entry = _SI_RESULT_CACHE.get(str(tmp_path.resolve()))
+        assert entry is not None
+        assert entry[1] is None
 
     def test_handles_unresolvable_path(self):
         """A bogus path that can't be resolved must not raise."""
@@ -120,7 +129,10 @@ class TestPrepare:
         from packages.llm_analysis.source_intel_inject import (
             _SI_RESULT_CACHE,
         )
-        assert _SI_RESULT_CACHE.get(str(tmp_path.resolve())) is None
+        # Cache stores (signature, None) — entry exists, result-slot None.
+        entry = _SI_RESULT_CACHE.get(str(tmp_path.resolve()))
+        assert entry is not None
+        assert entry[1] is None
 
 
 # ---- evidence_blocks_for_finding --------------------------------------

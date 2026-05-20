@@ -39,6 +39,7 @@ from packages.source_intel.analyze import (
     SourceIntelResult,
     WurEvidence,
     analyze,
+    clear_inventory_cache,
 )
 from packages.source_intel.cache import SourceIntelCache
 from packages.source_intel.conditional import enclosing_condition
@@ -78,8 +79,33 @@ __all__ = [
     "WurEvidence",
     "analyze",
     "derive_evidence_strings",
+    "clear_all_source_intel_caches",
+    "clear_inventory_cache",
     "discover_aliases",
     "enclosing_condition",
     "make_cwe_dispatched_collector",
     "make_source_intel_collector",
 ]
+
+
+def clear_all_source_intel_caches() -> None:
+    """Drop every source_intel process-level cache.
+
+    Single entry point for orchestrators that want a clean slate
+    between consecutive runs in the same Python process. Clears
+    both the inventory cache (``packages.source_intel.analyze``)
+    and the result cache (``packages.llm_analysis.source_intel_inject``).
+
+    Signature-based auto-invalidation already covers correctness
+    when the target tree changes; this is the explicit reset for
+    callers that don't want to rely on the implicit path. Safe to
+    call when ``packages.llm_analysis.source_intel_inject`` isn't
+    importable (the inject module is the LLM-side consumer; tests
+    that exercise source_intel in isolation may not import it).
+    """
+    clear_inventory_cache()
+    try:
+        from packages.llm_analysis.source_intel_inject import clear_si_result_cache
+    except ImportError:
+        return
+    clear_si_result_cache()

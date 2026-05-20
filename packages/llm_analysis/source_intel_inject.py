@@ -68,10 +68,15 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# Cache: absolute resolved target dir → ``SourceIntelResult``
-# (best-effort, may be ``None`` if the build failed for any reason
-# — distinguished from missing-key, which means "not yet attempted").
-_SI_RESULT_CACHE: Dict[str, Optional[Any]] = {}
+# Cache: absolute resolved target dir → ``(signature, result)``
+# tuple. ``result`` is the ``SourceIntelResult`` or ``None`` when
+# the build failed (distinguished from missing-key, which means
+# "not yet attempted"). ``signature`` is the fast change-detection
+# stamp from :func:`packages.source_intel.cache.compute_target_signature`
+# — lookups re-stamp the target and drop the entry if it shifted,
+# so two ``/agentic`` runs on the same target with content edits in
+# between trigger a re-analyze rather than serve stale evidence.
+_SI_RESULT_CACHE: Dict[str, Tuple[str, Optional[Any]]] = {}
 
 def prepare_source_intel(repo_path: Path) -> None:
     """Pre-seed the source_intel result cache for ``repo_path``.
@@ -103,14 +108,17 @@ def prepare_source_intel(repo_path: Path) -> None:
             repo_path,
         )
         return
-    if key in _SI_RESULT_CACHE:
-        return  # already attempted (success or failure)
+    from packages.source_intel.cache import compute_target_signature
+    sig = compute_target_signature(repo_path)
+    cached = _SI_RESULT_CACHE.get(key)
+    if cached is not None and cached[0] == sig:
+        return  # already attempted on this exact tree state (success or failure)
     if _analyze is None:
         logger.debug(
             "prepare_source_intel: packages.source_intel not importable; "
             "skipping injection wiring",
         )
-        _SI_RESULT_CACHE[key] = None
+        _SI_RESULT_CACHE[key] = (sig, None)
         return
     try:
         result = _analyze(repo_path)
@@ -120,9 +128,9 @@ def prepare_source_intel(repo_path: Path) -> None:
             "Stage D will run without source_intel evidence",
             repo_path, e,
         )
-        _SI_RESULT_CACHE[key] = None
+        _SI_RESULT_CACHE[key] = (sig, None)
         return
-    _SI_RESULT_CACHE[key] = result
+    _SI_RESULT_CACHE[key] = (sig, result)
 
 
 def evidence_blocks_for_finding(
@@ -162,8 +170,19 @@ def evidence_blocks_for_finding(
     except (OSError, ValueError):
         return ()
 
-    result = _SI_RESULT_CACHE.get(repo_key)
-    if result is None:  # cache miss OR cached failure
+    entry = _SI_RESULT_CACHE.get(repo_key)
+    if entry is None:  # cache miss — orchestrator never called prepare_source_intel
+        return ()
+    # Validate freshness. If the target's signature has shifted
+    # since prepare ran, treat as a miss + drop the stale entry —
+    # safer than serving evidence built from an out-of-date tree.
+    from packages.source_intel.cache import compute_target_signature
+    cached_sig, result = entry
+    current_sig = compute_target_signature(Path(repo_key))
+    if cached_sig != current_sig:
+        _SI_RESULT_CACHE.pop(repo_key, None)
+        return ()
+    if result is None:  # cached failure
         return ()
     if result.is_skipped and not result.attributes and not result.aborts:
         return ()
@@ -208,6 +227,18 @@ def evidence_blocks_for_finding(
     )
 
 
-def clear_cache_for_tests() -> None:
-    """Test hook — reset module state between test runs."""
+def clear_si_result_cache() -> None:
+    """Drop every cached source_intel result.
+
+    Public invalidation lever for orchestrators that want an explicit
+    fresh start (e.g. between two ``/agentic`` runs on different
+    targets). Signature-based auto-invalidation already covers the
+    same-path/content-changed case; this is the extra lever for
+    callers that don't want to rely on the implicit path.
+    """
     _SI_RESULT_CACHE.clear()
+
+
+# Back-compat alias. Existing test code imports this name; the
+# semantics are identical to ``clear_si_result_cache``.
+clear_cache_for_tests = clear_si_result_cache

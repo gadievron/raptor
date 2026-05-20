@@ -94,6 +94,77 @@ _C_CPP_EXTS: Tuple[str, ...] = (
 )
 
 
+def compute_target_signature(target: Path) -> str:
+    """Fast change-detection signature for a target dir or file.
+
+    Used as a cache-staleness marker — *not* a security-relevant
+    fingerprint. Walks up to 5000 C/C++ files under ``target`` and
+    combines each file's (mtime_ns, size) into a single sha256.
+    Two invocations on an unchanged tree return the same signature;
+    any source edit, file add/remove, or build-marker change flips it.
+
+    Cheaper than ``_hash_target_tree`` (no content reads) so it's
+    affordable to recompute on every cache lookup. Sub-second on
+    kernel-scale repos.
+
+    Falls back to deterministic sentinels for missing targets +
+    unresolvable paths so cache misses are predictable rather than
+    hash-of-error.
+    """
+    if not target.exists():
+        return "missing"
+
+    h = hashlib.sha256()
+    if target.is_file():
+        try:
+            st = target.stat()
+        except OSError:
+            return "stat-error"
+        h.update(b"FILE\x00")
+        h.update(str(target).encode("utf-8", "replace"))
+        h.update(b"\x00")
+        h.update(f"{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
+        return h.hexdigest()
+
+    h.update(b"DIR\x00")
+    files = []
+    for entry in target.rglob("*"):
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() not in _C_CPP_EXTS:
+            continue
+        files.append(entry)
+        if len(files) >= 5000:
+            break
+    for path in sorted(files, key=lambda p: str(p)):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        h.update(str(path.relative_to(target)).encode("utf-8", "replace"))
+        h.update(b"\x00")
+        h.update(f"{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
+        h.update(b"\x00")
+
+    # Build markers — mirrors `_hash_target_tree`. A Makefile / .config
+    # edit changes the build context even if no .c file changed.
+    for marker in ("Makefile", "GNUmakefile", "Kbuild",
+                   "compile_commands.json", ".config"):
+        mp = target / marker
+        if not mp.is_file():
+            continue
+        try:
+            st = mp.stat()
+        except OSError:
+            continue
+        h.update(b"BUILD\x00")
+        h.update(marker.encode("ascii"))
+        h.update(b"\x00")
+        h.update(f"{st.st_mtime_ns}:{st.st_size}".encode("ascii"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
 def _hash_target_tree(target: Path) -> str:
     """SHA-256 of every C/C++ source file under target, by sorted path.
 
