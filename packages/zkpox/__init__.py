@@ -22,51 +22,80 @@ Design proposal: docs/proposals/raptor-zkpox-design.md
 Phase 0 spike findings: docs/research/zkpox-phase0-findings.md
 """
 
-from .anchor import (
-    AnchorError,
-    Ed25519Keypair,
-    anchor_bundle,
-    confirm_anchor_matches,
-    fetch_log_entry,
-    gen_ed25519_keypair,
-    load_ed25519_secret_pem,
-    rekor_url,
-)
-from .bundle import (
-    BUNDLE_VERSION,
-    Bundle,
-    HarnessRef,
-    Proof,
-    Researcher,
-    Target,
-    Timestamp,
-    VendorEnvelope,
-    Vulnerability,
-    bundle_hash_pre_timestamp,
-    from_cbor,
-    sha256_bytes,
-    sha256_file,
-    to_cbor,
-    vendor_envelope_from,
-    with_timestamp,
-)
-from .envelope import (
-    AgeKeypair,
-    Envelope,
-    EnvelopeError,
-    EnvelopeRoundTripError,
-    EnvelopeToolError,
-    aes_decrypt,
-    aes_encrypt,
-    age_decrypt_with,
-    age_encrypt_to,
-    gen_age_keypair,
-    open_via_tlock,
-    open_via_vendor,
-    seal,
-    tle_decrypt,
-    tle_encrypt,
-)
+# Optional dependencies: cryptography and cbor2 are commented out in
+# requirements.txt by default (the Rust workspace at core/zkpox/ is what
+# does the real work). The Python wrappers below need them, but we don't
+# want plain `import packages.zkpox` to explode at collection time when
+# the deps aren't installed — that traps pytest before any path filter
+# can skip the suite. So: re-exports are guarded, AVAILABLE reflects
+# whether the wrappers are usable, and require() gives a one-line install
+# hint when callers actually need them.
+AVAILABLE = False
+_IMPORT_ERROR: Exception | None = None
+
+try:
+    from .anchor import (
+        AnchorError,
+        Ed25519Keypair,
+        anchor_bundle,
+        confirm_anchor_matches,
+        fetch_log_entry,
+        gen_ed25519_keypair,
+        load_ed25519_secret_pem,
+        rekor_url,
+    )
+    from .bundle import (
+        BUNDLE_VERSION,
+        Bundle,
+        HarnessRef,
+        Proof,
+        Researcher,
+        Target,
+        Timestamp,
+        VendorEnvelope,
+        Vulnerability,
+        bundle_hash_pre_timestamp,
+        from_cbor,
+        sha256_bytes,
+        sha256_file,
+        to_cbor,
+        vendor_envelope_from,
+        with_timestamp,
+    )
+    from .envelope import (
+        AgeKeypair,
+        Envelope,
+        EnvelopeError,
+        EnvelopeRoundTripError,
+        EnvelopeToolError,
+        aes_decrypt,
+        aes_encrypt,
+        age_decrypt_with,
+        age_encrypt_to,
+        gen_age_keypair,
+        open_via_tlock,
+        open_via_vendor,
+        seal,
+        tle_decrypt,
+        tle_encrypt,
+    )
+    AVAILABLE = True
+except ImportError as exc:
+    _IMPORT_ERROR = exc
+
+
+def require() -> None:
+    """Raise with an install hint if zkpox's optional deps aren't present.
+
+    Production entry points (raptor_zkpox.main) call this so a missing
+    dep surfaces as a single actionable line instead of an import traceback.
+    """
+    if not AVAILABLE:
+        raise RuntimeError(
+            "zkpox needs cryptography and cbor2. "
+            "pip install cryptography==45.0.4 cbor2==6.0.1 "
+            f"(or uncomment them in requirements.txt). {_IMPORT_ERROR}"
+        )
 
 __all__ = [
     "AgeKeypair",

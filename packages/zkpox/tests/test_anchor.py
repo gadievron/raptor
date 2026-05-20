@@ -14,6 +14,10 @@ import os
 import secrets
 
 import pytest
+
+pytest.importorskip("cryptography")
+pytest.importorskip("cbor2")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from packages.zkpox import (

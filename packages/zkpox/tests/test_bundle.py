@@ -11,8 +11,12 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-import cbor2
 import pytest
+
+pytest.importorskip("cryptography")
+pytest.importorskip("cbor2")
+
+import cbor2
 
 from packages.zkpox import (
     Bundle,
