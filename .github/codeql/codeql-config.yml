@@ -15,6 +15,19 @@ paths-ignore:
   # Flask + sys.argv command-injection patterns; CodeQL flags them
   # because they ARE vulnerable, by design).
   - packages/llm_analysis/tests/fixtures/iris_e2e/**
+  # core/sandbox tests plant sensitive-named fixtures on purpose
+  # (e.g. `real_secret = Path.home() / ".raptor_fake_home_regression.txt"`,
+  # `restricted_file.write_text("SECRET-CREDENTIAL\n")`, `SECRET-IN-DEV-SHM`)
+  # to verify the sandbox blocks reads of host secrets. CodeQL's
+  # heuristic-named sensitive-data sources taint-track these
+  # fixtures through `run_untrusted(cmd, ...)` into shared production
+  # sandbox code, surfacing `py/clear-text-logging-sensitive-data`
+  # alerts on every operator-visibility logger in `core/sandbox/` that
+  # interpolates `cmd[:3]`. The findings are FPs by construction — the
+  # "secret" is a test variable named to assert isolation, not a real
+  # credential. Excluding only this tests directory; other tests/ trees
+  # stay scanned.
+  - core/sandbox/tests/**
   # Generic test-fixture exclusion for any other deliberately-bad
   # samples a future test adds.
   - "**/tests/fixtures/**"
