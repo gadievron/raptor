@@ -173,51 +173,84 @@ def check_llm() -> tuple[list, list]:
                 models.append({"provider": provider, "model": "default", "api_key": key, "_from_env": True})
 
         if models:
-            # Validate keys in parallel
-            key_status = {}
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                futures = {}
-                seen = set()
-                for m in models:
-                    provider = m.get("provider", "unknown")
-                    api_key = m.get("api_key") or os.getenv(env_keys.get(provider, ""))
-                    if not api_key or provider in seen:
-                        continue
-                    seen.add(provider)
-                    futures[pool.submit(_test_key, provider, api_key, m.get("api_base"))] = provider
-                # `as_completed(timeout=5)` is an AGGREGATE
-                # timeout — applies to the iterator, not to
-                # individual futures. Pre-fix: with 5 providers
-                # configured, timeout=5 covered ALL of them
-                # collectively, so a single slow provider
-                # (network-misconfigured Anthropic endpoint
-                # taking 5s to fail-DNS) consumed the whole
-                # budget and the remaining providers never had
-                # their results collected — they got marked
-                # False as if THEIR keys failed.
-                #
-                # Wrap each `future.result()` in its own
-                # per-task `timeout=5` so each provider gets a
-                # full 5-second budget independent of others.
-                # The outer as_completed's timeout still bounds
-                # total wall-clock at ~5×N seconds worst case
-                # (acceptable for startup banner).
-                for future in as_completed(futures):
-                    provider = futures[future]
-                    try:
-                        key_status[provider] = future.result(timeout=5)
-                    except Exception:
-                        key_status[provider] = False
+            # Probe the validator's own prerequisite (`requests`)
+            # before spinning up the threadpool. If the venv is
+            # broken (Python upgraded out from under it, missing
+            # install), every `_test_key` call raises ImportError
+            # which the future-result handler used to swallow as
+            # `False` — producing one misleading "<provider> API
+            # key validation failed" per configured model, even
+            # though no HTTP probe ever ran. Emit a single, clear
+            # "validator unavailable" warning instead, and skip
+            # the per-key probes entirely.
+            validator_available = _validator_available()
+            if not validator_available:
+                warnings.append(
+                    "LLM key validation skipped — Python `requests` "
+                    "package not installed (pip install requests)"
+                )
 
-            # Build output lines (same format as before)
+            key_status = {}
+            if validator_available:
+                # Validate keys in parallel
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    futures = {}
+                    seen = set()
+                    for m in models:
+                        provider = m.get("provider", "unknown")
+                        api_key = m.get("api_key") or os.getenv(env_keys.get(provider, ""))
+                        if not api_key or provider in seen:
+                            continue
+                        seen.add(provider)
+                        futures[pool.submit(_test_key, provider, api_key, m.get("api_base"))] = provider
+                    # `as_completed(timeout=5)` is an AGGREGATE
+                    # timeout — applies to the iterator, not to
+                    # individual futures. Pre-fix: with 5 providers
+                    # configured, timeout=5 covered ALL of them
+                    # collectively, so a single slow provider
+                    # (network-misconfigured Anthropic endpoint
+                    # taking 5s to fail-DNS) consumed the whole
+                    # budget and the remaining providers never had
+                    # their results collected — they got marked
+                    # False as if THEIR keys failed.
+                    #
+                    # Wrap each `future.result()` in its own
+                    # per-task `timeout=5` so each provider gets a
+                    # full 5-second budget independent of others.
+                    # The outer as_completed's timeout still bounds
+                    # total wall-clock at ~5×N seconds worst case
+                    # (acceptable for startup banner).
+                    for future in as_completed(futures):
+                        provider = futures[future]
+                        try:
+                            key_status[provider] = future.result(timeout=5)
+                        except Exception:
+                            key_status[provider] = False
+
+            # Build output lines (same format as before). Dedupe
+            # per-provider warnings: `key_status` is keyed by
+            # provider but the model list can have multiple
+            # entries for the same provider (e.g. gemini pro +
+            # gemini flash). Pre-fix that emitted one identical
+            # "<provider> API key validation failed" per entry,
+            # which the operator reads as "two separate keys
+            # failed" when in reality only one HTTP probe ran.
+            warned_providers: set[str] = set()
+
+            def _warn_key_failure(p: str) -> None:
+                if p in warned_providers:
+                    return
+                warned_providers.add(p)
+                warnings.append(f"{p} API key validation failed")
+
             primary = models[0]
             provider = primary.get("provider", "unknown")
             model = primary.get("model", primary.get("model_name", "unknown"))
             src = _key_source(provider, primary)
             lines.append(f"   llm: {provider}/{model} (primary, {src})")
 
-            if key_status.get(provider) is False:
-                warnings.append(f"{provider} API key validation failed")
+            if validator_available and key_status.get(provider) is False:
+                _warn_key_failure(provider)
 
             for fm in models[1:4]:
                 fp = fm.get("provider", "unknown")
@@ -225,8 +258,8 @@ def check_llm() -> tuple[list, list]:
                 if f"{fp}/{fn}" != f"{provider}/{model}":
                     role = fm.get("role", "fallback")
                     lines.append(f"        {fp}/{fn} ({role}, {_key_source(fp, fm)})")
-                    if key_status.get(fp) is False:
-                        warnings.append(f"{fp} API key validation failed")
+                    if validator_available and key_status.get(fp) is False:
+                        _warn_key_failure(fp)
         else:
             lines.append("   llm: no external LLM configured")
 
@@ -238,6 +271,23 @@ def check_llm() -> tuple[list, list]:
         warnings.append(f"LLM detection: {e}")
 
     return lines, warnings
+
+
+def _validator_available() -> bool:
+    """Probe whether the validator's HTTP dep is importable.
+
+    Extracted so tests can stub the prereq state without
+    monkeypatching `builtins.__import__`. A False return means
+    `_test_key` cannot run; the orchestrator should skip the
+    threadpool and emit one "validation skipped" warning rather
+    than one misleading "<provider> API key validation failed"
+    per configured model.
+    """
+    try:
+        import requests  # noqa: F401 — prereq probe
+        return True
+    except ImportError:
+        return False
 
 
 def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
