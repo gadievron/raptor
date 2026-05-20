@@ -23,12 +23,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from packages.zkpox import (
     Bundle,
     BUNDLE_VERSION,
-    Ed25519Keypair,
     Envelope,
     HarnessRef,
     Proof,
     Target,
-    VendorEnvelope,
     Vulnerability,
     anchor_bundle,
     bundle_hash_pre_timestamp,
