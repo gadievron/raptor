@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 from packages.sca.findings import build_vuln_findings
 from packages.sca.models import (
@@ -354,10 +353,10 @@ def test_build_stage_breakdown_kev_per_stage() -> None:
     assert "### Build-stage breakdown" in md
     # Find the runtime row line and verify it carries the KEV count.
     runtime_line = next(
-        l for l in md.splitlines() if "`runtime`" in l
+        line for line in md.splitlines() if "`runtime`" in line
     )
     builder_line = next(
-        l for l in md.splitlines() if "`builder`" in l
+        line for line in md.splitlines() if "`builder`" in line
     )
     cells_runtime = [c.strip() for c in runtime_line.split("|") if c.strip()]
     cells_builder = [c.strip() for c in builder_line.split("|") if c.strip()]
@@ -492,7 +491,8 @@ def test_vuln_dedup_collapses_same_dep_same_advisory():
     advisory but declared in two manifests → one section, two
     sources. Without dedup we'd carry duplicate per-manifest
     sections that say the same thing about the same CVE."""
-    d_a = _dep(); d_a = Dependency(
+    d_a = _dep()
+    d_a = Dependency(
         **{**d_a.__dict__, "declared_in": Path("/repo/a")},
     )
     d_b = Dependency(
@@ -635,7 +635,7 @@ def test_references_prefer_advisory_pages_over_commits() -> None:
         vuln_findings=findings, hygiene_findings=[],
     )
     refs_line = next(
-        (l for l in md.splitlines() if l.startswith("- References:")),
+        (line for line in md.splitlines() if line.startswith("- References:")),
         None,
     )
     assert refs_line is not None

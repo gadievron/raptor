@@ -37,7 +37,6 @@ from .join import join as join_deps
 from core.cve import KevClient
 from .models import (
     Dependency,
-    HygieneFinding,
     Manifest,
     VulnFinding,
 )
@@ -1217,7 +1216,6 @@ def _run_triage(
     """Run LLM triage.  Returns (ran: bool, cost: float)."""
     from .llm import get_llm_client
     from .llm.triage import triage_findings
-    from .findings import write_findings_json
     import json as _json_mod
 
     all_findings = vuln_findings + hygiene_findings + supply_chain_findings

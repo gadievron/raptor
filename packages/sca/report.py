@@ -41,10 +41,18 @@ import logging
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_output_sanitise import sanitise_string
+
+from .findings import severity_rank
+from .models import (
+    Advisory,
+    HygieneFinding,
+    SupplyChainFinding,
+    VulnFinding,
+)
 
 # Per-finding detail strings can interpolate genuinely-untrusted
 # content — supply-chain findings include ``script_body`` from npm
@@ -57,16 +65,6 @@ from core.security.prompt_output_sanitise import sanitise_string
 # allows legitimate multi-paragraph detail; adversarial massive
 # strings get a Unicode ellipsis).
 _DETAIL_MAX_CHARS = 2000
-
-from .findings import severity_rank
-from .models import (
-    Advisory,
-    Dependency,
-    HygieneFinding,
-    Severity,
-    SupplyChainFinding,
-    VulnFinding,
-)
 
 logger = logging.getLogger(__name__)
 
