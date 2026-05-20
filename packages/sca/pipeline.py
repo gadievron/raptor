@@ -836,6 +836,7 @@ def run_sca(
         license_findings=license_findings,
         cache_hits=cache.hits,
         cache_misses=cache.misses,
+        cache_evictions=cache.memo_evictions,
     )
     write_markdown_report(report_path, md)
 
@@ -854,6 +855,7 @@ def run_sca(
             license_findings=license_findings,
             cache_hits=cache.hits,
             cache_misses=cache.misses,
+            cache_evictions=cache.memo_evictions,
         )
         write_html_report(output_dir / "report.html", html)
 

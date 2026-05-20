@@ -55,6 +55,7 @@ def render_html_report(
     license_findings: Sequence = (),
     cache_hits: Optional[int] = None,
     cache_misses: Optional[int] = None,
+    cache_evictions: Optional[int] = None,
     generated_at: Optional[datetime] = None,
 ) -> str:
     """Return the full report as a single HTML string."""
@@ -100,6 +101,7 @@ def render_html_report(
             supply_chain_findings=sorted_supply,
             license_findings=sorted_license,
             cache_hits=cache_hits, cache_misses=cache_misses,
+            cache_evictions=cache_evictions,
         ),
         _filter_bar(ecosystems),
     ]
@@ -177,6 +179,7 @@ def _summary_section(
     license_findings: Sequence,
     cache_hits: Optional[int],
     cache_misses: Optional[int],
+    cache_evictions: Optional[int] = None,
 ) -> str:
     from collections import Counter
     severity_counts: Counter = Counter()
@@ -222,10 +225,11 @@ def _summary_section(
     if cache_hits is not None and cache_misses is not None:
         total = cache_hits + cache_misses
         rate = (cache_hits * 100 // total) if total else 0
-        counts.append((
-            "Advisory cache",
-            f"{cache_hits} hits / {cache_misses} misses ({rate}%)",
-        ))
+        cache_label = f"{cache_hits} hits / {cache_misses} misses ({rate}%)"
+        if cache_evictions is not None and cache_evictions > 0:
+            # See report.py — surface evictions only when LRU fired.
+            cache_label += f", {cache_evictions} memo evictions"
+        counts.append(("Advisory cache", cache_label))
 
     counts_html = "".join(
         f"<dt>{escape(k)}</dt><dd>{escape(str(v))}</dd>"

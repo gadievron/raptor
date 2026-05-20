@@ -218,6 +218,36 @@ def test_cache_stats_when_provided() -> None:
     )
     assert "8 hits / 2 misses" in md
     assert "80%" in md
+    # Evictions absent when LRU didn't fire (None / zero).
+    assert "memo evictions" not in md
+
+
+def test_cache_evictions_surfaced_when_nonzero() -> None:
+    """LRU evictions only render when ``> 0`` — a quiet "0 evictions"
+    line would just be noise on small runs that don't fill the memo."""
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=10,
+        vuln_findings=[],
+        hygiene_findings=[],
+        cache_hits=100,
+        cache_misses=20,
+        cache_evictions=42,
+    )
+    assert "42 memo evictions" in md
+
+
+def test_cache_evictions_omitted_when_zero() -> None:
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=10,
+        vuln_findings=[],
+        hygiene_findings=[],
+        cache_hits=100,
+        cache_misses=20,
+        cache_evictions=0,
+    )
+    assert "memo evictions" not in md
 
 
 def test_build_stage_breakdown_omitted_for_single_scope() -> None:

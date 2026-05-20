@@ -98,6 +98,7 @@ def render_markdown_report(
     license_findings: Sequence = (),
     cache_hits: Optional[int] = None,
     cache_misses: Optional[int] = None,
+    cache_evictions: Optional[int] = None,
     generated_at: Optional[datetime] = None,
 ) -> str:
     """Return the full report as a single markdown string."""
@@ -132,6 +133,7 @@ def render_markdown_report(
         license_findings=sorted_license,
         cache_hits=cache_hits,
         cache_misses=cache_misses,
+        cache_evictions=cache_evictions,
     ))
     if sorted_vulns:
         parts.append(_render_vuln_section(sorted_vulns))
@@ -206,6 +208,7 @@ def _render_summary(
     license_findings: Sequence = (),
     cache_hits: Optional[int],
     cache_misses: Optional[int],
+    cache_evictions: Optional[int] = None,
 ) -> str:
     # Aggregate severity across ALL finding types (vulns + supply-chain
     # + hygiene). Without this, the headline severity table only
@@ -264,10 +267,18 @@ def _render_summary(
     if cache_hits is not None and cache_misses is not None:
         total = cache_hits + cache_misses
         rate = (cache_hits * 100 // total) if total else 0
-        rows.append(
+        cache_line = (
             f"- Advisory cache: **{cache_hits} hits / {cache_misses} misses "
             f"({rate}%)**"
         )
+        if cache_evictions is not None and cache_evictions > 0:
+            # Memo evictions are zero on small runs; only surface when
+            # the LRU cap actually fired. Non-zero evictions mean the
+            # in-process memo is at its byte budget — useful signal
+            # when investigating perf regressions or tuning
+            # ``tuning.json::max_json_memo_mb``.
+            cache_line += f" · {cache_evictions} memo evictions"
+        rows.append(cache_line)
     rows.append("")
 
     # Build-stage breakdown: only render when more than one distinct
