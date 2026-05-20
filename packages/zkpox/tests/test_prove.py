@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("cryptography")
+pytest.importorskip("cbor2")
+
 from packages.zkpox import prove
 
 
