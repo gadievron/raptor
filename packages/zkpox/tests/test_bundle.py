@@ -9,7 +9,6 @@ wired); for 1.3 we just confirm the bundle producer/parser is faithful.
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 
 import pytest
 
@@ -27,7 +26,6 @@ from packages.zkpox import (
     Researcher,
     Target,
     Timestamp,
-    VendorEnvelope,
     Vulnerability,
     bundle_hash_pre_timestamp,
     from_cbor,
