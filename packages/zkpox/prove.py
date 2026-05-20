@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.config import RaptorConfig
+from core.sandbox import run_untrusted
 
 
 # Repo root resolution. The Rust workspace lives at <repo>/core/zkpox/.
@@ -106,14 +107,24 @@ def run(
     if tag is not None:
         cmd += ["--tag", tag]
 
-    # Explicit get_safe_env() at the subprocess boundary. The prover
-    # binary is RAPTOR-built and trusted, but the convention is to be
-    # explicit at every spawn site so a direct caller (tests, integration
-    # scripts, future Python tooling) can't inherit a dirty env through.
-    completed = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False,
-        env=RaptorConfig.get_safe_env(),
-    )
+    # Sandboxed via run_untrusted: full env hygiene, Landlock-scoped FS
+    # (witness read-only, per-call temp dir for SP1 scratch), no network.
+    # The prover lives under core/zkpox/target/release/ which is not on
+    # the default safe-bin path, so tool_paths is mandatory here.
+    witness_dir = Path(witness).resolve().parent
+    sandbox_workdir = tempfile.mkdtemp(prefix="zkpox-prove-")
+    try:
+        completed = run_untrusted(
+            cmd,
+            target=str(witness_dir),
+            output=sandbox_workdir,
+            readable_paths=[str(witness_dir)],
+            tool_paths=[str(bin_path.parent)],
+            caller_label="zkpox-prove",
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    finally:
+        shutil.rmtree(sandbox_workdir, ignore_errors=True)
     if completed.returncode != 0:
         raise ProverError(
             f"zkpox-prove exited {completed.returncode}\n"
