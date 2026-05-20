@@ -201,6 +201,8 @@ FILTERS: dict[str, list[str]] = {
         "core/config.py",
         "core/config/**",
         ".github/workflows/tests.yml",
+        "core/http/**",
+        "core/sandbox/**",
     ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
     # gates on the corresponding filter, so a python-only PR skips the
