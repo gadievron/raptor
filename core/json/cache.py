@@ -41,11 +41,19 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from .utils import _reject_non_finite
+
+# ``MISSING`` sentinel lives in ``core.sentinels`` (sibling to
+# ``core.json``) so test suites that delete ``core.json.*`` from
+# ``sys.modules`` to exercise lazy re-exports don't replace the
+# singleton — see that module's docstring for the full reload-
+# stability rationale.
+from core.sentinels import MISSING
 
 logger = logging.getLogger(__name__)
 
@@ -63,30 +71,52 @@ TTL_FOREVER = -1
 # enough that real crash-orphans get cleaned on the next session.
 _REAP_FRESHNESS_S = 60.0
 
+# Reap-rate-limit window. Walking the cache tree to find crash-orphan
+# tempfiles is O(files-in-cache); on a real operator's cache (4-5 GB,
+# 150k+ files) it costs ~4.5 seconds per construction. JsonCache is
+# constructed once or twice per SCA scan, so the reap dominates the
+# perf budget for the whole scan even though it's pure hygiene
+# cleanup. Rate-limit to once per hour: a sentinel file records the
+# last reap timestamp; constructions within the window skip the walk
+# entirely. Trade-off: orphaned tempfiles linger for up to an hour
+# rather than being cleaned on the next session. That's fine —
+# orphans are correctness-irrelevant disk-space hygiene and the
+# accumulation rate is "one per process crash", not load-bearing.
+_REAP_RATE_LIMIT_S = 3600.0
+_REAP_SENTINEL_NAME = ".reap_last_run"
 
-# Sentinel for `try_get` — distinguishes "no entry" from "entry
-# exists but value is None". `get()` collapses both to None which
-# forced consumers (notably packages.nvd.client) to invent ad-hoc
-# wrapper sentinels (`_NVD_CACHE_MISSING`) to cache "not found"
-# verdicts without re-issuing the upstream request on every read.
-# Use a class-level singleton (not just `object()`) so `is`
-# comparisons across module reloads still work for tests.
-class _MissingType:
-    _instance: Optional["_MissingType"] = None
+# Default byte budget for the in-process memo. The memo is a
+# read-through cache over the on-disk JSON files — its only job is
+# to avoid repeat stat+open+parse for the same key inside a single
+# scan. Without a cap it grows to whatever the scan touches: on
+# Grafana (~9826 deps, ~200 npm scopes including multi-MB
+# ``@grafana/*`` metadata blobs) it climbed past 2 GB, the
+# dominant contributor to the scan's 5.5 GB peak RSS.
+# 128 MB is enough working set to keep the truly-hot deps in
+# memory (each scan re-uses a small minority of cached entries
+# many times) while keeping the memo out of the way of the rest of
+# the scan's RSS budget. Worst case for a too-tight budget is more
+# disk re-reads, never wrong answers. Overridable via
+# ``tuning.json::max_json_memo_mb``.
+_DEFAULT_MEMO_BUDGET_MB = 128
 
-    def __new__(cls) -> "_MissingType":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+# Byte cost charged for a memoised ``MISSING`` entry. The actual
+# Python overhead is tens of bytes (dict slot + entry object); 96
+# is generous but keeps the negative-cache bounded even when the
+# scan probes thousands of keys that don't exist on disk.
+_MISSING_ENTRY_BYTES = 96
 
-    def __repr__(self) -> str:
-        return "<JsonCache._MISSING>"
-
-    def __bool__(self) -> bool:
-        return False
-
-
-MISSING = _MissingType()
+# Max directory depth searched for orphan tempfiles. Cache keys
+# containing ``/`` produce nested files (`<root>/sub/name.json`); SCA
+# callers in practice go at most two levels deep
+# (``npm-meta:@scope/name``). Deeper orphans, if they ever existed,
+# would be picked up by an explicit ``cache-gc`` pass — we don't pay
+# the rglob over every entry on the hot path. Pre-fix
+# ``rglob("*.tmp.*")`` on the SCA cache (162k files across ~944
+# subdirs) spent ~60s on the dev box's first cache-of-the-hour;
+# depth-bounded glob completes in milliseconds because it touches
+# only the small directories that actually hold tempfiles.
+_REAP_MAX_DEPTH = 3
 
 
 @dataclass(frozen=True)
@@ -101,6 +131,66 @@ class CacheEnvelope:
         if self.ttl_seconds == TTL_FOREVER:
             return True
         return (now - self.written_at) <= self.ttl_seconds
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoEntry:
+    """One row of the in-process memo, accounted against a byte budget.
+
+    ``payload`` is either a :class:`CacheEnvelope` (fresh entry) or
+    the :data:`MISSING` sentinel (negative cache). ``mtime`` is the
+    on-disk file's modification time for fresh entries; ``None`` for
+    MISSING. ``size`` is the byte cost charged against the budget —
+    file-size for fresh entries, a small constant for MISSING.
+    """
+
+    payload: Any
+    mtime: Optional[float]
+    size: int
+
+
+def _resolved_memo_budget_bytes() -> int:
+    try:
+        from core.tuning import load_tuning
+        mb = max(1, load_tuning().max_json_memo_mb)
+    except Exception:  # noqa: BLE001
+        mb = _DEFAULT_MEMO_BUDGET_MB
+    return mb * 1024 * 1024
+
+
+def _iter_tempfile_candidates(
+    root: Path, *, max_depth: int,
+) -> Iterable[Path]:
+    """Yield candidate tempfile paths under ``root`` up to ``max_depth``.
+
+    A ``*.tmp.*`` name has at least one ``.tmp.`` substring, so we
+    short-circuit on that cheap byte check before constructing a
+    ``Path`` — the bulk of cache entries are real ``.json`` files we
+    don't want to materialise into Path objects.
+
+    Yields lazily so the caller can stop early; uses ``os.scandir`` to
+    avoid the per-entry ``stat`` that ``Path.rglob`` triggers.
+    """
+    stack = [(str(root), 0)]
+    while stack:
+        cur, depth = stack.pop()
+        try:
+            it = os.scandir(cur)
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if depth + 1 < max_depth:
+                            stack.append((entry.path, depth + 1))
+                        continue
+                except OSError:
+                    continue
+                name = entry.name
+                if ".tmp." not in name:
+                    continue
+                yield Path(entry.path)
 
 
 class JsonCache:
@@ -152,7 +242,17 @@ class JsonCache:
         # ``MISSING`` is also memoised so a cold-cache miss isn't
         # re-checked on disk repeatedly.
         self._memo_lock = threading.Lock()
-        self._memo: dict = {}
+        # OrderedDict tracks insertion / access order so we can evict
+        # least-recently-used entries when the byte budget is exceeded.
+        # Pre-fix the memo was a plain dict with no eviction — on
+        # Grafana it grew past 2 GB holding npm registry metadata for
+        # every dep.
+        self._memo: "OrderedDict[str, _MemoEntry]" = OrderedDict()
+        self._memo_bytes = 0
+        self._memo_budget = _resolved_memo_budget_bytes()
+        # Eviction metrics for cache-effectiveness reporting; same
+        # threading discipline as ``hits`` / ``misses``.
+        self.memo_evictions = 0
         try:
             self._root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -189,11 +289,36 @@ class JsonCache:
 
         Best-effort: any remove failure is ignored. Runs once at
         construction time; not in the hot path.
+
+        Rate-limited via a sentinel file at the cache root —
+        constructions within ``_REAP_RATE_LIMIT_S`` of the last
+        reap skip the walk entirely. The walk itself is depth-bounded
+        (``_REAP_MAX_DEPTH``) and uses ``os.scandir`` rather than
+        ``Path.rglob`` — on a 162k-file SCA cache the rglob touched
+        every entry to match the pattern (~60s first-of-the-hour);
+        the bounded scandir walk completes in milliseconds because it
+        skips deep subtrees that never hold tempfiles.
         """
         if self._root is None:
             return
+        sentinel = self._root / _REAP_SENTINEL_NAME
+        now = time.time()
         try:
-            entries = list(self._root.rglob("*.tmp.*"))
+            sentinel_mtime = sentinel.stat().st_mtime
+            if now - sentinel_mtime < _REAP_RATE_LIMIT_S:
+                return
+        except FileNotFoundError:
+            # First-ever construction on this cache root — fall
+            # through to the full reap, then write the sentinel.
+            pass
+        except OSError:
+            # Defensive: any other stat failure means we can't
+            # trust the rate-limit; fall through to the reap.
+            pass
+        try:
+            entries = list(_iter_tempfile_candidates(
+                self._root, max_depth=_REAP_MAX_DEPTH,
+            ))
         except OSError:
             return
         now = time.time()
@@ -222,6 +347,53 @@ class JsonCache:
                 entry.unlink()
             except OSError:
                 pass
+        # Update the sentinel so subsequent constructions within
+        # the rate-limit window skip the walk. Touch-only — the
+        # mtime is what matters, the contents don't.
+        try:
+            sentinel.touch(exist_ok=True)
+        except OSError:
+            # Sentinel-write failure means subsequent constructions
+            # will re-reap. Acceptable cost; the data is still
+            # correct.
+            pass
+
+    # ------------------------------------------------------------------
+    # Memo helpers (caller must hold ``self._memo_lock``)
+    # ------------------------------------------------------------------
+
+    def _memo_put(
+        self, key: str, payload: Any,
+        mtime: Optional[float], size: int,
+    ) -> None:
+        """Insert / replace a memo entry and evict from the front
+        while over budget. Caller holds the memo lock.
+        """
+        existing = self._memo.get(key)
+        if existing is not None:
+            self._memo_bytes -= existing.size
+            del self._memo[key]
+        self._memo[key] = _MemoEntry(
+            payload=payload, mtime=mtime, size=size,
+        )
+        self._memo_bytes += size
+        while (
+            self._memo_bytes > self._memo_budget
+            and len(self._memo) > 1  # keep the just-inserted entry
+        ):
+            _, evicted = self._memo.popitem(last=False)
+            self._memo_bytes -= evicted.size
+            self.memo_evictions += 1
+
+    def _memo_evict(self, key: str) -> None:
+        """Remove a memo entry if present. Caller holds the lock."""
+        entry = self._memo.pop(key, None)
+        if entry is not None:
+            self._memo_bytes -= entry.size
+
+    def _memo_touch(self, key: str) -> None:
+        """LRU-touch an existing entry. Caller holds the lock."""
+        self._memo.move_to_end(key, last=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -264,22 +436,28 @@ class JsonCache:
         # so the memo still wins net even with the per-hit stat.
         path = self._path_for(key)
         try:
-            file_mtime = path.stat().st_mtime
+            st = path.stat()
+            file_mtime: Optional[float] = st.st_mtime
+            file_size = st.st_size
         except OSError:
             file_mtime = None
+            file_size = 0
         if file_mtime is None:
             with self._memo_lock:
-                self._memo[key] = MISSING
+                self._memo_put(key, MISSING, None, _MISSING_ENTRY_BYTES)
             with self._counter_lock:
                 self.misses += 1
             return MISSING
         with self._memo_lock:
-            cached_pair = self._memo.get(key)
+            cached = self._memo.get(key)
         envelope: Optional[CacheEnvelope] = None
-        if (isinstance(cached_pair, tuple) and len(cached_pair) == 2
-                and cached_pair[1] == file_mtime):
-            envelope = cached_pair[0]
-        elif cached_pair is MISSING:
+        if (cached is not None and cached.payload is not MISSING
+                and cached.mtime == file_mtime):
+            envelope = cached.payload
+            with self._memo_lock:
+                if key in self._memo:
+                    self._memo_touch(key)
+        elif cached is not None and cached.payload is MISSING:
             # Negative-cached miss is rechecked because the file may
             # have appeared between the previous miss and this call —
             # disk stat already proved presence above, so fall through
@@ -291,12 +469,12 @@ class JsonCache:
             except (OSError, ValueError, KeyError) as e:
                 logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
                 with self._memo_lock:
-                    self._memo[key] = MISSING
+                    self._memo_put(key, MISSING, None, _MISSING_ENTRY_BYTES)
                 with self._counter_lock:
                     self.misses += 1
                 return MISSING
             with self._memo_lock:
-                self._memo[key] = (envelope, file_mtime)
+                self._memo_put(key, envelope, file_mtime, file_size)
         # Caller may downgrade TTL relative to what was stored. Honour
         # the *minimum* TTL.
         #
@@ -350,7 +528,7 @@ class JsonCache:
         # completes. The next ``try_get`` after the rename will
         # repopulate the memo via the stat + read path.
         with self._memo_lock:
-            self._memo.pop(key, None)
+            self._memo_evict(key)
         # Tempfile suffix MUST include the thread id, not just pid:
         # two threads in the same process writing the same key would
         # otherwise share a tmp path, and ``open("w")`` truncates on
@@ -382,7 +560,7 @@ class JsonCache:
         if not self._writable or self._root is None:
             return
         with self._memo_lock:
-            self._memo.pop(key, None)
+            self._memo_evict(key)
         path = self._path_for(key)
         try:
             path.unlink(missing_ok=True)

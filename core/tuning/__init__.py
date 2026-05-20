@@ -33,6 +33,8 @@ _VALID_KEYS = frozenset({
     "max_codeql_workers",
     "max_agentic_parallel",
     "max_fuzz_parallel",
+    "max_inventory_workers",
+    "max_json_memo_mb",
 })
 
 _DEFAULTS = {
@@ -42,6 +44,8 @@ _DEFAULTS = {
     "max_codeql_workers": 2,
     "max_agentic_parallel": 3,
     "max_fuzz_parallel": 4,
+    "max_inventory_workers": "auto",
+    "max_json_memo_mb": 128,
 }
 
 
@@ -87,6 +91,21 @@ def _detect_codeql_workers() -> int:
 def _detect_fuzz_parallel() -> int:
     """Resolve a conservative AFL++ parallel-instance ceiling."""
     return _detect_half_cpu_parallelism()
+
+
+def _detect_inventory_workers() -> int:
+    """Resolve a conservative per-file extractor pool size.
+
+    Tree-sitter Tree objects can transiently hold tens of MB per
+    file (TS / JS / large Java sources in particular). On a high-
+    core box ``os.cpu_count()`` returns 16+; the resulting peak —
+    ``workers × tree_size`` — dominated the inventory stage's RSS
+    on a Grafana-scale repo (5.7 GB across the SCA reach stage).
+    Cap at 8: extract is mostly per-file CPU with diminishing
+    returns past ~8 workers, and the bound keeps the transient
+    working set in line with the lighter scan stages.
+    """
+    return _detect_half_cpu_parallelism(max_workers=8)
 
 
 def _detect_cgroup_cpu_quota() -> int | None:
@@ -156,6 +175,7 @@ _AUTO_RESOLVERS = {
     "max_semgrep_workers": _detect_semgrep_workers,
     "max_codeql_workers": _detect_codeql_workers,
     "max_fuzz_parallel": _detect_fuzz_parallel,
+    "max_inventory_workers": _detect_inventory_workers,
 }
 
 # Keys where 0 is a valid explicit value (e.g. CodeQL's "0 = all CPUs")
@@ -171,6 +191,8 @@ class Tuning:
     max_codeql_workers: int
     max_agentic_parallel: int
     max_fuzz_parallel: int
+    max_inventory_workers: int
+    max_json_memo_mb: int
 
 
 def _validate_value(key: str, raw: Any) -> Optional[int]:
@@ -266,6 +288,8 @@ def _create_default_file(path: Path) -> None:
             "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
             "max_agentic_parallel": "parallel Claude Code agents for analysis",
             "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
+            "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
+            "max_json_memo_mb": "byte budget for JsonCache in-process memo; oldest entries evicted past this",
         }
         keys = list(_DEFAULTS.keys())
         entries = []

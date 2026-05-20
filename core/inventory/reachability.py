@@ -138,6 +138,134 @@ _MASKING_FLAGS: Set[str] = {
 }
 
 
+@dataclass(frozen=True)
+class _FunctionCalledIndex:
+    """Inverse index over ``inventory['files']`` so ``function_called``
+    can narrow the per-call file iteration from O(N_files) to
+    O(N_candidates_for_target).
+
+    Built once per inventory; ``function_called`` reuses across the
+    many (dep × affected_function) queries every SCA function-level
+    tier emits. Pre-fix the bare loop scanned all ~30k Grafana files
+    for every query — 8 tiers × dozens of deps × multiple affected
+    funcs/dep = tens of millions of file-record walks, the dominant
+    cost of a 12-min reach stage. Indexed: only the small set of
+    files that mention the target gets the per-file check.
+
+    Conservatism: each bucket is over-inclusive, never under. A file
+    in a bucket still pays the full per-file branch logic; a file
+    NOT in any bucket has zero possible match under the existing
+    semantics. False positives only cost cycles, not correctness.
+
+    Buckets use sorted ``Tuple[int, ...]`` rather than ``FrozenSet[int]``
+    — for the typical Grafana-shape distribution (64% of tokens hold
+    one file, 27% hold 2–5) the tuple cuts per-bucket overhead from
+    ~232 bytes (frozenset header + hash table) to ~64 bytes (tuple
+    header). The consumer in ``function_called`` only iterates each
+    bucket once into a set union; tuple iteration is faster than set
+    iteration anyway, so there's no perf cost.
+    """
+
+    # token (module head / dotted prefix / func tail / fully-qualified
+    # dotted chain / getattr-target name) → file indices that mention
+    # it in some role function_called might consult.
+    files_by_token: Dict[str, Tuple[int, ...]]
+    # Files with any non-wildcard masking flag — visited regardless
+    # of token bucket so the indirection branch can yield UNCERTAIN
+    # when ``file_mentions_tail`` matches the query.
+    files_with_non_wildcard_masking: Tuple[int, ...]
+    # Files with a wildcard import — visited so the wildcard branch
+    # can yield UNCERTAIN via ``_wildcard_could_provide``.
+    files_with_wildcard_import: Tuple[int, ...]
+
+
+# Keyed on ``id(inventory)``; identity-checked on read so a fresh
+# inventory dict reusing the address of a GC'd one doesn't return
+# the wrong index. Capped — matches the ``_INDEX_CACHE`` policy
+# already used by ``callers_of`` / ``callees_of``.
+_FN_CALLED_INDEX_CACHE: Dict[int, Tuple[Dict[str, Any], _FunctionCalledIndex]] = {}
+_FN_CALLED_INDEX_CACHE_MAX = 8
+
+
+def _build_function_called_index(
+    inventory: Dict[str, Any],
+) -> _FunctionCalledIndex:
+    files = inventory.get("files") or []
+    files_by_token: Dict[str, Set[int]] = {}
+    non_wildcard: Set[int] = set()
+    wildcard: Set[int] = set()
+
+    def _add(token: str, i: int) -> None:
+        if not token:
+            return
+        files_by_token.setdefault(token, set()).add(i)
+
+    for i, fr in enumerate(files):
+        if not isinstance(fr, dict):
+            continue
+        cg = fr.get("call_graph")
+        if not cg:
+            continue
+        # Imports: target_module matches `bound == target_module`,
+        # `bound == target_dot_func`, or `bound.startswith(
+        # target_module + ".")`. Indexing every dotted prefix of
+        # ``bound`` covers all three.
+        for bound in (cg.get("imports") or {}).values():
+            if not isinstance(bound, str) or not bound:
+                continue
+            parts = bound.split(".")
+            for k in range(1, len(parts) + 1):
+                _add(".".join(parts[:k]), i)
+            # Tail of the import name is what
+            # ``file_mentions_tail`` checks against — index the
+            # final segment too so target_func lookups hit it.
+            _add(parts[-1], i)
+        # Calls: chain tail + fully-qualified dotted chain.
+        for call in (cg.get("calls") or []):
+            chain = call.get("chain") or []
+            if not chain:
+                continue
+            _add(chain[-1], i)
+            if len(chain) >= 2:
+                _add(".".join(chain), i)
+        # getattr literals.
+        for name in (cg.get("getattr_targets") or []):
+            _add(name, i)
+        # Indirection flags split into the two buckets the resolver
+        # treats differently.
+        flags = set(cg.get("indirection") or [])
+        if (flags & _MASKING_FLAGS) - {INDIRECTION_WILDCARD_IMPORT}:
+            non_wildcard.add(i)
+        if INDIRECTION_WILDCARD_IMPORT in flags:
+            wildcard.add(i)
+
+    return _FunctionCalledIndex(
+        files_by_token={
+            k: tuple(sorted(v)) for k, v in files_by_token.items()
+        },
+        files_with_non_wildcard_masking=tuple(sorted(non_wildcard)),
+        files_with_wildcard_import=tuple(sorted(wildcard)),
+    )
+
+
+def _get_function_called_index(
+    inventory: Dict[str, Any],
+) -> _FunctionCalledIndex:
+    inv_id = id(inventory)
+    cached = _FN_CALLED_INDEX_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    if cached is not None:
+        # id reuse after GC — drop the stale entry.
+        _FN_CALLED_INDEX_CACHE.pop(inv_id, None)
+    idx = _build_function_called_index(inventory)
+    _FN_CALLED_INDEX_CACHE[inv_id] = (inventory, idx)
+    if len(_FN_CALLED_INDEX_CACHE) > _FN_CALLED_INDEX_CACHE_MAX:
+        oldest = next(iter(_FN_CALLED_INDEX_CACHE))
+        _FN_CALLED_INDEX_CACHE.pop(oldest, None)
+    return idx
+
+
 def function_called(
     inventory: Dict[str, Any],
     qualified_name: str,
@@ -175,7 +303,41 @@ def function_called(
 
     target_dot_func = f"{target_module}.{target_func}"
     target_module_dot = target_module + "."
-    for file_record in inventory.get("files", []):
+
+    # Narrow the file iteration to those the inverse index says
+    # could possibly match. Buckets:
+    #   - ``target_module`` token: file's imports mention it (as a
+    #     prefix or full match) — feeds the case-1 import-bound check.
+    #   - ``target_func`` token: file has a call whose chain tail
+    #     matches, or imports the bare name, or uses the name as a
+    #     getattr literal — feeds cases 2, 3, and 4 (file_mentions_tail).
+    #   - ``qualified_name`` token: file has a fully-qualified
+    #     dotted-chain call exactly matching — feeds case 3 directly.
+    #   - non-wildcard masking files: always considered for case 4.
+    #   - wildcard-import files: always considered for the wildcard
+    #     branch.
+    # Files NOT in any of those buckets have no possible role under
+    # the existing per-file branches, so dropping them is semantic-
+    # preserving.
+    files = inventory.get("files") or []
+    index = _get_function_called_index(inventory)
+    candidate_idx: Set[int] = set()
+    candidate_idx.update(
+        index.files_by_token.get(target_module, ()),
+    )
+    candidate_idx.update(
+        index.files_by_token.get(target_func, ()),
+    )
+    candidate_idx.update(
+        index.files_by_token.get(qualified_name, ()),
+    )
+    candidate_idx.update(index.files_with_non_wildcard_masking)
+    candidate_idx.update(index.files_with_wildcard_import)
+
+    for i in sorted(candidate_idx):
+        file_record = files[i]
+        if not isinstance(file_record, dict):
+            continue
         path = file_record.get("path") or ""
         if exclude_test_files and _is_test_file(path):
             continue
