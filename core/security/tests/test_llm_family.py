@@ -3,10 +3,36 @@
 from __future__ import annotations
 
 from core.security.llm_family import (
+    bare_model_id,
     family_of,
     same_family,
     select_cross_family_checker,
 )
+
+
+def test_bare_model_id_passes_through_bare_names():
+    assert bare_model_id("claude-haiku-4-5") == "claude-haiku-4-5"
+    assert bare_model_id("gpt-5") == "gpt-5"
+    assert bare_model_id("gemini-2.5-pro") == "gemini-2.5-pro"
+
+
+def test_bare_model_id_peels_provider_prefix():
+    assert bare_model_id("anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
+    assert bare_model_id("openai/gpt-5") == "gpt-5"
+    assert bare_model_id("gemini/gemini-2.5-pro") == "gemini-2.5-pro"
+
+
+def test_bare_model_id_peels_aggregator_then_provider():
+    # ``together/anthropic/claude-haiku-4-5`` — aggregator + provider
+    # both peel; the lookup in models.json sees just ``claude-haiku-4-5``.
+    assert bare_model_id("together/anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
+    assert bare_model_id("openrouter/openai/gpt-5") == "gpt-5"
+
+
+def test_bare_model_id_leaves_unknown_prefixes_alone():
+    # ``foo/`` is not a known provider — preserve as-is so an
+    # operator typo doesn't silently collapse to an unintended match.
+    assert bare_model_id("foo/bar-1") == "foo/bar-1"
 
 
 # --- family_of ---

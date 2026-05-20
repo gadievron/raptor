@@ -93,6 +93,16 @@ class DispatchTask:
             out["duration_seconds"] = round(result.duration, 1)
         if result.model:
             out["analysed_by"] = result.model
+        # Surface the validator quality score when the response was
+        # incomplete. Lets downstream report consumers see *why* a
+        # finding is unverdicted (gh #549) — `quality` defaults to 1.0
+        # and only drops when `validate_structured_response` flags
+        # missing required fields, so quietly omit it on the happy path.
+        # Gate on the rounded value so a 0.999 score (which would
+        # display as "1.00" anyway) doesn't pollute the output.
+        quality_rounded = round(result.quality, 2)
+        if quality_rounded < 1.0:
+            out["quality"] = quality_rounded
         return out
 
     def finalize(self, results: List[Dict], prior_results: dict) -> List[Dict]:

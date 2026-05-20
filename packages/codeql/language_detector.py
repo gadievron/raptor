@@ -41,7 +41,16 @@ class LanguageDetector:
     based on file extensions, build files, and structural indicators.
     """
 
-    # Language patterns with extensions, build files, and structural indicators
+    # Language patterns with extensions, build files, and structural indicators.
+    #
+    # ``min_confidence`` is the gate that keeps stray build manifests
+    # (e.g. a ``pom.xml`` in a docs example dir, a meta-repo
+    # ``package.json`` with no JS/TS source) from forcing a detection.
+    # With ``file_count=0`` the confidence math caps at ~0.2 (build-file
+    # boost only, no base or ratio). Every value here is >=0.5 by
+    # design — DO NOT lower any of these below 0.3 without re-deriving
+    # the manifest-only ceiling in ``_analyze_language``. The
+    # build-manifest-promotion path (gh #548) relies on this gap.
     LANGUAGE_PATTERNS = {
         "java": {
             "extensions": {".java"},
@@ -159,7 +168,12 @@ class LanguageDetector:
         Detect all languages in repository with confidence scores.
 
         Args:
-            min_files: Minimum files required to consider a language present
+            min_files: Minimum source files required when no build
+                manifest is present. Languages with a matching build
+                manifest (``go.mod``, ``pom.xml``, ``package.json``,
+                etc.) are detected regardless of source-file count,
+                provided the per-language confidence threshold is met
+                (gh #548).
 
         Returns:
             Dict mapping language name -> LanguageInfo
@@ -174,12 +188,36 @@ class LanguageDetector:
         for lang, patterns in self.LANGUAGE_PATTERNS.items():
             info = self._analyze_language(lang, patterns, stats)
 
-            # Only include if meets minimum criteria
-            if info.file_count >= min_files and info.confidence >= patterns["min_confidence"]:
+            # `min_files` exists to filter out false positives from stray
+            # source files. A matching build manifest defeats that risk
+            # on its own — see gh #548, where a real Go API with 2 .go
+            # files + go.mod was silently dropped under the old `>=3`
+            # gate. `min_confidence` still protects against stray
+            # manifests alone (e.g. a `pom.xml` in a docs example dir):
+            # a manifest without matching source extensions yields
+            # confidence ~0.2, below every language's per-pattern
+            # threshold.
+            has_build_signal = bool(info.build_files_found)
+            meets_threshold = info.file_count >= min_files or has_build_signal
+            meets_confidence = info.confidence >= patterns["min_confidence"]
+
+            if meets_threshold and meets_confidence:
                 detected[lang] = info
                 logger.info(
                     f"✓ Detected {lang}: {info.file_count} files, "
                     f"confidence={info.confidence:.2f}"
+                )
+            elif info.file_count > 0 or has_build_signal:
+                # Language had *some* signal but didn't pass — flag
+                # loudly so operators don't silently skip languages
+                # they expect to be covered. Quiet path is reserved
+                # for languages with zero presence in the repo.
+                # (gh #548)
+                logger.warning(
+                    f"⚠ Skipping {lang}: file_count={info.file_count} "
+                    f"(min={min_files}), confidence={info.confidence:.2f} "
+                    f"(min={patterns['min_confidence']}), build_files="
+                    f"{sorted(info.build_files_found) or 'none'}"
                 )
 
         if not detected:

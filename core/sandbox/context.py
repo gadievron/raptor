@@ -1574,6 +1574,23 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         if isinstance(_stderr_text, bytes):
                             _stderr_text = _stderr_text.decode(
                                 "utf-8", errors="replace")
+                        # Strip ``RAPTOR:``-prefixed lines before the
+                        # emptiness test. Those are deliberate
+                        # post-fork diagnostics from the sandbox itself
+                        # (see core/sandbox/_fork_safe_warn.py) — e.g.
+                        # the benign ``mount_ns: target remount-ro
+                        # failed; relying on Landlock`` warning, which
+                        # fires on most Linux hosts and would
+                        # otherwise defeat this gate. The convention
+                        # is documented; no tool legitimately emits
+                        # the prefix, and an attacker who could spoof
+                        # it would only re-trigger this same fallback
+                        # — they can already do that today by exiting
+                        # 126 with empty stderr.
+                        _stderr_text = "\n".join(
+                            ln for ln in _stderr_text.splitlines()
+                            if not ln.lstrip().startswith("RAPTOR:")
+                        )
                         if (tool_paths
                                 and result.returncode in (126, 127)
                                 and not _stderr_text.strip()):

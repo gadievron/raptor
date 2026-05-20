@@ -555,6 +555,21 @@ class TestRealAnthropicSDKThroughDispatcher:
             req_body = json.loads(upstream.captured["body"])
             assert req_body["model"] == "claude-3-haiku-20240307"
             assert req_body["messages"][0]["content"] == "ping"
+
+            # ---- upstream path is exactly ``/v1/messages`` ----
+            # Pins the contract that the worker base_url + dispatcher
+            # prefix-strip + SDK's own ``/v1/messages`` append produce
+            # the right upstream path. A regression that returns to
+            # the old doubled-``/v1/v1/messages`` shape would fail
+            # against the real Anthropic 404 in production without
+            # this assertion.
+            assert upstream.captured["path"] == "/v1/messages", (
+                f"upstream path = {upstream.captured['path']!r} "
+                "— expected '/v1/messages'. If this fails with "
+                "'/v1/v1/messages' the worker base_url has been "
+                "set to 'http://_/anthropic/v1' instead of "
+                "'http://_/anthropic' (SDK appends /v1 itself)."
+            )
         finally:
             upstream.shutdown()
             d.shutdown()
@@ -758,4 +773,112 @@ class TestSpawnHelperTokenIsolation:
             )
             assert len(token_value) >= 32   # url-safe 32 bytes -> 43 chars
         finally:
+            d.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Regression — response Content-Encoding must survive forwarding
+# ---------------------------------------------------------------------------
+
+
+class _GzipCaptiveUpstream:
+    """Captive HTTP server that gzip-encodes its response body and
+    serves it with ``Content-Encoding: gzip`` — mirrors how Anthropic
+    (always) and Gemini (often) reply in production."""
+
+    def __init__(self, payload: bytes):
+        import gzip
+        import http.server
+
+        compressed = gzip.compress(payload)
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_a, **_kw):
+                return
+
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                _ = self.rfile.read(length) if length else b""
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), _H)
+        self.host, self.port = self._server.server_address
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    def shutdown(self):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+class TestE2EResponseEncodingPreserved:
+    """Regression: the dispatcher used to strip ``Content-Encoding``
+    from upstream responses while forwarding the still-compressed
+    ``iter_raw()`` bytes — workers received gzipped bytes labelled as
+    plain, and the SDK's JSON parse choked on garbage (Gemini: char-0
+    parse error; Anthropic: binary in the error string)."""
+
+    def _setup(self, fake_creds, tmp_path, payload: bytes):
+        upstream = _GzipCaptiveUpstream(payload)
+        d = LLMDispatcher(
+            run_id="gzip-e2e", creds=fake_creds,
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=3600, token_budget=100,
+        )
+        from core.llm.dispatcher.auth import ProviderRule
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+        return d, upstream
+
+    def test_gzipped_upstream_body_decompresses_at_worker(
+        self, fake_creds, tmp_path,
+    ):
+        payload = b'{"id":"msg_test","content":"hello gzipped world"}'
+        d, upstream = self._setup(fake_creds, tmp_path, payload)
+        try:
+            _, fd = d.allocate_worker(label="gzip-e2e")
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
+
+            transport = httpx.HTTPTransport(uds=str(d.socket_path))
+            with httpx.Client(transport=transport, timeout=10.0) as client:
+                resp = client.post(
+                    "http://_/anthropic/v1/messages",
+                    headers={
+                        _TOKEN_HEADER: token,
+                        "x-api-key": "dummy-not-used",
+                        "Content-Type": "application/json",
+                    },
+                    content=b'{"model":"claude-3-haiku","messages":[]}',
+                )
+
+            assert resp.status_code == 200
+            # With ``Content-Encoding: gzip`` preserved, httpx
+            # auto-decompresses and ``resp.json()`` returns the
+            # original payload. Pre-fix this raised JSONDecodeError
+            # on the still-compressed bytes.
+            assert resp.json() == {
+                "id": "msg_test", "content": "hello gzipped world",
+            }
+            # And the worker's response headers retain the encoding
+            # advertisement — without that signal httpx falls back
+            # to opaque-bytes mode.
+            ce = {k.lower(): v for k, v in resp.headers.items()}.get("content-encoding")
+            assert ce == "gzip"
+        finally:
+            upstream.shutdown()
             d.shutdown()

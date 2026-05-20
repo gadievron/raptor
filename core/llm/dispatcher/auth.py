@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 
@@ -87,6 +88,11 @@ class CredentialStore:
     Loaded once from the parent's environ at dispatcher startup,
     keys then erased from environ. The store is the single point
     that holds plaintext credentials for the lifetime of the run.
+
+    The launcher may also call :func:`seed_from_config` after
+    constructing the store to fill any provider slots that env
+    didn't supply, from ``~/.config/raptor/models.json``. Env-set
+    keys are preserved (the seed only fills ``None`` slots).
     """
 
     def __init__(self) -> None:
@@ -121,7 +127,11 @@ class CredentialStore:
         return self._keys.get(provider)
 
     def set(self, provider: str, key: str | None) -> None:
-        """Test seam — production code does not call this."""
+        """Set or clear one provider's key.
+
+        Used by tests, and by :func:`seed_from_config` to fill slots
+        from ``models.json``. No other production caller touches this.
+        """
         self._keys[provider] = key
 
 
@@ -278,3 +288,65 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             ),
         ),
     }
+
+
+def seed_from_config(store: CredentialStore) -> None:
+    """Fill empty slots in *store* from ``~/.config/raptor/models.json``.
+
+    The ``CredentialStore`` reads API keys from env at construction.
+    Operators who instead keep their keys in ``models.json`` (the
+    documented UX that the startup banner advertises with
+    ``via models.json``) would otherwise see a configured-looking
+    system that still 503s every request — the proxy has no creds to
+    inject.
+
+    The launcher calls this after constructing the store, before
+    handing it to ``LLMDispatcher(..., creds=...)``. Env-supplied keys
+    always win: only slots where ``store.get(provider) is None`` are
+    filled, so an explicit env override of a ``models.json`` entry is
+    preserved.
+
+    Path resolution matches ``core/llm/detection.py:_read_config_models``:
+    ``$RAPTOR_CONFIG`` if set, else ``~/.config/raptor/models.json``.
+
+    Silent on file-missing, parse-error, or schema-error — same posture
+    as the rest of the config-reading path. A misconfigured file looks
+    the same as no file at all and surfaces later as the dispatcher's
+    own ``503 provider not configured``.
+    """
+    try:
+        from core.json import load_json_with_comments
+    except ImportError:
+        return
+
+    config_path_str = os.environ.get("RAPTOR_CONFIG")
+    if config_path_str:
+        config_path = Path(config_path_str).expanduser().resolve()
+    else:
+        config_path = Path.home() / ".config" / "raptor" / "models.json"
+
+    data = load_json_with_comments(config_path)
+    if data is None:
+        return
+
+    if isinstance(data, dict):
+        entries = data.get("models") or []
+    elif isinstance(data, list):
+        entries = data
+    else:
+        return
+    if not isinstance(entries, list):
+        return
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("provider")
+        api_key = entry.get("api_key")
+        if not isinstance(provider, str) or not isinstance(api_key, str):
+            continue
+        # Env wins: only fill empty slots. Also handles the duplicate-
+        # provider case (operator lists two gemini entries for different
+        # roles, same key) — first match seeds, rest are no-ops.
+        if store.get(provider) is None:
+            store.set(provider, api_key)

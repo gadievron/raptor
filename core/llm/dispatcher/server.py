@@ -500,8 +500,17 @@ def _make_request_handler(dispatcher: LLMDispatcher) -> type:
                     with client.stream(method, url, content=body, headers=forwarded) as up:
                         self.send_response(up.status_code)
                         for k, v in up.headers.items():
+                            # Strip hop-by-hop headers only. ``content-
+                            # encoding`` is response-scoped and MUST be
+                            # preserved: ``iter_raw()`` below forwards
+                            # the upstream's still-compressed bytes (it
+                            # does not auto-decompress), so the worker
+                            # needs the header to know to decompress.
+                            # Stripping it ships gzipped bytes labelled
+                            # as plain JSON — Anthropic always gzips,
+                            # so worker SDK calls choke on the bytes.
                             if k.lower() in (
-                                "transfer-encoding", "content-encoding",
+                                "transfer-encoding",
                                 "connection",
                             ):
                                 continue

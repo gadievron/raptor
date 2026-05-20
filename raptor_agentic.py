@@ -1786,6 +1786,7 @@ Examples:
     analysed_count = 0
     true_positives = 0
     false_positives = 0
+    unverdicted = 0
     exploitable_count = 0
     failed_count = 0
     blocked_count = 0
@@ -1798,26 +1799,18 @@ Examples:
         analysed_count = orch.get("findings_analysed", 0)
         exploits_count = max(exploits_count, orchestration_result.get('exploits_generated', 0))
         patches_count = max(patches_count, orchestration_result.get('patches_generated', 0))
-        for r in orchestration_result.get("results", []):
-            if "error" in r:
-                if r.get("error_type") == "blocked":
-                    blocked_count += 1
-                else:
-                    failed_count += 1
-                continue
-            # Only count findings that were actually analysed (have explicit verdict)
-            if "is_true_positive" not in r:
-                continue
-            if r.get("is_true_positive") is False:
-                false_positives += 1
-                # Flag severity mismatches: scanner says error/critical but LLM says false positive
-                scanner_level = r.get("level", "")
-                if scanner_level == "error":
-                    severity_mismatches.append(r)
-            else:
-                true_positives += 1
-            if r.get("is_exploitable"):
-                exploitable_count += 1
+        # gh #549: distinguish is_true_positive=None (q<0.5 empty
+        # dispatch) from True at bucket time; otherwise total
+        # dispatch failure looks like a successful run.
+        from core.orchestration.funnel import bucket_orchestration_results
+        _buckets = bucket_orchestration_results(orchestration_result.get("results", []))
+        true_positives = _buckets["true_positives"]
+        false_positives = _buckets["false_positives"]
+        unverdicted = _buckets["unverdicted"]
+        exploitable_count = _buckets["exploitable"]
+        failed_count = _buckets["failed"]
+        blocked_count = _buckets["blocked"]
+        severity_mismatches = _buckets["severity_mismatches"]
     else:
         analysed_count = analysis.get('analyzed', 0)
         exploitable_count = analysis.get('exploitable', 0)
@@ -1865,6 +1858,14 @@ Examples:
         print(f"   True positives: {true_positives}")
         if false_positives > 0:
             print(f"   False positives: {false_positives}")
+    if unverdicted > 0:
+        # Per-finding LLM dispatch returned empty / low-quality response
+        # (q<0.5 from cc_dispatch leaves verdict fields as None). Pre-fix
+        # `else: true_positives += 1` counted these as confirmed findings,
+        # so total dispatch failure looked like a successful run.
+        # gh #549 — print loudly so the operator sees the analysis gap.
+        print(f"   ⚠️  Unverdicted: {unverdicted} "
+              f"(LLM dispatch returned empty/low-quality — analysis is incomplete)")
     contradictions = sum(1 for r in orchestration_result.get("results", [])
                          if r.get("self_contradictory")) if orchestration_result else 0
     if contradictions > 0:

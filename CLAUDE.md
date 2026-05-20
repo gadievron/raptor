@@ -15,6 +15,15 @@ VERY IMPORTANT: follow these steps in order.
 
 ---
 
+## EXECUTION RULES
+
+When a skill, command file, or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), or `cd` prefixes.
+RAPTOR pipelines emit progress lines, real-time cost tracking, and the `OUTPUT_DIR=<path>` sentinel that downstream lifecycle steps parse. Truncating or filtering that stream breaks both operator visibility and orchestration.
+
+Exception: when the skill itself shows the modification (e.g. a documented `| tee logfile` pattern), follow what the skill prints.
+
+---
+
 ## COMMANDS
 
 /project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export

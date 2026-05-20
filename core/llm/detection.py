@@ -367,6 +367,13 @@ def _read_config_models() -> list:
 
     Shared config file parsing — used by both detection and config modules.
     Returns a list of model dicts, or empty list on any error.
+
+    Anthropic model names are resolved through the live ``/v1/models``
+    inventory before return: operators usually configure unversioned
+    aliases (e.g. ``claude-haiku-4-5``) but the SDK requires the
+    versioned snapshot (``claude-haiku-4-5-20251001``). See
+    :mod:`core.llm.model_resolution` for the resolver and its failure
+    posture (verbatim passthrough on any error).
     """
     try:
         from core.json import load_json_with_comments
@@ -384,12 +391,54 @@ def _read_config_models() -> list:
         # Accept both {"models": [...]} and bare [...]
         if isinstance(data, dict):
             model_list = data.get("models", [])
-            return model_list if isinstance(model_list, list) else []
+            if not isinstance(model_list, list):
+                return []
         elif isinstance(data, list):
-            return data
-        return []
+            model_list = data
+        else:
+            return []
+
+        return _apply_anthropic_resolution(model_list)
     except Exception:
         return []
+
+
+def _apply_anthropic_resolution(entries: list) -> list:
+    """Rewrite each Anthropic entry's ``model`` field through the resolver.
+
+    Non-anthropic entries are returned unchanged. Anthropic entries
+    with no ``model`` field, a non-string ``model``, or no api_key
+    are returned unchanged (the resolver needs the key for the
+    inventory fetch). Resolution failures fall through to verbatim
+    so a misconfigured or unreachable Anthropic API can never break
+    config reads.
+    """
+    try:
+        from .model_resolution import resolve_anthropic
+    except ImportError:
+        return entries
+
+    out = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("provider") != "anthropic":
+            out.append(entry)
+            continue
+        name = entry.get("model")
+        api_key = entry.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
+        if not isinstance(name, str) or not api_key:
+            out.append(entry)
+            continue
+        resolved = resolve_anthropic(name, api_key)
+        if resolved == name:
+            out.append(entry)
+        else:
+            new_entry = dict(entry)
+            new_entry["model"] = resolved
+            # Preserve the operator's input for diagnostics. Run logs
+            # and reports can show "configured as X, resolved to Y".
+            new_entry.setdefault("_configured_model", name)
+            out.append(new_entry)
+    return out
 
 
 def _config_has_keyed_models() -> bool:

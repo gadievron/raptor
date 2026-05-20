@@ -154,11 +154,14 @@ def make_anthropic_client(
     http = _make_httpx_client(socket_path, token, timeout=timeout)
     # ``api_key='dummy'`` because the SDK validates that *something*
     # was passed; the dispatcher strips it and injects the real key.
-    # ``base_url`` directs requests to ``/anthropic/v1/...`` so the
-    # dispatcher can route by path prefix.
+    # ``base_url`` directs requests to ``/anthropic/...`` so the
+    # dispatcher can route by path prefix. The Anthropic SDK appends
+    # ``/v1/messages`` itself, so the base URL stops at the provider
+    # prefix — adding ``/v1`` here would double it and produce
+    # ``/v1/v1/messages`` upstream.
     return anthropic.Anthropic(
         api_key="dummy-not-used",
-        base_url="http://_/anthropic/v1",
+        base_url="http://_/anthropic",
         http_client=http,
     )
 

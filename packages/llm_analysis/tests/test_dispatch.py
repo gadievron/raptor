@@ -78,6 +78,32 @@ class TestDispatchTask:
         assert processed["analysed_by"] == "test-model"
         assert processed["duration_seconds"] == 5.0
 
+    def test_process_result_omits_quality_on_happy_path(self):
+        # quality defaults to 1.0; happy path must NOT pollute every
+        # result dict with a "quality" field. gh #549.
+        task = DispatchTask()
+        dr = DispatchResult(result={"is_true_positive": True}, quality=1.0)
+        out = task.process_result({}, dr)
+        assert "quality" not in out
+
+    def test_process_result_surfaces_low_quality(self):
+        # The zephrfish-shape case (q=0.08 from cc_dispatch leaves
+        # is_true_positive=None): quality must surface in the dict so
+        # downstream report consumers can see *why* it's unverdicted.
+        task = DispatchTask()
+        dr = DispatchResult(result={"is_true_positive": None}, quality=0.08)
+        out = task.process_result({}, dr)
+        assert out["quality"] == 0.08
+
+    def test_process_result_quality_rounds_to_two_decimals(self):
+        # q=0.999 would display as "1.00" if surfaced — that's
+        # indistinguishable from the happy path, so the branch must
+        # gate on the *rounded* value, not the raw one.
+        task = DispatchTask()
+        dr = DispatchResult(result={}, quality=0.999)
+        out = task.process_result({}, dr)
+        assert "quality" not in out
+
     def test_finalize_default_noop(self):
         task = DispatchTask()
         results = [{"a": 1}]
