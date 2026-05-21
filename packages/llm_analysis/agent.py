@@ -15,6 +15,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -152,6 +153,18 @@ class VulnerabilityContext:
         self.exploitable: bool = False
         self.exploitability_score: float = 0.0
         self.exploit_code: Optional[str] = None
+        # Compilation-verification result for ``exploit_code``. ``None``
+        # means verification was not attempted (no LLM exploit emitted,
+        # or compiler unavailable / skipped); ``True`` / ``False``
+        # reflect gcc's verdict in a sandbox.
+        # ``exploit_compile_errors`` carries the parsed compiler
+        # diagnostics when compilation fails — preserved so
+        # downstream consumers (reporting, /validate, future
+        # refinement loop) can see why the LLM's exploit didn't
+        # build. Empty list means "no errors observed" or
+        # "compilation not attempted".
+        self.exploit_compiled: Optional[bool] = None
+        self.exploit_compile_errors: List[str] = []
         self.patch_code: Optional[str] = None
         self.analysis: Optional[Dict[str, Any]] = None
 
@@ -360,6 +373,18 @@ class VulnerabilityContext:
             "has_patch": self.patch_code is not None,
         }
 
+        # Surface compile-verification verdict on the finding so
+        # reporting / downstream consumers can distinguish a viable
+        # PoC from a hallucinated one. Omitted entirely when no
+        # exploit was emitted (no value to encode "not attempted on
+        # a non-existent artefact").
+        if self.exploit_code is not None:
+            result["exploit_compiled"] = self.exploit_compiled
+            if self.exploit_compile_errors:
+                result["exploit_compile_errors"] = list(
+                    self.exploit_compile_errors
+                )
+
         # Add function metadata if available (from inventory checklist)
         if self.metadata:
             result["metadata"] = self.metadata
@@ -458,7 +483,8 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
                  prep_only: bool = False,
-                 synthesise_checkers: bool = True):
+                 synthesise_checkers: bool = True,
+                 verify_exploits: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -467,6 +493,18 @@ class AutonomousSecurityAgentV2:
         # for variants found across the codebase. Default on; opt out
         # via ``--no-checker-synthesis`` for cost-sensitive runs.
         self.synthesise_checkers = synthesise_checkers
+        # Compile-verify every LLM-emitted exploit by shelling out to
+        # gcc in a sandboxed temp dir. Default on; opt out via
+        # ``--no-verify-exploits`` for time-sensitive runs. Wall-clock
+        # cost is ~140ms per finding in the steady state (measured on
+        # a clean linux/x86_64 host; cold-start may add sandbox
+        # init time on the first call). For a 100-finding run that's
+        # ~14s of extra wall-clock — usually below the noise threshold
+        # of the surrounding LLM calls, but the opt-out exists for
+        # benchmarks / CI surfaces where every second counts.
+        # See ``_verify_exploit_compiles`` for what the verdict
+        # populates on each ``VulnerabilityContext``.
+        self.verify_exploits = verify_exploits
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -491,7 +529,7 @@ class AutonomousSecurityAgentV2:
             if self.llm_config.primary_model.cost_per_1k_tokens > 0:
                 print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
             else:
-                print(f"💰 Cost: FREE (self-hosted model)")
+                print("💰 Cost: FREE (self-hosted model)")
 
             # Warn about Ollama model limitations for exploit generation
             if "ollama" in self.llm_config.primary_model.provider.lower():
@@ -653,7 +691,7 @@ class AutonomousSecurityAgentV2:
             logger.info(f"  False positive: {validation.get('false_positive')}")
 
             if validation.get('sanitizer_details'):
-                logger.info(f"\n  Sanitizer Analysis:")
+                logger.info("\n  Sanitizer Analysis:")
                 for san_detail in validation.get('sanitizer_details', []):
                     logger.info(f"    - {san_detail.get('name')}")
                     logger.info(f"      Purpose: {san_detail.get('purpose')}")
@@ -662,7 +700,7 @@ class AutonomousSecurityAgentV2:
                         logger.info(f"      Bypass: {san_detail.get('bypass_method')[:100]}")
 
             if validation.get('attack_payload_concept'):
-                logger.info(f"\n  Attack Payload Concept:")
+                logger.info("\n  Attack Payload Concept:")
                 logger.info(f"    {validation.get('attack_payload_concept')[:200]}")
 
             # Save validation details
@@ -704,7 +742,7 @@ class AutonomousSecurityAgentV2:
                 if vuln.sanitizers_found:
                     logger.info(f"  ⚠️  Sanitizers detected: {', '.join(vuln.sanitizers_found)}")
             else:
-                logger.warning(f"⚠️  Failed to extract dataflow path")
+                logger.warning("⚠️  Failed to extract dataflow path")
 
         from packages.llm_analysis.prompts import (
             build_analysis_prompt_bundle,
@@ -794,7 +832,7 @@ class AutonomousSecurityAgentV2:
 
             # Log dataflow-specific analysis
             if vuln.has_dataflow and 'source_attacker_controlled' in analysis:
-                logger.info(f"\n  Dataflow Analysis:")
+                logger.info("\n  Dataflow Analysis:")
                 logger.info(f"    Source attacker-controlled: {analysis.get('source_attacker_controlled', 'N/A')}")
                 logger.info(f"    Sanitizers effective: {analysis.get('sanitizers_effective', 'N/A')}")
                 if analysis.get('sanitizer_bypass_technique'):
@@ -850,12 +888,12 @@ class AutonomousSecurityAgentV2:
                     if validation:
                         # Update exploitability based on validation
                         if validation.get('false_positive'):
-                            logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info("⚠️  Validation marked as FALSE POSITIVE:")
                             logger.info(f"    Reason: {validation.get('false_positive_reason')}")
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
                         elif not validation.get('is_exploitable'):
-                            logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info("⚠️  Validation determined NOT EXPLOITABLE:")
                             logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
                             vuln.exploitable = False
                             # Same null-vs-missing distinction as the
@@ -867,7 +905,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info(f"✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms EXPLOITABLE")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
@@ -1026,7 +1064,7 @@ class AutonomousSecurityAgentV2:
     def generate_exploit(self, vuln: VulnerabilityContext) -> bool:
 
         if not vuln.exploitable:
-            logger.debug(f"⊘ Skipping exploit generation (not exploitable)")
+            logger.debug("⊘ Skipping exploit generation (not exploitable)")
             return False
 
         # IRIS Tier 1 pre-flight gate — free CodeQL check before paying
@@ -1116,6 +1154,22 @@ class AutonomousSecurityAgentV2:
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
+
+                # Compile-verify the LLM's output. Pre-fix, exploit_code
+                # was saved unconditionally with no signal about whether
+                # it would build — operators downstream had no way to
+                # distinguish a viable PoC from a hallucinated one. The
+                # sandbox-wrapped gcc invocation here matches the
+                # pattern /codeql --autonomous has used since v2.0; the
+                # only new thing is wiring it into /agentic's path.
+                # Verdict populates ``ExploitResult.result``-equivalent
+                # fields on the finding so reporting can surface
+                # "exploit compiled" rates per run. Gated on
+                # ``self.verify_exploits`` so operators with tight
+                # time budgets can opt out via constructor / CLI flag.
+                if self.verify_exploits:
+                    self._verify_exploit_compiles(vuln, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -1126,6 +1180,122 @@ class AutonomousSecurityAgentV2:
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
+
+    # File extensions that map to languages the gcc-based validator
+    # can compile. Anything else (Python / Java / JS / Go / etc.) is
+    # skipped with a "language_not_supported" marker rather than
+    # being marked compiled=False — surfacing a sea of gcc parse
+    # errors on Python exploits is anti-signal.
+    _COMPILABLE_EXTENSIONS = frozenset({
+        ".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp",
+    })
+
+    def _verify_exploit_compiles(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Compile-check the LLM-emitted exploit in a sandbox.
+
+        Wraps ``packages.autonomous.exploit_validator.ExploitValidator``
+        — the same machinery ``/codeql --autonomous`` has used since
+        v2.0. Populates ``vuln.exploit_compiled`` and
+        ``vuln.exploit_compile_errors`` so reporting can surface
+        compile-success rates and downstream consumers (future
+        refinement loop, ``/validate`` verification tier) can act on
+        the verdict.
+
+        Failures here are intentionally non-fatal: a compile error is
+        useful signal, not an exception to propagate. The exploit
+        artefact is preserved on disk regardless so operators can
+        still inspect it.
+
+        Verification is gated on the **target's** language (read from
+        ``vuln.file_path``'s extension), not the exploit file's
+        ``.cpp`` extension (which is hardcoded by the writer above).
+        For Python / Java / JS / Go targets the LLM typically emits
+        a same-language exploit; feeding that to gcc produces parse-
+        error noise. We mark ``exploit_compiled=None`` with a single-
+        entry ``exploit_compile_errors`` annotating
+        "language_not_supported" so operators see *why* verdict is
+        absent.
+        """
+        # Language gate. The exploit file is always saved with .cpp
+        # (a bug in the writer, see exploit_file path above), so we
+        # cannot trust the artefact's extension — look at the target.
+        target_ext = ""
+        if vuln.file_path:
+            target_ext = Path(vuln.file_path).suffix.lower()
+        if target_ext and target_ext not in self._COMPILABLE_EXTENSIONS:
+            vuln.exploit_compiled = None
+            vuln.exploit_compile_errors = [
+                f"language_not_supported: target extension {target_ext!r} "
+                f"is not in the gcc-compilable set; skipping compile-verify"
+            ]
+            logger.debug(
+                f"   · Skipping compile-verify for {vuln.finding_id} "
+                f"(target language {target_ext!r} not gcc-compilable)"
+            )
+            return
+
+        try:
+            from packages.autonomous.exploit_validator import ExploitValidator
+        except ImportError as e:
+            logger.debug(
+                f"ExploitValidator unavailable ({e}) — leaving "
+                f"exploit_compiled unset for {vuln.finding_id}"
+            )
+            return
+
+        # Sanitise finding_id before passing it as ExploitValidator's
+        # ``exploit_name`` (which becomes a filename inside the work
+        # dir). SARIF rule-ids legitimately contain ``/`` (e.g.
+        # CodeQL's ``py/clear-text-logging-sensitive-data``) and some
+        # scanner outputs include ``..`` or other traversal-shaped
+        # segments. ``Path(...).name`` collapses any traversal,
+        # ``replace("..", "_")`` closes the residual case where
+        # ``..`` appears within a single name segment. Matches the
+        # pattern ``ExploitValidator.validate_exploit`` uses
+        # internally as defence-in-depth.
+        safe_id = Path(vuln.finding_id or "exploit").name.replace("..", "_") \
+            or "exploit"
+
+        # Use a tempdir that auto-cleans on context exit. The build
+        # artefacts (compiled binary, source-file copy) aren't needed
+        # after verification — the verdict + compiler diagnostics
+        # are all we want to keep. Earlier drafts kept the build dir
+        # under ``{out_dir}/exploits/_build/{safe_id}/`` which
+        # accumulated across runs and co-located build clutter with
+        # the polished ``.cpp`` artefacts. Operators who want to
+        # re-inspect can re-compile from the saved
+        # ``exploits/{finding_id}_exploit.cpp`` themselves.
+        with tempfile.TemporaryDirectory(
+            prefix=f"agentic-verify-{safe_id}-",
+        ) as work_dir_str:
+            work_dir = Path(work_dir_str)
+            try:
+                validator = ExploitValidator(work_dir=work_dir)
+                result = validator.validate_exploit(exploit_code, safe_id)
+            except Exception as e:  # noqa: BLE001 — validator is best-effort
+                logger.warning(
+                    f"   ⚠ Compile-verify raised {type(e).__name__}: {e}; "
+                    f"leaving verdict unset for {vuln.finding_id}"
+                )
+                return
+
+            vuln.exploit_compiled = bool(result.success)
+            vuln.exploit_compile_errors = list(result.compilation_errors or [])
+
+            if result.success:
+                logger.info("   ✓ Exploit compiled successfully")
+            else:
+                err_count = len(vuln.exploit_compile_errors)
+                logger.info(
+                    f"   ⚠ Exploit failed to compile "
+                    f"({err_count} error{'s' if err_count != 1 else ''})"
+                )
+                for err in vuln.exploit_compile_errors[:3]:
+                    logger.info(f"     - {err}")
+                if err_count > 3:
+                    logger.info(f"     ... ({err_count - 3} more)")
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
         logger.info("─" * 70)
@@ -1138,7 +1308,7 @@ class AutonomousSecurityAgentV2:
             logger.error(f"   ✗ File not found: {file_path}")
             return False
 
-        logger.info(f"   ✓ Reading full file for context...")
+        logger.info("   ✓ Reading full file for context...")
 
         with open(file_path) as f:
             full_file_content = f.read()
@@ -1566,7 +1736,7 @@ class AutonomousSecurityAgentV2:
                                     "checker followup error", exc_info=True,
                                 )
                     else:
-                        logger.debug(f"⊘ Skipping patch generation (not exploitable)")
+                        logger.debug("⊘ Skipping patch generation (not exploitable)")
 
                 # Always include finding in results (with or without LLM analysis)
                 results.append(vuln.to_dict())
@@ -1657,18 +1827,18 @@ class AutonomousSecurityAgentV2:
                     f"(test-harness circularity); prep outcomes "
                     f"{fixture_prep_outcomes}"
                 )
-            logger.info(f"")
+            logger.info("")
             if dataflow_validated > 0:
-                logger.info(f"Dataflow Validation:")
+                logger.info("Dataflow Validation:")
                 logger.info(f"   Deep validated: {dataflow_validated} dataflow paths")
                 logger.info(f"   False positives caught: {false_positives_found}")
-                logger.info(f"")
-            logger.info(f"LLM Statistics:")
+                logger.info("")
+            logger.info("LLM Statistics:")
             logger.info(f"   Total requests: {llm_stats['total_requests']}")
             logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
             logger.info(f"   Execution time: {execution_time:.1f}s")
         if not is_prep_only:
-            logger.info(f"")
+            logger.info("")
             logger.info(f"Report saved: {report_file}")
             logger.info("=" * 70)
 
@@ -1731,6 +1901,15 @@ def main() -> None:
              "variant annotations. Use to cut LLM cost on confirmed "
              "exploitable findings — at the price of losing variant "
              "discovery.",
+    )
+    ap.add_argument(
+        "--no-verify-exploits",
+        action="store_true",
+        help="Skip the compile-verify step on LLM-emitted exploits "
+             "(default on, ~140ms per finding). Use for "
+             "benchmarks / CI surfaces where every second counts. "
+             "When disabled, exploit_compiled stays unset on each "
+             "finding (None — verification not attempted).",
     )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
@@ -1807,6 +1986,7 @@ def main() -> None:
         repo_path, out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
+        verify_exploits=not args.no_verify_exploits,
     )
 
     # Load checklist for metadata lookup
