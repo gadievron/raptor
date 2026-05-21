@@ -237,8 +237,16 @@ def test_non_json_serialisable_value_does_not_leak_tempfile(tmp_path: Path) -> N
     # TypeError. Older versions of this code only caught OSError, leaking
     # the partial tempfile.
     cache.put("k", datetime.datetime.now(), ttl_seconds=60)
-    leftovers = sorted(p.name for p in tmp_path.rglob("*") if p.is_file())
-    assert leftovers == [], f"tempfile leak: {leftovers}"
+    # Tempfile leak = .tmp.<pid>[.<tid>] shaped leftovers. The reaper's
+    # rate-limit sentinel (``.reap_last_run``) is cache infrastructure,
+    # not a leak — exclude it from the assertion.
+    tempfile_leftovers = sorted(
+        p.name for p in tmp_path.rglob("*")
+        if p.is_file() and ".tmp." in p.name
+    )
+    assert tempfile_leftovers == [], (
+        f"tempfile leak: {tempfile_leftovers}"
+    )
     # And the cache returns None on subsequent get (write was rejected).
     assert cache.get("k", ttl_seconds=60) is None
 
@@ -321,3 +329,137 @@ def test_memo_negative_cached_miss_is_recomputed_after_put(
     assert cache.get("k", ttl_seconds=60) is None
     cache.put("k", "v", ttl_seconds=60)
     assert cache.get("k", ttl_seconds=60) == "v"
+
+
+# ---------------------------------------------------------------------------
+# Reaper rate-limit
+# ---------------------------------------------------------------------------
+
+def test_reaper_writes_sentinel_after_first_run(tmp_path: Path) -> None:
+    """First-ever JsonCache construction reaps + drops a sentinel."""
+    JsonCache(root=tmp_path)
+    sentinel = tmp_path / ".reap_last_run"
+    assert sentinel.is_file()
+
+
+def test_reaper_skipped_when_sentinel_is_fresh(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Second construction within the rate-limit window must NOT
+    re-walk the cache. We assert by stubbing the candidate iterator
+    to detect the call."""
+    JsonCache(root=tmp_path)
+    # Sentinel now exists with current mtime.
+    from core.json import cache as cache_mod
+    calls: list = []
+    original = cache_mod._iter_tempfile_candidates
+
+    def spy(root, **kwargs):
+        calls.append(str(root))
+        return original(root, **kwargs)
+
+    monkeypatch.setattr(cache_mod, "_iter_tempfile_candidates", spy)
+    JsonCache(root=tmp_path)
+    cache_walks = [c for c in calls if str(tmp_path) in c]
+    assert cache_walks == [], (
+        f"reaper was not rate-limit-skipped on warm sentinel: {cache_walks}"
+    )
+
+
+def test_reaper_runs_when_sentinel_is_stale(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """When the sentinel's mtime is older than the rate-limit window,
+    the reaper must run again."""
+    JsonCache(root=tmp_path)
+    sentinel = tmp_path / ".reap_last_run"
+    # Make the sentinel old enough to fall outside the rate-limit
+    # window (default 3600s; backdate by 2 hours for safety).
+    old = time.time() - 7200
+    import os as _os
+    _os.utime(sentinel, (old, old))
+
+    from core.json import cache as cache_mod
+    calls: list = []
+    original = cache_mod._iter_tempfile_candidates
+
+    def spy(root, **kwargs):
+        calls.append(str(root))
+        return original(root, **kwargs)
+
+    monkeypatch.setattr(cache_mod, "_iter_tempfile_candidates", spy)
+    JsonCache(root=tmp_path)
+    cache_walks = [c for c in calls if str(tmp_path) in c]
+    assert len(cache_walks) == 1, (
+        f"reaper did not run on stale sentinel: {cache_walks}"
+    )
+
+
+def test_reaper_finds_shallow_tempfiles_but_skips_deep(tmp_path: Path) -> None:
+    """Depth-bounded scan picks up depth-1/2 orphans (the SCA cache
+    shape) but stops before walking the whole tree on big caches.
+
+    Also exercises the legacy ``.tmp.<pid>`` shape so a writer crash
+    from an older RAPTOR version still gets cleaned."""
+    # Depth-1 orphan with current shape.
+    (tmp_path / "shallow.json.tmp.12345.99999").write_text("{}")
+    # Depth-2 orphan under a normal SCA subdir.
+    sub = tmp_path / "npm-meta:@scope"
+    sub.mkdir()
+    (sub / "name.json.tmp.12345.99999").write_text("{}")
+    # Backdate both so they're outside the freshness window.
+    import os as _os
+    old = time.time() - 600  # 10 min ago
+    _os.utime(tmp_path / "shallow.json.tmp.12345.99999", (old, old))
+    _os.utime(sub / "name.json.tmp.12345.99999", (old, old))
+    JsonCache(root=tmp_path)
+    assert not (tmp_path / "shallow.json.tmp.12345.99999").exists()
+    assert not (sub / "name.json.tmp.12345.99999").exists()
+
+
+# ---------------------------------------------------------------------------
+# Memo byte-budget LRU
+# ---------------------------------------------------------------------------
+
+def test_memo_evicts_oldest_when_budget_exceeded(tmp_path: Path) -> None:
+    """Once the byte budget is exceeded, the LRU front entry is dropped
+    and ``memo_evictions`` increments. Disk values stay; only the
+    in-process memo is cleared, so a re-read still works."""
+    c = JsonCache(root=tmp_path)
+    # Tight budget makes every entry trigger eviction.
+    c._memo_budget = 256
+    payload = "x" * 200
+    for i in range(5):
+        c.put(f"key_{i}", payload, ttl_seconds=3600)
+        c.get(f"key_{i}", ttl_seconds=3600)  # populate memo
+    # ~200B payload + envelope JSON overhead ~80B = ~280B per entry,
+    # so each get() pushes us past budget and the oldest entry is
+    # evicted. Final state: only the most-recently-inserted entry
+    # survives (a single oversize entry is always kept regardless of
+    # budget — eviction stops before dropping the just-inserted row).
+    assert len(c._memo) == 1
+    assert c.memo_evictions >= 4
+    # A re-read after eviction still works — the disk file is intact.
+    assert c.get("key_0", ttl_seconds=3600) == payload
+
+
+def test_memo_touch_keeps_hot_entry_alive(tmp_path: Path) -> None:
+    """LRU-touched (recently-read) entries survive eviction over
+    cold entries even when the cold entries were inserted later."""
+    c = JsonCache(root=tmp_path)
+    # Budget chosen so two entries (~268B each) fit but a third
+    # triggers eviction of one.
+    c._memo_budget = 700
+    payload = "x" * 200
+    c.put("hot", payload, ttl_seconds=3600)
+    c.get("hot", ttl_seconds=3600)            # memo[hot]
+    c.put("cold_1", payload, ttl_seconds=3600)
+    c.get("cold_1", ttl_seconds=3600)         # memo[hot, cold_1]
+    # Re-read "hot" — now hot is MRU, cold_1 is LRU.
+    c.get("hot", ttl_seconds=3600)            # memo[cold_1, hot]
+    # Third entry forces one eviction; cold_1 (LRU) goes, hot stays.
+    c.put("cold_2", payload, ttl_seconds=3600)
+    c.get("cold_2", ttl_seconds=3600)         # memo[hot, cold_2]
+    assert "hot" in c._memo
+    assert "cold_1" not in c._memo
+    assert c.memo_evictions >= 1

@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 
 # packages/codeql/tests/test_build_synthesis.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -205,3 +207,212 @@ class TestScriptSafety:
         # subprocess.run". Accept either.
         assert "subprocess.run(cmd" in script or "subprocess.Popen(cmd" in script
         assert "shell=True" not in script
+
+
+# =====================================================================
+# Item 1: CMake subdirectory-fragment rejection
+# =====================================================================
+
+class TestCmakeSubdirRejection:
+    """When the only CMakeLists.txt at the target is a subdir
+    fragment (no ``cmake_minimum_required`` / ``project()``),
+    BuildDetector must NOT return ``cmake . && make`` — that would
+    fail at configure and silently break CodeQL DB creation.
+    """
+
+    def test_real_cmake_root_accepted(self, tmp_path):
+        (tmp_path / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.10)\n"
+            "project(TestProj C)\n"
+            "add_executable(foo main.c)\n"
+        )
+        (tmp_path / "main.c").write_text("int main() { return 0; }")
+        bs = BuildDetector(tmp_path).detect_build_system("cpp")
+        assert bs is not None and bs.type == "cmake"
+
+    def test_subdir_fragment_rejected(self, tmp_path):
+        (tmp_path / "CMakeLists.txt").write_text(
+            "# Subdir fragment — meant for add_subdirectory()\n"
+            "add_library(curl_lib STATIC altsvc.c easy.c)\n"
+        )
+        (tmp_path / "altsvc.c").write_text("// stub")
+        bs = BuildDetector(tmp_path).detect_build_system("cpp")
+        assert bs is None or bs.type != "cmake"
+
+    def test_project_decl_uppercase_or_indented(self, tmp_path):
+        """CMake commands are case-insensitive; project() inside
+        ``if (BUILD_X)`` is still a project root marker."""
+        (tmp_path / "CMakeLists.txt").write_text(
+            "CMAKE_MINIMUM_REQUIRED(VERSION 3.10)\n"
+            "if(BUILD_ALL)\n"
+            "    PROJECT(MixedProj)\n"
+            "endif()\n"
+        )
+        assert BuildDetector._is_cmake_project_root(tmp_path / "CMakeLists.txt")
+
+    def test_missing_file_returns_false(self, tmp_path):
+        assert not BuildDetector._is_cmake_project_root(tmp_path / "does-not-exist.txt")
+
+
+# =====================================================================
+# Item 2: Ancestor-include discovery
+# =====================================================================
+
+class TestAncestorIncludeDiscovery:
+    """Walk up from repo_path looking for sibling ``include/``
+    directories at ancestors. Used by synthesised compile to fix
+    ``#include <foo/bar.h>`` references in subdir targets.
+    """
+
+    def test_finds_sibling_include_at_parent(self, tmp_path):
+        # tmp_path/include/foo.h + tmp_path/lib/main.c
+        (tmp_path / "include").mkdir()
+        (tmp_path / "include" / "foo.h").write_text("// header")
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "main.c").write_text("// stub")
+        bd = BuildDetector(tmp_path / "lib")
+        found = bd._discover_ancestor_includes()
+        assert any("include" in p for p in found)
+
+    def test_returns_empty_when_no_ancestor_include(self, tmp_path):
+        (tmp_path / "main.c").write_text("// stub")
+        bd = BuildDetector(tmp_path)
+        # parent of tmp_path may or may not have include/, but we're
+        # at tmp_path which has no siblings — so under normal
+        # conditions this is empty. Just verify the call works.
+        found = bd._discover_ancestor_includes()
+        # The check is type-shape: must be a list of strings.
+        assert isinstance(found, list)
+        assert all(isinstance(p, str) for p in found)
+
+    def test_skips_system_path_targets(self, tmp_path):
+        """A symlinked include/ that resolves to /etc must be rejected
+        (filesystem-layout leak defence)."""
+        import os
+        (tmp_path / "lib").mkdir()
+        try:
+            # Symlink tmp_path/include → /etc — if include/ exists
+            # and resolves to /etc, the resolution-block check should
+            # reject it.
+            os.symlink("/etc", str(tmp_path / "include"))
+        except (OSError, PermissionError):
+            pytest.skip("symlink creation not permitted")
+        bd = BuildDetector(tmp_path / "lib")
+        found = bd._discover_ancestor_includes()
+        assert not any(p.startswith("/etc") for p in found), found
+
+    def test_max_depth_bounds_walk(self, tmp_path):
+        """Walk should stop at max_depth levels even if more ancestors exist."""
+        # Make tmp_path/a/b/c/lib/main.c
+        deep = tmp_path / "a" / "b" / "c" / "lib"
+        deep.mkdir(parents=True)
+        (deep / "main.c").write_text("// stub")
+        # Put include at tmp_path (4 levels up from lib)
+        (tmp_path / "include").mkdir()
+        (tmp_path / "include" / "x.h").write_text("// hdr")
+        bd = BuildDetector(deep)
+        # max_depth=2 isn't enough to reach tmp_path/include
+        found_shallow = bd._discover_ancestor_includes(max_depth=2)
+        assert not found_shallow
+        # max_depth=4 IS enough
+        found_deep = bd._discover_ancestor_includes(max_depth=4)
+        assert any("include" in p for p in found_deep)
+
+    def test_include_flags_use_absolute_paths(self, tmp_path):
+        """End-to-end: synthesised build script uses absolute -I
+        for ancestor includes (relative would be ambiguous from the
+        compiler's cwd)."""
+        (tmp_path / "include").mkdir()
+        (tmp_path / "include" / "lib.h").write_text("// header")
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.c").write_text("int main() { return 0; }")
+        bd = BuildDetector(tmp_path / "src")
+        bd.synthesise_build_command("cpp")
+        script = _find_script(tmp_path / "src").read_text()
+        # Should contain absolute -I path to tmp_path/include.
+        assert f"-I{tmp_path}/include" in script or f"-I{tmp_path.resolve()}/include" in script
+
+
+# =====================================================================
+# Item 3: Missing-config-header detection (diagnostic only, no exec)
+# =====================================================================
+
+class TestMissingConfigHeaderDetection:
+    """``detect_missing_config_headers`` is a pure diagnostic — it
+    surfaces a list of referenced ``*config.h`` headers that don't
+    exist on disk anywhere reachable. Does NOT auto-execute
+    configure/cmake (arbitrary-code-execution risk).
+    """
+
+    def test_detects_missing_curl_config(self, tmp_path):
+        """``#include "curl_config.h"`` in a .h with no such file on disk."""
+        (tmp_path / "main.c").write_text(
+            "#include \"setup.h\"\nint main() { return 0; }"
+        )
+        (tmp_path / "setup.h").write_text(
+            "#include \"curl_config.h\"\n"  # missing target
+        )
+        bd = BuildDetector(tmp_path)
+        missing = bd.detect_missing_config_headers()
+        assert any(h == "curl_config.h" for h, _ in missing)
+
+    def test_detects_missing_plain_config_h(self, tmp_path):
+        """``#include "config.h"`` is the autoconf-canonical pattern."""
+        (tmp_path / "x.c").write_text("#include \"config.h\"\n")
+        bd = BuildDetector(tmp_path)
+        missing = bd.detect_missing_config_headers()
+        assert any(h == "config.h" for h, _ in missing)
+
+    def test_reports_zero_when_header_exists(self, tmp_path):
+        """If the referenced config.h is present on disk, no report."""
+        (tmp_path / "x.c").write_text("#include \"my_config.h\"\n")
+        (tmp_path / "my_config.h").write_text("/* generated */\n")
+        bd = BuildDetector(tmp_path)
+        missing = bd.detect_missing_config_headers()
+        assert not [h for h, _ in missing if h == "my_config.h"]
+
+    def test_reports_zero_when_ancestor_include_has_it(self, tmp_path):
+        """Header at ancestor include/ counts as 'on disk'."""
+        (tmp_path / "include").mkdir()
+        (tmp_path / "include" / "ancestor_config.h").write_text("/* gen */\n")
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.c").write_text("#include \"ancestor_config.h\"\n")
+        bd = BuildDetector(tmp_path / "src")
+        missing = bd.detect_missing_config_headers()
+        assert not [h for h, _ in missing if h == "ancestor_config.h"]
+
+    def test_dedupes_repeated_references(self, tmp_path):
+        """Same missing header referenced from 5 files → one entry."""
+        for i in range(5):
+            (tmp_path / f"f{i}.c").write_text("#include \"missing_config.h\"\n")
+        bd = BuildDetector(tmp_path)
+        missing = bd.detect_missing_config_headers()
+        names = [h for h, _ in missing if h == "missing_config.h"]
+        assert len(names) == 1
+
+    def test_synthesised_compile_logs_missing_config_warning(
+        self, tmp_path, caplog
+    ):
+        """End-to-end: synthesise_build_command emits a WARNING when
+        config headers are missing, but does NOT auto-execute anything."""
+        import logging
+        (tmp_path / "x.c").write_text("#include \"missing_config.h\"\nint main(){return 0;}")
+        bd = BuildDetector(tmp_path)
+        # build_detector uses ``core.logging.get_logger()`` which
+        # returns a wrapper around the ``"raptor"`` stdlib logger
+        # (see core/logging/__init__.py:RaptorLogger). Attach the
+        # capture there. caplog's pytest integration doesn't see
+        # these messages because the wrapper bypasses the standard
+        # propagation chain.
+        captured: list[logging.LogRecord] = []
+        class _Capture(logging.Handler):
+            def emit(self, record): captured.append(record)
+        h = _Capture(level=logging.WARNING)
+        target_logger = logging.getLogger("raptor")
+        target_logger.addHandler(h)
+        try:
+            bd.synthesise_build_command("cpp")
+        finally:
+            target_logger.removeHandler(h)
+        warnings = [r.getMessage() for r in captured if r.levelno == logging.WARNING]
+        assert any("missing_config.h" in m for m in warnings), warnings

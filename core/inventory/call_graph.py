@@ -190,14 +190,47 @@ class FileCallGraph:
     )
 
     def to_dict(self) -> dict:
-        return {
-            "imports": dict(self.imports),
-            "calls": [
-                {"line": c.line, "chain": list(c.chain),
-                 "caller": c.caller,
-                 "receiver_class": c.receiver_class}
-                for c in self.calls
-            ],
+        # Default-None fields (``caller``, ``receiver_class``) are
+        # omitted from each call dict — they're set on a small minority
+        # of CallSites (method calls + class-context calls) but the
+        # baseline write emitted them on every call. Consumers all
+        # use ``call.get("caller")`` / ``call.get("receiver_class")``
+        # which returns None for missing keys, so the on-disk +
+        # in-memory shape stays equivalent. Saves ~30% of the call
+        # dict size on call-heavy files (~30k Grafana TS files ×
+        # hundreds of calls/file → ~hundreds of MB peak RSS).
+        #
+        # String interning (``sys.intern``) on the small high-
+        # cardinality tokens — import targets and chain tail names —
+        # collapses thousands of copies of common strings like
+        # ``"lodash"`` / ``"react"`` / ``"requests"`` to one shared
+        # object. The chain head + tail are the most-repeated tokens
+        # across a project; the interior elements are usually less
+        # repetitive so we leave them as plain strings.
+        import sys
+        intern = sys.intern
+        calls: list = []
+        for c in self.calls:
+            chain = list(c.chain)
+            if chain:
+                chain[0] = intern(chain[0])
+                if len(chain) > 1:
+                    chain[-1] = intern(chain[-1])
+            entry: dict = {"line": c.line, "chain": chain}
+            if c.caller is not None:
+                entry["caller"] = intern(c.caller)
+            if c.receiver_class is not None:
+                entry["receiver_class"] = intern(c.receiver_class)
+            calls.append(entry)
+
+        # Intern import keys + values — the same dependency name
+        # ("lodash") shows up as a value across thousands of files.
+        out: dict = {
+            "imports": {
+                intern(k): intern(v)
+                for k, v in self.imports.items()
+            },
+            "calls": calls,
             "indirection": sorted(self.indirection),
             "getattr_targets": sorted(self.getattr_targets),
             "classes": [
@@ -212,9 +245,14 @@ class FileCallGraph:
                  "decorators": [list(ch) for ch in d.decorators]}
                 for d in self.decorated_functions
             ],
-            "package_name": self.package_name,
             "relative_imports": [list(ri) for ri in self.relative_imports],
         }
+        # Omit ``package_name`` when unset — Python / JS / TS files
+        # all carry ``None`` here, which is the majority of any
+        # mixed-language repo's files.
+        if self.package_name is not None:
+            out["package_name"] = self.package_name
+        return out
 
     @classmethod
     def from_dict(cls, d: dict) -> "FileCallGraph":

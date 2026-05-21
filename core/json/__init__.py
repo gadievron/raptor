@@ -31,7 +31,9 @@ from typing import Any
 _LAZY_EXPORTS = {
     "CacheEnvelope":          ("core.json.cache", "CacheEnvelope"),
     "JsonCache":              ("core.json.cache", "JsonCache"),
-    "MISSING":                ("core.json.cache", "MISSING"),
+    # MISSING lives outside core.json.* so test_f046's sys.modules
+    # reset doesn't replace the singleton — see core/sentinels/.
+    "MISSING":                ("core.sentinels", "MISSING"),
     "TTL_FOREVER":            ("core.json.cache", "TTL_FOREVER"),
     "load_json":              ("core.json.utils", "load_json"),
     "save_json":              ("core.json.utils", "save_json"),

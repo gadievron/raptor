@@ -322,6 +322,8 @@ class TestTuningFrozen(unittest.TestCase):
             codeql_ram_mb=8192, codeql_threads=8,
             max_semgrep_workers=4, max_codeql_workers=2,
             max_agentic_parallel=3, max_fuzz_parallel=1,
+            max_inventory_workers=4,
+            max_json_memo_mb=256,
         )
         with self.assertRaises(AttributeError):
             t.codeql_ram_mb = 999

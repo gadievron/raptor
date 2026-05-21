@@ -40,7 +40,24 @@ from .diff import compare_inventories
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKERS = os.cpu_count() or 4
+# Worker cap for the per-file extractor pool. Tree-sitter Tree
+# objects can briefly hold tens of MB per file (large TS / JS
+# sources in particular). On a high-core box ``os.cpu_count()``
+# returns 16+, and the resulting transient peak — workers × tree
+# size — dominated inventory peak RSS on Grafana-scale repos
+# (observed 5.7 GB across the reach stage). Sourced from
+# ``tuning.json`` (``max_inventory_workers``) so operators tune it
+# alongside the other RAPTOR pool sizes; default "auto" resolves to
+# half the available CPU count, capped at 8.
+def _resolved_max_workers() -> int:
+    try:
+        from core.tuning import load_tuning
+        return max(1, load_tuning().max_inventory_workers)
+    except Exception:  # noqa: BLE001
+        return min(8, os.cpu_count() or 4)
+
+
+MAX_WORKERS = _resolved_max_workers()
 
 # Per-file read cap. Bigger than any realistic source file (the
 # largest in CPython is ~30K LOC ≈ 1 MB) but small enough that a
