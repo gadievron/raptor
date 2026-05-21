@@ -34,6 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from core.cve import EpssClient
 from core.cve import KevClient
+from core.cve.vulnrichment import VulnrichmentClient
 from .models import (
     Advisory,
     Confidence,
@@ -72,6 +73,7 @@ def build_vuln_findings(
     kev: Optional[KevClient] = None,
     epss: Optional[EpssClient] = None,
     reachability: Optional[Dict[str, Reachability]] = None,
+    vulnrichment: Optional["VulnrichmentClient"] = None,
 ) -> List[VulnFinding]:
     """Combine signal layers into one ``VulnFinding`` per (dep, advisory).
 
@@ -83,6 +85,10 @@ def build_vuln_findings(
         kev: optional KEV lookup; ``None`` skips the KEV enrichment.
         epss: optional EPSS lookup; ``None`` skips the EPSS enrichment.
         reachability: optional per-dep-key reachability records.
+        vulnrichment: optional CISA Vulnrichment SSVC lookup; closes
+            the cold-start eco gap (Cargo / NuGet / Packagist) where
+            KEV / EPSS / EDB / MSF / PoC return nothing for the
+            majority of advisories. ``None`` skips the SSVC layer.
     """
     out: List[VulnFinding] = []
 
@@ -121,6 +127,7 @@ def build_vuln_findings(
                 kev=kev,
                 epss=epss,
                 reachability=reachability,
+                vulnrichment=vulnrichment,
             ))
     return out
 
@@ -170,6 +177,7 @@ def _assemble_finding(
     kev: Optional[KevClient],
     epss: Optional[EpssClient],
     reachability: Optional[Dict[str, Reachability]],
+    vulnrichment: Optional[VulnrichmentClient] = None,
 ) -> VulnFinding:
     cve_aliases = [a for a in advisory.aliases if a.upper().startswith("CVE-")]
     in_kev = bool(kev and any(kev.contains(c) for c in cve_aliases))
@@ -178,6 +186,26 @@ def _assemble_finding(
         scores = epss.scores(cve_aliases)
         if scores:
             epss_score = max(scores.values())
+    # CISA Vulnrichment SSVC — broadest cross-eco exploitation
+    # signal, covering the ~60% of cold-start eco CVEs (Cargo /
+    # NuGet / Packagist) that KEV / EPSS / EDB / MSF / PoC skip.
+    # Pick the strongest signal across the advisory's CVE aliases:
+    # ``active`` > ``poc`` > ``none``. Any miss (CISA hasn't
+    # enriched, or no CVE aliases at all) leaves
+    # ``ssvc_exploitation`` as ``None`` so the risk formula's
+    # "no signal" branch fires.
+    ssvc_exploitation: Optional[str] = None
+    if vulnrichment is not None and cve_aliases:
+        decisions = [
+            vulnrichment.lookup(c) for c in cve_aliases
+        ]
+        decisions = [d for d in decisions if d is not None]
+        if any(d.is_active for d in decisions):
+            ssvc_exploitation = "active"
+        elif any(d.has_exploit for d in decisions):
+            ssvc_exploitation = "poc"
+        elif decisions:
+            ssvc_exploitation = "none"
 
     fixed = _smallest_applicable_fix(
         dep.ecosystem, dep.version, advisory.fixed_versions,
@@ -218,6 +246,7 @@ def _assemble_finding(
         severity=severity_str,
         exposure_factor=0.0,        # populated by reachability layer
         transitive_depth=0 if dep.direct else 1,
+        ssvc_exploitation=ssvc_exploitation,
         related_findings=related_ids,
     )
     # Composite risk estimate (calibration unverified — see

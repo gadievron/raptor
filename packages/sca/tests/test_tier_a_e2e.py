@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from core.http import HttpError
 from core.json import JsonCache
 from packages.sca.osv import OSV_QUERY_BATCH_URL, OSV_VULN_URL_TEMPLATE
 from packages.sca.pipeline import RunOptions, run_sca
@@ -101,6 +102,12 @@ class StubHttp:
                 {"cve": "CVE-2021-44228", "epss": "0.97559"},
                 {"cve": "CVE-2024-FAKE-DJ", "epss": "0.05"},
             ]}
+        if "raw.githubusercontent.com/cisagov/vulnrichment" in url:
+            # Vulnrichment per-CVE GET — return 404 so the lookup
+            # falls through cleanly (no SSVC signal). Tests that
+            # specifically want to exercise the SSVC path inject
+            # their own response.
+            raise HttpError(f"not found: {url}", status=404)
         raise RuntimeError(f"unexpected GET: {url}")
 
     def get_bytes(self, *a, **k):

@@ -254,6 +254,16 @@ class VulnFinding:
     # ExploitEvidence (all-fields-empty) when loaded but no
     # signals matched any of this finding's CVE aliases.
     exploit_evidence: Optional["ExploitEvidence"] = None
+    # CISA Vulnrichment SSVC `Exploitation` decision — one of
+    # ``"active"`` / ``"poc"`` / ``"none"`` / ``None``. Closes the
+    # cold-start eco gap where KEV / EPSS / EDB / MSF / PoC return
+    # nothing for ~95% of Cargo / NuGet / Packagist findings;
+    # Vulnrichment scores ~60% of those CVEs. ``active`` is a
+    # KEV-equivalent signal (broader coverage than CISA KEV
+    # itself); ``poc`` is an ExploitEvidence-equivalent signal.
+    # ``None`` means either CISA hasn't enriched the CVE yet, or
+    # the Vulnrichment lookup wasn't wired into this run.
+    ssvc_exploitation: Optional[str] = None
     related_findings: List[str] = field(default_factory=list)
     suppressed: bool = False
     suppression_reason: Optional[str] = None

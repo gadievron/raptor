@@ -174,6 +174,24 @@ def compute_risk_estimate(
     else:
         components["exploit_evidence_multiplier"] = 1.0
 
+    # 2-ter. CISA Vulnrichment SSVC. Broader coverage than KEV /
+    # EDB / MSF (~60% of cold-start eco CVEs vs ~0%); when an
+    # advisory carries an SSVC ``active`` decision, the CVE is
+    # being exploited in the wild and gets KEV-tier treatment
+    # even when CISA hasn't yet promoted it onto the KEV list
+    # itself. ``poc`` gets ExploitEvidence-tier treatment —
+    # there's public PoC code but no observed in-the-wild use.
+    # Each tier checks "not already counted" to keep one signal
+    # from being double-counted as KEV + SSVC-active.
+    ssvc = finding.ssvc_exploitation
+    if ssvc == "active" and not finding.in_kev:
+        base = max(base, kev_floor) * kev_mult
+        components["ssvc_active_multiplier"] = kev_mult
+    elif ssvc == "poc" and not finding.in_kev and not has_evidence:
+        base = max(base, ee_floor) * ee_mult
+        components["ssvc_poc_multiplier"] = ee_mult
+    # ``none`` and ``None`` carry no multiplier — neutral.
+
     # 3. EPSS: 0..1 probability mapped onto a 0.30..1.00 multiplier.
     epss = finding.epss if finding.epss is not None else epss_missing
     epss_mult = epss_floor + epss_range * epss

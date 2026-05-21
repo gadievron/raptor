@@ -615,7 +615,7 @@ def run_sca(
     affected = sum(1 for r in osv_results if r.advisories)
     progress.done(f"{affected}/{len(canonical)} deps with advisories")
 
-    # 5. KEV / EPSS enrichment (best-effort; degrades on failure).
+    # 5. KEV / EPSS / Vulnrichment enrichment (best-effort; degrades on failure).
     kev: Optional[KevClient] = None
     epss: Optional[EpssClient] = None
     if options.enable_kev:
@@ -624,6 +624,24 @@ def run_sca(
     if options.enable_epss:
         epss = EpssClient(http, cache, offline=options.offline,
                           ttl_seconds=epss_ttl)
+    # CISA Vulnrichment SSVC closes the cold-start eco gap: ~60% of
+    # Cargo / NuGet / Packagist CVEs get an exploitation signal
+    # (active / poc / none) that KEV / EPSS / EDB / MSF / PoC miss.
+    # Same caller-injected http+cache pattern as KEV/EPSS.
+    # Enabled alongside KEV by the same operator intent ("show me
+    # what's been weaponised"); separate ``enable_vulnrichment`` knob
+    # is not surfaced yet — wired here for now, can expose if an
+    # operator needs the off-switch.
+    from core.cve.vulnrichment import VulnrichmentClient
+    vulnrichment: Optional[VulnrichmentClient] = None
+    if options.enable_kev:
+        vulnrichment = VulnrichmentClient(
+            http, cache, offline=options.offline,
+            # Vulnrichment is shipped via raw.githubusercontent.com
+            # one-CVE-at-a-time; a 7-day TTL matches the SSVC update
+            # cadence (CISA refreshes daily, but per-CVE drift within
+            # a week is rare).
+        )
 
     # 6. Reachability — skip if disabled or when no advisories were
     #    found (saves a tree walk on clean projects). Pass http +
@@ -660,6 +678,7 @@ def run_sca(
     vuln_findings = build_vuln_findings(
         canonical, osv_results, kev=kev, epss=epss,
         reachability=reachability_map,
+        vulnrichment=vulnrichment,
     )
 
     # 7a-bis. Annotate each finding with exploit-existence
