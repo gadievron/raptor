@@ -107,6 +107,10 @@ def check_binary(name: str, version_flag: str = "--version") -> Tuple[bool, str,
 def check_python_package(name: str, min_version: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
     """Check if a Python package is installed."""
     try:
+        # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+        # Devcontainer test — verifies named packages are installed.
+        # ``name`` comes from the harness's hardcoded list, not
+        # external input.
         module = importlib.import_module(name.replace('-', '_'))
         version = getattr(module, '__version__', None)
         if version is None:
@@ -313,6 +317,9 @@ def check_raptor_imports() -> List[TestResult]:
 
     for module_name, description in packages_to_test:
         try:
+            # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+            # ``module_name`` is from the harness's hardcoded list
+            # of expected package names. Not external input.
             importlib.import_module(module_name)
             results.append(TestResult(
                 name=f"import {module_name}",
