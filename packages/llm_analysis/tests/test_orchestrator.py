@@ -18,6 +18,11 @@ from packages.llm_analysis.orchestrator import (
     CostTracker,
     CUTOFF_SKIP_CONSENSUS,
 )
+from packages.llm_analysis.tasks import (
+    ConsensusTask,
+    ExploitTask,
+    AggregationTask,
+)
 from packages.llm_analysis.cc_dispatch import (
     build_schema,
 )
@@ -723,32 +728,52 @@ class TestCostTracker:
         assert summary["cost_by_model"]["opus"] == 3.0
         assert summary["cost_by_model"]["gemini"] == 2.0
 
-    def test_skip_consensus_at_70_percent(self):
-        ct = CostTracker(max_cost=10.0)
-        ct.add_cost("opus", 6.9)
-        assert ct.should_skip_consensus() is False
-        ct.add_cost("opus", 0.2)
-        assert ct.should_skip_consensus() is True
+    # ------------------------------------------------------------------
+    # Pre-fix these tests called CostTracker.should_skip_consensus /
+    # should_skip_exploits / should_single_model — three predicates the
+    # orchestrator marks deprecated (each emits DeprecationWarning;
+    # only these legacy tests still hit them). Migrate to the
+    # supported API `should_skip_phase(n_calls, model_name,
+    # cutoff_ratio, phase_name)` and source the cutoffs from the
+    # Task classes' `budget_cutoff` class-vars so the test matches
+    # the actual orchestrator path. `n_calls=0` makes the projection
+    # equal the current total (estimate == 0), which preserves the
+    # cost-vs-cutoff threshold check the old tests exercised.
+    # ------------------------------------------------------------------
 
-    def test_skip_exploits_at_85_percent(self):
+    def test_skip_consensus_at_consensus_cutoff(self):
         ct = CostTracker(max_cost=10.0)
-        ct.add_cost("opus", 8.4)
-        assert ct.should_skip_exploits() is False
-        ct.add_cost("opus", 0.2)
-        assert ct.should_skip_exploits() is True
+        cutoff = ConsensusTask.budget_cutoff  # 0.70
+        ct.add_cost("opus", cutoff * 10.0 - 0.1)  # just under (e.g. 6.9)
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "consensus") is False
+        ct.add_cost("opus", 0.2)  # cross the threshold
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "consensus") is True
 
-    def test_single_model_at_95_percent(self):
+    def test_skip_exploits_at_exploit_cutoff(self):
         ct = CostTracker(max_cost=10.0)
-        ct.add_cost("opus", 9.4)
-        assert ct.should_single_model() is False
+        cutoff = ExploitTask.budget_cutoff  # 0.85
+        ct.add_cost("opus", cutoff * 10.0 - 0.1)  # just under (e.g. 8.4)
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "exploits") is False
         ct.add_cost("opus", 0.2)
-        assert ct.should_single_model() is True
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "exploits") is True
+
+    def test_single_model_at_aggregation_cutoff(self):
+        ct = CostTracker(max_cost=10.0)
+        cutoff = AggregationTask.budget_cutoff  # 0.95
+        ct.add_cost("opus", cutoff * 10.0 - 0.1)  # just under (e.g. 9.4)
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "aggregation") is False
+        ct.add_cost("opus", 0.2)
+        assert ct.should_skip_phase(0, "unknown-model", cutoff, "aggregation") is True
 
     def test_no_budget_never_skips(self):
         ct = CostTracker(max_cost=0)
         ct.add_cost("opus", 100.0)
-        assert ct.should_skip_consensus() is False
-        assert ct.should_skip_exploits() is False
+        # max_cost <= 0 → should_skip_phase early-returns False,
+        # regardless of how much has been spent. Pin this for every
+        # task-class cutoff that production orchestrator uses.
+        assert ct.should_skip_phase(0, "opus", ConsensusTask.budget_cutoff, "consensus") is False
+        assert ct.should_skip_phase(0, "opus", ExploitTask.budget_cutoff, "exploits") is False
+        assert ct.should_skip_phase(0, "opus", AggregationTask.budget_cutoff, "aggregation") is False
 
     def test_estimate_cost(self):
         ct = CostTracker(max_cost=10.0)
