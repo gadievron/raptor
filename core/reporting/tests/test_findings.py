@@ -149,6 +149,30 @@ class TestBuildFindingDetail(unittest.TestCase):
         self.assertIn("**Remediation:**", section.content)
         self.assertIn("strncpy", section.content)
 
+    def test_function_slot_labeled_function_for_code_finding(self):
+        """Code findings (semgrep / codeql / agentic) put a real
+        function name in the ``function`` slot — labelled as
+        ``Function`` in the report."""
+        finding = {**SAMPLE_FINDINGS[0], "function": "process_input",
+                   "tool": "semgrep"}
+        section = build_finding_detail(finding, 1)
+        self.assertIn("| Function | `process_input` |", section.content)
+
+    def test_function_slot_labeled_dependency_for_sca_finding(self):
+        """SCA findings stuff the dep name into the ``function`` slot
+        because the generic shape requires SOMETHING there and SCA
+        doesn't have a code function. Renderer relabels as
+        ``Dependency`` so the operator doesn't read it as
+        ``urllib3 is a function called urllib3``.
+
+        Discovered 2026-05-21 by a dogfood SCA scan on raptor's
+        own repo."""
+        finding = {**SAMPLE_FINDINGS[0], "function": "urllib3",
+                   "tool": "sca"}
+        section = build_finding_detail(finding, 1)
+        self.assertIn("| Dependency | `urllib3` |", section.content)
+        self.assertNotIn("| Function | `urllib3` |", section.content)
+
     def test_patch_code_in_code_block(self):
         finding = {**SAMPLE_FINDINGS[0], "patch_code": "strncpy(dst, src, sizeof(dst));"}
         section = build_finding_detail(finding, 1)

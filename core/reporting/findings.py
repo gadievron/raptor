@@ -218,7 +218,15 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
 
     func = finding.get("function")
     if func:
-        lines.append(f"| Function | `{_md_table_cell(func)}` |")
+        # SCA findings stuff the dependency name into the ``function``
+        # slot (the finding shape is shared across tools, and SCA has
+        # no code function to attribute against). Labelling that as
+        # "Function" is operator-misleading — they see ``urllib3`` and
+        # assume there's a Python function literally called urllib3.
+        # Tool-aware label fixes the report without forcing every
+        # producer to reshape its output.
+        slot_label = "Dependency" if finding.get("tool") == "sca" else "Function"
+        lines.append(f"| {slot_label} | `{_md_table_cell(func)}` |")
 
     code = finding.get("proof", {}).get("vulnerable_code") if isinstance(finding.get("proof"), dict) else None
     code = code or finding.get("code") or ""
