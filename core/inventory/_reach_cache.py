@@ -281,6 +281,19 @@ def load_index(fingerprint: Optional[str]) -> Optional["_AdjacencyIndex"]:
         )
         return None
     try:
+        # nosemgrep: python.lang.security.deserialization.pickle.avoid-pickle
+        # Trust analysis: cache path is ``~/.cache/raptor/
+        # reachability/<fingerprint>.bin`` — RAPTOR's own cache dir
+        # under the operator's home. Files are created with mode
+        # ``0o600`` (owner-only) via O_EXCL atomic write
+        # (no symlink-following). A magic-prefix sentinel
+        # (``_HEADER_MAGIC``) guards format; mismatched files skip
+        # the pickle path entirely. An attacker with write access
+        # here has already broken the security boundary far worse
+        # than pickle exposure. Accept pickle for fast cache
+        # load/save of compiled adjacency indices over a code-
+        # execution-class CWE that doesn't apply to this trust
+        # profile.
         idx = pickle.loads(blob[len(_HEADER_MAGIC):])
     except (pickle.UnpicklingError, EOFError, AttributeError,
             ImportError, IndexError, TypeError, ValueError) as exc:

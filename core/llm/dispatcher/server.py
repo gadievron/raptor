@@ -439,6 +439,12 @@ class LLMDispatcher:
         safe_worker = _scrub(ev.worker_label)
         safe_reason = _scrub(ev.reason)
         # Always log via stdlib logger for terminal visibility.
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+        # ``ev.token_id`` is a 12-character correlation prefix (see
+        # ``AuditEvent.token_id`` docstring) — explicitly NOT the
+        # full token. Operator visibility for the auth flow needs
+        # SOME identifier; the prefix gives correlation without
+        # disclosure.
         _logger.info(
             "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
             ev.event, ev.status, ev.peer_pid, ev.peer_uid,
