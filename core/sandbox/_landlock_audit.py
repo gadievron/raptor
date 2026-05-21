@@ -468,6 +468,10 @@ def run_landlock_audit(
                     str(target_pid), str(audit_run_dir),
                     str(t_ready_w), config_path,
                 ]
+                # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                # tracer_env is a hand-crafted dict with 2 keys only
+                # (PYTHONPATH + PATH). No inheritance — strictly
+                # safer than the default os.environ-copy path.
                 os.execvpe(sys.executable, tracer_argv, tracer_env)
             except FileNotFoundError:
                 os._exit(127)

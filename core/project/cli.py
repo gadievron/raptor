@@ -502,6 +502,11 @@ def main():
                     ) as tf:
                         tf_path = tf.name
                         tf.write(p.notes or "")
+                    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+                    # Operator-launched editor invocation. The
+                    # ``EDITOR`` env var is the operator's own
+                    # choice; if it's compromised they have bigger
+                    # problems than RAPTOR launching it.
                     result = subprocess.run(editor_argv + [tf_path])
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")

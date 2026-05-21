@@ -1063,6 +1063,13 @@ def run_sandboxed(
                     except (ValueError, OSError):
                         warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
+                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                    # exec_env is from a RAPTOR caller — either an
+                    # explicit env arg with DANGEROUS_ENV_VARS
+                    # strip applied (lines 1015-1019), or an inherit
+                    # of the caller's env on the no-env-supplied
+                    # path. Either way the caller is trusted (RAPTOR
+                    # owns the sandbox spawn surface).
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
                     os._exit(127)
@@ -1258,6 +1265,10 @@ def run_sandboxed(
                     ]
                     if _audit_config_path is not None:
                         tracer_argv.append(_audit_config_path)
+                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                    # tracer_env is hand-crafted: 2 keys
+                    # (PYTHONPATH + PATH), no inheritance. Explicitly
+                    # safer than os.environ-copy.
                     os.execvpe(
                         sys.executable, tracer_argv, tracer_env,
                     )

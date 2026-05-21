@@ -1241,6 +1241,11 @@ Examples:
             *sandbox_passthrough,
         ]
         logger.info("Running: Scanning code with Semgrep")
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # ``semgrep_cmd`` is a list of RAPTOR-constructed argv;
+        # env inherits from RAPTOR's own process (the operator's
+        # env). PYTHONUSERBASE inheritance is intentional — see
+        # F102 comment below.
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
@@ -1297,6 +1302,11 @@ Examples:
         if args.codeql_cli:
             codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
         logger.info("Running: Scanning code with CodeQL")
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # Explicit ``env=RaptorConfig.get_safe_env()`` — strips
+        # DANGEROUS_ENV_VARS (LD_PRELOAD / DYLD_* / GCONV_PATH
+        # etc.) per the env-allowlist convention. Semgrep's rule
+        # can't infer that the helper is safety-strip-aware.
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
