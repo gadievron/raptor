@@ -26,7 +26,11 @@ core/dataflow/corpus/
 ```
 
 Run scripts (`run_corpus.py`, `corpus_metrics.py`) ship as task #4
-under `core/dataflow/` with `libexec/raptor-corpus-*` shims.
+under `core/dataflow/`. Operator-facing dev tooling lives at
+`core/dataflow/scripts/corpus-run` and
+`core/dataflow/scripts/corpus-metrics` — invoke directly; these are
+not framework-internal libexec shims and do not require the
+`_RAPTOR_TRUSTED` trust marker.
 
 ## Status
 
