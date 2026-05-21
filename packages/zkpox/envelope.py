@@ -224,9 +224,9 @@ def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d") -> Envelo
     return Envelope(aes_blob=aes_blob, ct_K_age=ct_K_age, ct_K_tlock=ct_K_tlock)
 
 
-def open_via_vendor(envelope: Envelope, vendor_secret_key: Path) -> bytes:
+def open_via_vendor(envelope: Envelope, vendor_key_path: Path) -> bytes:
     """Open an envelope by the vendor path: age decrypt K, then AES."""
-    K = age_decrypt_with(envelope.ct_K_age, vendor_secret_key)
+    K = age_decrypt_with(envelope.ct_K_age, vendor_key_path)
     return aes_decrypt(envelope.aes_blob, K)
 
 
