@@ -597,7 +597,11 @@ def run_sandboxed(
             _cfd, _audit_config_path = _tf.mkstemp(
                 prefix="raptor-audit-cfg-", suffix=".json",
             )
-            _serialised = _json.dumps(audit_config).encode("utf-8")
+            # sort_keys=True — same rationale as _landlock_audit.py:
+            # the serialised audit config is hashed elsewhere for
+            # cache lookups; stable ordering keeps the identity
+            # contract intact across Python versions.
+            _serialised = _json.dumps(audit_config, sort_keys=True).encode("utf-8")
             try:
                 # os.write may write fewer bytes than requested
                 # (rare on local fs, possible on network mounts).

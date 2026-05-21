@@ -142,6 +142,15 @@ _DNS_CACHE_TTL = 60.0
 # who are used to OS-level happy-eyeballs.
 _HAPPY_EYEBALLS_DELAY = 0.25
 
+# Per-call timeouts for the proxy's asyncio operations. Promoted from
+# inline literals so operators tuning latency/throughput have a single
+# knob to adjust. _READ_TIMEOUT_S is the per-IO read budget (between
+# successive bytes from upstream/downstream); _CONNECT_TIMEOUT_S is
+# the larger budget for CONNECT-time waits where TLS handshake +
+# happy-eyeballs eat into the window.
+_PROXY_READ_TIMEOUT_S = 10.0
+_PROXY_CONNECT_TIMEOUT_S = 30.0
+
 # Canonical filename for the per-run proxy events JSONL. Written by
 # context.py (post-sandbox flush of unregister_sandbox events). Defined
 # here so consumers of the proxy module reference one source-of-truth
@@ -512,7 +521,7 @@ class EgressProxy:
         # /scan started". 30s is well above any realistic
         # asyncio-loop-startup latency on a busy host (sub-second in
         # practice).
-        if not self._ready.wait(timeout=30.0):
+        if not self._ready.wait(timeout=_PROXY_CONNECT_TIMEOUT_S):
             raise RuntimeError(
                 "egress proxy did not become ready within 30s "
                 "(thread may have crashed before signalling)"
@@ -713,7 +722,7 @@ class EgressProxy:
             return cached[1]
         addrinfo = await asyncio.wait_for(
             self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
-            timeout=10.0,
+            timeout=_PROXY_READ_TIMEOUT_S,
         )
         self._dns_cache[key] = (now + _DNS_CACHE_TTL, addrinfo)
         return addrinfo
@@ -757,7 +766,7 @@ class EgressProxy:
                     reader, writer = await asyncio.wait_for(
                         asyncio.open_connection(host=ip, port=port,
                                                  family=family),
-                        timeout=10.0,
+                        timeout=_PROXY_READ_TIMEOUT_S,
                     )
                     return reader, writer, ip
                 except (OSError, asyncio.TimeoutError) as e:
@@ -781,7 +790,7 @@ class EgressProxy:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host=ip, port=port,
                                          family=family),
-                timeout=10.0,
+                timeout=_PROXY_READ_TIMEOUT_S,
             )
             return reader, writer, ip
 
@@ -1174,7 +1183,7 @@ class EgressProxy:
             try:
                 up_reader, up_writer = await asyncio.wait_for(
                     asyncio.open_connection(host=up_host, port=up_port),
-                    timeout=10.0,
+                    timeout=_PROXY_READ_TIMEOUT_S,
                 )
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
@@ -1195,9 +1204,9 @@ class EgressProxy:
                    f"Host: {host}:{port}\r\n\r\n").encode("latin-1")
             up_writer.write(req)
             try:
-                await asyncio.wait_for(up_writer.drain(), timeout=10.0)
+                await asyncio.wait_for(up_writer.drain(), timeout=_PROXY_READ_TIMEOUT_S)
                 resp_line = await asyncio.wait_for(
-                    up_reader.readuntil(b"\r\n"), timeout=10.0,
+                    up_reader.readuntil(b"\r\n"), timeout=_PROXY_READ_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.IncompleteReadError,
                     ConnectionError) as e:
@@ -1457,7 +1466,7 @@ class EgressProxy:
 async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str]:
     """Read one CRLF-terminated line, max_len bytes. None on error/EOF."""
     try:
-        data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=30.0)
+        data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=_PROXY_CONNECT_TIMEOUT_S)
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError,
             asyncio.TimeoutError):
         return None

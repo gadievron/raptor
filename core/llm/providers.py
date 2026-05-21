@@ -1005,7 +1005,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
                     self._instructor_warned = True
                 else:
-                    logger.debug(f"Instructor fallback (repeat): {e}")
+                    from core.security.log_sanitisation import escape_nonprintable as _esc
+                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
                 # Disable Instructor for this provider — same error will repeat
                 self.instructor_client = None
 
@@ -1135,8 +1136,13 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                 if not _is_transient_openai(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_openai(exc) else "permanent"
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
-                    logger.warning(f"OpenAICompatibleProvider.turn: {err_msg}")
+                    # escape_nonprintable — exc is from the SDK and
+                    # can carry ANSI / BIDI / control bytes that
+                    # forge log entries on operator TTYs. Defang
+                    # before the warning + the TurnResponse.error.
+                    from core.security.log_sanitisation import escape_nonprintable
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    logger.warning("OpenAICompatibleProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
@@ -1573,7 +1579,8 @@ class AnthropicProvider(LLMProvider):
                     logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
                     self._instructor_warned = True
                 else:
-                    logger.debug(f"Instructor fallback (repeat): {e}")
+                    from core.security.log_sanitisation import escape_nonprintable as _esc
+                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
                 # Disable Instructor for this provider — same error will repeat
                 self.instructor_client = None
 
@@ -1742,8 +1749,11 @@ class AnthropicProvider(LLMProvider):
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if not _is_transient_anthropic(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_anthropic(exc) else "permanent"
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
-                    logger.warning(f"AnthropicProvider.turn: {err_msg}")
+                    # escape_nonprintable — see OpenAICompatibleProvider.turn
+                    # above for the rationale.
+                    from core.security.log_sanitisation import escape_nonprintable
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    logger.warning("AnthropicProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,

@@ -23,16 +23,24 @@ from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 
 # Import for type-based error detection (optional SDKs)
+# DEBUG log on import failure so operators can diagnose partial-
+# install issues via --verbose. See core/llm/detection.py for the
+# canonical probe sites.
+import logging as _logging
+_client_log = _logging.getLogger(__name__)
+
 try:
     import openai as _openai_module
     _OPENAI_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    _client_log.debug("openai SDK probe failed (client.py): %s", _e)
     _OPENAI_AVAILABLE = False
 
 try:
     import anthropic as _anthropic_module
     _ANTHROPIC_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    _client_log.debug("anthropic SDK probe failed (client.py): %s", _e)
     _ANTHROPIC_AVAILABLE = False
 
 logger = get_logger()
@@ -907,7 +915,16 @@ class LLMClient:
 
                         if _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
-                            logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+                            # escape_nonprintable on provider/model
+                            # — config-loaded strings, could carry
+                            # ANSI/BIDI/control bytes from a hostile
+                            # models.json edit. Defence in depth.
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Quota error for %s/%s:%s",
+                                _esc(model.provider), _esc(model.model_name),
+                                _esc(quota_guidance),
+                            )
 
                         logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
                                      f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
@@ -1137,7 +1154,16 @@ class LLMClient:
 
                         if _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
-                            logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+                            # escape_nonprintable on provider/model
+                            # — config-loaded strings, could carry
+                            # ANSI/BIDI/control bytes from a hostile
+                            # models.json edit. Defence in depth.
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Quota error for %s/%s:%s",
+                                _esc(model.provider), _esc(model.model_name),
+                                _esc(quota_guidance),
+                            )
 
                         logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 

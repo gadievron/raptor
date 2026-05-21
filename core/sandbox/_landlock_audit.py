@@ -151,7 +151,12 @@ def _write_audit_config(audit_config: dict) -> str:
     fd, path = tempfile.mkstemp(
         prefix="raptor-audit-cfg-", suffix=".json",
     )
-    serialised = json.dumps(audit_config).encode("utf-8")
+    # sort_keys=True — the serialised audit config is hashed
+    # elsewhere for cache lookups and reproducibility. Without
+    # stable key ordering, dict-rebuild order changes (across
+    # Python versions / interpreter restarts) would break the
+    # cache identity contract.
+    serialised = json.dumps(audit_config, sort_keys=True).encode("utf-8")
     try:
         written = 0
         while written < len(serialised):

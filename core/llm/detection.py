@@ -23,22 +23,33 @@ from core.logging import get_logger
 logger = get_logger()
 
 # SDK availability flags — canonical source, imported by other modules
+# Pre-fix these ``except ImportError`` blocks silently set the
+# availability flag to False with no diagnostic. If openai /
+# anthropic / google-genai is partially installed (broken venv,
+# missing C extension, ``pip install --no-deps`` half-finished),
+# operators saw "provider unavailable" downstream with no
+# breadcrumb pointing at the real cause. ``logger.debug`` keeps
+# normal-startup quiet but lets operators rerun with --verbose
+# to see the import-failure traceback.
 try:
     import openai as _openai_module  # noqa: F401 — availability probe
     OPENAI_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("openai SDK probe failed: %s", _e)
     OPENAI_SDK_AVAILABLE = False
 
 try:
     import anthropic as _anthropic_module  # noqa: F401 — availability probe
     ANTHROPIC_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("anthropic SDK probe failed: %s", _e)
     ANTHROPIC_SDK_AVAILABLE = False
 
 try:
     from google import genai as _genai_module  # noqa: F401 — availability probe
     GENAI_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("google-genai SDK probe failed: %s", _e)
     GENAI_SDK_AVAILABLE = False
 
 
