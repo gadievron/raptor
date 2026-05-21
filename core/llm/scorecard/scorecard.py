@@ -755,8 +755,19 @@ class ModelScorecard:
                 if self.lock_fh is not None:
                     try:
                         fcntl.flock(self.lock_fh.fileno(), fcntl.LOCK_UN)
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        # Unlock failures are non-fatal — the fd close
+                        # below releases any kernel-held advisory lock
+                        # via close-on-fd-release semantics. Pre-fix
+                        # the bare swallow hid genuinely interesting
+                        # cases (filesystem revoked the lock,
+                        # underlying device disappeared) — log at
+                        # DEBUG so they surface under ``--verbose``
+                        # without flooding normal runs.
+                        logger.debug(
+                            "scorecard: flock unlock failed on %s: %s",
+                            self.scorecard.path, e,
+                        )
                     self.lock_fh.close()
             return False
 

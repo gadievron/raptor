@@ -88,14 +88,16 @@ def _client(
 
     client = LLMClient.__new__(LLMClient)
     import threading
+    from collections import OrderedDict
     client.config = cfg
     client.providers = {}
     client.total_cost = 0.0
     client.request_count = 0
     client.task_type_costs = {}
     client._stats_lock = threading.RLock()
-    client._key_locks = {}
+    client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
+    client._key_locks_cap = 4096
     return client
 
 

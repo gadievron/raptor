@@ -32,6 +32,26 @@ logger = get_logger()
 
 
 # ---------------------------------------------------------------------------
+# Default token budgets when MODEL_LIMITS doesn't carry an entry for a
+# specific model. Centralised so a model bump only needs one edit, not
+# the four-to-six call-sites that previously each spelled out the
+# integers inline:
+#
+#   - ``_build_anthropic_config``        : Anthropic frontier (1M context, 32k output)
+#   - ``_build_openai_config``           : OpenAI frontier (1M context, 32k output)
+#   - ``_build_ollama_config`` cold path : conservative local model defaults
+#   - ``_get_configured_models`` ``max_tokens=64000`` user-supplied model entries
+#
+# Operators can override per-model via models.json; these are the
+# floors used when MODEL_LIMITS / models.json don't carry a value.
+_DEFAULT_MAX_CONTEXT_FRONTIER: int = 1_000_000   # current frontier (Sonnet/Opus 4.x, GPT-4.x)
+_DEFAULT_MAX_CONTEXT_LOCAL: int = 32_000          # local-quant Ollama default
+_DEFAULT_MAX_OUTPUT_FRONTIER: int = 32_000        # frontier output cap
+_DEFAULT_MAX_OUTPUT_USER_CONFIGURED: int = 64_000  # models.json-supplied model output cap
+_DEFAULT_MAX_OUTPUT_LOCAL: int = 4_096            # local quant safe default
+
+
+# ---------------------------------------------------------------------------
 # Config file reading
 # ---------------------------------------------------------------------------
 
@@ -160,8 +180,14 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
                         # Determine max_tokens and max_context from config or limits
                         limits = MODEL_LIMITS.get(entry_model, {})
-                        max_tokens = model_entry.get('max_output', limits.get('max_output', 64000))
-                        max_context = model_entry.get('max_context', limits.get('max_context', 32000))
+                        max_tokens = model_entry.get(
+                            'max_output',
+                            limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
+                        )
+                        max_context = model_entry.get(
+                            'max_context',
+                            limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
+                        )
 
                         # Set api_base for non-Anthropic providers
                         api_base = PROVIDER_ENDPOINTS.get(entry_provider)
@@ -219,8 +245,8 @@ def _build_anthropic_config() -> Optional['ModelConfig']:
         provider="anthropic",
         model_name=default_model,
         api_key=os.getenv("ANTHROPIC_API_KEY"),
-        max_tokens=limits.get("max_output", 32000),
-        max_context=limits.get("max_context", 1000000),
+        max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
+        max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
         temperature=0.7,
         cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,
     )
@@ -254,8 +280,14 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
         model_name=default_model,
         api_key=api_key,
         api_base=PROVIDER_ENDPOINTS[provider_name],
+        # OpenAI-family providers (OpenAI, Mistral, Cohere) — historical
+        # default tuned for GPT-4.x-class models. Frontier defaults
+        # would over-allocate for older models still routed through this
+        # builder; the per-model ``MODEL_LIMITS`` entry takes precedence
+        # when present so the fallback only kicks in for unfamiliar
+        # models.
         max_tokens=limits.get("max_output", 8192),
-        max_context=limits.get("max_context", 128000),
+        max_context=limits.get("max_context", 128_000),
         temperature=0.7,
         cost_per_1k_tokens=avg_cost,
     )
@@ -287,13 +319,15 @@ def _build_ollama_config() -> Optional['ModelConfig']:
     if limits is None:
         logger.info(
             f"Model '{selected_model}' not in MODEL_LIMITS — using defaults "
-            f"(max_context=32000, max_output=4096). Override in models.json if needed."
+            f"(max_context={_DEFAULT_MAX_CONTEXT_LOCAL}, "
+            f"max_output={_DEFAULT_MAX_OUTPUT_LOCAL}). "
+            f"Override in models.json if needed."
         )
-        max_output = 4096
-        max_context = 32000
+        max_output = _DEFAULT_MAX_OUTPUT_LOCAL
+        max_context = _DEFAULT_MAX_CONTEXT_LOCAL
     else:
-        max_output = limits.get("max_output", 4096)
-        max_context = limits.get("max_context", 32000)
+        max_output = limits.get("max_output", _DEFAULT_MAX_OUTPUT_LOCAL)
+        max_context = limits.get("max_context", _DEFAULT_MAX_CONTEXT_LOCAL)
     return ModelConfig(
         provider="ollama",
         model_name=selected_model,

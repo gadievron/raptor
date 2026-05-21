@@ -50,6 +50,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.llm.semantic_entropy import divergence
+from core.security.redaction import redact_secrets
 
 from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
@@ -147,7 +148,13 @@ def record_reasoning_divergence(
                 # the divergence summary rather than another model's
                 # text — there isn't a single "other" to compare to
                 # here, so a panel-level summary is more useful.
-                this_reasoning = reasonings.get(model, "")
+                # Persisted ``this_reasoning`` was previously the raw
+                # LLM text. Models do occasionally cite a tool-output
+                # snippet that contains an API key, Bearer token, or
+                # secrets-stuffed URL; scorecard JSON is intended to
+                # survive past the run so the secret would sit on disk
+                # indefinitely. Run through ``redact_secrets`` first.
+                this_reasoning = redact_secrets(reasonings.get(model, ""))
                 sample = {
                     "this_reasoning": this_reasoning[:_MAX_REASONING_CHARS],
                     "other_reasoning": (

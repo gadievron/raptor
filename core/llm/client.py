@@ -14,6 +14,7 @@ import json
 import re
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Optional, Any, Tuple
 
@@ -310,12 +311,19 @@ class LLMClient:
         # Per-cache-key locks. Two threads issuing the same cache key
         # serialise on its lock so only one calls the provider; the
         # second observes the first's freshly-written cache entry on
-        # its own check. Bounded by distinct keys this client sees in
-        # its lifetime — sha256-keyed locks are ~80 B each so 100k
-        # distinct keys is ~8 MB, an acceptable upper bound for what
-        # is in practice a single-run object.
-        self._key_locks: Dict[str, threading.Lock] = {}
+        # its own check. Held in an ``OrderedDict`` so we can evict
+        # least-recently-used entries once the cap is hit — pre-fix a
+        # long-running daemon process (cve-diff bench sweep at 50k+
+        # distinct prompts) saw unbounded growth here. The ~80 B per
+        # lock isn't dramatic but it's monotonic and the dict never
+        # garbage-collects on its own; the cap turns it into a fixed
+        # working-set ceiling. 4096 distinct in-flight keys is more
+        # than any current consumer needs — even agentic at 1k
+        # findings × full multi-pass chain doesn't sustain that many
+        # CONCURRENT keys.
+        self._key_locks: OrderedDict[str, threading.Lock] = OrderedDict()
         self._key_locks_guard = threading.Lock()
+        self._key_locks_cap = 4096
         # Lazy-built model scorecard. Stays None until a consumer
         # asks for it via the ``scorecard`` property; constructing
         # one is cheap but it does open a file handle and create
@@ -482,6 +490,16 @@ class LLMClient:
             if lock is None:
                 lock = threading.Lock()
                 self._key_locks[cache_key] = lock
+                # LRU evict the oldest entry if we've exceeded the
+                # cap. ``popitem(last=False)`` drops the LRU side;
+                # the lock object itself goes out of scope and is GC'd
+                # once the last caller releases it.
+                while len(self._key_locks) > self._key_locks_cap:
+                    self._key_locks.popitem(last=False)
+            else:
+                # Touch existing entries so the LRU eviction picks the
+                # genuinely cold keys, not a still-active one.
+                self._key_locks.move_to_end(cache_key)
             return lock
 
     @staticmethod
