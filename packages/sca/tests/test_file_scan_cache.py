@@ -14,10 +14,9 @@ python_imports) and ``core.json.JsonCache``. Tests cover:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from core.json import JsonCache, TTL_FOREVER
+from core.json import JsonCache
 
 from packages.sca._file_scan_cache import (
     cached_per_file,

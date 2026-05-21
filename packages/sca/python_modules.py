@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import io
 import logging
-import struct
 import zipfile
 from typing import Iterable, List, Optional, Tuple
 

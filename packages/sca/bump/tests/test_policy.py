@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from packages.sca.bump.policy import (
-    BumpPolicy, SkipRule, Thresholds, load_policy,
+    BumpPolicy, SkipRule, load_policy,
 )
 
 

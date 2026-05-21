@@ -17,7 +17,6 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-import pytest
 
 from packages.sca.resolvers import get_resolver
 from packages.sca.resolvers.gomod import GoResolver

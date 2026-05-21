@@ -8,10 +8,9 @@ detectors get their own test groups."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import pytest
 
 from packages.sca.bump.evaluator import evaluate_bump_supply_chain
 

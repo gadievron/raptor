@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
 
-import pytest
 
 from packages.sca.llm.maintainer_trust import (
     _format_metadata,

@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register

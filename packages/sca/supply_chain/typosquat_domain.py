@@ -32,7 +32,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
-from urllib.parse import urlparse
 
 from ..models import Confidence, Dependency, Manifest
 

@@ -43,7 +43,6 @@ from typing import Optional, Sequence
 _REPO = Path(__file__).resolve().parents[2]  # raptor-sca repo root
 sys.path.insert(0, str(_REPO))
 
-from packages.sca import SCA_ALLOWED_HOSTS  # noqa: E402
 from packages.sca.api import analyse  # noqa: E402
 
 logger = logging.getLogger(__name__)

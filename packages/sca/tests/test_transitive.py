@@ -18,17 +18,13 @@ fires.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 from unittest.mock import MagicMock
 
-import pytest
 
 from packages.sca.models import Confidence, Dependency, Manifest, PinStyle
 from packages.sca.resolvers import ResolverResult
 from packages.sca.transitive import (
-    TransitiveStatus,
     expand_missing_transitives,
 )
 

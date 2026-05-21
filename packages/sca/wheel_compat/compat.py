@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from packages.sca.platform_matrix import PlatformPair, ProjectPlatformMatrix
 from packages.sca.platform_matrix.glibc_db import LibcVersion

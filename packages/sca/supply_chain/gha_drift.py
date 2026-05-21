@@ -29,7 +29,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 

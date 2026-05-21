@@ -16,13 +16,11 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Tuple
 
 import pytest
 
 from core.llm.config import LLMConfig, ModelConfig
-from core.llm.scorecard import EventType, ModelScorecard, Policy
+from core.llm.scorecard import EventType, ModelScorecard
 from core.llm.task_types import TaskType
 
 

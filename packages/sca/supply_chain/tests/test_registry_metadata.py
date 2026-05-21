@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.supply_chain.registry_metadata import (
@@ -14,8 +14,6 @@ from packages.sca.supply_chain.registry_metadata import (
     _low_bus_factor_check,
     _maintainer_account_change_check,
     _maintainer_change_check,
-    _recent_publish_check,
-    _version_publish_check,
     scan_deps,
 )
 

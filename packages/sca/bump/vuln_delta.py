@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List
 
 from ..findings import build_vuln_findings
 from ..models import Confidence, Dependency, PinStyle, VulnFinding

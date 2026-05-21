@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from .pipeline import RunOptions, run_sca
+from .pipeline import run_sca
 
 logger = logging.getLogger(__name__)
 

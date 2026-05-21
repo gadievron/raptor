@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import pytest
 
 from core.inventory.call_graph import extract_call_graph_python
 from core.inventory.reachability import InternalFunction

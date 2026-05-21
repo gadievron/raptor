@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.update import _PlanEntry, _rewrite_inline_install
 

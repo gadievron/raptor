@@ -11,9 +11,6 @@ import pytest
 
 from packages.sca.calibration.refit import (
     ConstantRefit,
-    DEFAULT_IMPROVEMENT_THRESHOLD,
-    DEFAULT_MAX_DELTA,
-    MIN_SAMPLES_FOR_REFIT,
     RefitReport,
     grid_search_refit,
     _top_20_precision,

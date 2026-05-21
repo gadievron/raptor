@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from . import ResolverResult, _check_tool, _run
 

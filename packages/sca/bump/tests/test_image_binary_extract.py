@@ -20,10 +20,8 @@ import io
 import json
 import tarfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import pytest
 
 from packages.sca.bump.image_binary_extract import (
     _resolve_entrypoint_path,

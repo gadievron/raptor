@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.sca.models import (
-    Confidence, Dependency, PinStyle, SupplyChainFinding,
-    VulnFinding,
+    Confidence, Dependency, PinStyle, VulnFinding,
 )
 from packages.sca.transitive_drop import detect_droppable_transitives
 

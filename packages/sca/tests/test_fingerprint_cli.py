@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -38,7 +36,6 @@ class TestCliBasics:
         as an OCI image ref. We stub the image extractor so
         the test doesn't need a registry."""
         # Stub fetch_image_binary to return a real file path
-        from packages.sca import fingerprint_cli as fp_mod
         real_bin = tmp_path / "fake.bin"
         # An ELF file so capability_fingerprint succeeds
         if not Path("/bin/ls").is_file():

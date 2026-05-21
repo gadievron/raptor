@@ -10,14 +10,12 @@ served back via fake HTTP Range responses to exercise the
 from __future__ import annotations
 
 import io
-import json
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import pytest
 
-from core.http import HttpError, NotModified, Response, SizeLimitExceeded
+from core.http import HttpError, Response
 from packages.sca.python_modules import resolve_modules
 
 

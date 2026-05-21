@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-from unittest.mock import patch
+from typing import Any, Dict
 
-import pytest
 from pydantic import BaseModel, Field
 
 from packages.sca.llm import (
-    StageResult,
     TaintedString,
     UntrustedBlock,
     run_stage,

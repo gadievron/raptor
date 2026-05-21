@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import patch
 
-import pytest
 
 from packages.sca.llm.install_hook_review import (
     _merge_verdict,

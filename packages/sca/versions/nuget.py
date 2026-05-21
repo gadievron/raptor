@@ -12,7 +12,6 @@ Reference: https://learn.microsoft.com/en-us/nuget/concepts/package-versioning
 
 from __future__ import annotations
 
-import re
 from typing import List, Tuple
 
 

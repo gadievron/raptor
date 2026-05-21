@@ -16,7 +16,6 @@ from core.json import JsonCache
 from core.http import HttpError
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.osv import (
-    OSV_QUERY_BATCH_URL,
     OSV_VULN_URL_TEMPLATE,
     OsvClient,
     parse_osv_record,

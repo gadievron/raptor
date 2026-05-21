@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.parsers.inline_installs import (
     parse_devcontainer_json,

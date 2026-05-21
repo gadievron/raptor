@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 from typing import List
 
-from . import RewriteEdit, RewriteResult, register
+from . import RewriteEdit, RewriteResult
 
 logger = logging.getLogger(__name__)
 

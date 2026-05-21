@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
 from unittest.mock import patch
 
-import pytest
 
 from packages.sca import optimise
 from packages.sca.update import _PlanEntry, UpgradeChange

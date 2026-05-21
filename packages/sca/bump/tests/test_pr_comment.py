@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict
 
-import pytest
 
 from packages.sca.bump.orchestrator import run_bump
 from packages.sca.bump.pr_comment import render_pr_comment
@@ -17,7 +16,6 @@ from packages.sca.bump.pr_comment import render_pr_comment
 
 class _StubResp:
     def __init__(self, body):
-        import json
         self._body = body
         self.status_code = 200
         self.headers: Dict[str, str] = {}

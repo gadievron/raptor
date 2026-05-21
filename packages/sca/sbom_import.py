@@ -42,7 +42,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from .models import Confidence, Dependency, PinStyle
 

@@ -7,13 +7,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
 
 from packages.sca.bump.orchestrator import (
-    BumpCandidate, BumpReport, BumpResult,
-    _VERDICT_BLOCK, _VERDICT_CLEAN, _VERDICT_REVIEW,
+    BumpCandidate, _VERDICT_BLOCK, _VERDICT_CLEAN, _VERDICT_REVIEW,
     render_report, run_bump,
 )
 
@@ -323,7 +322,6 @@ class _CountingHttp(_StubHttp):
 # ---------------------------------------------------------------------------
 
 def _tags_response(tags):
-    import json
     return _StubResp({"name": "ignored", "tags": tags})
 
 
@@ -1048,9 +1046,6 @@ def test_git_submodule_candidate_via_parser(tmp_path: Path) -> None:
     from packages.sca.models import (
         Confidence, Dependency, PinStyle,
     )
-    from packages.sca.parsers import (
-        parse_manifest as _real_parse,
-    )
 
     current_sha = "a" * 40
     target_sha = "b" * 40
@@ -1115,7 +1110,7 @@ def test_git_submodule_apply_emits_manual_instruction(
     instead emits a ``manual: git submodule update ...``
     instruction the operator can run."""
     from packages.sca.bump.orchestrator import (
-        BumpCandidate, _evaluate_one,
+        _evaluate_one,
     )
     cand = BumpCandidate(
         kind="git_submodule",

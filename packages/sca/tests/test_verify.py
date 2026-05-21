@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 from packages.sca import verify
 from core.json import JsonCache

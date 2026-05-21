@@ -57,7 +57,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -644,7 +643,7 @@ def _compute_with_overrides(
     """Rebuild a :class:`VulnFinding` from the archived dict and
     call ``compute_risk_estimate(overrides=...)``."""
     from packages.sca.models import (
-        Confidence, Dependency, PinStyle, Reachability, VulnFinding,
+        Dependency, PinStyle, Reachability, VulnFinding,
     )
     from packages.sca.risk import compute_risk_estimate
 

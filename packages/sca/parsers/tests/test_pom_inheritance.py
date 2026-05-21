@@ -22,7 +22,7 @@ Plus cycle + depth + offline + property-substitution edge cases.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from packages.sca.parsers import pom as pom_parser
 from packages.sca.parsers import pom_inheritance

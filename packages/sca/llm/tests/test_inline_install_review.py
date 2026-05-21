@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from packages.sca.llm.inline_install_review import review_inline_installs
 from packages.sca.llm.schemas import InlineInstallItem, InlineInstallVerdict

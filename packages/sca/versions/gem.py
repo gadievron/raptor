@@ -20,7 +20,7 @@ trailing zeros (``1.0.0`` == ``1.0`` per RubyGems) are handled.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple, Union
+from typing import List, Union
 
 
 _Segment = Union[int, str]

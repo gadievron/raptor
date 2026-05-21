@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import List
 
-from packages.sca.models import Advisory, AffectedRange, CVSSScore
+from packages.sca.models import Advisory
 from packages.sca.osv import OsvResult
 from packages.sca.whatif import _modal_report, _parse_modal_spec
 

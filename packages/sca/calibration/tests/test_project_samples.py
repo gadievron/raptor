@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import List
 from unittest.mock import patch
 
-import pytest
 
 from packages.sca.calibration.project_samples import (
     PROJECT_SAMPLES,

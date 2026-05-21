@@ -6,7 +6,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
-from packages.sca import suppressions
 from packages.sca.suppressions import (
     SUPPRESS_FILENAME,
     SuppressionEntry,

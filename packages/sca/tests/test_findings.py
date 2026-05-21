@@ -287,7 +287,6 @@ def test_vuln_row_includes_commented_out_in_sca_block() -> None:
     from packages.sca.models import VulnFinding
     d = _dep()
     d.commented_out = True
-    from packages.sca.models import Reachability
     f = VulnFinding(
         finding_id="x", dependency=d, advisories=[],
         severity="high", in_kev=False, epss=None,

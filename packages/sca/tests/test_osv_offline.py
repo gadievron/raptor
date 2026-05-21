@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import io
 import json
-import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List

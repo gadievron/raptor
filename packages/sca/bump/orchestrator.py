@@ -577,7 +577,7 @@ def _enumerate_from_image_candidates(
     from core.dockerfile.parser import parse_dockerfile
     from core.oci.image_ref import parse_image_ref
     from core.upstream_latest._version_filter import (
-        parse_stable, parse_stable_with_variant,
+        parse_stable_with_variant,
     )
     from core.upstream_latest.github_releases import (
         NoStableVersionsFound,
@@ -1234,10 +1234,7 @@ def _enumerate_gha_uses_candidates(
     """
     from core.upstream_latest._version_filter import parse_stable
     from core.upstream_latest.github_releases import (
-        NoStableVersionsFound,
         UpstreamLookupError,
-        latest_release,
-        latest_tag,
         resolve_tag_to_sha,
     )
 

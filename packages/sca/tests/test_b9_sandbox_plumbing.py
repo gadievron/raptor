@@ -8,7 +8,6 @@ the sandbox allowlist alongside the static set.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from packages.sca import SCA_ALLOWED_HOSTS
 from packages.sca.agent import _compose_proxy_hosts

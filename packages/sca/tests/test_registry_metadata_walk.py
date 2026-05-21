@@ -10,13 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
-import pytest
 
 from core.http import HttpError
 from core.json import JsonCache
 from packages.sca.models import Confidence, Dependency, PinStyle
 from packages.sca.registry_metadata_walk import (
-    WalkResult,
     _lower_bound,
     _norm_name,
     walk_transitive,

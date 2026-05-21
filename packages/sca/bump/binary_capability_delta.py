@@ -25,11 +25,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from packages.binary_analysis.fingerprint import (
-    BUCKETS as _BUCKETS,
-    HIGH_SEVERITY_BUCKETS as _HIGH_SEVERITY_BUCKETS,
-    bucket_imports as _bucket_imports_shared,
-)
 from core.binary import diff_binary_capabilities
 from ..models import (
     Confidence,

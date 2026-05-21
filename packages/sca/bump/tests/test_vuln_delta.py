@@ -7,15 +7,12 @@ bump introduces new vulnerability surface" signal."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 
-import pytest
 
 from packages.sca.bump.vuln_delta import evaluate_bump_vulns
 from packages.sca.models import (
-    AffectedRange, Advisory, Confidence, CVSSScore,
+    AffectedRange, Advisory, CVSSScore,
 )
 from packages.sca.osv import OsvResult
 

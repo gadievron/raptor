@@ -4,7 +4,6 @@ conan.lock."""
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from packages.sca.models import PinStyle
 from packages.sca.parsers.conan import parse_lock, parse_py, parse_txt

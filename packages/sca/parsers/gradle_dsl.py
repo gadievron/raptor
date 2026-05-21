@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from ..models import Confidence, Dependency, PinStyle
 from . import register

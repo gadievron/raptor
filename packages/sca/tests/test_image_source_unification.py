@@ -13,14 +13,12 @@ import gzip
 import io
 import tarfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 from unittest.mock import MagicMock
 
 import pytest
 
 from packages.sca.dockerfile_from import (
-    ImageRefSource,
     find_all_image_refs,
     find_compose_image_refs,
     find_gitlab_ci_image_refs,

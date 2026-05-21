@@ -23,7 +23,6 @@ import sys
 from pathlib import Path
 from typing import List
 
-import pytest
 
 # Anchor to the repo root via __file__ (test sits at
 # packages/sca/tests/test_cli_smoke.py — three parents up).

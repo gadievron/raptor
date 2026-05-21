@@ -14,7 +14,6 @@ PyPI/npm/etc.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -95,7 +94,6 @@ def _build_simple_fixture(repo: Path) -> None:
 # The actual gate
 # ---------------------------------------------------------------------------
 
-import pytest
 
 
 def test_offline_scan_makes_no_network_connections(tmp_path: Path) -> None:

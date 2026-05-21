@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 

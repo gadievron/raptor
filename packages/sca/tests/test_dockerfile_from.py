@@ -11,14 +11,12 @@ from __future__ import annotations
 
 import gzip
 import io
-import json
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, Optional
 from unittest.mock import MagicMock
 
-import pytest
 
 from packages.sca.dockerfile_from import (
     FromEntry,
@@ -29,7 +27,7 @@ from packages.sca.dockerfile_from import (
     packages_to_dependencies,
     scan_dockerfiles,
 )
-from packages.sca.models import Dependency, PinStyle
+from packages.sca.models import PinStyle
 
 
 # ---------------------------------------------------------------------------

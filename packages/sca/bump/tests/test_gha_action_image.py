@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-import pytest
 
 from packages.sca.bump.gha_action_image import (
     _parse_docker_action_image,

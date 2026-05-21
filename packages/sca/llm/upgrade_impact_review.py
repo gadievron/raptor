@@ -106,7 +106,7 @@ def _short_circuit_safe_result(
         confidence="medium",
         summary=(
             f"Fast-tier prefilter: {reasoning}"[:500] if reasoning
-            else f"Fast-tier prefilter classified upgrade as safe"
+            else "Fast-tier prefilter classified upgrade as safe"
         ),
     )
 

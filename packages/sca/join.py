@@ -38,7 +38,6 @@ whatever its parser inferred.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple

@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 from unittest.mock import MagicMock
 
-import pytest
 
 from core.json import JsonCache
 from packages.sca.dockerfile_from import (

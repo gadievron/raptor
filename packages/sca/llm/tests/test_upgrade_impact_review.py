@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from packages.sca.llm.upgrade_impact_review import (
     _grep_call_sites,

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from packages.sca.models import (
-    Confidence, Dependency, SupplyChainFinding, VulnFinding,
+    Dependency, SupplyChainFinding, VulnFinding,
 )
 
 logger = logging.getLogger(__name__)

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from packages.sca.api import analyse, _summarise
 from packages.sca.pipeline import RunResult

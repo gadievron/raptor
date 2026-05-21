@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.rewriters import RewriteEdit, rewrite
 from packages.sca.rewriters.yaml_image import rewrite_yaml_image

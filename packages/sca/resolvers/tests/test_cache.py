@@ -7,11 +7,8 @@ subprocess entirely; misses run it and cache the result.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import List, Optional
 
-import pytest
 
 from core.json import JsonCache
 from packages.sca.resolvers import ResolverResult

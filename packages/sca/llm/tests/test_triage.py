@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from packages.sca.llm.schemas import TriageResult
 from packages.sca.llm.triage import _trim_for_llm, triage_findings

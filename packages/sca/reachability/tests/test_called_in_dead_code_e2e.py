@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import pytest
 
 from core.inventory.call_graph import extract_call_graph_python
 from packages.sca.models import (
@@ -209,7 +208,7 @@ def test_sbom_called_in_dead_code_renders_in_triage():
         target_name="test",
     )
     vulns = sbom.get("vulnerabilities") or []
-    assert vulns, f"finding not in SBOM"
+    assert vulns, "finding not in SBOM"
     v = vulns[0]
     analysis = v.get("analysis") or {}
     assert analysis.get("state") == "in_triage", (

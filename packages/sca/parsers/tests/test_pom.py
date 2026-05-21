@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.models import PinStyle
 from packages.sca.parsers.pom import parse

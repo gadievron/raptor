@@ -361,7 +361,7 @@ def test_evidence_lines_truncated_to_five(tmp_path):
     """Even if many call sites match, the verdict carries at most
     five evidence lines (matches Go / npm tier behaviour)."""
     body = "\n".join(
-        f"        ObjectMapper.readValue(\"x\");" for _ in range(8)
+        "        ObjectMapper.readValue(\"x\");" for _ in range(8)
     )
     target = _project(
         tmp_path,

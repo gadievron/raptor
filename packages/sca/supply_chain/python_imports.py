@@ -40,7 +40,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, List, Set
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
 
@@ -84,7 +84,6 @@ _EXCLUDED_DIRS: Set[str] = (
 
 # Test-path detection shared with reachability + other supply_chain
 # detectors via packages.sca._test_paths — one source of truth.
-from .._test_paths import TEST_DIR_NAMES as _TEST_DIR_NAMES
 from .._test_paths import is_test_path as _shared_is_test_path
 
 # Top-level module names whose function calls at import time we

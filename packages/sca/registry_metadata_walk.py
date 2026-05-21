@@ -41,8 +41,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence,
-    Set, Tuple,
+    Callable, Dict, Iterable, List, Optional, Set, Tuple,
 )
 
 from core.http import HttpClient, HttpError

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.llm.version_diff_review import (
     _archive_url,

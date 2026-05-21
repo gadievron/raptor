@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -10,7 +9,7 @@ import pytest
 
 from packages.sca import review
 from core.json import JsonCache
-from packages.sca.osv import OSV_QUERY_BATCH_URL, OSV_VULN_URL_TEMPLATE
+from packages.sca.osv import OSV_VULN_URL_TEMPLATE
 
 
 _LODASH_VULN_RECORD = {

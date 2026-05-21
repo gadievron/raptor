@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-import pytest
 
 from packages.sca.calibration.build import (
     _bytes_equal_excluding_timestamp,

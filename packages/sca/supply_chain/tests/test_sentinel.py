@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from packages.sca.models import Confidence, Dependency, PinStyle
-from packages.sca.supply_chain.sentinel import SentinelHit, scan_deps, _load_sentinels
+from packages.sca.supply_chain.sentinel import scan_deps, _load_sentinels
 
 
 def _dep(name: str, ecosystem: str = "npm", version: str = "1.0.0") -> Dependency:

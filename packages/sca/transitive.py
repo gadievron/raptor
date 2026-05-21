@@ -41,13 +41,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple,
+    Callable, Dict, List, Optional, Sequence, Tuple,
 )
 
 from core.http import HttpClient
 from core.json import JsonCache
 
-from .models import Confidence, Dependency, Manifest
+from .models import Dependency, Manifest
 
 logger = logging.getLogger(__name__)
 
@@ -901,7 +901,6 @@ _CASCADE_LOCKFILE_NAMES: Dict[str, str] = {
 def _import_lockfile_parser(ecosystem: str) -> Optional[Callable]:
     """Lazy-import the matching lockfile parser. Avoids import-time
     cycles between transitive.py and the parsers package."""
-    from . import parsers
     if ecosystem == "PyPI":
         from .parsers.requirements import parse as _parse
         return _parse

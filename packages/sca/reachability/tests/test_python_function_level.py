@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pytest
 
 from packages.sca.models import Confidence, Dependency, PinStyle, Reachability
 from packages.sca.reachability.python_function_level import (

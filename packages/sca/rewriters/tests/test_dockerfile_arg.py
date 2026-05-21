@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from packages.sca.rewriters import RewriteEdit, rewrite
 from packages.sca.rewriters.dockerfile_arg import rewrite_dockerfile_arg

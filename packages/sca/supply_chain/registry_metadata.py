@@ -28,7 +28,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from ..models import Confidence, Dependency

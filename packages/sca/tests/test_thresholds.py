@@ -15,9 +15,8 @@ import json
 from pathlib import Path
 from typing import List
 
-import pytest
 
-from packages.sca import cli, render, thresholds
+from packages.sca import render, thresholds
 
 
 # ---------------------------------------------------------------------------

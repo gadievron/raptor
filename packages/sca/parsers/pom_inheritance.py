@@ -76,10 +76,9 @@ shape), behaviour is unchanged from the pre-resolver baseline.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 

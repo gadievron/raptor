@@ -12,7 +12,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import SCA_CACHE_ROOT, default_client
 from .pipeline import RunOptions, RunResult, run_sca
 
 logger = logging.getLogger(__name__)

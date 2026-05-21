@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 from packages.sca.findings import build_vuln_findings
 from packages.sca.models import (
