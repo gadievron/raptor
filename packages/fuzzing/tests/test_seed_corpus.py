@@ -1,5 +1,9 @@
 """Tests for deterministic fuzzing seed corpus preparation."""
 
+from pathlib import Path
+
+import pytest
+
 from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
 
 
@@ -94,6 +98,60 @@ def test_prepare_seed_corpus_can_include_lockfiles_when_requested(tmp_path):
     )
 
     assert [seed["source"] for seed in manifest["seeds"]] == ["package-lock.json"]
+
+
+def test_prepare_seed_corpus_refuses_source_directory_as_output_without_deleting(tmp_path):
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "seed.json").write_text("{}\n", encoding="utf-8")
+    (source / "json").mkdir()
+    operator_data = source / "json" / "operator-data.json"
+    operator_data.write_text("do not delete\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must not be the source directory"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=source))
+
+    assert operator_data.read_text(encoding="utf-8") == "do not delete\n"
+
+
+def test_prepare_seed_corpus_refuses_output_ancestor_without_deleting(tmp_path):
+    source = tmp_path / "workspace" / "project"
+    out = tmp_path / "workspace"
+    source.mkdir(parents=True)
+    (source / "seed.json").write_text("{}\n", encoding="utf-8")
+    (out / "json").mkdir()
+    operator_data = out / "json" / "operator-data.json"
+    operator_data.write_text("do not delete\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must not be an ancestor"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
+
+    assert operator_data.read_text(encoding="utf-8") == "do not delete\n"
+
+
+def test_prepare_seed_corpus_refuses_dangerous_output_paths(tmp_path, monkeypatch):
+    source = tmp_path / "project"
+    source.mkdir()
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=fake_home))
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=Path(source.anchor)))
+
+
+def test_prepare_seed_corpus_refuses_repository_root_output(tmp_path):
+    source = tmp_path / "project"
+    out = tmp_path / "repo"
+    source.mkdir()
+    out.mkdir()
+    (out / ".git").mkdir()
+
+    with pytest.raises(ValueError, match="repository root"):
+        prepare_seed_corpus(SeedCorpusOptions(source_dir=source, out_dir=out))
 
 
 def test_prepare_seed_corpus_ignores_output_directory_inside_source(tmp_path):
