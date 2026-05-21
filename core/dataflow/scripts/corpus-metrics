@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Compute precision/recall/F1 + per-FP-category breakdown from a
+corpus-run CSV.
+
+Usage:
+  core/dataflow/scripts/corpus-metrics <csv> [--check-pivot-gate]
+
+--check-pivot-gate exits non-zero when missing_sanitizer_model accounts
+for less than 10% of labelled FPs — the dataflow sanitizer-bypass
+feature line is targeting the wrong class otherwise.
+
+Dev-tooling only — not invoked by the LLM-driven RAPTOR workflows.
+Co-located with ``core/dataflow/`` (the module it operates on) rather
+than ``libexec/`` (which is reserved for framework-internal shims
+called by the launcher, hooks, or other libexec scripts).
+
+The libexec ``_RAPTOR_TRUSTED`` guard previously gated invocation —
+removed in the relocation since this script is now openly invocable
+by developers; the guard was defensible only under the
+"internal dispatch script" framing libexec implies.
+"""
+import sys
+from pathlib import Path
+
+# Repo root: this script lives at core/dataflow/scripts/corpus-metrics,
+# three levels deep. parents[3] climbs:
+#   [0] core/dataflow/scripts/  (this file's directory)
+#   [1] core/dataflow/
+#   [2] core/
+#   [3] <repo root>
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.dataflow.corpus_metrics import main
+
+sys.exit(main())

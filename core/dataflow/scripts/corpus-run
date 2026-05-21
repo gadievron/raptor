@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Replay dataflow corpus findings through a validator and emit CSV.
+
+Usage:
+  core/dataflow/scripts/corpus-run --output <csv> [--corpus-dir <dir>] [--validator <module:Cls>]
+
+Default validator is core.dataflow.validator:TrivialValidator (always
+exploitable) — the producer-only baseline. Pass --validator to plug in
+a real validator (e.g. PR1's LLM-backed sanitizer-evidence validator).
+
+Dev-tooling only — not invoked by the LLM-driven RAPTOR workflows.
+Co-located with ``core/dataflow/`` (the module it operates on) rather
+than ``libexec/`` (which is reserved for framework-internal shims
+called by the launcher, hooks, or other libexec scripts).
+
+The libexec ``_RAPTOR_TRUSTED`` guard previously gated invocation —
+removed in the relocation since this script is now openly invocable
+by developers; the guard was defensible only under the
+"internal dispatch script" framing libexec implies.
+"""
+import sys
+from pathlib import Path
+
+# Repo root: this script lives at core/dataflow/scripts/corpus-run,
+# three levels deep. parents[3] climbs:
+#   [0] core/dataflow/scripts/  (this file's directory)
+#   [1] core/dataflow/
+#   [2] core/
+#   [3] <repo root>
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.dataflow.run_corpus import main
+
+sys.exit(main())
