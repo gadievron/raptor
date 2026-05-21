@@ -694,11 +694,15 @@ def _extract_gha_run_blocks(text: str) -> List[Tuple[int, str, bool]]:
 # ---------------------------------------------------------------------------
 
 def _safe_read(path: Path) -> Optional[str]:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("sca.parsers: cannot read %s: %s", path, e)
-        return None
+    # Delegates to the shared size-bounded reader. Caps at 50 MB
+    # (the package-wide default) — large enough for the biggest
+    # legitimate Dockerfile / shell / GHA workflow, small enough
+    # to refuse a hostile target-repo manifest that would
+    # otherwise OOM the parser before the sandbox memory limit
+    # kicks in. Returns None + logs a warning on bound violation;
+    # the caller already treats None as "skip this file".
+    from .._safe_read import read_bounded
+    return read_bounded(path)
 
 
 def _load_jsonc(text: str) -> dict:
