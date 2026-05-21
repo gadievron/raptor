@@ -227,6 +227,9 @@ class LLMDispatcher:
 
         # L1 — filesystem isolation.
         self._sock_dir = Path(tempfile.mkdtemp(prefix=f"raptor-llm-{run_id}-"))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions
+        # 0o700 = owner-only — the socket lives here and must not be
+        # group/other-readable on a multi-user host.
         os.chmod(self._sock_dir, 0o700)
         self.socket_path = self._sock_dir / "llm.sock"
 

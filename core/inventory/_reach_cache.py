@@ -322,6 +322,8 @@ def save_index(
         return
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions
+        # 0o700 = owner-only — most restrictive POSIX mode.
         os.chmod(_CACHE_DIR, 0o700)
     except OSError as exc:
         logger.debug("reach_cache: dir setup failed: %s", exc)
@@ -340,6 +342,8 @@ def save_index(
                 # newer Python is still readable on older runtimes
                 # in the same dev environment.
                 pickle.dump(index, f, protocol=4)
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions
+            # 0o600 = owner-only file mode (no group/other).
             os.chmod(tmp_path, 0o600)
             os.rename(tmp_path, path)
         except BaseException:
