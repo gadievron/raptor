@@ -30,6 +30,7 @@ from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
+from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
@@ -40,7 +41,11 @@ def _tuning_default(key: str) -> int:
     return getattr(get_tuning(), key)
 
 
-def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
+def run_command_streaming(
+    cmd: list,
+    description: str,
+    timeout: int = 1800,
+) -> tuple[int, str, str]:
     """
     Run a command and stream output in real-time while also capturing it.
 
@@ -50,6 +55,11 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
     Args:
         cmd: Command and arguments as a list
         description: Human-readable description of the command
+        timeout: Wall-clock timeout in seconds (default 1800 = 30 min).
+            ``0`` disables the timeout entirely — caller's responsibility
+            to Ctrl-C if the subprocess hangs. Operator-overridable via
+            the ``--phase-timeout`` CLI flag for kernel-scale targets
+            where the analysis subprocess can take hours.
 
     Returns:
         Tuple of (return_code, stdout, stderr)
@@ -167,8 +177,13 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         stdout_thread.start()
         stderr_thread.start()
 
-        # Wait for process to complete
-        process.wait(timeout=1800)  # 30 minutes
+        # Wait for process to complete. ``timeout=0`` means unbounded
+        # — pass ``None`` to subprocess.wait so the operator can run
+        # kernel-scale analyses that legitimately take hours.
+        # ``RaptorConfig.DEFAULT_TIMEOUT`` may itself be ``None``
+        # (set by --phase-timeout 0 mutation at startup) — fall
+        # through gracefully in that case too.
+        process.wait(timeout=(timeout or None))
 
         # Wait for all output to be read.
         # Bounded join: pre-fix `.join()` (no timeout) hung forever
@@ -642,6 +657,19 @@ Examples:
                         help="Path to repository to analyse (default: directory raptor was launched from)")
     parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10)")
+    parser.add_argument(
+        "--phase-timeout", type=int,
+        default=RaptorConfig.DEFAULT_TIMEOUT, metavar="SECONDS",
+        help=(
+            "Per-phase wall-clock timeout in seconds for the three "
+            "long-running subprocess calls (Semgrep scan, CodeQL scan, "
+            "analysis subprocess). Default: %(default)s (sourced from "
+            "RaptorConfig.DEFAULT_TIMEOUT). Set to 0 to disable the "
+            "timeout entirely — useful for kernel-scale targets where "
+            "source_intel spatch + LLM analysis can take hours. "
+            "Operator is responsible for Ctrl-C when unbounded."
+        ),
+    )
     parser.add_argument("--no-exploits", action="store_true", help="Skip exploit generation")
     parser.add_argument("--no-patches", action="store_true", help="Skip patch generation")
     parser.add_argument(
@@ -802,6 +830,15 @@ Examples:
     add_cli_args(parser)
     args = parser.parse_args()
     apply_cli_args(args, parser=parser)
+
+    # Apply --phase-timeout uniformly. ``0`` is the unbounded
+    # sentinel — set RaptorConfig.DEFAULT_TIMEOUT to None so
+    # downstream subprocess calls that use the named constant
+    # (or that read ``args.phase_timeout or None``) all see the
+    # operator's choice. Same pattern as raptor_codeql.py for
+    # cross-command consistency.
+    if args.phase_timeout != RaptorConfig.DEFAULT_TIMEOUT:
+        RaptorConfig.DEFAULT_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
 
     # --verbose: drop the existing console StreamHandler from INFO to
     # DEBUG so per-LLM-call detail (cache hits, retries, per-call
@@ -1197,7 +1234,11 @@ Examples:
     # ---- Collect Semgrep results ----
     if semgrep_proc:
         try:
-            semgrep_stdout, semgrep_stderr = semgrep_proc.communicate(timeout=1800)
+            # ``args.phase_timeout`` 0 → ``None`` = unbounded (operator
+            # opt-in for kernel-scale targets via ``--phase-timeout 0``).
+            semgrep_stdout, semgrep_stderr = semgrep_proc.communicate(
+                timeout=(args.phase_timeout or None)
+            )
             rc = semgrep_proc.returncode
         except subprocess.TimeoutExpired:
             semgrep_proc.kill()
@@ -1260,7 +1301,9 @@ Examples:
     # ---- Collect CodeQL results ----
     if codeql_proc:
         try:
-            codeql_stdout, codeql_stderr = codeql_proc.communicate(timeout=1800)
+            codeql_stdout, codeql_stderr = codeql_proc.communicate(
+                timeout=(args.phase_timeout or None)
+            )
             rc = codeql_proc.returncode
         except subprocess.TimeoutExpired:
             codeql_proc.kill()
@@ -1342,7 +1385,7 @@ Examples:
                     break
             sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
                                  sca_metrics.get("supply_chain_findings", 0)
-            print(f"\n✓ SCA complete:")
+            print("\n✓ SCA complete:")
             print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
             print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
             print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
@@ -1459,7 +1502,10 @@ Examples:
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
-        rc, stdout, stderr = run_command_streaming(analysis_cmd, "Preparing findings for analysis")
+        rc, stdout, stderr = run_command_streaming(
+            analysis_cmd, "Preparing findings for analysis",
+            timeout=args.phase_timeout,
+        )
 
         # Parse analysis results
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
@@ -2148,9 +2194,6 @@ Examples:
             logger.debug(f"Cleaned up temp git dir: {_git_temp_dir}")
         except Exception as e:
             logger.debug(f"Failed to clean temp git dir: {e}")
-
-
-from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 
 
 def _build_aggregation_report_section(aggregation):
