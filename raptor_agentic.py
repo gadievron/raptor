@@ -699,10 +699,17 @@ Examples:
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
 
-    # CodeQL integration
-    parser.add_argument("--codeql", action="store_true", help="Enable CodeQL scanning (in addition to Semgrep)")
-    parser.add_argument("--codeql-only", action="store_true", help="Run CodeQL only (skip Semgrep)")
-    parser.add_argument("--no-codeql", action="store_true", help="Disable CodeQL scanning (Semgrep only)")
+    # CodeQL integration — mutually exclusive. Pre-fix all three
+    # flags were independent ``store_true`` booleans, so combinations
+    # like ``--codeql-only --no-codeql`` resolved to
+    # ``run_semgrep=False, run_codeql=False`` (neither scanner runs)
+    # and the pipeline still reported "complete" with zero findings.
+    # Mutually exclusive group rejects the contradictory combo at
+    # argparse time with a clear error.
+    _codeql_group = parser.add_mutually_exclusive_group()
+    _codeql_group.add_argument("--codeql", action="store_true", help="Enable CodeQL scanning (in addition to Semgrep)")
+    _codeql_group.add_argument("--codeql-only", action="store_true", help="Run CodeQL only (skip Semgrep)")
+    _codeql_group.add_argument("--no-codeql", action="store_true", help="Disable CodeQL scanning (Semgrep only)")
     parser.add_argument("--languages", help="Languages for CodeQL (comma-separated, auto-detected if not specified)")
     parser.add_argument("--build-command", help="Custom build command for CodeQL")
     parser.add_argument("--extended", action="store_true", help="Use CodeQL extended security suites")
@@ -803,7 +810,13 @@ Examples:
              "database) is on whenever --codeql produced a database. Pass this "
              "flag to skip validation completely.",
     )
-    parser.add_argument(
+    # --deep-validate / --no-deep-validate are contradictory; the
+    # help text claimed "Takes precedence over --deep-validate" but
+    # argparse didn't enforce that — both flags landed on args and
+    # downstream code read them independently. Mutex group makes
+    # argparse reject the contradictory combo with a clear error.
+    _deep_group = parser.add_mutually_exclusive_group()
+    _deep_group.add_argument(
         "--deep-validate",
         action="store_true",
         help="Force-enable Tier 2 / Tier 3 of IRIS validation for ALL "
@@ -816,7 +829,7 @@ Examples:
              "thinks it can SMT-check); pass --no-deep-validate to disable "
              "even that auto-enable path.",
     )
-    parser.add_argument(
+    _deep_group.add_argument(
         "--no-deep-validate",
         action="store_true",
         help="Hard kill-switch: disable Tier 2 / Tier 3 entirely, including "

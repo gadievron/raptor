@@ -389,7 +389,7 @@ def mode_scan(args: list) -> int:
     scanner_script = script_root / "packages/static-analysis/scanner.py"
 
     if not scanner_script.exists():
-        print(f"✗ Scanner not found: {scanner_script}")
+        print(f"✗ Scanner not found: {scanner_script}", file=sys.stderr)
         return 1
 
     return _run_with_lifecycle("scan", scanner_script, args,
@@ -402,7 +402,7 @@ def mode_fuzz(args: list) -> int:
     fuzzing_script = script_root / "raptor_fuzzing.py"
 
     if not fuzzing_script.exists():
-        print(f"✗ Fuzzing script not found: {fuzzing_script}")
+        print(f"✗ Fuzzing script not found: {fuzzing_script}", file=sys.stderr)
         return 1
 
     return _run_with_lifecycle("fuzz", fuzzing_script, args,
@@ -415,11 +415,19 @@ def mode_web(args: list) -> int:
     web_script = script_root / "packages/web/scanner.py"
 
     if not web_script.exists():
-        print(f"✗ Web scanner not found: {web_script}")
+        print(f"✗ Web scanner not found: {web_script}", file=sys.stderr)
         return 1
 
-    # Display alpha warning
-    print("\nWARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.\n")
+    # Alpha warning — pre-fix this said "/web is a STUB and should
+    # not be relied upon. Consider a placeholder/in alpha." which is
+    # internally contradictory (stub OR alpha, not both) and landed
+    # on stdout (captured in reports). Land on stderr and pick one
+    # description.
+    print(
+        "\nWARNING: /web is in alpha — expect false positives and "
+        "incomplete coverage.\n",
+        file=sys.stderr,
+    )
 
     return _run_with_lifecycle("web", web_script, args,
                               "Running web application scanner...")
@@ -431,7 +439,7 @@ def mode_agentic(args: list) -> int:
     agentic_script = script_root / "raptor_agentic.py"
 
     if not agentic_script.exists():
-        print(f"✗ Agentic workflow script not found: {agentic_script}")
+        print(f"✗ Agentic workflow script not found: {agentic_script}", file=sys.stderr)
         return 1
 
     # Enable CodeQL by default for comprehensive agentic mode
@@ -449,7 +457,7 @@ def mode_codeql(args: list) -> int:
     codeql_script = script_root / "raptor_codeql.py"
 
     if not codeql_script.exists():
-        print(f"✗ CodeQL script not found: {codeql_script}")
+        print(f"✗ CodeQL script not found: {codeql_script}", file=sys.stderr)
         return 1
 
     # Default to scan-only; autonomous analysis requires explicit --analyze
@@ -466,7 +474,7 @@ def mode_llm_analysis(args: list) -> int:
     llm_script = script_root / "packages/llm_analysis/agent.py"
 
     if not llm_script.exists():
-        print(f"✗ LLM analysis script not found: {llm_script}")
+        print(f"✗ LLM analysis script not found: {llm_script}", file=sys.stderr)
         return 1
 
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
@@ -498,13 +506,13 @@ def show_mode_help(mode: str) -> None:
     }
     
     if mode not in mode_scripts:
-        print(f"✗ Unknown mode: {mode}")
+        print(f"✗ Unknown mode: {mode}", file=sys.stderr)
         print(f"Available modes: {', '.join(mode_scripts.keys())}")
         return
     
     script_path = mode_scripts[mode]
     if not script_path.exists():
-        print(f"✗ Script not found: {script_path}")
+        print(f"✗ Script not found: {script_path}", file=sys.stderr)
         return
     
     print(f"\n[*] Help for mode: {mode}\n")
@@ -526,7 +534,7 @@ def show_mode_help(mode: str) -> None:
             timeout=10,
         )
     except subprocess.TimeoutExpired:
-        print(f"✗ Help rendering for {mode} timed out after 10s")
+        print(f"✗ Help rendering for {mode} timed out after 10s", file=sys.stderr)
 
 
 # Help epilog used by both the no-args path and the explicit
@@ -642,9 +650,18 @@ def main():
     }
     
     if mode not in mode_handlers:
-        print(f"✗ Unknown mode: {mode}")
-        print(f"\nAvailable modes: {', '.join(mode_handlers.keys())}")
-        print("\nRun 'python3 raptor.py --help' for more information")
+        print(f"✗ Unknown mode: {mode}", file=sys.stderr)
+        # Suggest the closest match — typos like ``agantic`` for
+        # ``agentic`` shouldn't force the operator to read the
+        # full mode dump.
+        import difflib
+        suggestion = difflib.get_close_matches(
+            mode, mode_handlers.keys(), n=1, cutoff=0.6,
+        )
+        if suggestion:
+            print(f"  Did you mean '{suggestion[0]}'?", file=sys.stderr)
+        print(f"\nAvailable modes: {', '.join(mode_handlers.keys())}", file=sys.stderr)
+        print("\nRun 'python3 raptor.py --help' for more information", file=sys.stderr)
         return 1
     
     # Execute the mode handler
