@@ -33,6 +33,7 @@ drops it from Phase 1.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,26 +112,30 @@ def _clean_dest(dest: Path) -> None:
         # Refuse explicitly so the error is structured.
         raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
     if any(dest.iterdir()):
-        # Use absolute path + sanitised env. Pre-fix the bare `rm`
-        # was resolved via PATH — a hostile PATH entry (a CI
-        # environment with `.` early in PATH, an operator-poisoned
-        # ~/.bashrc) could shadow `/usr/bin/rm` with an attacker
-        # binary that the destructive operation then ran.
-        # `shutil.which("rm")` resolves once at module use-time
-        # (not import — keeps the cost off the import critical
-        # path); fallback to `/usr/bin/rm` keeps the operation
-        # working on hosts where shutil.which trips on a weird
-        # PATH config. `env=` to a stripped environment so the
-        # subprocess can't pick up LD_PRELOAD / LD_LIBRARY_PATH /
-        # other code-injection vectors via the parent's env.
+        # ``shutil.rmtree`` rather than spawning ``rm -rf`` via
+        # subprocess. Pre-fix this path was a guarded subprocess
+        # invocation defending against PATH hijack on the ``rm``
+        # binary; that defence is moot once we delegate to the
+        # standard library. shutil.rmtree() is also cheaper (no fork
+        # / exec), portable (works on Windows where ``rm`` isn't
+        # available), and yields structured Python exceptions on
+        # error rather than a non-zero exit-code we'd have to
+        # interpret.
+        #
+        # On read-only files inside ``dest`` shutil.rmtree raises
+        # ``PermissionError``. We pass ``onerror=`` that chmods +
+        # retries — same end-state as ``rm -rf``.
         import shutil
-        rm_bin = shutil.which("rm") or "/usr/bin/rm"
-        from core.config import RaptorConfig
-        subprocess.run(
-            [rm_bin, "-rf", str(dest)],
-            capture_output=True, check=False, timeout=60,
-            env=RaptorConfig.get_safe_env(),
-        )
+        import stat as _stat_mod
+
+        def _force_remove(func, path, _exc):
+            try:
+                os.chmod(path, _stat_mod.S_IWRITE | _stat_mod.S_IREAD)
+                func(path)
+            except OSError:
+                pass
+
+        shutil.rmtree(dest, onerror=_force_remove)
 
 
 @dataclass

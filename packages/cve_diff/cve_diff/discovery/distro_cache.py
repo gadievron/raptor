@@ -45,7 +45,15 @@ _DEBIAN_URL = "https://security-tracker.debian.org/tracker/{cve_id}"
 _UBUNTU_URL = "https://ubuntu.com/security/cves.json?q={cve_id}"
 _REDHAT_URL = "https://access.redhat.com/hydra/rest/securitydata/cve/{cve_id}.json"
 
-_HREF_RE = re.compile(r'href="([^"]+)"', re.IGNORECASE)
+# Cap the href character class so an adversarial HTML response can't
+# force the regex engine to materialise a multi-megabyte string per
+# match. 4096 chars is well above any realistic href on the Debian
+# security tracker / Red Hat security data pages we scrape. Pre-fix
+# the unbounded ``[^"]+`` could in principle match the whole response
+# body if the upstream emitted a single multi-megabyte quoted value
+# — input size is already capped at the HTTP-client layer, but
+# defence-in-depth at the regex layer costs nothing.
+_HREF_RE = re.compile(r'href="([^"]{1,4096})"', re.IGNORECASE)
 
 
 # In-memory LRU cap for `_mem`. Pre-cap the dict grew without
