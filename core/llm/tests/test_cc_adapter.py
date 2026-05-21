@@ -26,7 +26,11 @@ class TestBuildCCCommand:
         # gh #549: strict_mcp defaults to True so sub-agents don't
         # inherit the operator's ~/.claude.json MCP servers.
         assert "--strict-mcp-config" in cmd
-        assert cmd[cmd.index("--mcp-config") + 1] == "{}"
+        # Value must include the `mcpServers` key (even empty);
+        # bare `{}` is rejected by recent Claude Code MCP validation
+        # (`mcpServers: Invalid input: expected record, received
+        # undefined`).
+        assert cmd[cmd.index("--mcp-config") + 1] == '{"mcpServers": {}}'
 
     def test_strict_mcp_can_be_disabled(self):
         # Opt-out path for any future consumer that genuinely needs MCP.
