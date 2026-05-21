@@ -727,22 +727,146 @@ class TestFreeVariableFallback:
         assert r.feasible is True
 
     @_requires_z3
-    def test_two_calls_distinct_free_vars(self):
-        """Two textually-identical calls produce *distinct* placeholders.
+    def test_identical_calls_share_placeholder_within_condition(self):
+        """Textually-identical calls within ONE condition string share
+        a placeholder.
 
-        Calls aren't assumed pure, so ``strlen(s) == strlen(s)`` is
-        satisfiable — but ``strlen(s) != strlen(s)`` is also satisfiable
-        (different anon vars).  This is the conservative stance: the
-        solver never claims infeasibility from elided subterms.
+        Pre-fix every call match allocated a fresh anon var, so
+        ``strlen(s) != strlen(s)`` was satisfiable (two independent
+        unconstrained vars).  That contradicted the writer's intent:
+        an LLM emitting the same ``strlen(s)`` twice means "the same
+        value", and ``X != X`` is unsat for any single ``X``.  Post-
+        fix the two occurrences share one Z3 var so the equality
+        ``strlen(s) == strlen(s)`` is a tautology and the inequality
+        ``strlen(s) != strlen(s)`` is unsat.
         """
         sat_eq = check_path_feasibility([
             PathCondition("strlen(s) == strlen(s)", step_index=0),
         ])
-        sat_ne = check_path_feasibility([
+        unsat_ne = check_path_feasibility([
             PathCondition("strlen(s) != strlen(s)", step_index=0),
         ])
         assert sat_eq.feasible is True
-        assert sat_ne.feasible is True
+        assert unsat_ne.feasible is False
+
+    @_requires_z3
+    def test_identical_calls_share_placeholder_across_conditions(self):
+        """Textually-identical calls in DIFFERENT condition strings
+        within one ``check_path_feasibility`` batch share a placeholder.
+
+        Pre-fix each condition's ``_substitute_calls`` call allocated
+        fresh anon vars, so the realistic Tier-4 path
+        ``[strlen(input) > 100, strlen(input) < 50]`` (two conditions,
+        one batch) encoded as ``_anon_0 > 100 AND _anon_1 < 50`` —
+        trivially sat, missing the obvious contradiction.  Post-fix
+        the second ``strlen(input)`` reuses the first's placeholder,
+        making the contradiction visible and refuting the path.
+        """
+        r = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert r.feasible is False
+        # Refutation should name the conflicting conditions in the
+        # unsat core.
+        assert any("strlen(input)" in u for u in r.unsatisfied)
+
+    @_requires_z3
+    def test_dedup_resets_between_batches(self):
+        """Dedup is scoped to one ``check_path_feasibility`` call.
+
+        Two separate batches that both mention ``strlen(input)`` get
+        independent anon vars — the conservative impure-call default
+        applies at batch boundaries because that's the only scope at
+        which the LLM can't textually express same-value intent.
+        """
+        # Batch 1: refuted because both conditions in one batch share
+        # the strlen(input) placeholder.
+        batch1 = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert batch1.feasible is False
+        # Batch 2: re-running the SAME conditions gets fresh state and
+        # the same refutation — confirms the refutation isn't sticky
+        # process-global state from batch 1.
+        batch2 = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert batch2.feasible is False
+        # Batch 3: one condition per batch — each batch allocates fresh
+        # vars, so neither batch alone has a contradiction.
+        b3a = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+        ])
+        b3b = check_path_feasibility([
+            PathCondition("strlen(input) < 50", step_index=0),
+        ])
+        assert b3a.feasible is True
+        assert b3b.feasible is True
+
+    @_requires_z3
+    def test_distinct_call_texts_remain_distinct(self):
+        """Different call texts still get distinct placeholders.
+
+        Pins the existing ``first(x)`` vs ``second(y)`` contract: only
+        EXACT text matches dedup.  Different function names or
+        different arguments mean different placeholders even within
+        one batch.
+        """
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_dedup_distinguishes_whitespace_and_argument_variations(self):
+        """Dedup is literal text equality — whitespace and argument
+        differences keep calls distinct.
+
+        ``strlen(s)`` vs ``strlen( s )`` differ in whitespace; treat as
+        distinct (we can't prove the whitespace is semantically
+        irrelevant without parsing the inner expression).  ``strlen(a)``
+        vs ``strlen(b)`` are distinct functions of distinct arguments.
+        """
+        # Whitespace-different forms in one batch shouldn't dedup —
+        # the resulting two anon vars let the inequality be sat.
+        r1 = check_path_feasibility([
+            PathCondition("strlen(s) != strlen( s )", step_index=0),
+        ])
+        assert r1.feasible is True
+        # Different-argument forms shouldn't dedup either.
+        r2 = check_path_feasibility([
+            PathCondition("strlen(a) != strlen(b)", step_index=0),
+        ])
+        assert r2.feasible is True
+
+    @_requires_z3
+    def test_anon_counter_progresses_across_distinct_calls(self):
+        """Counter still progresses when call texts differ — keeps the
+        pre-existing 'no index collision' guarantee for the cross-
+        condition case with non-identical call texts."""
+        # Two textually-distinct calls in one batch must produce TWO
+        # placeholders, not one. If both got `_anon_0` they'd share a
+        # Z3 var and the joint constraint
+        # `first(x) != 0 AND second(y) == 0` would still be sat —
+        # but for the wrong reason. The clean signal is two anon
+        # entries in the model.
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.feasible is True
+        anon_names = [k for k in r.model if k.startswith("_anon_")]
+        # At least two distinct anon entries (one per distinct call).
+        # Counts may be higher if model_completion fills extras, but
+        # the lower bound is what matters here.
+        assert len(anon_names) >= 2
+        assert "_anon_0" in r.model
+        assert "_anon_1" in r.model
 
     @_requires_z3
     def test_call_in_bitmask_lhs(self):
@@ -806,19 +930,13 @@ class TestFreeVariableFallback:
         assert r.unknown == []
         assert r.feasible is True
 
-    @_requires_z3
-    def test_anon_counter_progresses_across_conditions(self):
-        """Free-var allocator is seeded from existing ``vars_`` so
-        anon names don't collide across conditions in one path."""
-        # If both calls were assigned `_anon_0`, they'd share a Z3
-        # variable and 'first != 0 AND second == 0' would be unsat-ish
-        # in some encodings.  With distinct vars, both are satisfiable.
-        r = check_path_feasibility([
-            PathCondition("first(x) != 0", step_index=0),
-            PathCondition("second(y) == 0", step_index=1),
-        ])
-        assert r.unknown == []
-        assert r.feasible is True
+# Note: the "anon counter progresses across conditions" assertion
+# previously lived here. The new `test_anon_counter_progresses_across_
+# distinct_calls` (above, in this same class) subsumes it: same input
+# shape (``first(x)`` / ``second(y)``), same feasibility verdict, plus
+# the stronger assertion that two distinct anon entries appear in the
+# model. Kept the dedup-aware variant; removed the older one to avoid
+# encoding the same property twice.
 
 
 # ---------------------------------------------------------------------------

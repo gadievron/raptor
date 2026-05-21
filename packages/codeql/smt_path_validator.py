@@ -60,12 +60,17 @@ mis-encoded):
 
 Function-call subterms (``strlen(input)``, ``getpid()``, ...) are
 recovered through a free-variable fallback: each balanced
-``<ident>(...)`` subterm is replaced with a fresh ``_anon_N`` Z3
-variable before parsing, so the rest of the condition can still
-contribute to feasibility analysis.  Two textually-identical calls
-(``strlen(s) == strlen(s)``) are deliberately treated as *independent*
-free variables — the parser doesn't know which calls are pure, so it
-chooses the conservative semantics (no false claims of infeasibility).
+``<ident>(...)`` subterm is replaced with an ``_anon_N`` Z3 variable
+before parsing, so the rest of the condition can still contribute to
+feasibility analysis.  Textually-identical calls *within one
+``check_path_feasibility`` batch* (whether in the same condition string
+or across conditions in the list) share a single placeholder — the
+LLM's textual repetition of ``strlen(input)`` is read as intent that
+both references denote the same value, matching how a human writer
+would mean it.  Across separate ``check_path_feasibility`` calls the
+state resets; two batches that both mention ``strlen(input)`` allocate
+independent vars, preserving the conservative impure-call default for
+batch boundaries where the LLM has no way to express same-value intent.
 
 Other limitations (verdict still trustworthy, but with caveats):
 
@@ -473,10 +478,17 @@ def is_balanced_call(text: str) -> bool:
 def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
     """Allocate a fresh ``_anon_N`` Z3 BV for a function-call operand.
 
-    Two textually-identical calls (``strlen(s) == strlen(s)``) produce
-    *distinct* anon vars — the parser doesn't assume calls are pure.
-    Callers wanting same-call equality should use a helper variable in
-    a guard instead.
+    Each call allocates a new variable.  This is the verb-path
+    allocator (one BV per operand the verb's caller hands it); it has
+    no call-text input and therefore can't dedup textually-identical
+    operands the way :func:`_substitute_calls` does for the
+    path-validator entry point.  Verb callers wanting same-text dedup
+    must consult their own operand-text → BV map before calling — the
+    verb dispatcher in ``packages/exploit_feasibility/smt_verbs.py``
+    currently does NOT, so passing the same operand text twice to one
+    verb (e.g. ``check_overflow(["strlen(s)", "strlen(s)"], "+")``)
+    will produce two independent anon vars.  Tracked as a follow-on
+    to the path-validator dedup landed alongside this comment.
 
     Shares the ``_anon_*`` namespace with the parser-side substitution
     in :func:`_substitute_calls`, so a verb can build an operand and
@@ -492,19 +504,37 @@ def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
 ) -> str:
-    """Replace balanced ``<ident>(...)`` subterms with fresh free variables.
+    """Replace balanced ``<ident>(...)`` subterms with free Z3 variables.
 
-    Each function-call-shaped subterm is swapped for a unique
-    ``_anon_N`` placeholder and registered as a free Z3 bitvector in
-    ``vars_``.  Lets conditions like ``strlen(input) < 1024`` parse
-    instead of being rejected wholesale on the parens check, while
-    preserving correctness: the placeholder is unconstrained, so the
-    solver can never claim infeasibility based on the elided subterm.
+    Each function-call-shaped subterm is swapped for an ``_anon_N``
+    placeholder registered as a free Z3 bitvector in ``vars_``.  Lets
+    conditions like ``strlen(input) < 1024`` parse instead of being
+    rejected wholesale on the parens check.
 
     Nested calls collapse to a single placeholder
     (``f(g(x))`` → ``_anon_0``), since the outer call drives the
-    balanced-paren walk.  Two textually-identical calls produce
-    *distinct* placeholders — calls aren't assumed pure.
+    balanced-paren walk.
+
+    **Dedup contract.** Textually-identical call substrings share one
+    placeholder within a single ``_substitute_calls`` invocation, and —
+    when ``anon_map`` is supplied — across all invocations that share
+    that map (the call ``_anon_N → call-text`` mapping doubles as a
+    dedup oracle).  Pre-fix every match allocated a fresh placeholder,
+    so ``strlen(input) > 100 AND strlen(input) < 50`` across two
+    conditions in one ``check_path_feasibility`` batch encoded as
+    ``_anon_0 > 100 AND _anon_1 < 50`` — trivially satisfiable when
+    the two ``strlen(input)`` texts were meant to denote one value.
+    Reusing the placeholder when the call text exactly matches an
+    earlier subterm makes the encoding model writer intent: the LLM
+    re-typing ``strlen(input)`` reads as "same expression, same
+    value".  The conservative impure-call default is preserved at
+    *batch boundaries* — different ``check_path_feasibility`` calls
+    allocate fresh state — because that's the only granularity at
+    which the LLM has no syntactic way to spell shared identity.
+
+    Dedup is by literal text equality, so whitespace differences
+    (``strlen(s)`` vs ``strlen( s )``) and argument-form differences
+    (``strlen(a)`` vs ``strlen(b)``) stay distinct.
 
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
@@ -514,11 +544,22 @@ def _substitute_calls(
     (``anon_map["_anon_0"] = "strlen(argv[1])"``).  Threaded through
     ``_parse_condition`` and ``_classify_text_condition`` from
     ``check_path_feasibility`` so the final ``PathSMTResult`` can
-    surface meaningful labels for the witness model.  None / omitted
-    preserves backwards compatibility — callers that don't care
-    (verb path, tests pre-dating this) still work unchanged.
+    surface meaningful labels for the witness model — and so the
+    same map drives cross-condition dedup as described above.  None
+    / omitted preserves backwards compatibility for callers that
+    don't thread the map; in that mode the dedup scope shrinks to
+    intra-call only.
     """
     counter = _next_anon_index(vars_)
+    # Reverse lookup from call-text to existing placeholder. Seeded
+    # from `anon_map` (if supplied) so dedup spans every invocation
+    # that shares the map. When `anon_map` is None we still build a
+    # local map so identical calls within THIS invocation share a
+    # placeholder; callers that thread anon_map (the path-validator
+    # entry point) additionally get cross-condition dedup.
+    rev: Dict[str, str] = (
+        {v: k for k, v in anon_map.items()} if anon_map is not None else {}
+    )
     out: List[str] = []
     i = 0
     n = len(text)
@@ -534,11 +575,18 @@ def _substitute_calls(
                     depth -= 1
                 j += 1
             if depth == 0:
+                call_text = text[i:j]
+                existing = rev.get(call_text)
+                if existing is not None:
+                    out.append(existing)
+                    i = j
+                    continue
                 placeholder = f'_anon_{counter}'
                 counter += 1
                 vars_[placeholder] = _mk_var(placeholder, profile.width)
                 if anon_map is not None:
-                    anon_map[placeholder] = text[i:j]
+                    anon_map[placeholder] = call_text
+                rev[call_text] = placeholder
                 out.append(placeholder)
                 i = j
                 continue
