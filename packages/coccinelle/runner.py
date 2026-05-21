@@ -26,6 +26,28 @@ RESULT_PREFIX = "COCCIRESULT:"
 _SPATCH_BIN = "spatch"
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
 
+# Position-metavariable names that we refuse to inject into the
+# @script:python@ harness — they'd shadow Python builtins / keywords
+# or our own scratch identifiers (``_p``, ``_m``), confusing the
+# embedded interpreter or enabling unexpected behaviour from a
+# hostile .cocci rule. The dunder-prefix check above this set
+# catches ``__import__`` / ``__builtins__`` etc. without enumeration.
+_COCCI_POS_VAR_DENY = frozenset({
+    # Python keywords
+    "True", "False", "None", "if", "else", "elif", "for", "while",
+    "import", "from", "as", "def", "class", "return", "yield",
+    "lambda", "try", "except", "finally", "raise", "with", "pass",
+    "break", "continue", "global", "nonlocal", "assert", "in", "is",
+    "not", "and", "or",
+    # Harness-scope locals
+    "json", "sys", "_p", "_m",
+    # Common shadow-the-builtin foot-guns
+    "int", "str", "bytes", "open", "type", "list", "dict", "set",
+    "tuple", "object", "print", "id", "input", "exec", "eval",
+    "compile", "globals", "locals", "vars", "getattr", "setattr",
+    "hasattr", "delattr",
+})
+
 # Resolve `spatch` ONCE per process via shutil.which and cache the
 # absolute path. Pre-fix every subprocess call passed the bare
 # `"spatch"` and the kernel did a fresh PATH lookup at exec time.
@@ -436,6 +458,20 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     pos_match = re.search(r"position\s+(\w+)", rule_text, re.ASCII)
     pos_var = pos_match.group(1)
 
+    # ASCII-restricted via re.ASCII above, but the captured name
+    # becomes a Python identifier inside the @script:python@ harness
+    # below — it sits in scope alongside ``json``, ``sys``, ``int``,
+    # ``_p``, ``_m`` etc. A hostile coccinelle rule could pick a
+    # name that shadows a builtin (``int``, ``open``, ``__import__``)
+    # or our own scratch vars and confuse the embedded interpreter.
+    # Reject anything in the Python builtin/keyword namespace or
+    # starting with a dunder; rule names that fail this check skip
+    # harness injection (spatch still runs, just without
+    # COCCIRESULT structured output).
+    if (pos_var.startswith("_") or pos_var.startswith("__")
+            or pos_var in _COCCI_POS_VAR_DENY):
+        return rule_text
+
     # Detect multi-rule .cocci files. Pre-fix the harness only
     # bound to the FIRST `@rule_name@` block, so:
     #   * If the position variable was declared in a LATER
@@ -463,6 +499,14 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     rule_id = rule_names[0]
 
     safe_name = _SAFE_NAME_RE.sub("_", rule_name)
+    # ``json.dumps(safe_name)`` produces a properly-quoted Python
+    # string literal — including escapes for any backslashes or
+    # double quotes that might end up in safe_name after a future
+    # widening of _SAFE_NAME_RE. Pre-fix the f-string interpolated
+    # safe_name BETWEEN double quotes; today's regex (``[A-Za-z0-9_-]``)
+    # prevents quote/backslash chars but a single regex change
+    # would let a hostile rule break out of the string literal.
+    safe_name_repr = json.dumps(safe_name)
 
     harness = f"""
 
@@ -472,7 +516,7 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
 
 import json, sys
 for _p in {pos_var}:
-    _m = {{"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": "{safe_name}"}}
+    _m = {{"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": {safe_name_repr}}}
     sys.stderr.write("{RESULT_PREFIX}" + json.dumps(_m) + "\\n")
 """
     return rule_text + harness

@@ -46,10 +46,23 @@ import time
 # warning that XML parsing is using the unsafe stdlib).
 try:
     import defusedxml.ElementTree as ET  # type: ignore[import-not-found]
-    _DEFUSED_XML = True
-except ImportError:
-    import xml.etree.ElementTree as ET
-    _DEFUSED_XML = False
+except ImportError as _e:
+    # Hard requirement now (PR #516 pinned defusedxml==0.7.1). Pre-
+    # fix this fell back to ``xml.etree.ElementTree`` and logged a
+    # one-time warning, which means a host with defusedxml
+    # accidentally uninstalled (failed ``pip install`` race,
+    # stripped venv, distro pkg manager swap) silently parsed
+    # untrusted pom.xml with the XXE-vulnerable stdlib parser.
+    # The threat model is "operator's target repo may carry a
+    # pom.xml crafted by an attacker via a malicious dependency",
+    # so the soft fallback was a security gap. Fail loudly at
+    # import time — operators see a clear ImportError pointing at
+    # the missing pip dep instead of a delayed XXE leak.
+    raise ImportError(
+        "defusedxml is required for SCA pom.xml parsing "
+        "(blocks XXE / billion-laughs on untrusted manifests). "
+        "Install via: pip install defusedxml==0.7.1"
+    ) from _e
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -430,8 +443,6 @@ def find_dependency_files(root: Path) -> List[Path]:
     return candidates
 
 
-_PARSE_POM_WARNED_UNSAFE = False
-
 # Bounded-read caps for dependency manifest parsers.
 # Legitimate manifests are <100 KiB (requirements.txt, package.json,
 # pom.xml); 4 MiB is generous for the long-tail of large monorepos
@@ -448,23 +459,11 @@ _REQ_MAX_INCLUDE_FILES = 64
 
 
 def parse_pom(p):
-    global _PARSE_POM_WARNED_UNSAFE
-    if not _DEFUSED_XML and not _PARSE_POM_WARNED_UNSAFE:
-        # Warn once per process — operator should know they're
-        # parsing untrusted XML with the stdlib parser. Logging
-        # here rather than at import to avoid the warning when
-        # SCA isn't actually invoked.
-        try:
-            from core.logging import get_logger
-            get_logger("sca.agent").warning(
-                "defusedxml not installed — pom.xml parsing falls back to "
-                "xml.etree.ElementTree which is vulnerable to XXE / "
-                "billion-laughs in adversarial XML. `pip install defusedxml` "
-                "to enable safe parsing."
-            )
-        except Exception:
-            pass
-        _PARSE_POM_WARNED_UNSAFE = True
+    # Pre-fix this branch warned-once when defusedxml was missing and
+    # then parsed untrusted XML with vulnerable stdlib ElementTree.
+    # Now defusedxml is a hard import-time requirement (see top of
+    # this module); _DEFUSED_XML is always True or import fails.
+    # The warn-once gate is removed alongside _PARSE_POM_WARNED_UNSAFE.
     # File-size pre-check. A 5 GiB pom.xml (legitimate manifests are
     # well under 100 KiB) would otherwise OOM the parser. defusedxml
     # bounds nested-entity expansion but not raw file size.
