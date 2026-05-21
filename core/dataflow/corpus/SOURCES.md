@@ -103,15 +103,15 @@ won't match.
 ### Regenerating the Juice Shop + WebGoat hand-labels
 
 The `juiceshop_*` and `webgoat_*` entries are hand-curated. The
-manifest lives in `core/dataflow/handlabel_seed.py` as a tuple of
-`SeedEntry` records — each names the fixture file, the source/sink
-line numbers, the producer + rule_id, the verdict + fp_category,
-and a written rationale citing the specific defence (or absence
-thereof). Adding entries means appending tuples to `JUICE_SHOP` or
-`WEBGOAT` in that file; re-running:
+manifest lives in `core/dataflow/scripts/handlabel_seed.py` as a
+tuple of `SeedEntry` records — each names the fixture file, the
+source/sink line numbers, the producer + rule_id, the verdict +
+fp_category, and a written rationale citing the specific defence
+(or absence thereof). Adding entries means appending tuples to
+`JUICE_SHOP` or `WEBGOAT` in that file; re-running:
 
 ```
-python3 -m core.dataflow.handlabel_seed
+python3 core/dataflow/scripts/handlabel_seed.py
 ```
 
 reads each fixture's source line for the snippet and writes paired

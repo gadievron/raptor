@@ -28,6 +28,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# Repo root: this script lives at core/dataflow/scripts/handlabel_seed.py,
+# three levels deep. parents[3] climbs:
+#   [0] core/dataflow/scripts/  (this file's directory)
+#   [1] core/dataflow/
+#   [2] core/
+#   [3] <repo root>
+# Inserted so direct invocation (``python3 core/dataflow/scripts/handlabel_seed.py``)
+# works without PYTHONPATH setup. Matches the pattern in this dir's
+# ``corpus-metrics`` and ``corpus-run`` scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from core.dataflow.adapters.codeql import make_finding_id
 from core.dataflow.finding import Finding, Step
 from core.dataflow.label import (
@@ -396,12 +407,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "corpus" / "findings",
+        # ``parent.parent`` climbs from scripts/ → dataflow/, then
+        # appends corpus/findings — the canonical corpus output path.
+        # Pre-relocation this was just ``parent / corpus / findings``
+        # since the script lived in core/dataflow/ alongside corpus/.
+        default=Path(__file__).resolve().parent.parent / "corpus" / "findings",
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=Path(__file__).resolve().parents[2],
+        # parents[3] = repo root (see top-of-file comment for the climb).
+        # Pre-relocation this was parents[2] when the script lived in
+        # core/dataflow/.
+        default=Path(__file__).resolve().parents[3],
     )
     args = parser.parse_args(argv)
     n = write_seed(args.out_dir, args.repo_root)
