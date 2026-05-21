@@ -1086,6 +1086,100 @@ class TestAssignmentShapeBarrier:
         )
         assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED
 
+
+# ---------------------------------------------------------------------------
+# Pin the incidental assignment-shape coverage so a "simplify this
+# regex" refactor breaks loudly. The cases below all match via
+# substring overlap with a *designed* alternation rather than by a
+# dedicated pattern; dropping the designed alternation that carries
+# them would silently regress coverage.
+#
+# See `_ASSIGNMENT_SHAPED_RE` in smt_path_validator.py for the
+# full table of designed vs incidental matches.
+# ---------------------------------------------------------------------------
+
+class TestAssignmentShapeCoverage:
+    """Pin the incidental + edge-case behaviour of _ASSIGNMENT_SHAPED_RE.
+
+    Every case here is documented as either intentional-incidental
+    coverage we want to keep, or a known-rare false positive we're
+    knowingly accepting. Tests fail if either category drifts.
+    """
+
+    @_requires_z3
+    @pytest.mark.parametrize("text,which_alternation", [
+        # Python language operators not in the designed enumeration:
+        (":=",  "bare `=` (`:` not in lookbehind exclusion)"),
+        ("**=", "trailing `*=` matches `[+\\-*/%&|^]=`"),
+        ("//=", "trailing `/=` matches `[+\\-*/%&|^]=`"),
+        ("@=",  "bare `=` (`@` not in lookbehind exclusion)"),
+        # Java language operator not in the designed enumeration:
+        (">>>=", "trailing `>>=` matches `<<=|>>=`"),
+    ])
+    def test_incidental_assignment_shapes_pinned(self, text, which_alternation):
+        """Each incidental match must keep routing to
+        ASSIGNMENT_SHAPED so a regex refactor can't silently drop
+        coverage of these operators.
+
+        ``which_alternation`` documents WHICH designed alternation
+        carries the incidental coverage — when this test fails after
+        a refactor, the message names the load-bearing pattern that
+        was removed or weakened.
+        """
+        # Wrap in a minimal condition so the parser pipeline runs.
+        # `x text y` ensures the text appears at a position where
+        # any of the alternations could fire.
+        cond_text = f"x {text} y"
+        r = check_path_feasibility([
+            PathCondition(cond_text, step_index=0),
+        ])
+        assert cond_text in r.unknown, (
+            f"expected ASSIGNMENT_SHAPED rejection for {cond_text!r} "
+            f"(carried by: {which_alternation})"
+        )
+        rej = next(x for x in r.unknown_reasons if x.text == cond_text)
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED, (
+            f"{cond_text!r} no longer matches ASSIGNMENT_SHAPED — "
+            f"check whether the regex refactor dropped the alternation "
+            f"that previously carried this case incidentally: "
+            f"{which_alternation}"
+        )
+
+    @_requires_z3
+    def test_numeric_double_negation_flagged_as_assignment(self):
+        """Documented exotic false positive: ``--x > 0`` (numeric
+        double-negation) matches the ``--`` decrement alternation
+        and routes to ASSIGNMENT_SHAPED.
+
+        Effectively never seen in real path-condition input — C
+        rejects ``--literal`` at compile time and LLMs don't emit
+        this shape. Pinned here so a future fix that special-cases
+        it can land with the existing test flipping rather than as
+        a silent behaviour change. If an operator hits this case
+        in the wild, rephrasing as ``x != 0`` or ``0 - x`` in the
+        condition string sidesteps it.
+        """
+        r = check_path_feasibility([
+            PathCondition("--x > 0", step_index=0),
+        ])
+        assert "--x > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "--x > 0")
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED
+
+    @_requires_z3
+    def test_single_negative_literal_not_misdetected(self):
+        """``x == -1`` and ``offset > -16`` contain a single ``-``
+        but no ``--``; the increment/decrement alternation does NOT
+        match these. Important because ``rejection.parse_literal_value``
+        accepts negative decimal literals at signed profiles."""
+        for text in ("x == -1", "offset > -16", "y >= -128"):
+            r = check_path_feasibility([PathCondition(text, step_index=0)])
+            for rej in r.unknown_reasons:
+                assert rej.kind is not RejectionKind.ASSIGNMENT_SHAPED, (
+                    f"negative literal misdetected as ASSIGNMENT_SHAPED: "
+                    f"{text!r}"
+                )
+
     @_requires_z3
     def test_call_in_bitmask_lhs(self):
         """Function call in bitmask LHS: ``strlen(s) & 0xff == 0``."""

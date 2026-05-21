@@ -526,17 +526,61 @@ def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
     return vars_[name]
 
 
-# Detects program-statement shapes that aren't valid Boolean
-# path-conditions: bare assignment (``x = y`` — but NOT the ``==`` /
-# ``<=`` / ``>=`` / ``!=`` operators), compound assignment
-# (``+=`` / ``-=`` / ``*=`` / ``/=`` / ``%=`` / ``&=`` / ``|=`` /
-# ``^=`` / ``<<=`` / ``>>=``), and post-/pre-increment-or-decrement
-# (``++`` / ``--``). When matched, the parser routes to
-# RejectionKind.ASSIGNMENT_SHAPED — separate from the generic
-# UNRECOGNIZED_FORM so check_path_feasibility can recognise the
-# mutation and break the call-dedup window at that step (the
-# textually-identical ``strlen(input)`` before vs after a ``realloc``
-# must be modelled as two free variables, not one).
+# Detects program-statement shapes that aren't valid Boolean path-
+# conditions. Matches route to RejectionKind.ASSIGNMENT_SHAPED so
+# check_path_feasibility can break the call-dedup window at that
+# step (textually-identical ``strlen(input)`` references before vs
+# after a ``realloc`` must be modelled as two free variables, not
+# one).
+#
+# Coverage is a mix of *designed* matches (operators we explicitly
+# enumerate in the regex) and *incidental* matches (operators that
+# fire via substring overlap with a designed alternation). Both
+# directions are intentional — the incidental side gives us
+# best-effort coverage of language operators we never thought
+# about — but the dependency is fragile: dropping e.g. ``*`` from
+# ``[+\-*/%&|^]`` would silently regress ``**=`` along with the
+# obvious ``*=``. Pinning tests in TestAssignmentShapeCoverage
+# (see test_smt_path_validator.py) make every entry below load-
+# bearing so a future "simplify this regex" refactor fails loudly.
+#
+#  operator       matched?  how
+#  -------------  --------  ---------------------------------------
+#  =              yes       designed (bare-`=` alternation, with
+#                            `(?<![=<>!])` / `(?!=)` guards
+#                            excluding `==`/`<=`/`>=`/`!=`)
+#  += -= *= /=    yes       designed (`[+\-*/%&|^]=` alternation)
+#  %= &= |= ^=    yes       designed (same alternation)
+#  <<= >>=        yes       designed (`<<=|>>=` alternation)
+#  ++ --          yes       designed (`\+\+|--` alternation)
+#
+#  :=  (Python walrus)               yes  INCIDENTAL — `:` not in
+#                                          the bare-`=` lookbehind
+#                                          exclusion, so the bare-`=`
+#                                          alternation fires.
+#  **= (Python pow-assign)           yes  INCIDENTAL — trailing
+#                                          `*=` matches the compound-
+#                                          assignment alternation.
+#  //= (Python floordiv-assign)      yes  INCIDENTAL — trailing
+#                                          `/=` matches the compound-
+#                                          assignment alternation.
+#  >>>= (Java unsigned-rshift-assign) yes  INCIDENTAL — trailing
+#                                          `>>=` matches the shift-
+#                                          compound alternation.
+#  @=  (Python PEP 465 matmul-assign) yes  INCIDENTAL — `@` not in
+#                                          the bare-`=` lookbehind
+#                                          exclusion, so the bare-`=`
+#                                          alternation fires.
+#
+# Known exotic false positives (flagged for completeness, NOT tested
+# as wanted-behaviour):
+#  --x  (numeric double-negation in a condition): matches via the
+#       `--` decrement alternation. Effectively never seen in real
+#       path-condition input — C rejects `--literal` at compile
+#       time, and LLM-emitted conditions don't write it this way.
+#       If it ever appears, the operator gets ASSIGNMENT_SHAPED on a
+#       valid Boolean predicate; rephrasing as `x != 0` or `0 - x`
+#       in the condition string sidesteps it.
 _ASSIGNMENT_SHAPED_RE = re.compile(
     r'(?<![=<>!])=(?!=)'         # bare `=` not in `==`/`<=`/`>=`/`!=`
     r'|[+\-*/%&|^]='             # compound assignment ops `+= -= *= /= %= &= |= ^=`
