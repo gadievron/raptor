@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from shlex import quote
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
 # packages/codeql/build_detector.py -> repo root
@@ -334,6 +334,38 @@ class BuildDetector:
         # Choose command (with fallback support)
         command = config["command"]
 
+        # Special handling for cmake: distinguish "real cmake project
+        # root" (CMakeLists.txt has cmake_minimum_required + project())
+        # from "CMake subdir fragment" (e.g. ``lib/CMakeLists.txt`` in
+        # curl's source tree, meant to be included via
+        # ``add_subdirectory`` from the parent — running ``cmake .``
+        # from the subdir fails with "No cmake_minimum_required
+        # command is present").
+        #
+        # Without this check BuildDetector confidently returned
+        # ``cmake . && make`` for any directory containing a
+        # CMakeLists.txt, which silently broke CodeQL database
+        # creation on subdir targets — surfaced by /agentic on
+        # ``curl-8.11.0/lib`` (rc=1 from the synthesized build script,
+        # zero CodeQL findings, downstream LLM analysis ran without
+        # CodeQL context).
+        if build_type == "cmake":
+            cml = working_dir / "CMakeLists.txt"
+            if cml.is_file() and not self._is_cmake_project_root(cml):
+                logger.warning(
+                    "%s is a CMake subdirectory fragment (no "
+                    "cmake_minimum_required / project() declaration). "
+                    "Skipping cmake build — point CodeQL at the "
+                    "project root instead (typically the directory "
+                    "containing the top-level CMakeLists.txt with "
+                    "project()). Falling through to per-file "
+                    "synthesised compile, which may give partial "
+                    "coverage but won't recover configure-generated "
+                    "headers (e.g. config.h).",
+                    cml,
+                )
+                return None
+
         # Special handling for gradle wrapper
         if build_type == "gradle" and "./gradlew" in command:
             gradlew = self.repo_path / "gradlew"
@@ -361,6 +393,168 @@ class BuildDetector:
             detected_files=detected_files,
             env_detect=config.get("env_detect", []),
         )
+
+    def _discover_ancestor_includes(self, max_depth: int = 3) -> List[str]:
+        """Find ``include/`` directories at ancestors of ``self.repo_path``.
+
+        Used by the synthesised-compile fallback to rescue subdir
+        targets where the public headers live in a sibling of the
+        compiled subdir. Example: repo_path ==
+        ``curl-8.11.0/lib`` — headers at ``curl-8.11.0/include/``.
+
+        Returns absolute paths (the includes are by construction
+        outside repo_path; relative paths would all start with
+        ``../`` and depend on the compiler's cwd at compile time).
+        Bounded depth so a deep target doesn't spend the entire
+        detection budget on filesystem stat() calls.
+
+        Safety: same X_OK + symlink-escape checks the cmake
+        detection path uses. An ``include/`` symlinked to /etc on
+        a malicious target would otherwise leak the operator's
+        filesystem layout into the compile script.
+        """
+        found: List[str] = []
+        try:
+            current = self.repo_path.resolve(strict=False)
+        except OSError:
+            return found
+        for _ in range(max_depth):
+            current = current.parent
+            if not current.is_dir():
+                break
+            if not os.access(current, os.X_OK):
+                break
+            include_dir = current / "include"
+            try:
+                inc_resolved = include_dir.resolve(strict=False)
+            except OSError:
+                continue
+            if (
+                include_dir.is_dir()
+                and os.access(include_dir, os.X_OK)
+                and self._has_c_header(inc_resolved)
+            ):
+                # Sanity-check the resolved path is somewhere
+                # plausible. Reject anything that resolves to a
+                # system path like /etc, /proc, /sys, /dev — these
+                # could not legitimately be the "include/" dir of
+                # the operator's source target.
+                blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
+                if any(str(inc_resolved).startswith(b) for b in blocked):
+                    logger.debug(
+                        "Skipping ancestor include candidate %s "
+                        "(resolves to a system path)",
+                        include_dir,
+                    )
+                    continue
+                found.append(str(inc_resolved))
+        return found
+
+    @staticmethod
+    def _has_c_header(path: Path) -> bool:
+        """True if ``path`` contains at least one .h/.hpp file
+        recursively. Quick existence check — does not enumerate."""
+        try:
+            for entry in path.rglob("*"):
+                if entry.is_file() and entry.suffix.lower() in (".h", ".hpp", ".hh"):
+                    return True
+        except OSError:
+            return False
+        return False
+
+    def detect_missing_config_headers(self) -> List[Tuple[str, Path]]:
+        """Detect referenced ``*config.h``-shaped headers that don't
+        exist on disk anywhere reachable.
+
+        Returns a list of (header_name, source_file_that_references_it)
+        tuples. Pure diagnostic — does NOT generate or auto-run
+        anything. Caller decides whether to log a WARNING + suggest
+        the operator pre-run ``./configure`` / ``cmake`` to materialise
+        the missing headers.
+
+        Heuristic: scan up to 200 .c/.cpp files at the top of
+        repo_path's sort order; grep for ``#include "<name>_config.h"``
+        or ``#include "config.h"``; cross-check whether each referenced
+        name exists anywhere under repo_path OR any ancestor we'd
+        consider for include discovery. Bounded scan + bounded
+        per-file read so an oversized target doesn't dominate
+        detection wall time.
+        """
+        import re
+        missing: List[Tuple[str, Path]] = []
+        # Build the set of header names that DO exist on disk —
+        # repo_path + ancestor includes we'd consider.
+        existing_header_names = set()
+        for ext in (".h", ".hpp", ".hh"):
+            for h in self.repo_path.rglob(f"*{ext}"):
+                existing_header_names.add(h.name)
+        for parent_inc in self._discover_ancestor_includes(max_depth=3):
+            try:
+                for ext in (".h", ".hpp", ".hh"):
+                    for h in Path(parent_inc).rglob(f"*{ext}"):
+                        existing_header_names.add(h.name)
+            except OSError:
+                continue
+
+        # Pattern: #include "something_config.h" OR #include "config.h"
+        pattern = re.compile(
+            r'^\s*#\s*include\s*"([^"]*config(?:_[a-z0-9_]+)?\.h)"',
+            re.MULTILINE | re.IGNORECASE,
+        )
+        seen_missing = set()
+        sources = []
+        # Also scan local .h files — many projects use a gateway
+        # header (e.g. curl's ``curl_setup.h``) that does the
+        # ``#include "curl_config.h"`` so the .c files never
+        # reference the config header directly.
+        for ext in (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"):
+            sources.extend(self.repo_path.rglob(f"*{ext}"))
+        # Cap at 200 files to bound scan time on huge targets.
+        for src in sorted(sources, key=lambda p: (len(p.parts), str(p)))[:200]:
+            try:
+                with src.open("rb") as f:
+                    text = f.read(65536).decode("utf-8", "replace")
+            except OSError:
+                continue
+            for m in pattern.finditer(text):
+                header = m.group(1)
+                if header in existing_header_names:
+                    continue
+                if header in seen_missing:
+                    continue
+                seen_missing.add(header)
+                missing.append((header, src))
+        return missing
+
+    @staticmethod
+    def _is_cmake_project_root(cmakelists: Path) -> bool:
+        """Return True if ``CMakeLists.txt`` declares itself a project
+        root (carries ``cmake_minimum_required`` or ``project()``).
+
+        Subdirectory CMakeLists fragments — e.g. ``curl-8.11.0/lib/CMakeLists.txt``,
+        meant to be included via ``add_subdirectory`` from a parent —
+        carry neither declaration and cannot be configured standalone:
+        ``cmake .`` from such a directory fails with "No
+        cmake_minimum_required command is present."
+
+        Detection: scan for either keyword at the start of any
+        non-comment line (case-insensitive — CMake commands are
+        not case-sensitive in the language). Leading whitespace
+        is tolerated so a ``project()`` inside an
+        ``if(BUILD_SOMETHING)`` block still counts. Bounded read
+        (first 64 KB) — real CMakeLists files rarely exceed this;
+        the cap protects against pathological inputs.
+        """
+        try:
+            with cmakelists.open("rb") as f:
+                head = f.read(65536).decode("utf-8", "replace")
+        except OSError:
+            return False
+        for raw in head.splitlines():
+            line = raw.lstrip().lower()
+            if line.startswith("cmake_minimum_required") or line.startswith("project("):
+                return True
+        return False
 
     def _has_build_script(self, package_json: Path) -> bool:
         """Check if package.json has a build script."""
@@ -581,6 +775,34 @@ class BuildDetector:
         if not source_files:
             return None
 
+        # Diagnostic — does NOT auto-run anything. If the target's
+        # .c files reference ``*_config.h``-shaped headers that
+        # don't exist on disk, surface a single WARNING listing
+        # them with the recommended manual fix. Configure/cmake
+        # auto-execution is intentionally out of scope (arbitrary
+        # code execution from untrusted source); the operator must
+        # opt in by running the build step themselves.
+        if language == "cpp":
+            try:
+                missing_cfg = self.detect_missing_config_headers()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("missing-config-header detection failed: %s", e)
+                missing_cfg = []
+            if missing_cfg:
+                names = sorted({h for h, _ in missing_cfg})
+                sample_src = missing_cfg[0][1]
+                logger.warning(
+                    "Synthesised compile: %d config-header(s) missing "
+                    "(%s) — referenced by e.g. %s. These are typically "
+                    "generated by ``./configure`` or ``cmake`` at the "
+                    "project root. Re-run after pre-building (NOT "
+                    "auto-executed — arbitrary code execution risk) to "
+                    "recover full CodeQL coverage. Synthesised build "
+                    "will continue with partial coverage.",
+                    len(names), ", ".join(names[:5]) + ("..." if len(names) > 5 else ""),
+                    sample_src,
+                )
+
         # Create build dir and script once — reused across heuristic and CC
         import tempfile
         build_dir = Path(tempfile.mkdtemp(prefix=".raptor_build_", dir=self.repo_path))
@@ -689,6 +911,20 @@ class BuildDetector:
                         include_flags.add(f"-I{h.parent.relative_to(self.repo_path)}")
                     except ValueError:
                         pass
+            # Subdir-target rescue: walk UP from repo_path looking for
+            # sibling ``include/`` directories at ancestors. Real-world
+            # case: repo_path points at ``curl-8.11.0/lib`` and the
+            # public headers live at ``curl-8.11.0/include/curl/``;
+            # without this rescue, every ``#include <curl/curl.h>`` in
+            # the .c files fails to resolve and the synthesised
+            # compile produces a near-empty CodeQL database.
+            #
+            # Compile-context expansion only — these -I paths let the
+            # compiler find headers, but CodeQL DB still scopes to
+            # compilation events INSIDE the build target. No expansion
+            # of operator-stated scan scope.
+            for parent_inc in self._discover_ancestor_includes():
+                include_flags.add(f"-I{parent_inc}")
             include_flags = sorted(include_flags)
         elif language == "java":
             source_files = list(self.repo_path.rglob("*.java"))

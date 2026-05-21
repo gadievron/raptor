@@ -3,9 +3,9 @@
 
 This is the operator-facing measurement entry point. Wire via:
 
-    libexec/raptor-corpus-run --output evidence.csv \\
+    core/dataflow/scripts/corpus-run --output evidence.csv \\
         --validator packages.codeql.evidence_validator:CodeQLEvidenceValidator
-    libexec/raptor-corpus-metrics evidence.csv
+    core/dataflow/scripts/corpus-metrics evidence.csv
 
 The resulting metrics compare against the TrivialValidator baseline
 (precision/recall/F1 on the same corpus). PR1's exit criterion —

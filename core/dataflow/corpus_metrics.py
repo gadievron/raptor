@@ -156,12 +156,19 @@ def check_pivot_gate(m: Metrics) -> Tuple[bool, str]:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path, help="CSV from run_corpus.py")
+    # Python 3.14's argparse eagerly validates help strings via
+    # ``help % params`` substitution at add_argument time, so a
+    # literal ``%`` not part of a valid format spec raises
+    # ``ValueError: incomplete format``. The ``:.0%`` f-string
+    # format spec resolves to e.g. ``15%`` at runtime — that ``%``
+    # would trip the new validator. Escape via ``%%`` so argparse
+    # sees a literal percent + still renders ``15%`` in help.
     parser.add_argument(
         "--check-pivot-gate",
         action="store_true",
         help=(
             "Exit non-zero if missing_sanitizer_model share is below "
-            f"{PIVOT_GATE_THRESHOLD:.0%}"
+            f"{PIVOT_GATE_THRESHOLD:.0%}".replace("%", "%%")
         ),
     )
     args = parser.parse_args(argv)

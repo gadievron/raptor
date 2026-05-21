@@ -164,6 +164,48 @@ class RaptorLogger:
         file_handler.setFormatter(json_formatter)
         self.logger.addHandler(file_handler)
 
+        # Also attach the SAME console handler to the root logger so
+        # INFO-level messages from modules that use the stdlib
+        # ``logging.getLogger(__name__)`` pattern (108+ modules in
+        # this codebase, e.g. ``packages.llm_analysis.dataflow_validation``)
+        # surface in operator output. Pre-fix, RAPTOR's handlers
+        # were attached only to the "raptor" namespace; stdlib-named
+        # loggers propagated to root, found no handler, and INFO
+        # messages were silently dropped — most visible in
+        # subprocess contexts (e.g. ``agent.py`` running under
+        # ``raptor agentic``) where no other code calls basicConfig.
+        #
+        # Root level set to INFO so module-level INFO surfaces
+        # without flooding with third-party DEBUG. Third-party
+        # libraries that emit INFO (httpx request lines, openai
+        # client status, etc.) will surface too — same behaviour
+        # operators already see in scripts that call basicConfig,
+        # so no behaviour regression.
+        #
+        # ``self.logger.propagate = False`` (line above) means the
+        # "raptor" namespace doesn't double-fire to the root
+        # handler. Stdlib-named loggers do propagate, get handled
+        # at root, and their format follows the same
+        # LOG_FORMAT_CONSOLE shape as raptor's own messages.
+        root_logger = logging.getLogger()
+        # Idempotent guard: only attach once even if RaptorLogger
+        # is re-instantiated (shouldn't happen via the singleton,
+        # but the file handler's eager initialisation has been a
+        # source of bugs before — see the audit-trail filename
+        # comment above).
+        if not any(
+            isinstance(h, logging.StreamHandler) and getattr(h, "_raptor_root_handler", False)
+            for h in root_logger.handlers
+        ):
+            root_console = logging.StreamHandler(sys.stderr)
+            root_console.setLevel(logging.INFO)
+            root_console.setFormatter(console_formatter)
+            root_console._raptor_root_handler = True  # sentinel for the guard above
+            root_logger.addHandler(root_console)
+            # Ensure root accepts INFO-level records; default is WARNING.
+            if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
+                root_logger.setLevel(logging.INFO)
+
         RaptorLogger._initialized = True
 
         self.debug(f"RAPTOR logging initialized - audit trail: {log_file}")
