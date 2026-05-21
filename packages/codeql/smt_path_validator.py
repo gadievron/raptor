@@ -72,6 +72,32 @@ state resets; two batches that both mention ``strlen(input)`` allocate
 independent vars, preserving the conservative impure-call default for
 batch boundaries where the LLM has no way to express same-value intent.
 
+This dedup contract assumes the conditions reflect an SSA view of the
+path: every appearance of an identifier denotes the same value.  A
+real CFG that mutates an identifier between guards
+(``input = realloc(input, n)``) violates that assumption.  Two
+defences:
+
+  1. *Preferred — caller SSA-renames across mutations.*  Emit
+     ``strlen(input_pre) > 100`` then ``strlen(input_post) < 50``
+     instead of the same ``strlen(input)`` text twice.  Distinct text
+     → distinct placeholders → solver models the mutation correctly.
+     The LLM prompts in ``packages/codeql/dataflow_validator.py``
+     and ``packages/llm_analysis/prompts/schemas.py`` instruct the
+     extractor to do this.
+
+  2. *Defence-in-depth — assignment-shape barrier.*  Conditions that
+     contain a top-level assignment (``=``), compound-assignment
+     (``+=`` / ``-=`` / ...), or increment/decrement (``++`` / ``--``)
+     token are routed to :data:`RejectionKind.ASSIGNMENT_SHAPED`.
+     :func:`check_path_feasibility` then resets the call-dedup window
+     at that step so identical-text calls *after* the mutation
+     allocate fresh placeholders.  This catches the common case where
+     the LLM emits the program statement verbatim
+     (``input = realloc(input, n)``) without SSA-renaming the
+     surrounding guards — the verdict goes to "feasible (post-mutation
+     calls allocated fresh)" rather than a false refutation.
+
 Other limitations (verdict still trustworthy, but with caveats):
 
   - **C operator precedence**, not arithmetic-textbook precedence.
@@ -500,9 +526,29 @@ def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
     return vars_[name]
 
 
+# Detects program-statement shapes that aren't valid Boolean
+# path-conditions: bare assignment (``x = y`` — but NOT the ``==`` /
+# ``<=`` / ``>=`` / ``!=`` operators), compound assignment
+# (``+=`` / ``-=`` / ``*=`` / ``/=`` / ``%=`` / ``&=`` / ``|=`` /
+# ``^=`` / ``<<=`` / ``>>=``), and post-/pre-increment-or-decrement
+# (``++`` / ``--``). When matched, the parser routes to
+# RejectionKind.ASSIGNMENT_SHAPED — separate from the generic
+# UNRECOGNIZED_FORM so check_path_feasibility can recognise the
+# mutation and break the call-dedup window at that step (the
+# textually-identical ``strlen(input)`` before vs after a ``realloc``
+# must be modelled as two free variables, not one).
+_ASSIGNMENT_SHAPED_RE = re.compile(
+    r'(?<![=<>!])=(?!=)'         # bare `=` not in `==`/`<=`/`>=`/`!=`
+    r'|[+\-*/%&|^]='             # compound assignment ops `+= -= *= /= %= &= |= ^=`
+    r'|<<=|>>='                  # shift compound assignment
+    r'|\+\+|--'                  # post/pre-increment, decrement
+)
+
+
 def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
+    dedup_window: Optional[Dict[str, str]] = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with free Z3 variables.
 
@@ -536,6 +582,19 @@ def _substitute_calls(
     (``strlen(s)`` vs ``strlen( s )``) and argument-form differences
     (``strlen(a)`` vs ``strlen(b)``) stay distinct.
 
+    **SSA assumption.** Dedup assumes the conditions reflect an SSA
+    view of the path: every appearance of an identifier denotes the
+    same value.  A real CFG that mutates an identifier between
+    guards (``input = realloc(input, n)``) violates this — two
+    ``strlen(input)`` references straddling that mutation refer to
+    different memory.  The caller must SSA-rename across mutations
+    (``strlen(input_pre)`` / ``strlen(input_post)``) so dedup matches
+    intent, OR rely on :func:`check_path_feasibility` to detect
+    assignment-shaped conditions (via
+    :data:`RejectionKind.ASSIGNMENT_SHAPED`) and break the
+    ``dedup_window`` at each mutation step — see
+    :func:`check_path_feasibility` for that defence-in-depth layer.
+
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
 
@@ -544,22 +603,39 @@ def _substitute_calls(
     (``anon_map["_anon_0"] = "strlen(argv[1])"``).  Threaded through
     ``_parse_condition`` and ``_classify_text_condition`` from
     ``check_path_feasibility`` so the final ``PathSMTResult`` can
-    surface meaningful labels for the witness model — and so the
-    same map drives cross-condition dedup as described above.  None
-    / omitted preserves backwards compatibility for callers that
-    don't thread the map; in that mode the dedup scope shrinks to
-    intra-call only.
+    surface meaningful labels for the witness model.  ``anon_map``
+    accumulates ALL placeholder→call-text bindings allocated across
+    every invocation that shares it — including across mutation
+    barriers — because labels are global per-result.
+
+    ``dedup_window`` is the optional source-of-truth for *which*
+    placeholders the current invocation may reuse.  Distinct from
+    ``anon_map`` so the caller can scope dedup to a window narrower
+    than the full label store: pass a fresh dict per call to disable
+    cross-call dedup, pass a shared dict spanning every call in a
+    batch to enable it, ``.clear()`` between calls at a mutation
+    barrier to reset the window.  When ``dedup_window`` is omitted
+    and ``anon_map`` is supplied, dedup falls back to inverting
+    ``anon_map`` (the pre-D2 behaviour, preserving backward
+    compatibility for callers that don't manage their own window).
+    When both are omitted, dedup is intra-invocation only.
     """
     counter = _next_anon_index(vars_)
-    # Reverse lookup from call-text to existing placeholder. Seeded
-    # from `anon_map` (if supplied) so dedup spans every invocation
-    # that shares the map. When `anon_map` is None we still build a
-    # local map so identical calls within THIS invocation share a
-    # placeholder; callers that thread anon_map (the path-validator
-    # entry point) additionally get cross-condition dedup.
-    rev: Dict[str, str] = (
-        {v: k for k, v in anon_map.items()} if anon_map is not None else {}
-    )
+    # Reverse lookup from call-text to existing placeholder.
+    # Preference order (most to least specific):
+    #   1. caller-supplied `dedup_window` — explicit dedup scope,
+    #      lets the caller widen or narrow as needed (e.g.
+    #      check_path_feasibility resets at each mutation barrier).
+    #   2. derived from `anon_map` — pre-D2 behaviour, preserves
+    #      back-compat for callers that don't manage their own
+    #      window. Dedup spans every call that shares the anon_map.
+    #   3. local dict — dedup is intra-invocation only.
+    if dedup_window is not None:
+        rev = dedup_window
+    elif anon_map is not None:
+        rev = {v: k for k, v in anon_map.items()}
+    else:
+        rev = {}
     out: List[str] = []
     i = 0
     n = len(text)
@@ -615,6 +691,7 @@ def _substitute_calls(
 def _parse_condition(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
+    dedup_window: Optional[Dict[str, str]] = None,
 ) -> Union[Any, Rejection]:
     """Parse a single condition string into a Z3 boolean expression.
 
@@ -651,8 +728,31 @@ def _parse_condition(
                 f"most {_MAX_CONDITION_CHARS} characters"
             ),
         )
+    canonicalised = _canonicalise(text)
+    # Reject program-statement shapes (assignment, compound assignment,
+    # increment/decrement) BEFORE call substitution — they aren't
+    # Boolean guards and routing them to ASSIGNMENT_SHAPED lets
+    # check_path_feasibility break the call-dedup window at this step
+    # (so two `strlen(input)` references straddling an `input = ...`
+    # mutation get distinct placeholders rather than colliding under
+    # the SSA assumption). The detection is purely textual; the regex
+    # carefully excludes the `==` / `<=` / `>=` / `!=` relational ops.
+    if _ASSIGNMENT_SHAPED_RE.search(canonicalised):
+        return Rejection(
+            text, RejectionKind.ASSIGNMENT_SHAPED,
+            "condition is assignment-shaped (program statement, not a "
+            "Boolean guard)",
+            hint=(
+                "path conditions are Boolean guards on the path; emit the "
+                "guard predicates only, not the statements between them. "
+                "If a variable mutates between guards, SSA-rename it so "
+                "later references denote the post-mutation value "
+                "(e.g. `strlen(input_pre)` then `strlen(input_post)`)"
+            ),
+        )
     t = _substitute_calls(
-        _canonicalise(text), vars_, profile=profile, anon_map=anon_map,
+        canonicalised, vars_, profile=profile,
+        anon_map=anon_map, dedup_window=dedup_window,
     )
 
     # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
@@ -760,6 +860,7 @@ def _classify_text_condition(
     *,
     profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
+    dedup_window: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[str], Optional[Tuple[str, Any]], Optional[Rejection]]:
     """Parse one text condition and classify it.
 
@@ -771,8 +872,16 @@ def _classify_text_condition(
     Factored out so :func:`check_path_feasibility` and
     :func:`check_verb_feasibility` share the same parse-and-classify
     semantics.
+
+    ``dedup_window`` is threaded through to :func:`_substitute_calls`
+    so the call-dedup scope is controllable by the outer iteration
+    (see :func:`check_path_feasibility` for how it's reset at
+    assignment-shaped barriers).
     """
-    expr = _parse_condition(cond.text, vars_, profile=profile, anon_map=anon_map)
+    expr = _parse_condition(
+        cond.text, vars_, profile=profile,
+        anon_map=anon_map, dedup_window=dedup_window,
+    )
     if isinstance(expr, Rejection):
         _get_logger().debug(
             f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
@@ -1144,8 +1253,23 @@ def check_path_feasibility(
     # subterms; threaded into the PathSMTResult so downstream
     # consumers (witness PoC seed renderer) can show meaningful
     # labels like `_anon_0 (= strlen(argv[1])) = 32` instead of
-    # bare `_anon_0 = 32`.
+    # bare `_anon_0 = 32`. Accumulates EVERY allocation across the
+    # whole batch — including allocations on either side of a
+    # mutation barrier — so labels remain complete for the result.
     anon_map: Dict[str, str] = {}
+    # The call-dedup window controls *which* placeholders the current
+    # condition's parser may reuse. Distinct from `anon_map` (the
+    # label store) so we can reset it at mutation barriers without
+    # erasing labels. Pre-D2 the substitution derived its
+    # reverse-lookup directly from `anon_map`, so dedup was forced to
+    # span the whole batch — a path like
+    # ``[strlen(input) > 100, input = realloc(input,...),
+    # strlen(input) < 50]`` then merged the two `strlen(input)`
+    # references under one Z3 var, refuting the (actually feasible)
+    # path under the broken SSA assumption. Post-D2 the parser
+    # consults this window instead; ASSIGNMENT_SHAPED rejections
+    # clear it so post-mutation calls allocate fresh placeholders.
+    dedup_window: Dict[str, str] = {}
 
     satisfied: List[str] = []
     unknown: List[str] = []
@@ -1154,13 +1278,22 @@ def check_path_feasibility(
 
     for cond in conditions:
         sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, solver, profile=profile, anon_map=anon_map,
+            cond, vars_, solver, profile=profile,
+            anon_map=anon_map, dedup_window=dedup_window,
         )
         if sat_display is not None:
             satisfied.append(sat_display)
         elif rejection is not None:
             unknown.append(cond.text)
             unknown_reasons.append(rejection)
+            # Mutation barrier: an assignment-shaped step means
+            # subsequent identifiers may denote post-mutation values,
+            # so identical-text calls after this point must NOT dedup
+            # with earlier ones. Clear the window; `anon_map` (label
+            # store) is untouched, so all placeholders (before and
+            # after the barrier) remain visible in the final result.
+            if rejection.kind is RejectionKind.ASSIGNMENT_SHAPED:
+                dedup_window.clear()
         else:
             assert pending_pair is not None
             pending.append(pending_pair)
