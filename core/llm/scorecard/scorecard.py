@@ -119,6 +119,15 @@ class EventType:
     # Threshold + outlier identification live in
     # :mod:`core.llm.semantic_entropy`.
     REASONING_DIVERGENCE = "reasoning_divergence"
+    # IntentMatchJudge v1 verdict on whether an LLM-generated exploit
+    # targets the finding it was generated for. Producer:
+    # :mod:`packages.llm_analysis.intent_match`. Keyed by
+    # (generator_model, judge_model). ``correct`` = ``matches``
+    # verdict; ``incorrect`` = ``off_target``; ``unknown`` =
+    # ``uncertain`` (no calibrated answer). v1 is a weak signal —
+    # heuristic-first with a 2-step LLM tiebreak, no ground-truth
+    # calibration.
+    EXPLOIT_INTENT_MATCH = "exploit_intent_match"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -128,6 +137,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.TOOL_EVIDENCE,
     EventType.OPERATOR_FEEDBACK,
     EventType.REASONING_DIVERGENCE,
+    EventType.EXPLOIT_INTENT_MATCH,
 )
 
 

@@ -73,6 +73,15 @@ class CrashContext:
     exploit_compiled: Optional[bool] = None
     exploit_compile_errors: List[str] = field(default_factory=list)
 
+    # Intent-match verdict on ``exploit_code`` — whether the
+    # LLM-emitted exploit targets THIS crash specifically. Produced
+    # by ``packages.llm_analysis.intent_match.intent_match`` and
+    # stored as a dict (the dataclass's ``asdict()`` form). ``None``
+    # means the judge was not invoked (no exploit, opt-out via
+    # ``--no-judge-intent``, or pre-judge stage). Mirrors the
+    # contract on ``VulnerabilityContext.intent_match``.
+    intent_match: Optional[Dict] = None
+
 
 class CrashAnalyser:
     """Analyses crashes using debugger and LLM."""

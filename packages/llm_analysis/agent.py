@@ -164,6 +164,15 @@ class VulnerabilityContext:
         # "compilation not attempted".
         self.exploit_compiled: Optional[bool] = None
         self.exploit_compile_errors: List[str] = []
+        # Intent-match verdict on ``exploit_code`` — whether the
+        # LLM-emitted exploit targets THIS finding or hit a
+        # different bug / didn't engage at all. Produced by
+        # ``packages.llm_analysis.intent_match.intent_match`` and
+        # stored as a dict (the dataclass's ``asdict()`` form) so
+        # ``to_dict()`` can serialise it cleanly. ``None`` means the
+        # judge was not invoked (no exploit produced, or
+        # ``--no-judge-intent`` opt-out).
+        self.intent_match: Optional[Dict[str, Any]] = None
         self.patch_code: Optional[str] = None
         self.analysis: Optional[Dict[str, Any]] = None
 
@@ -384,6 +393,13 @@ class VulnerabilityContext:
                     self.exploit_compile_errors
                 )
 
+        # Surface the intent-match verdict when present. Only emit
+        # when actually populated — None means the judge wasn't
+        # invoked (no exploit, opt-out, or pre-judge stage) and
+        # there's no value in encoding that absence.
+        if self.intent_match is not None:
+            result["intent_match"] = dict(self.intent_match)
+
         # Add function metadata if available (from inventory checklist)
         if self.metadata:
             result["metadata"] = self.metadata
@@ -483,7 +499,8 @@ class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
                  prep_only: bool = False,
                  synthesise_checkers: bool = True,
-                 verify_exploits: bool = True):
+                 verify_exploits: bool = True,
+                 judge_intent: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -504,6 +521,15 @@ class AutonomousSecurityAgentV2:
         # See ``_verify_exploit_compiles`` for what the verdict
         # populates on each ``VulnerabilityContext``.
         self.verify_exploits = verify_exploits
+        # IntentMatchJudge v1 — heuristic-first, LLM tiebreak on
+        # ambiguous cases. Decides whether an LLM-generated exploit
+        # actually targets the finding it was generated for, or
+        # hit a different bug. Default on; opt out via
+        # ``--no-judge-intent`` for runs where the extra LLM
+        # tiebreak cost (~$0.001-0.01 per ambiguous finding) is
+        # unwanted. See ``_judge_exploit_intent`` and
+        # ``packages.llm_analysis.intent_match``.
+        self.judge_intent = judge_intent
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -1192,6 +1218,16 @@ class AutonomousSecurityAgentV2:
                 if self.verify_exploits:
                     self._verify_exploit_compiles(vuln, exploit_code)
 
+                # Intent-match judgement on the (possibly compile-
+                # verified) exploit. Runs heuristics first (cheap);
+                # escalates to a 2-step LLM tiebreak on ambiguous
+                # cases. Gated on ``self.judge_intent`` so operators
+                # opting out via ``--no-judge-intent`` skip the
+                # tiebreak's LLM cost. See
+                # ``packages.llm_analysis.intent_match`` for design.
+                if self.judge_intent:
+                    self._judge_exploit_intent(vuln, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -1239,6 +1275,68 @@ class AutonomousSecurityAgentV2:
         )
         vuln.exploit_compiled = compiled
         vuln.exploit_compile_errors = errors
+
+    def _judge_exploit_intent(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Run IntentMatchJudge v1 against the LLM-emitted exploit.
+
+        Skips findings the analysis pass already triaged as false
+        positives — judging an exploit for a finding the LLM
+        rejected is allocation that's not worth the cost.
+
+        Heuristic-first; LLM tiebreak only on ambiguous results.
+        Failures (LLM error, missing config) leave the verdict as
+        ``uncertain`` with the error captured in
+        ``intent_match['llm_error']`` — never raises.
+        """
+        # Skip when analysis already classified the finding as FP.
+        # No exploit can meaningfully target a non-bug.
+        if vuln.analysis:
+            is_tp = vuln.analysis.get("is_true_positive")
+            if is_tp is False:
+                logger.debug(
+                    f"   · Skipping intent-match for {vuln.finding_id} "
+                    "(analysis is_true_positive=False)"
+                )
+                return
+
+        from dataclasses import asdict
+        from packages.llm_analysis.intent_match import intent_match
+
+        verdict = intent_match(
+            exploit_code=exploit_code,
+            finding_file_path=vuln.file_path,
+            finding_function_name=(
+                (vuln.metadata or {}).get("name")
+                if vuln.metadata else None
+            ),
+            finding_cwe=vuln.cwe_id,
+            finding_message=vuln.message,
+            exploit_compile_errors=list(vuln.exploit_compile_errors),
+            llm_client=self.llm,
+            logger=logger,
+        )
+        vuln.intent_match = asdict(verdict)
+
+        if verdict.verdict == "matches":
+            logger.info(
+                f"   ✓ Intent-match: matches "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        elif verdict.verdict == "off_target":
+            logger.info(
+                f"   ⚠ Intent-match: off_target "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm}) — "
+                "exploit may have hit a different bug"
+            )
+        else:
+            logger.info(
+                f"   · Intent-match: uncertain "
+                f"(used_llm={verdict.used_llm})"
+            )
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
         logger.info("─" * 70)
@@ -1907,6 +2005,17 @@ def main() -> None:
              "When disabled, exploit_compiled stays unset on each "
              "finding (None — verification not attempted).",
     )
+    ap.add_argument(
+        "--no-judge-intent",
+        action="store_true",
+        help="Skip the intent-match judge on LLM-emitted exploits "
+             "(default on). Judge runs 4 cheap heuristics first; "
+             "escalates ambiguous cases to a 2-step LLM tiebreak "
+             "(~$0.001-0.01 per ambiguous finding). When disabled, "
+             "intent_match stays unset on each finding (None — "
+             "judge not invoked). See "
+             "packages/llm_analysis/intent_match.py for design.",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -1983,6 +2092,7 @@ def main() -> None:
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
         verify_exploits=not args.no_verify_exploits,
+        judge_intent=not args.no_judge_intent,
     )
 
     # Load checklist for metadata lookup

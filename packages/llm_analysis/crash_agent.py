@@ -294,7 +294,8 @@ class CrashAnalysisAgent:
 
     def __init__(self, binary_path: Path, out_dir: Path,
                  llm_config: LLMConfig = None,
-                 verify_exploits: bool = True):
+                 verify_exploits: bool = True,
+                 judge_intent: bool = True):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -306,6 +307,13 @@ class CrashAnalysisAgent:
         # in ``AutonomousSecurityAgentV2``; see
         # ``packages.llm_analysis.exploit_verify.compile_verify``.
         self.verify_exploits = verify_exploits
+        # IntentMatchJudge v1 — heuristic-first, LLM tiebreak on
+        # ambiguous cases. Decides whether an LLM-generated exploit
+        # targets the crash it was generated for. Default on; opt
+        # out via ``--no-judge-intent`` (plumbed from
+        # ``raptor_fuzzing.py``). Mirrors the
+        # ``AutonomousSecurityAgentV2`` contract.
+        self.judge_intent = judge_intent
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -649,6 +657,14 @@ FULL LLM RESPONSE:
                 if self.verify_exploits:
                     self._verify_exploit_compiles(crash_context, exploit_code)
 
+                # Intent-match judgement on the (possibly compile-
+                # verified) exploit. Same heuristic-first / LLM-
+                # tiebreak pattern as the /agentic path. Failures
+                # are non-fatal — the verdict stays as ``uncertain``
+                # with the error captured.
+                if self.judge_intent:
+                    self._judge_exploit_intent(crash_context, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -698,6 +714,77 @@ FULL LLM RESPONSE:
         )
         crash_context.exploit_compiled = compiled
         crash_context.exploit_compile_errors = errors
+
+    def _judge_exploit_intent(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Run IntentMatchJudge v1 against the LLM-emitted exploit.
+
+        Thin wrapper that maps
+        :func:`packages.llm_analysis.intent_match.intent_match`'s
+        ``IntentMatchVerdict`` onto the crash context's
+        ``intent_match`` field.
+
+        For language / function metadata, reads
+        ``crash_context.source_location`` (``file:line``) and
+        ``crash_context.function_name``. The CWE is approximated
+        from ``crash_context.crash_type`` (a free-form string like
+        ``"heap_overflow"`` set by the LLM analysis step) via a
+        small lookup table.
+        """
+        target_file_path: Optional[str] = None
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(":", 1)[0]
+
+        # Best-effort crash-type → CWE mapping for the cwe_shape
+        # heuristic. crash_type is LLM-set and free-form; this
+        # covers the common shapes the analysis prompt encourages.
+        crash_type_to_cwe = {
+            "heap_overflow": "CWE-122",
+            "stack_overflow": "CWE-121",
+            "buffer_overflow": "CWE-120",
+            "use_after_free": None,  # no v1 detector
+            "null_deref": "CWE-476",
+            "integer_overflow": "CWE-190",
+            "format_string": None,  # no v1 detector
+            "command_injection": "CWE-78",
+        }
+        finding_cwe = crash_type_to_cwe.get(crash_context.crash_type)
+
+        from dataclasses import asdict
+        from packages.llm_analysis.intent_match import intent_match
+
+        verdict = intent_match(
+            exploit_code=exploit_code,
+            finding_file_path=target_file_path,
+            finding_function_name=crash_context.function_name,
+            finding_cwe=finding_cwe,
+            finding_message=crash_context.crash_type,
+            exploit_compile_errors=list(
+                crash_context.exploit_compile_errors,
+            ),
+            llm_client=self.llm,
+            logger=logger,
+        )
+        crash_context.intent_match = asdict(verdict)
+
+        if verdict.verdict == "matches":
+            logger.info(
+                f"   ✓ Intent-match: matches "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        elif verdict.verdict == "off_target":
+            logger.info(
+                f"   ⚠ Intent-match: off_target "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        else:
+            logger.info(
+                f"   · Intent-match: uncertain "
+                f"(used_llm={verdict.used_llm})"
+            )
 
     def _signal_name(self, signal: str) -> str:
         """Convert signal number to name."""

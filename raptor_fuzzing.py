@@ -78,6 +78,16 @@ def main() -> None:
              "When disabled, exploit_compiled stays unset on each "
              "crash context (None — verification not attempted).",
     )
+    ap.add_argument(
+        "--no-judge-intent",
+        action="store_true",
+        help="Skip the intent-match judge on LLM-emitted exploits "
+             "(default on). Judge runs 4 cheap heuristics first; "
+             "escalates ambiguous cases to a 2-step LLM tiebreak "
+             "(~$0.001-0.01 per ambiguous crash). When disabled, "
+             "intent_match stays unset on each crash context "
+             "(None — judge not invoked).",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -366,6 +376,7 @@ def main() -> None:
             binary_path=binary_path,
             out_dir=out_dir / "analysis",
             verify_exploits=not args.no_verify_exploits,
+            judge_intent=not args.no_judge_intent,
         )
 
         # Initialize multi-turn analyser if autonomous mode
