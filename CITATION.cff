@@ -34,6 +34,7 @@ authors:
     family-names: Evron
   - given-names: Daniel
     family-names: Cuthbert
+    orcid: "https://orcid.org/0009-0000-6443-0251"
   - given-names: Thomas
     family-names: Dullien
     alias: "Halvar Flake"
