@@ -31,6 +31,8 @@ should use this from the start.
 from __future__ import annotations
 
 import logging
+import os
+import stat as _stat
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +44,7 @@ _MAX_PARSER_BYTES = 50 * 1024 * 1024
 
 def read_bounded(
     path: Path, *, max_bytes: int = _MAX_PARSER_BYTES,
+    follow_symlinks: bool = True,
 ) -> Optional[str]:
     """Read ``path`` as UTF-8 text, capped at ``max_bytes``.
 
@@ -63,12 +66,34 @@ def read_bounded(
     don't crash the parser — the caller's regex / JSON parse
     handles the resulting U+FFFD replacement chars as gracefully
     as it handles legitimate non-UTF-8 manifests.
+
+    When ``follow_symlinks=False`` is set, both the stat and the
+    open refuse to traverse a symlink at the final path component
+    (the open uses ``O_NOFOLLOW``; the stat uses ``lstat``). A
+    hostile target with ``Directory.Packages.props -> /etc/shadow``
+    is rejected here instead of leaking privileged file contents
+    into the parser's error logs. Defaults to ``True`` for
+    backward compatibility; new SCA parser sites that read attacker-
+    controlled manifest paths should pass ``follow_symlinks=False``.
     """
     try:
-        size = path.stat().st_size
+        st = (path.lstat() if not follow_symlinks else path.stat())
     except OSError as e:
         logger.debug("sca.parsers: cannot stat %s: %s", path, e)
         return None
+    # Reject non-regular files up-front (symlinks, sockets, FIFOs,
+    # devices). With ``follow_symlinks=False`` ``lstat`` reports
+    # the symlink itself, so the S_ISLNK check is what blocks the
+    # symlink read. With ``follow_symlinks=True`` ``stat`` follows
+    # transparently and this check rejects only non-regular final
+    # targets (FIFO, socket, etc.).
+    if not _stat.S_ISREG(st.st_mode):
+        logger.warning(
+            "sca.parsers: refusing to read %s (not a regular file: "
+            "mode=0o%o); treating as unparseable", path, st.st_mode,
+        )
+        return None
+    size = st.st_size
     if size > max_bytes:
         logger.warning(
             "sca.parsers: refusing to read %s (size=%d > max=%d) "
@@ -77,8 +102,16 @@ def read_bounded(
         )
         return None
     try:
-        with path.open("rb") as fh:
-            raw = fh.read(max_bytes + 1)
+        if not follow_symlinks:
+            # ``O_NOFOLLOW`` raises ELOOP if the final component
+            # is a symlink — defends against the TOCTOU window
+            # between the ``lstat`` above and this open.
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                raw = fh.read(max_bytes + 1)
+        else:
+            with path.open("rb") as fh:
+                raw = fh.read(max_bytes + 1)
     except OSError as e:
         logger.debug("sca.parsers: cannot read %s: %s", path, e)
         return None

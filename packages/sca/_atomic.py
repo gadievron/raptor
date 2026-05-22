@@ -52,24 +52,50 @@ def atomic_write_bytes(
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
 
+    # If the destination already exists, capture its mode bits up-front
+    # so we can reapply them to the temp file before rename. Operators
+    # occasionally chmod manifests to 0o600 (e.g. CI deploy keys
+    # embedded in a Directory.Packages.props PropertyGroup); without
+    # this preservation the rewrite would silently widen those perms
+    # to 0o644. We only carry the permission bits (S_IMODE); the file-
+    # type bits stay as O_CREAT's default (regular file).
+    #
+    # A stat-then-write race is benign here: this is a permission-
+    # preserve hint, not a security boundary. Worst case under a
+    # racing chmod we apply the pre-race mode and the operator re-
+    # runs the chmod.
+    preserve_mode: int = 0o644
+    try:
+        import stat as _stat
+        preserve_mode = _stat.S_IMODE(path.stat().st_mode)
+    except (OSError, ValueError):
+        # File doesn't exist yet (new manifest write) or stat
+        # surfaced something the platform can't represent — fall
+        # back to the historical default.
+        pass
+
     # PID suffix avoids collision when concurrent runs target the same
     # path (e.g. parallel CI matrix jobs, two operators on a shared
     # filesystem).
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
 
     try:
-        # O_CREAT|O_WRONLY|O_TRUNC matches the semantics of write_text;
-        # 0o644 default mode matches Python's behaviour for new files.
-        # When the destination already exists, ``os.replace`` preserves
-        # nothing of the destination — we don't try to copy permissions
-        # because that's another TOCTOU window. Callers that need
-        # specific perms should chmod after.
+        # O_CREAT|O_WRONLY|O_TRUNC matches the semantics of write_text.
+        # The mode argument is umask-modified on creation; we ``fchmod``
+        # after open so the captured preserve_mode lands verbatim.
         fd = os.open(
             tmp,
             os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            0o644,
+            preserve_mode,
         )
         try:
+            try:
+                os.fchmod(fd, preserve_mode)
+            except (OSError, AttributeError):
+                # Windows + a handful of mounted filesystems don't
+                # honour fchmod — the O_CREAT mode argument already
+                # provided the best-effort fallback.
+                pass
             os.write(fd, content)
             os.fsync(fd)
         finally:

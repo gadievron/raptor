@@ -138,3 +138,44 @@ def test_pid_suffix_isolates_concurrent_runs(tmp_path: Path) -> None:
     assert other_pid_tmp.read_text() == "another writer's draft\n"
     # Our temp was consumed by os.replace.
     assert not expected_tmp.exists()
+
+
+def test_preserves_existing_mode_bits(tmp_path: Path) -> None:
+    """When the destination already exists with a non-default mode
+    (e.g. 0o600 — operator chmod'd a manifest carrying credentials),
+    a subsequent atomic_write_text MUST NOT widen the permissions
+    back to 0o644. The post-rewrite mode reflects the pre-rewrite
+    mode."""
+    import stat as _stat
+    p = tmp_path / "manifest.txt"
+    p.write_text("v1\n")
+    p.chmod(0o600)
+    pre_mode = _stat.S_IMODE(p.stat().st_mode)
+    assert pre_mode == 0o600
+
+    atomic_write_text(p, "v2\n")
+    post_mode = _stat.S_IMODE(p.stat().st_mode)
+    assert post_mode == pre_mode, (
+        f"mode widened on rewrite: {pre_mode:o} → {post_mode:o}"
+    )
+    assert p.read_text() == "v2\n"
+
+
+def test_new_file_uses_default_mode(tmp_path: Path) -> None:
+    """When writing a NEW file (no existing destination to preserve),
+    the historical 0o644 default applies — minus the process umask.
+    Pin the umask before checking so the test is deterministic."""
+    import stat as _stat
+    p = tmp_path / "new-manifest.txt"
+    old_umask = os.umask(0o022)
+    try:
+        atomic_write_text(p, "fresh\n")
+    finally:
+        os.umask(old_umask)
+    mode = _stat.S_IMODE(p.stat().st_mode)
+    # 0o644 & ~0o022 == 0o644. fchmod inside the writer applies the
+    # captured ``preserve_mode`` (0o644 default for new files)
+    # verbatim — the umask is honoured by the open() but fchmod
+    # then overrides. Either result (0o644 with fchmod / 0o644 with
+    # umask-022) is the same here.
+    assert mode == 0o644
