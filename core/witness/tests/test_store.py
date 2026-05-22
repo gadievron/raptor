@@ -241,3 +241,110 @@ def test_manifest_is_valid_json(tmp_path):
     parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert parsed["bytes_hash"] == w.bytes_hash
     assert parsed["source"] == "fuzz"
+
+
+# ----------------------------------------------------------------------
+# Defensive checks added in the stacked fix on top of #579
+# ----------------------------------------------------------------------
+
+
+def test_put_rejects_bytes_len_mismatch(tmp_path):
+    """Caller-supplied ``bytes_len`` that disagrees with
+    ``len(data)`` is silent corruption of the manifest if not
+    caught — downstream consumers trust this field. Reject with a
+    clear error pointing at the producer."""
+    store = WitnessStore(tmp_path)
+    data = b"actual data"
+    w = Witness(
+        bytes_hash=compute_bytes_hash(data),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        bytes_len=9999,  # caller lied
+    )
+    with pytest.raises(WitnessStoreError, match="bytes_len"):
+        store.put(w, data)
+
+
+def test_put_accepts_bytes_len_equal_to_data_length(tmp_path):
+    """Caller-supplied ``bytes_len`` that DOES match is fine — only
+    the mismatch path raises."""
+    store = WitnessStore(tmp_path)
+    data = b"actual data"
+    w = Witness(
+        bytes_hash=compute_bytes_hash(data),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        bytes_len=len(data),  # matches
+    )
+    store.put(w, data)  # must not raise
+    loaded = store.get_witness(w.bytes_hash)
+    assert loaded.bytes_len == len(data)
+
+
+def test_put_rejects_non_json_outcome_detail(tmp_path):
+    """outcome_detail with a non-JSON-safe value (Path, datetime,
+    bytes, custom class) is rejected with a clear error BEFORE the
+    blob is written. Pre-fix the blob landed first and the manifest
+    write failed with a confusing ``TypeError`` from json.dumps,
+    leaving an orphan blob."""
+    store = WitnessStore(tmp_path)
+    data = b"x"
+    w = Witness(
+        bytes_hash=compute_bytes_hash(data),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        outcome_detail={"path_obj": Path("/tmp/foo")},  # not JSON-safe
+    )
+    with pytest.raises(WitnessStoreError, match="JSON-serialisable"):
+        store.put(w, data)
+    # Confirm no orphan blob landed.
+    blobs_dir = tmp_path / "blobs"
+    if blobs_dir.is_dir():
+        assert list(blobs_dir.iterdir()) == [], (
+            "non-JSON failure left an orphan blob behind"
+        )
+
+
+def test_put_atomic_blob_write_no_tmp_residue_on_success(tmp_path):
+    """Successful blob writes go through .tmp + os.replace — verify
+    no .tmp residue lingers after a clean put. (Failure mode for
+    atomic-write is hard to test without crash injection; this
+    pins the happy-path cleanup.)"""
+    store = WitnessStore(tmp_path)
+    data = b"atomic"
+    w = _make_witness(data)
+    store.put(w, data)
+    blobs_dir = tmp_path / "blobs"
+    tmp_files = list(blobs_dir.glob("*.tmp"))
+    assert tmp_files == [], f"residue: {tmp_files}"
+
+
+def test_put_atomic_manifest_write_no_tmp_residue_on_success(tmp_path):
+    """Same as above for manifests."""
+    store = WitnessStore(tmp_path)
+    data = b"atomic-manifest"
+    w = _make_witness(data)
+    store.put(w, data)
+    manifests_dir = tmp_path / "manifests"
+    tmp_files = list(manifests_dir.glob("*.tmp"))
+    assert tmp_files == [], f"residue: {tmp_files}"
+
+
+def test_compute_bytes_hash_importable_from_init(tmp_path):
+    """``compute_bytes_hash`` is part of the public API — consumers
+    should import it from ``core.witness``, not from the private
+    ``core.witness.types`` path. Pre-fix the symbol existed but
+    wasn't re-exported, forcing the awkward import."""
+    from core.witness import compute_bytes_hash as imported
+    # Sanity: same function as the types-module version
+    from core.witness.types import compute_bytes_hash as direct
+    assert imported is direct
+
+
+def test_witness_store_error_importable_from_init(tmp_path):
+    """Likewise for ``WitnessStoreError`` — callers that want to
+    catch store-specific errors shouldn't reach into the
+    submodule."""
+    from core.witness import WitnessStoreError as imported
+    from core.witness.store import WitnessStoreError as direct
+    assert imported is direct
