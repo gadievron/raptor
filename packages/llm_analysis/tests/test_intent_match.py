@@ -567,3 +567,81 @@ class TestSchemaShape:
         assert VERDICT_MATCHES == "matches"
         assert VERDICT_OFF_TARGET == "off_target"
         assert VERDICT_UNCERTAIN == "uncertain"
+
+
+# ---------------------------------------------------------------------------
+# Defensive paths added in the adversarial-review stacked fix
+# ---------------------------------------------------------------------------
+
+
+class TestLLMContentTypeTolerance:
+    """The judge tolerates unusual LLM client return shapes without
+    crashing the prompt envelope. Real providers return ``str``, but
+    custom adapters / wrappers have been seen to return ``bytes`` —
+    the envelope's regex sub then raises TypeError on bytes input.
+    Pre-fix this crashed mid-tiebreak; post-fix the bytes get
+    decoded to UTF-8 (with errors=replace) before reaching the
+    envelope."""
+
+    _AMBIGUOUS_KWARGS = dict(
+        exploit_code='payload = "A" * 200',
+        finding_file_path="src/other.c",
+        finding_function_name="check_password",
+        finding_cwe="CWE-120",
+    )
+
+    def test_describe_response_bytes_content_decoded(self):
+        """Step 1 (describe) returning bytes content doesn't crash."""
+        from unittest.mock import MagicMock
+        llm = MagicMock()
+        # describe-step → bytes content; judge-step → str
+        describe_resp = MagicMock()
+        describe_resp.content = b"The exploit constructs a long payload."
+        describe_resp.cost_usd = 0.001
+        judge_resp = MagicMock()
+        judge_resp.content = "matches: payload aimed at target"
+        judge_resp.cost_usd = 0.001
+        llm.generate.side_effect = [describe_resp, judge_resp]
+
+        v = intent_match(**self._AMBIGUOUS_KWARGS, llm_client=llm)
+        assert v.used_llm is True
+        # Verdict can be matches OR uncertain depending on how the
+        # decoded content gets judged — what matters is no crash.
+        assert v.verdict in {VERDICT_MATCHES, VERDICT_OFF_TARGET, VERDICT_UNCERTAIN}
+        assert v.llm_error is None
+
+    def test_judge_response_bytes_content_decoded(self):
+        """Step 2 (judge) returning bytes content doesn't crash and
+        parses correctly after decode."""
+        from unittest.mock import MagicMock
+        llm = MagicMock()
+        describe_resp = MagicMock()
+        describe_resp.content = "the exploit does X"
+        describe_resp.cost_usd = 0.001
+        judge_resp = MagicMock()
+        judge_resp.content = b"matches: bytes-typed verdict"
+        judge_resp.cost_usd = 0.001
+        llm.generate.side_effect = [describe_resp, judge_resp]
+
+        v = intent_match(**self._AMBIGUOUS_KWARGS, llm_client=llm)
+        assert v.verdict == VERDICT_MATCHES
+        assert v.used_llm is True
+        assert v.llm_error is None
+
+    def test_invalid_utf8_bytes_replaced_not_raised(self):
+        """Non-UTF8 bytes (decoder error) get replaced rather than
+        raised — best-effort decode."""
+        from unittest.mock import MagicMock
+        llm = MagicMock()
+        describe_resp = MagicMock()
+        # Invalid UTF-8 byte sequence
+        describe_resp.content = b"\xff\xfe invalid utf-8 attempt"
+        describe_resp.cost_usd = 0.001
+        judge_resp = MagicMock()
+        judge_resp.content = "uncertain: garbled input"
+        judge_resp.cost_usd = 0.001
+        llm.generate.side_effect = [describe_resp, judge_resp]
+
+        v = intent_match(**self._AMBIGUOUS_KWARGS, llm_client=llm)
+        assert v.used_llm is True
+        # No specific verdict expected — what matters is no crash.

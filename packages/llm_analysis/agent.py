@@ -1291,8 +1291,13 @@ class AutonomousSecurityAgentV2:
         ``intent_match['llm_error']`` — never raises.
         """
         # Skip when analysis already classified the finding as FP.
-        # No exploit can meaningfully target a non-bug.
-        if vuln.analysis:
+        # No exploit can meaningfully target a non-bug. Be defensive
+        # against ``vuln.analysis`` being non-dict — the type hint
+        # says ``Optional[Dict[str, Any]]`` but in-flight pipelines
+        # have been observed to set it to other shapes (raw response
+        # strings, lists). Treat anything non-dict as "no analysis
+        # signal" and proceed to judge.
+        if isinstance(vuln.analysis, dict):
             is_tp = vuln.analysis.get("is_true_positive")
             if is_tp is False:
                 logger.debug(
@@ -1301,16 +1306,21 @@ class AutonomousSecurityAgentV2:
                 )
                 return
 
+        # Function name from inventory-checklist metadata. Defensive
+        # against ``vuln.metadata`` being non-dict — same shape-
+        # tolerance reasoning as for vuln.analysis above.
+        if isinstance(vuln.metadata, dict):
+            function_name = vuln.metadata.get("name")
+        else:
+            function_name = None
+
         from dataclasses import asdict
         from packages.llm_analysis.intent_match import intent_match
 
         verdict = intent_match(
             exploit_code=exploit_code,
             finding_file_path=vuln.file_path,
-            finding_function_name=(
-                (vuln.metadata or {}).get("name")
-                if vuln.metadata else None
-            ),
+            finding_function_name=function_name,
             finding_cwe=vuln.cwe_id,
             finding_message=vuln.message,
             exploit_compile_errors=list(vuln.exploit_compile_errors),

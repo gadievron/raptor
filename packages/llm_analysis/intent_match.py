@@ -555,7 +555,16 @@ def _llm_tiebreak(
             cost_usd, "describe: no response",
         )
 
-    description = (getattr(describe_response, "content", "") or "").strip()
+    # Coerce content to str defensively. Real LLM clients return str,
+    # but the loose ``getattr`` access tolerates anything; if a custom
+    # provider hands back ``bytes`` (rare but observed in synthetic
+    # tests), passing it through to the prompt envelope later crashes
+    # the envelope's regex sub with a "string pattern on bytes-like
+    # object" TypeError. Coerce here so the failure can't propagate.
+    raw_content = getattr(describe_response, "content", "") or ""
+    if isinstance(raw_content, (bytes, bytearray)):
+        raw_content = raw_content.decode("utf-8", errors="replace")
+    description = str(raw_content).strip()
     cost_usd += getattr(describe_response, "cost_usd", 0.0) or 0.0
 
     if not description:
@@ -596,7 +605,11 @@ def _llm_tiebreak(
             cost_usd, "judge: no response",
         )
 
-    judge_content = (getattr(judge_response, "content", "") or "").strip()
+    # Same bytes-tolerance defensive coerce as the describe step.
+    raw_judge = getattr(judge_response, "content", "") or ""
+    if isinstance(raw_judge, (bytes, bytearray)):
+        raw_judge = raw_judge.decode("utf-8", errors="replace")
+    judge_content = str(raw_judge).strip()
     cost_usd += getattr(judge_response, "cost_usd", 0.0) or 0.0
 
     verdict, reason = _parse_judge_response(judge_content)
