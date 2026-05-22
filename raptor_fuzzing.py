@@ -69,6 +69,15 @@ def main() -> None:
                     help="Force the legacy AFL++-only fuzzing path")
     ap.add_argument("--plan-only", action="store_true",
                     help="With --orchestrator, print the plan and exit without running")
+    ap.add_argument(
+        "--no-verify-exploits",
+        action="store_true",
+        help="Skip the compile-verify step on LLM-emitted exploits "
+             "(default on, ~150ms per crash). Use for "
+             "benchmarks / CI surfaces where every second counts. "
+             "When disabled, exploit_compiled stays unset on each "
+             "crash context (None — verification not attempted).",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -171,12 +180,12 @@ def main() -> None:
         for key, value in result.items():
             print(f"  {key}: {value}")
         print(f"\nOutput: {out_dir}")
-        print(f"  fuzzing_plan.json     -- target detection and fuzzer choice")
-        print(f"  capability_report.json -- host capability snapshot")
-        print(f"  fuzz-summary.json     -- final campaign telemetry")
-        print(f"  fuzz-events.jsonl     -- full event stream")
+        print("  fuzzing_plan.json     -- target detection and fuzzer choice")
+        print("  capability_report.json -- host capability snapshot")
+        print("  fuzz-summary.json     -- final campaign telemetry")
+        print("  fuzz-events.jsonl     -- full event stream")
         if (out_dir / "binary-context-map.json").exists():
-            print(f"  binary-context-map.json -- radare2 adversarial analysis")
+            print("  binary-context-map.json -- radare2 adversarial analysis")
         print("=" * 70)
         sys.exit(0)
 
@@ -292,7 +301,7 @@ def main() -> None:
             max_crashes=args.max_crashes,
         )
 
-        print(f"\n✓ Fuzzing complete:")
+        print("\n✓ Fuzzing complete:")
         print(f"  - Duration: {args.duration}s")
         print(f"  - Unique crashes: {num_crashes}")
         print(f"  - Crashes dir: {crashes_dir}")
@@ -356,6 +365,7 @@ def main() -> None:
         llm_agent = CrashAnalysisAgent(
             binary_path=binary_path,
             out_dir=out_dir / "analysis",
+            verify_exploits=not args.no_verify_exploits,
         )
 
         # Initialize multi-turn analyser if autonomous mode
@@ -401,7 +411,7 @@ def main() -> None:
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
-                print(f"⊘ Duplicate crash - same stack trace as previous crash")
+                print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
 
@@ -536,13 +546,13 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("RAPTOR FUZZING COMPLETE")
     print("=" * 70)
-    print(f"\n Summary:")
+    print("\n Summary:")
     print(f"   Total crashes: {num_crashes}")
     print(f"   analysed: {analysed}")
     print(f"   Exploitable: {exploitable}")
     print(f"   Exploits generated: {exploits_generated}")
 
-    print(f"\n Outputs:")
+    print("\n Outputs:")
     print(f"   AFL output: {out_dir / 'afl_output'}")
     print(f"   Crashes: {crashes_dir}")
     print(f"   Analysis: {out_dir / 'analysis'}")
@@ -596,7 +606,7 @@ def main() -> None:
     print(f"   Report: {report_file}")
 
     if args.autonomous and memory:
-        print(f"\n Autonomous Learning:")
+        print("\n Autonomous Learning:")
         stats = memory.get_statistics()
         print(f"   Knowledge entries: {stats['total_knowledge']}")
         print(f"   Average confidence: {stats['average_confidence']:.2f}")

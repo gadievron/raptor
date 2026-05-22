@@ -15,7 +15,6 @@ import argparse
 import json
 import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1182,10 +1181,9 @@ class AutonomousSecurityAgentV2:
             return False
 
     # File extensions that map to languages the gcc-based validator
-    # can compile. Anything else (Python / Java / JS / Go / etc.) is
-    # skipped with a "language_not_supported" marker rather than
-    # being marked compiled=False — surfacing a sea of gcc parse
-    # errors on Python exploits is anti-signal.
+    # can compile. Retained as a class attribute for back-compat with
+    # external tests that mirror it onto stub agents; the canonical
+    # set now lives in ``packages.llm_analysis.exploit_verify``.
     _COMPILABLE_EXTENSIONS = frozenset({
         ".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp",
     })
@@ -1195,107 +1193,29 @@ class AutonomousSecurityAgentV2:
     ) -> None:
         """Compile-check the LLM-emitted exploit in a sandbox.
 
-        Wraps ``packages.autonomous.exploit_validator.ExploitValidator``
-        — the same machinery ``/codeql --autonomous`` has used since
-        v2.0. Populates ``vuln.exploit_compiled`` and
-        ``vuln.exploit_compile_errors`` so reporting can surface
-        compile-success rates and downstream consumers (future
-        refinement loop, ``/validate`` verification tier) can act on
-        the verdict.
+        Thin wrapper around
+        :func:`packages.llm_analysis.exploit_verify.compile_verify`
+        that maps the shared helper's ``(compiled, errors)`` tuple
+        onto the finding's ``exploit_compiled`` /
+        ``exploit_compile_errors`` fields. See ``exploit_verify`` for
+        the verification mechanics, language gate, sanitisation, and
+        failure-mode semantics.
 
-        Failures here are intentionally non-fatal: a compile error is
-        useful signal, not an exception to propagate. The exploit
-        artefact is preserved on disk regardless so operators can
-        still inspect it.
-
-        Verification is gated on the **target's** language (read from
-        ``vuln.file_path``'s extension), not the exploit file's
-        ``.cpp`` extension (which is hardcoded by the writer above).
-        For Python / Java / JS / Go targets the LLM typically emits
-        a same-language exploit; feeding that to gcc produces parse-
-        error noise. We mark ``exploit_compiled=None`` with a single-
-        entry ``exploit_compile_errors`` annotating
-        "language_not_supported" so operators see *why* verdict is
-        absent.
+        Failures here are non-fatal: the helper returns ``None`` on
+        unattempted/aborted verification rather than raising, so the
+        exploit artefact remains on disk regardless and downstream
+        reporting can distinguish "not attempted" (None) from
+        "failed to compile" (False) from "compiled cleanly" (True).
         """
-        # Language gate. The exploit file is always saved with .cpp
-        # (a bug in the writer, see exploit_file path above), so we
-        # cannot trust the artefact's extension — look at the target.
-        target_ext = ""
-        if vuln.file_path:
-            target_ext = Path(vuln.file_path).suffix.lower()
-        if target_ext and target_ext not in self._COMPILABLE_EXTENSIONS:
-            vuln.exploit_compiled = None
-            vuln.exploit_compile_errors = [
-                f"language_not_supported: target extension {target_ext!r} "
-                f"is not in the gcc-compilable set; skipping compile-verify"
-            ]
-            logger.debug(
-                f"   · Skipping compile-verify for {vuln.finding_id} "
-                f"(target language {target_ext!r} not gcc-compilable)"
-            )
-            return
-
-        try:
-            from packages.autonomous.exploit_validator import ExploitValidator
-        except ImportError as e:
-            logger.debug(
-                f"ExploitValidator unavailable ({e}) — leaving "
-                f"exploit_compiled unset for {vuln.finding_id}"
-            )
-            return
-
-        # Sanitise finding_id before passing it as ExploitValidator's
-        # ``exploit_name`` (which becomes a filename inside the work
-        # dir). SARIF rule-ids legitimately contain ``/`` (e.g.
-        # CodeQL's ``py/clear-text-logging-sensitive-data``) and some
-        # scanner outputs include ``..`` or other traversal-shaped
-        # segments. ``Path(...).name`` collapses any traversal,
-        # ``replace("..", "_")`` closes the residual case where
-        # ``..`` appears within a single name segment. Matches the
-        # pattern ``ExploitValidator.validate_exploit`` uses
-        # internally as defence-in-depth.
-        safe_id = Path(vuln.finding_id or "exploit").name.replace("..", "_") \
-            or "exploit"
-
-        # Use a tempdir that auto-cleans on context exit. The build
-        # artefacts (compiled binary, source-file copy) aren't needed
-        # after verification — the verdict + compiler diagnostics
-        # are all we want to keep. Earlier drafts kept the build dir
-        # under ``{out_dir}/exploits/_build/{safe_id}/`` which
-        # accumulated across runs and co-located build clutter with
-        # the polished ``.cpp`` artefacts. Operators who want to
-        # re-inspect can re-compile from the saved
-        # ``exploits/{finding_id}_exploit.cpp`` themselves.
-        with tempfile.TemporaryDirectory(
-            prefix=f"agentic-verify-{safe_id}-",
-        ) as work_dir_str:
-            work_dir = Path(work_dir_str)
-            try:
-                validator = ExploitValidator(work_dir=work_dir)
-                result = validator.validate_exploit(exploit_code, safe_id)
-            except Exception as e:  # noqa: BLE001 — validator is best-effort
-                logger.warning(
-                    f"   ⚠ Compile-verify raised {type(e).__name__}: {e}; "
-                    f"leaving verdict unset for {vuln.finding_id}"
-                )
-                return
-
-            vuln.exploit_compiled = bool(result.success)
-            vuln.exploit_compile_errors = list(result.compilation_errors or [])
-
-            if result.success:
-                logger.info("   ✓ Exploit compiled successfully")
-            else:
-                err_count = len(vuln.exploit_compile_errors)
-                logger.info(
-                    f"   ⚠ Exploit failed to compile "
-                    f"({err_count} error{'s' if err_count != 1 else ''})"
-                )
-                for err in vuln.exploit_compile_errors[:3]:
-                    logger.info(f"     - {err}")
-                if err_count > 3:
-                    logger.info(f"     ... ({err_count - 3} more)")
+        from packages.llm_analysis.exploit_verify import compile_verify
+        compiled, errors = compile_verify(
+            exploit_code,
+            vuln.file_path,
+            vuln.finding_id,
+            logger,
+        )
+        vuln.exploit_compiled = compiled
+        vuln.exploit_compile_errors = errors
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
         logger.info("─" * 70)

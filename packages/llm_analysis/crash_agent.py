@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from core.json import save_json
-from typing import Dict
+from typing import Dict, Optional
 
 from core.llm.task_types import TaskType
 from core.logging import get_logger
@@ -292,10 +292,20 @@ def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
 class CrashAnalysisAgent:
     """LLM-powered crash analysis agent."""
 
-    def __init__(self, binary_path: Path, out_dir: Path, llm_config: LLMConfig = None):
+    def __init__(self, binary_path: Path, out_dir: Path,
+                 llm_config: LLMConfig = None,
+                 verify_exploits: bool = True):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # Compile-verify every LLM-emitted exploit by shelling out to
+        # gcc in a sandboxed tempdir. Default on; opt out via
+        # ``--no-verify-exploits`` (plumbed from ``raptor_fuzzing.py``)
+        # for time-sensitive runs. Verification cost is ~150ms per
+        # crash on a clean linux/x86_64 host. Mirrors the contract
+        # in ``AutonomousSecurityAgentV2``; see
+        # ``packages.llm_analysis.exploit_verify.compile_verify``.
+        self.verify_exploits = verify_exploits
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -313,7 +323,7 @@ class CrashAnalysisAgent:
             if self.llm_config.primary_model.cost_per_1k_tokens > 0:
                 print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
             else:
-                print(f"Cost: FREE (self-hosted model)")
+                print("Cost: FREE (self-hosted model)")
 
             if "ollama" in self.llm_config.primary_model.provider.lower():
                 print()
@@ -623,6 +633,22 @@ FULL LLM RESPONSE:
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
+
+                # Compile-verify the LLM's output. Same pattern as
+                # the /agentic path landed in PR #572 — populates
+                # ``crash_context.exploit_compiled`` /
+                # ``exploit_compile_errors`` via the shared
+                # ``exploit_verify.compile_verify`` helper. The
+                # language gate uses the crash's source location
+                # (file:line from addr2line) when available; if
+                # source_location is empty the helper attempts gcc
+                # unconditionally, which is right for the typical
+                # /crash-analysis case of native binaries built from
+                # C/C++. Gated on ``self.verify_exploits`` so
+                # operators can opt out for time-sensitive runs.
+                if self.verify_exploits:
+                    self._verify_exploit_compiles(crash_context, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -633,6 +659,45 @@ FULL LLM RESPONSE:
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
+
+    def _verify_exploit_compiles(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Compile-check the LLM-emitted exploit in a sandbox.
+
+        Thin wrapper around
+        :func:`packages.llm_analysis.exploit_verify.compile_verify`
+        that maps the shared helper's ``(compiled, errors)`` tuple
+        onto the crash context's ``exploit_compiled`` /
+        ``exploit_compile_errors`` fields. See ``exploit_verify`` for
+        verification mechanics, language gate, sanitisation, and
+        failure-mode semantics.
+
+        For language gating, the target's source file is read from
+        ``crash_context.source_location`` (populated by addr2line
+        as ``path/to/file.c:42``). When source_location is empty
+        (addr2line failed or stripped binary), the helper falls
+        through to gcc unconditionally — appropriate for the
+        typical native-binary case where C/C++ is the default
+        assumption.
+        """
+        # Parse source path out of the ``file:line`` source_location
+        # (e.g. ``src/foo.c:42``). Empty string when addr2line
+        # couldn't resolve the address; ``None`` falls through the
+        # language gate without skipping.
+        target_file_path: Optional[str] = None
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(":", 1)[0]
+
+        from packages.llm_analysis.exploit_verify import compile_verify
+        compiled, errors = compile_verify(
+            exploit_code,
+            target_file_path,
+            crash_context.crash_id,
+            logger,
+        )
+        crash_context.exploit_compiled = compiled
+        crash_context.exploit_compile_errors = errors
 
     def _signal_name(self, signal: str) -> str:
         """Convert signal number to name."""

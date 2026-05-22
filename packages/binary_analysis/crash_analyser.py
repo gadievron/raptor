@@ -17,7 +17,7 @@ from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import platform
 
 from core.config import RaptorConfig
@@ -59,6 +59,19 @@ class CrashContext:
 
     # Generated artifacts
     exploit_code: Optional[str] = None
+
+    # Compile-verification result for ``exploit_code``. ``None`` means
+    # verification was not attempted (no LLM exploit emitted, target
+    # language unsupported, or compiler unavailable / skipped);
+    # ``True`` / ``False`` reflect gcc's verdict in a sandbox.
+    # ``exploit_compile_errors`` carries the parsed compiler
+    # diagnostics when compilation fails — preserved so downstream
+    # consumers (reporting, future refinement loop) can see why the
+    # LLM's exploit didn't build. Empty list means "no errors
+    # observed" or "compilation not attempted". Mirrors the contract
+    # defined in ``packages.llm_analysis.exploit_verify``.
+    exploit_compiled: Optional[bool] = None
+    exploit_compile_errors: List[str] = field(default_factory=list)
 
 
 class CrashAnalyser:
