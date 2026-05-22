@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -87,16 +88,26 @@ class WitnessStore:
     def put(self, witness: Witness, data: bytes) -> Path:
         """Persist ``witness`` and ``data``. Returns the blob path.
 
-        Validates that ``witness.bytes_hash`` matches
-        ``sha256(data)`` — passing mismatched hash + bytes raises
-        :class:`WitnessStoreError`. Catches the common bug of a
-        producer computing the hash on a transformed copy of the
-        bytes (e.g. forgetting to strip a header).
+        Validates four invariants before touching disk:
+
+        1. ``witness.bytes_hash == sha256(data)`` — catches the
+           producer bug of hashing a transformed copy of the bytes.
+        2. If ``witness.bytes_len`` is set (non-zero), it matches
+           ``len(data)``. If left at default ``0``, the store
+           stamps it from the actual length.
+        3. ``witness.outcome_detail`` is JSON-serialisable.
+           Pre-check catches non-serialisable values
+           (:class:`pathlib.Path`, :class:`datetime`, ``bytes``,
+           etc.) with a clear ``WitnessStoreError`` *before* the
+           blob is written, so a serialisation failure can't leave
+           an orphan blob.
 
         Blob writes are idempotent — if the same hash is put again,
-        the existing blob is reused (no rewrite). Manifest writes
-        overwrite — later put-calls with the same hash but
-        different provenance update the manifest.
+        the existing blob is reused (no rewrite). Both blob and
+        manifest writes are atomic via the temp-file + rename
+        pattern; a process killed mid-write leaves the on-disk
+        state at "before the put started", never a partial /
+        corrupt artefact.
         """
         expected = compute_bytes_hash(data)
         if expected != witness.bytes_hash:
@@ -107,27 +118,61 @@ class WitnessStore:
                 "actual bytes being stored"
             )
 
-        # Stamp bytes_len from the actual data length, in case the
-        # producer left it at the default 0.
+        # Enforce bytes_len agreement when caller set it. Pre-fix
+        # the store accepted (and persisted) a caller-supplied
+        # bytes_len that disagreed with len(data) — silent corruption
+        # of the manifest, which downstream consumers trust.
+        if witness.bytes_len and witness.bytes_len != len(data):
+            raise WitnessStoreError(
+                f"witness.bytes_len ({witness.bytes_len}) does not "
+                f"match len(data) ({len(data)}); pass bytes_len=0 to "
+                f"let the store stamp it, or fix the producer"
+            )
         if witness.bytes_len == 0 and data:
             witness.bytes_len = len(data)
+
+        # Pre-serialise the manifest so non-JSON-safe values in
+        # ``outcome_detail`` fail loudly here, not after we've
+        # already written the blob. Common offenders:
+        # :class:`pathlib.Path`, :class:`datetime`, ``bytes``,
+        # custom classes. The fix at the call site is to stringify.
+        try:
+            manifest_text = (
+                json.dumps(witness.to_dict(), indent=2) + "\n"
+            )
+        except (TypeError, ValueError) as exc:
+            raise WitnessStoreError(
+                f"witness manifest is not JSON-serialisable "
+                f"({type(exc).__name__}: {exc}); convert any "
+                f"Path / datetime / bytes / custom-class values in "
+                f"outcome_detail to strings before constructing the "
+                f"Witness"
+            ) from exc
 
         self._ensure_dirs()
 
         blob_path = self._blobs_dir / f"{witness.bytes_hash}.bin"
         manifest_path = self._manifests_dir / f"{witness.bytes_hash}.json"
 
-        # Blob write: skip if the same content already there. Avoids
-        # a redundant fsync on dedup.
+        # Atomic blob write: write to .tmp + os.replace. POSIX
+        # guarantees the rename is atomic. Pre-fix ``write_bytes``
+        # was direct and a crash mid-write left a partial blob
+        # that subsequent puts would skip (since blob_path.exists()
+        # was True), producing on-disk corruption invisible to
+        # later readers.
         if not blob_path.exists():
-            blob_path.write_bytes(data)
+            blob_tmp = blob_path.with_suffix(".bin.tmp")
+            blob_tmp.write_bytes(data)
+            os.replace(blob_tmp, blob_path)
 
-        # Manifest write: always. Each call's provenance / outcome
-        # is the most recent canonical view.
-        manifest_path.write_text(
-            json.dumps(witness.to_dict(), indent=2) + "\n",
-            encoding="utf-8",
-        )
+        # Atomic manifest write. Pre-fix ``write_text`` was direct
+        # and a crash mid-write left a malformed JSON file forever
+        # — list_witnesses skipped it with a warning but get_witness
+        # raised, and there was no recovery path other than manual
+        # cleanup.
+        manifest_tmp = manifest_path.with_suffix(".json.tmp")
+        manifest_tmp.write_text(manifest_text, encoding="utf-8")
+        os.replace(manifest_tmp, manifest_path)
 
         logger.debug(
             "WitnessStore.put: hash=%s len=%d source=%s outcome=%s",

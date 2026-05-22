@@ -25,11 +25,12 @@ to avoid the layering inversion of ``core/`` importing
 ``packages/``.
 """
 
-from core.witness.store import WitnessStore
+from core.witness.store import WitnessStore, WitnessStoreError
 from core.witness.types import (
     Witness,
     WitnessOutcome,
     WitnessSource,
+    compute_bytes_hash,
 )
 
 __all__ = [
@@ -37,4 +38,6 @@ __all__ = [
     "WitnessOutcome",
     "WitnessSource",
     "WitnessStore",
+    "WitnessStoreError",
+    "compute_bytes_hash",
 ]
