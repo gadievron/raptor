@@ -25,7 +25,6 @@ Typical use (operator wiring for memory-corruption findings)::
     )
     validator = DataflowValidator(llm_client, evidence_collector=dispatched)
 
-Design rationale: per ``~/design/dataflow-sanitizer-bypass.md``
 ("Mechanism #4 — source_intel"), source_intel plugs into the same
 ``evidence_collector=`` channel PR1 V2 shipped — but evidence is
 pre-computed cocci output, not LLM extraction. CWE-class dispatch

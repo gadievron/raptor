@@ -74,12 +74,10 @@ class LifecyclePrecondition:
     violation makes the bug shape consume an under-guarded field.
 
     v1 source_intel verdict policy IGNORES this field. v2 (the future
-    `/audit` Phase B+ logic-bug consumer) reads it directly — the
     annotation is precomputed during corpus seeding while the kernel
     patch is in the labeler's head, so the v2 consumer doesn't have
     to re-derive it later.
 
-    See ~/design/source-intel-lifecycle-annotation.md (and
     CVE-2026-46333 as the canonical example).
     """
 
@@ -157,7 +155,6 @@ class GroundTruth:
     fp_category: Optional[str] = None
     #: Optional forward-compatible annotation for CWE-476 / CWE-416
     #: fixtures (and structurally-related logic bugs). v1 source_intel
-    #: ignores this field; v2 `/audit` Phase B+ consumer will read it
     #: directly. See `LifecyclePrecondition` for shape.
     lifecycle_precondition: Optional[LifecyclePrecondition] = None
 

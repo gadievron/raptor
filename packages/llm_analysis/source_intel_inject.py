@@ -12,7 +12,6 @@ This module plugs into the broader ``llm_analysis`` family used by
 ``/agentic`` and ``/analyze`` for any finding (CodeQL or otherwise)
 whose rule_id matches the memory-corruption set.
 
-Design intent (``~/design/dataflow-sanitizer-bypass.md``):
   * Source_intel is a SIDECAR — evidence, never verdict.
   * Evidence renders as ``UntrustedBlock(kind="source-intel-evidence")``
     so the prompt-envelope discipline applies uniformly.

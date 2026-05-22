@@ -1,6 +1,5 @@
 """Tests for Stage E binary-supersedes (Phase C PR2).
 
-Per design ``~/design/dataflow-sanitizer-bypass.md``:
   > "Binary observation supersedes source intent when both
   > available (Stage E binary wins)."
 

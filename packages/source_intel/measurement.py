@@ -46,7 +46,6 @@ LLM cost note: each entry produces 2 LLM calls (one per condition);
 budget accordingly. Sampling 10 entries → ~20 calls. With cheap
 models this is sub-$1; with frontier models budget $5-15.
 
-Exit gate: per design (~/design/dataflow-sanitizer-bypass.md), Phase
 D ships when source_intel-injected runs achieve ≥10% LLM-decision-
 error reduction on the memory-corruption corpus subset compared to
 the baseline. This harness reports the delta; the operator decides

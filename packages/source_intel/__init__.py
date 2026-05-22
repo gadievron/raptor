@@ -14,7 +14,6 @@ Public API:
     with the PR1 V2 sanitizer-extraction collector via rule_id-prefix
     dispatch
 
-See ``~/design/dataflow-sanitizer-bypass.md`` ("Mechanism #4 —
 source_intel") for the design + axis roadmap.
 """
 
