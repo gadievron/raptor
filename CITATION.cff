@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use RAPTOR in your research or tooling, please cite it as below."
+title: "RAPTOR: Autonomous Offensive/Defensive Research Framework"
+abstract: >-
+  RAPTOR is an autonomous offensive/defensive research framework built
+  on top of Claude Code. It provides agentic security testing
+  workflows — scan, dedup, prepare, analyse, consensus, judge, exploit,
+  patch — covering static analysis (Semgrep, CodeQL), binary fuzzing
+  (AFL++), web application scanning, crash root-cause analysis,
+  exploitability validation, and zero-knowledge proof-of-exploit
+  disclosure bundles, for defensive security research, education, and
+  authorized penetration testing.
+type: software
+version: "1.0-beta"
+date-released: "2026-05-22"
+license: MIT
+url: "https://github.com/gadievron/raptor"
+repository-code: "https://github.com/gadievron/raptor"
+keywords:
+  - security
+  - vulnerability-research
+  - static-analysis
+  - fuzzing
+  - codeql
+  - semgrep
+  - exploitability
+  - llm-agents
+  - claude-code
+  - defensive-security
+  - penetration-testing
+# Authors listed in the same order as the README and LICENSE.
+authors:
+  - given-names: Gadi
+    family-names: Evron
+  - given-names: Daniel
+    family-names: Cuthbert
+  - given-names: Thomas
+    family-names: Dullien
+    alias: "Halvar Flake"
+  - given-names: Michael
+    family-names: Bargury
+  - given-names: John
+    family-names: Cartwright
