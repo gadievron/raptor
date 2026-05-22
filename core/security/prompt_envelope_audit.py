@@ -213,6 +213,26 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
     ),
     AllowlistEntry(
         file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer._refine_exploit_loop',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
+        audit_note=(
+            'ID passed to validator.validate_exploit (subprocess '
+            'invocation), not LLM'
+        ),
+    ),
+    AllowlistEntry(
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer._refine_exploit_loop',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note=(
+            'ID passed to validator.validate_exploit (subprocess '
+            'invocation), not LLM'
+        ),
+    ),
+    AllowlistEntry(
+        file='packages/codeql/autonomous_analyzer.py',
         func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
         attr='rule_id',
         expr_text='{finding.rule_id}',

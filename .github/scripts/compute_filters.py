@@ -82,6 +82,8 @@ FILTERS: dict[str, list[str]] = {
     # subsystem, its tier is skipped — net runtime saving on most PRs.
     "codeql": [
         "packages/codeql/**",
+        "packages/autonomous/**",
+        "packages/source_intel/**",
         "core/build/**",
         "core/config/**",
         "core/coverage/**",
@@ -104,6 +106,7 @@ FILTERS: dict[str, list[str]] = {
     ],
     "llm_analysis": [
         "packages/llm_analysis/**",
+        "packages/autonomous/**",
         "packages/binary_analysis/**",
         "packages/checker_synthesis/**",
         "packages/codeql/**",
@@ -112,8 +115,10 @@ FILTERS: dict[str, list[str]] = {
         "packages/exploitability_validation/**",
         "packages/fuzzing/**",
         "packages/hypothesis_validation/**",
+        "packages/source_intel/**",
         "core/annotations/**",
         "core/ast/**",
+        "core/build/**",
         "core/config/**",
         "core/coverage/**",
         "core/inventory/**",

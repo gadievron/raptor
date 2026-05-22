@@ -913,6 +913,99 @@ class AutonomousCodeQLAnalyzer:
             self.logger.error(f"Exploit generation failed: {e}")
             return None
 
+    def _refine_exploit_loop(
+        self,
+        exploit_code: str,
+        finding: "CodeQLFinding",
+        validation_result,
+        max_refinement: int,
+    ):
+        """Iteratively refine an exploit that failed initial validation.
+
+        Each iteration runs one LLM refinement round (via
+        ``MultiTurnAnalyser.refine_exploit_iteratively`` with
+        ``max_iterations=1``) followed by a fresh compile-validate of
+        the refined code. Returns the final
+        ``(exploit_code, validation_result, refinement_count)``
+        tuple — exploit_code is the most-recently-refined version
+        (the one operators want saved), validation_result reflects
+        its compile state.
+
+        Terminates early when:
+
+        * Compile now succeeds — short-circuits the loop and
+          surfaces a success log.
+        * Refinement produced no change (LLM returned the same
+          code, or returned ``None``) — no point looping further on
+          identical diagnostics.
+        * The multi-turn analyser is unavailable (operator ran
+          without external LLM, or instantiation failed in
+          ``raptor_codeql.py``) — return immediately with the
+          input state, preserving today's behaviour when no LLM is
+          configured.
+
+        Counts attempted iterations whether or not they produced a
+        change; this lets downstream telemetry distinguish a "tried
+        and failed N times" finding from a "didn't try" one.
+
+        Helper extracted from the original inline TODO loop in
+        :meth:`analyze_finding_autonomous` for isolated testing.
+        """
+        refinement_count = 0
+
+        if validation_result.success or not self.multi_turn:
+            return exploit_code, validation_result, refinement_count
+
+        # MultiTurnAnalyser._build_refinement_prompt reads only
+        # ``crash_context.signal``; for the CodeQL path there's no
+        # CrashContext, so synthesise a minimal shim using the
+        # CodeQL rule_id as the "signal" the refinement prompt
+        # surfaces. The LLM sees this as crash_signal in the
+        # envelope's slot — close enough for a one-token hint about
+        # the vulnerability class.
+        from types import SimpleNamespace
+        refinement_context = SimpleNamespace(signal=finding.rule_id)
+
+        while (
+            not validation_result.success
+            and refinement_count < max_refinement
+        ):
+            refinement_count += 1
+            self.logger.info(
+                f"🔄 Refining exploit "
+                f"(attempt {refinement_count}/{max_refinement})..."
+            )
+
+            refined_code = self.multi_turn.refine_exploit_iteratively(
+                exploit_code=exploit_code,
+                crash_context=refinement_context,
+                validation_errors=validation_result.compilation_errors,
+                max_iterations=1,
+            )
+
+            if refined_code is None or refined_code == exploit_code:
+                self.logger.warning(
+                    "Refinement produced no change; "
+                    "abandoning further refinement attempts"
+                )
+                break
+
+            exploit_code = refined_code
+            validation_result = self.validator.validate_exploit(
+                exploit_code,
+                f"{finding.rule_id}_{finding.start_line}_refined_{refinement_count}",
+            )
+
+            if validation_result.success:
+                self.logger.info(
+                    f"✓ Refinement succeeded after "
+                    f"{refinement_count} iteration"
+                    f"{'s' if refinement_count != 1 else ''}"
+                )
+                break
+
+        return exploit_code, validation_result, refinement_count
+
     def analyze_finding_autonomous(
         self,
         sarif_result: Dict,
@@ -1092,14 +1185,24 @@ class AutonomousCodeQLAnalyzer:
 
             exploit_compiled = validation_result.success
 
-            # Refine if needed
-            while not validation_result.success and refinement_count < max_refinement:
-                refinement_count += 1
-                self.logger.info(f"🔄 Refining exploit (attempt {refinement_count}/{max_refinement})...")
-
-                # TODO: Implement refinement using multi-turn dialogue
-                # For now, just break
-                break
+            # Stage 7a: Refine on compile failure. Pre-fix this loop
+            # was a TODO that logged "🔄 Refining exploit..." and then
+            # immediately `break`d, leaving operators with
+            # broken-but-claimed-refined output. The TODO predated
+            # PR #572's compile-verify work and the
+            # MultiTurnAnalyser consumption substrate was already
+            # wired at ``raptor_codeql.py:151`` — only the call site
+            # was missing.
+            if not exploit_compiled:
+                exploit_code, validation_result, refinement_count = (
+                    self._refine_exploit_loop(
+                        exploit_code=exploit_code,
+                        finding=finding,
+                        validation_result=validation_result,
+                        max_refinement=max_refinement,
+                    )
+                )
+                exploit_compiled = validation_result.success
 
         # Save artifacts
         out_dir.mkdir(parents=True, exist_ok=True)
