@@ -495,12 +495,16 @@ def parse_pom(p):
         is_namespaced = root.tag.startswith('{')
         if is_namespaced:
             iter_xpath = './/m:dependency'
-            child = lambda d, k: d.find(f'm:{k}', ns)
+
+            def child(d, k):
+                return d.find(f'm:{k}', ns)
             findall_kwargs = (iter_xpath, ns)
             properties_xpath = './/m:properties'
         else:
             iter_xpath = './/dependency'
-            child = lambda d, k: d.find(k)
+
+            def child(d, k):
+                return d.find(k)
             findall_kwargs = (iter_xpath,)
             properties_xpath = './/properties'
 
