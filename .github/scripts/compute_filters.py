@@ -114,6 +114,8 @@ FILTERS: dict[str, list[str]] = {
         "packages/exploit_feasibility/**",
         "packages/exploitability_validation/**",
         "packages/fuzzing/**",
+        "core/hash/**",
+        "core/witness/**",
         "packages/hypothesis_validation/**",
         "packages/source_intel/**",
         "core/annotations/**",
