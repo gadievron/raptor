@@ -24,6 +24,7 @@ from .findings import (
     findings_summary_line,
     findings_summary,
 )
+from .witnesses import build_witness_summary, render_witness_summary
 
 # Public re-export surface (see module docstring for layering).
 # Order matches the import groups above; both layers are intentionally
@@ -46,4 +47,7 @@ __all__ = [
     "build_findings_summary",
     "findings_summary_line",
     "findings_summary",
+    # Layer 2 — witness summary
+    "build_witness_summary",
+    "render_witness_summary",
 ]

@@ -1581,7 +1581,7 @@ Examples:
             )
             sca_findings_path = sca_out / "findings.json"
 
-            print(f"\n✓ SCA complete:")
+            print("\n✓ SCA complete:")
             print(f"  - Dependencies analysed: {sca_result.deps_analysed}")
             print(f"  - Vulnerability findings: {sca_result.vuln_findings}")
             print(f"  - Hygiene findings: {sca_result.hygiene_findings}")
@@ -1589,7 +1589,7 @@ Examples:
             if sca_result.llm_reviews_run:
                 print(f"  - LLM reviews: {sca_result.llm_reviews_run}")
             if sca_result.triage_run:
-                print(f"  - Triage: completed")
+                print("  - Triage: completed")
             logger.info("SCA complete: %d vulns, %d hygiene, %d supply-chain",
                         sca_result.vuln_findings, sca_result.hygiene_findings,
                         sca_result.supply_chain_findings)
@@ -1698,6 +1698,20 @@ Examples:
 
                 if args.codeql or args.codeql_only:
                     print(f"  - CodeQL dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+
+                # Witness summary — recorded by ``AutonomousSecurityAgentV2``
+                # when ``--no-record-witnesses`` wasn't passed. Lives under
+                # ``<autonomous_out>/witnesses/``. Silent when empty.
+                from core.reporting import render_witness_summary
+                witness_block = render_witness_summary(
+                    autonomous_out / "witnesses",
+                )
+                if witness_block:
+                    print(f"\n  Witnesses ({autonomous_out / 'witnesses'}):")
+                    for line in witness_block.splitlines():
+                        # Strip one level of leading indent so it sits
+                        # consistently under the analysis-complete bullets.
+                        print(f"  {line}")
         else:
             print("⚠️  Analysis failed or produced no output")
             if stderr:

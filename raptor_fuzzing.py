@@ -707,6 +707,24 @@ Examples:
     print(f"   Analysis: {out_dir / 'analysis'}")
     print(f"   Exploits: {out_dir / 'analysis' / 'exploits'}")
 
+    # Witness summary — two stores in play here. The fuzz crashes
+    # are recorded under ``<out>/witnesses`` (source=fuzz) by the
+    # crash-collection step; the LLM-emitted exploits land under
+    # ``<out>/analysis/witnesses`` (source=llm_emit_run) by the
+    # ``CrashAnalysisAgent`` wiring. Surface both — operators don't
+    # care about the layout split, they care about the totals.
+    from core.reporting import render_witness_summary
+    fuzz_summary = render_witness_summary(out_dir / "witnesses")
+    llm_summary = render_witness_summary(out_dir / "analysis" / "witnesses")
+    if fuzz_summary or llm_summary:
+        print("")
+        if fuzz_summary:
+            print(f" Fuzz witnesses ({out_dir / 'witnesses'}):")
+            print(fuzz_summary)
+        if llm_summary:
+            print(f" LLM-exploit witnesses ({out_dir / 'analysis' / 'witnesses'}):")
+            print(llm_summary)
+
     # Save summary report
     report = {
         "binary": str(binary_path),
