@@ -120,6 +120,49 @@ Examples:
              "flag only affects the secondary LLM-exploit "
              "Witnesses produced by ``CrashAnalysisAgent``.",
     )
+    ap.add_argument(
+        "--execute-exploits",
+        action="store_true",
+        help="Execute each LLM-emitted exploit against the fuzzed "
+             "binary inside the sandbox after compile-verify, then "
+             "thread the observed outcome (EXIT_SIGNAL / "
+             "SANITIZER_REPORT / NO_OBVIOUS_EFFECT / ...) into the "
+             "recorded Witness. DEFAULT OFF — actually running LLM-"
+             "generated code is a policy shift even with the "
+             "sandbox (Landlock + seccomp + namespaces + network "
+             "block). Enable when you want post-execution evidence "
+             "in the Witness manifest; pair with --no-network if "
+             "you want the strictest containment. Requires "
+             "compile-verify (cannot run without a binary), so "
+             "implicitly no-op when --no-verify-exploits is also "
+             "set. Per-exploit timeout: 5s by default; raise via "
+             "--execute-timeout if your exploits genuinely need "
+             "more wall-clock.",
+    )
+    ap.add_argument(
+        "--execute-timeout",
+        type=int,
+        default=5,
+        help="Per-exploit execution timeout in seconds (only "
+             "meaningful with --execute-exploits). Default 5s — "
+             "matches the long-dormant ``safe_test_exploit`` "
+             "default. Timeouts surface as outcome=UNKNOWN with "
+             "timed_out=True in the Witness detail.",
+    )
+    ap.add_argument(
+        "--execute-sanitizers",
+        type=str,
+        default="",
+        help="Comma-separated gcc sanitizer names to compile each "
+             "exploit with before execution (e.g. "
+             "``address,undefined``). Only meaningful with "
+             "--execute-exploits. When ``address`` is included, an "
+             "exploit that triggers a memory-safety bug surfaces as "
+             "WitnessOutcome.SANITIZER_REPORT (vs the bare "
+             "EXIT_SIGNAL you get from an unsanitised crash). "
+             "Allowlist matches ExploitValidator: address, undefined, "
+             "memory, thread, leak, kernel-address, hwaddress.",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -465,6 +508,13 @@ Examples:
             verify_exploits=not args.no_verify_exploits,
             judge_intent=not args.no_judge_intent,
             record_witnesses=not args.no_record_witnesses,
+            execute_exploits=args.execute_exploits,
+            execute_timeout=args.execute_timeout,
+            execute_sanitizers=(
+                [s.strip() for s in args.execute_sanitizers.split(",")
+                 if s.strip()]
+                if args.execute_sanitizers else None
+            ),
         )
 
         # Initialize multi-turn analyser if autonomous mode

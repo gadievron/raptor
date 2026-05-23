@@ -300,7 +300,10 @@ class CrashAnalysisAgent:
                  llm_config: LLMConfig = None,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
-                 record_witnesses: bool = True):
+                 record_witnesses: bool = True,
+                 execute_exploits: bool = False,
+                 execute_timeout: int = 5,
+                 execute_sanitizers: Optional[list] = None):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -329,6 +332,29 @@ class CrashAnalysisAgent:
         # failures are non-fatal.
         self.record_witnesses = record_witnesses
         self._witness_store = None  # lazy
+        # Execute the LLM-emitted exploit against the fuzzed binary
+        # in the sandbox after compile-verify, then thread the
+        # observed outcome (EXIT_SIGNAL / SANITIZER_REPORT / etc.)
+        # into the Witness. Default OFF — actually running LLM-
+        # generated code is a policy shift that needs operator
+        # opt-in even with the sandbox. Enable via
+        # ``--execute-exploits``. Requires ``verify_exploits``
+        # (compilation is a prerequisite for execution). The
+        # crash_agent path has a natural target (``self.binary``);
+        # the /agentic path stays NOT_RUN until a build harness
+        # lands.
+        self.execute_exploits = execute_exploits
+        self.execute_timeout = execute_timeout
+        # When set, the compiled exploit is built with these gcc
+        # sanitizer flags (e.g. ``["address"]`` → ``-fsanitize=address``)
+        # so runtime memory-safety bugs surface as ASAN reports
+        # — landing as ``WitnessOutcome.SANITIZER_REPORT`` rather
+        # than just ``EXIT_SIGNAL``. Default ``None`` keeps the
+        # historical no-instrumentation behaviour. Opt-in via
+        # ``--execute-sanitizers=address,undefined`` on
+        # ``raptor_fuzzing.py``. Only meaningful with
+        # ``execute_exploits=True``.
+        self.execute_sanitizers = execute_sanitizers
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -669,7 +695,19 @@ FULL LLM RESPONSE:
                 # /crash-analysis case of native binaries built from
                 # C/C++. Gated on ``self.verify_exploits`` so
                 # operators can opt out for time-sensitive runs.
-                if self.verify_exploits:
+                # When ``execute_exploits`` is on, we use the
+                # unified compile-and-execute path instead so the
+                # binary is reachable for the run before tempdir
+                # cleanup. Execution requires compile-verify (no
+                # binary → no run), so the flag combination
+                # ``execute_exploits=True, verify_exploits=False``
+                # silently falls back to compile-only — operator
+                # opted out of the prerequisite.
+                if self.verify_exploits and self.execute_exploits:
+                    self._compile_and_execute_exploit(
+                        crash_context, exploit_code,
+                    )
+                elif self.verify_exploits:
                     self._verify_exploit_compiles(crash_context, exploit_code)
 
                 # Intent-match judgement on the (possibly compile-
@@ -737,6 +775,51 @@ FULL LLM RESPONSE:
         )
         crash_context.exploit_compiled = compiled
         crash_context.exploit_compile_errors = errors
+
+    def _compile_and_execute_exploit(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Compile-verify AND sandbox-execute the LLM-emitted exploit.
+
+        Used when ``--execute-exploits`` is on. Replaces the compile-
+        only path: both the compiled binary and the executed outcome
+        live in the same tempdir scope, so the binary is reachable
+        for the run before cleanup.
+
+        Threads the executed outcome onto the crash context as
+        ``execute_outcome`` (string form of ``WitnessOutcome``) and
+        ``execute_detail`` (dict). The witness recorder consumes
+        those fields to upgrade the Witness from ``NOT_RUN`` to the
+        observed outcome.
+
+        Failures are non-fatal: a sandbox import failure, a binary
+        path that vanished, an unexpected ``compile_and_execute``
+        return shape — any of these leave ``execute_outcome=None``
+        and the witness ends up ``NOT_RUN`` as if execution had
+        been opted out. The exploit file on disk is unaffected.
+        """
+        from packages.llm_analysis.exploit_verify import compile_and_execute
+
+        target_file_path = ""
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(
+                ":", 1
+            )[0]
+
+        compiled, errors, outcome, detail = compile_and_execute(
+            exploit_code,
+            target_file_path,
+            crash_context.crash_id,
+            target_binary_path=self.binary,
+            timeout=self.execute_timeout,
+            logger=logger,
+            sanitizers=self.execute_sanitizers,
+        )
+        crash_context.exploit_compiled = compiled
+        crash_context.exploit_compile_errors = errors
+        if outcome is not None:
+            crash_context.execute_outcome = outcome.value
+            crash_context.execute_detail = detail
 
     def _judge_exploit_intent(
         self, crash_context: CrashContext, exploit_code: str,
@@ -874,6 +957,21 @@ FULL LLM RESPONSE:
                 intent_verdict=intent_verdict,
                 intent_confidence=intent_confidence,
                 target_binary_path=self.binary,
+                # PR E: when execution actually ran, upgrade the
+                # Witness's observed_outcome from NOT_RUN to the
+                # observed one. ``execute_outcome`` is the
+                # WitnessOutcome enum *string* on the crash context
+                # (kept as string so the binary_analysis module
+                # doesn't depend on core.witness); convert back here.
+                executed_outcome=(
+                    self._resolve_execute_outcome(
+                        crash_context.execute_outcome,
+                    )
+                    if crash_context.execute_outcome else None
+                ),
+                executed_detail=(
+                    crash_context.execute_detail or None
+                ),
                 produced_by="crash-agent",
             )
             self._witness_store.put(witness, data)
@@ -886,6 +984,26 @@ FULL LLM RESPONSE:
                 f"   · Witness record failed for "
                 f"{crash_context.crash_id}: {type(e).__name__}: {e}"
             )
+
+    @staticmethod
+    def _resolve_execute_outcome(value: Optional[str]):
+        """Map the string form on CrashContext back to WitnessOutcome.
+
+        ``CrashContext.execute_outcome`` is a string (enum ``.value``)
+        so the binary_analysis module doesn't depend on
+        ``core.witness``. The witness recorder re-lifts it into the
+        enum here. Unknown values fall back to ``UNKNOWN`` defensively
+        rather than raising — if a future code path writes an
+        unrecognised string we don't want to break the witness
+        record.
+        """
+        if not value:
+            return None
+        from core.witness import WitnessOutcome
+        try:
+            return WitnessOutcome(value)
+        except ValueError:
+            return WitnessOutcome.UNKNOWN
 
     def _signal_name(self, signal: str) -> str:
         """Convert signal number to name."""

@@ -82,6 +82,19 @@ class CrashContext:
     # contract on ``VulnerabilityContext.intent_match``.
     intent_match: Optional[Dict] = None
 
+    # Executed-outcome from running the compiled exploit in the
+    # sandbox (only populated when ``--execute-exploits`` is on).
+    # ``execute_outcome`` is the ``WitnessOutcome`` enum string
+    # value (``"exit_signal"``, ``"sanitizer_report"``, etc.) — kept
+    # as a string here so this module doesn't depend on
+    # ``core.witness``. ``None`` means execution wasn't attempted,
+    # compilation failed, or the sandbox raised. ``execute_detail``
+    # carries the structured outcome detail (signal name, sanitizer
+    # type, blocked-actions list, etc.); empty when execution
+    # wasn't attempted.
+    execute_outcome: Optional[str] = None
+    execute_detail: Dict = field(default_factory=dict)
+
 
 class CrashAnalyser:
     """Analyses crashes using debugger and LLM."""

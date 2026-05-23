@@ -25,6 +25,7 @@ to avoid the layering inversion of ``core/`` importing
 ``packages/``.
 """
 
+from core.witness.sandbox_outcome import outcome_from_sandbox_info
 from core.witness.store import WitnessStore, WitnessStoreError
 from core.witness.types import (
     Witness,
@@ -40,4 +41,5 @@ __all__ = [
     "WitnessStore",
     "WitnessStoreError",
     "compute_bytes_hash",
+    "outcome_from_sandbox_info",
 ]
