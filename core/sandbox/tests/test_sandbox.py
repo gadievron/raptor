@@ -1058,7 +1058,8 @@ class TestUserLimitsValidation(unittest.TestCase):
 
     def test_rejects_negatives_accepts_zero(self):
         import core.sandbox as mod; from core.sandbox import state as mod_state
-        import json, tempfile
+        import json
+        import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
         saved_path = mod.preexec._CONFIG_PATH
@@ -1089,7 +1090,8 @@ class TestUserLimitsValidation(unittest.TestCase):
     def test_rejects_bool(self):
         """bool is an int subclass — exclude so `true` doesn't become 1."""
         import core.sandbox as mod; from core.sandbox import state as mod_state
-        import json, tempfile
+        import json
+        import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
         saved_path = mod.preexec._CONFIG_PATH

@@ -268,7 +268,8 @@ def test_update_allowlist_is_atomic_on_failure(tmp_path):
     """If the rewrite raises mid-way, no half-written file should
     remain on disk and the original audit module must be intact.
     Simulates failure by patching `render_allowlist` to throw."""
-    import shutil, inspect
+    import shutil
+    import inspect
     from unittest.mock import patch
     from core.security import prompt_envelope_audit as mod
     from core.security.prompt_envelope_audit import _update_allowlist_in_source

@@ -955,7 +955,8 @@ class TestAfInetConstantsAgree:
         # constants).
         from core.sandbox import seccomp
         from core.sandbox import tracer
-        import inspect, re
+        import inspect
+        import re
 
         # tracer's _decode_sockaddr defines AF_INET/AF_INET6 as
         # function-local constants. Pull them via source.

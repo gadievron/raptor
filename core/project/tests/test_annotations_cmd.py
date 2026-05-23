@@ -193,7 +193,8 @@ class TestPrintAnnotations(unittest.TestCase):
             assert "2 annotation(s)" in output
 
     def test_since_filter_excludes_old(self):
-        import os, time
+        import os
+        import time
         with TemporaryDirectory() as d:
             project = _build_project(Path(d))
             # Backdate the run-level annotation file by 30 days.
