@@ -26,8 +26,12 @@ class TestCLI(unittest.TestCase):
                 instance.create.return_value = type("P", (), {
                     "name": "test", "output_dir": str(output_dir)
                 })()
+                # The ProjectManager is mocked, so the target is
+                # opaque to this CLI parsing test — value just needs
+                # to be a string the argparse layer accepts.
+                target = str(Path(d) / "code")
                 with patch("sys.argv", ["raptor-project", "create", "test",
-                                        "--target", "/tmp/code"]):
+                                        "--target", target]):
                     main()
                 instance.create.assert_called_once()
 

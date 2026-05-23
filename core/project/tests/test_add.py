@@ -14,13 +14,16 @@ class TestAddDirectory(unittest.TestCase):
         self.tmpdir = TemporaryDirectory()
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         self.output_dir = str(Path(self.tmpdir.name) / "output")
+        # Per-test scratch target; lives under the same tmpdir, so no
+        # hardcoded host path leaks into Project(target=...) values.
+        self.target_code = str(Path(self.tmpdir.name) / "code")
         self.mgr = ProjectManager(projects_dir=self.projects_dir)
 
     def tearDown(self):
         self.tmpdir.cleanup()
 
     def test_add_single_run(self):
-        self.mgr.create("myapp", "/tmp/code", output_dir=self.output_dir)
+        self.mgr.create("myapp", self.target_code, output_dir=self.output_dir)
         run_dir = Path(self.tmpdir.name) / "scan-20260406"
         run_dir.mkdir()
         (run_dir / "findings.json").write_text("[]")
@@ -28,7 +31,7 @@ class TestAddDirectory(unittest.TestCase):
         self.assertEqual(added, 1)
 
     def test_add_directory_of_runs(self):
-        self.mgr.create("myapp", "/tmp/code", output_dir=self.output_dir)
+        self.mgr.create("myapp", self.target_code, output_dir=self.output_dir)
         runs = Path(self.tmpdir.name) / "runs"
         runs.mkdir()
         for name in ["scan_vulns_20260401", "scan_vulns_20260402", "raptor_vulns_20260403"]:
@@ -45,7 +48,7 @@ class TestAddDirectory(unittest.TestCase):
         (run_dir / "findings.json").write_text("[]")
         out = str(Path(self.tmpdir.name) / "new_out")
         added = self.mgr.add_directory("newproject", str(run_dir),
-                                        target="/tmp/code", output_dir=out)
+                                        target=self.target_code, output_dir=out)
         self.assertEqual(added, 1)
         self.assertIsNotNone(self.mgr.load("newproject"))
 
@@ -57,7 +60,7 @@ class TestAddDirectory(unittest.TestCase):
             self.mgr.add_directory("newproject", str(run_dir))
 
     def test_generates_run_metadata(self):
-        self.mgr.create("myapp", "/tmp/code", output_dir=self.output_dir)
+        self.mgr.create("myapp", self.target_code, output_dir=self.output_dir)
         run_dir = Path(self.tmpdir.name) / "scan_vulns_20260406_100000"
         run_dir.mkdir()
         (run_dir / "findings.json").write_text("[]")
@@ -68,7 +71,7 @@ class TestAddDirectory(unittest.TestCase):
         self.assertTrue((moved_dir / RUN_METADATA_FILE).exists())
 
     def test_prefix_inference(self):
-        self.mgr.create("myapp", "/tmp/code", output_dir=self.output_dir)
+        self.mgr.create("myapp", self.target_code, output_dir=self.output_dir)
         for name, expected_cmd in [
             ("scan_vulns_20260406", "scan"),
             ("raptor_vulns_20260406", "agentic"),
@@ -96,7 +99,7 @@ class TestAddDirectory(unittest.TestCase):
         self.assertIn("validate", types)
 
     def test_skip_non_run_directories(self):
-        self.mgr.create("myapp", "/tmp/code", output_dir=self.output_dir)
+        self.mgr.create("myapp", self.target_code, output_dir=self.output_dir)
         runs = Path(self.tmpdir.name) / "mixed"
         runs.mkdir()
         (runs / "scan_20260406").mkdir()
@@ -111,6 +114,9 @@ class TestRemoveRun(unittest.TestCase):
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
         self.projects_dir = Path(self.tmpdir.name) / "projects"
+        # Per-test scratch target; lives under the same tmpdir, so no
+        # hardcoded host path leaks into Project(target=...) values.
+        self.target_code = str(Path(self.tmpdir.name) / "code")
         self.mgr = ProjectManager(projects_dir=self.projects_dir)
 
     def tearDown(self):
@@ -118,7 +124,7 @@ class TestRemoveRun(unittest.TestCase):
 
     def test_remove_to_path(self):
         out = Path(self.tmpdir.name) / "out"
-        p = self.mgr.create("myapp", "/tmp/code", output_dir=str(out))
+        p = self.mgr.create("myapp", self.target_code, output_dir=str(out))
         run_dir = Path(p.output_dir) / "scan-20260406"
         run_dir.mkdir()
         (run_dir / "findings.json").write_text("{}")
@@ -129,14 +135,15 @@ class TestRemoveRun(unittest.TestCase):
         self.assertTrue((to_path / "scan-20260406" / "findings.json").exists())
 
     def test_remove_requires_to_path(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         with self.assertRaises(ValueError):
             self.mgr.remove_run("myapp", "scan-20260406")
 
     def test_remove_missing_run_raises(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         with self.assertRaises(ValueError):
-            self.mgr.remove_run("myapp", "nonexistent", to_path="/tmp")
+            self.mgr.remove_run("myapp", "nonexistent",
+                                to_path=str(Path(self.tmpdir.name) / "elsewhere"))
 
 
 if __name__ == "__main__":

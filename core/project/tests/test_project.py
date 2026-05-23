@@ -11,8 +11,22 @@ from core.project.project import Project, ProjectManager
 
 class TestProject(unittest.TestCase):
 
+    def setUp(self):
+        # Hermetic scratch dir; gives every test a per-instance Path
+        # to feed Project(target=...) without hardcoding a host path.
+        self._tmp = TemporaryDirectory()
+        self.scratch = Path(self._tmp.name)
+        # Convention: ``code`` for the project's nominal target,
+        # ``other`` if a test needs a second distinct target. Both
+        # live under the per-test scratch dir.
+        self.target_code = str(self.scratch / "code")
+        self.target_other = str(self.scratch / "other")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def test_to_dict_roundtrip(self):
-        p = Project(name="test", target="/tmp/code", output_dir="out/test",
+        p = Project(name="test", target=self.target_code, output_dir="out/test",
                     created="2026-04-06", description="desc", notes="notes")
         d = p.to_dict()
         p2 = Project.from_dict(d)
@@ -22,12 +36,12 @@ class TestProject(unittest.TestCase):
         self.assertEqual(p.notes, p2.notes)
 
     def test_output_path(self):
-        p = Project(name="test", target="/tmp", output_dir="out/projects/test")
+        p = Project(name="test", target=self.target_code, output_dir="out/projects/test")
         self.assertEqual(p.output_path, Path("out/projects/test"))
 
     def test_get_run_dirs_empty(self):
         with TemporaryDirectory() as d:
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             self.assertEqual(p.get_run_dirs(sweep=False), [])
 
     def test_get_run_dirs_sorted(self):
@@ -35,7 +49,7 @@ class TestProject(unittest.TestCase):
             # Create dirs with different mtimes
             (Path(d) / "scan-20260401").mkdir()
             (Path(d) / "scan-20260403").mkdir()
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             dirs = p.get_run_dirs(sweep=False)
             self.assertEqual(len(dirs), 2)
             # Newest first
@@ -47,7 +61,7 @@ class TestProject(unittest.TestCase):
             (Path(d) / ".cache").mkdir()
             (Path(d) / "_tmp").mkdir()
             (Path(d) / "scan-20260401").mkdir()
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             dirs = p.get_run_dirs(sweep=False)
             self.assertEqual(len(dirs), 1)
             self.assertEqual(dirs[0].name, "scan-20260401")
@@ -67,7 +81,7 @@ class TestProject(unittest.TestCase):
                     "status": "running", "extra": {},
                     "session_pid": 99999999,
                 })
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             count = p.sweep_stale_runs(keep_latest=False)
             self.assertEqual(count, 2)
             self.assertEqual(load_json(Path(d) / "scan-20260401" / RUN_METADATA_FILE)["status"], "failed")
@@ -95,7 +109,7 @@ class TestProject(unittest.TestCase):
             # — fails the comm check. Mock so this test stays
             # focused on sweep logic, not on _pid_alive's mechanics
             # (which has its own coverage).
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             with patch("core.run.metadata._pid_alive", return_value=True):
                 count = p.sweep_stale_runs(keep_latest=False)
             self.assertEqual(count, 0)
@@ -114,7 +128,7 @@ class TestProject(unittest.TestCase):
                     "timestamp": f"{ts}T00:00:00+00:00",
                     "status": "running", "extra": {},
                 })
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             count = p.sweep_stale_runs(keep_latest=True)
             self.assertEqual(count, 1)
             self.assertEqual(load_json(Path(d) / "scan-20260401" / RUN_METADATA_FILE)["status"], "failed")
@@ -129,7 +143,7 @@ class TestProject(unittest.TestCase):
             run1.mkdir()
             start_run(run1, "scan")
             complete_run(run1)
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             count = p.sweep_stale_runs(keep_latest=False)
             self.assertEqual(count, 0)
             self.assertEqual(load_json(run1 / RUN_METADATA_FILE)["status"], "completed")
@@ -139,7 +153,7 @@ class TestProject(unittest.TestCase):
         with TemporaryDirectory() as d:
             (Path(d) / "scan-20260401").mkdir()
             (Path(d) / "agentic-20260402").mkdir()
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=self.target_code, output_dir=d)
             groups = p.get_run_dirs_by_type()
             self.assertIn("scan", groups)
             self.assertIn("agentic", groups)
@@ -155,57 +169,67 @@ class TestProjectManager(unittest.TestCase):
         self.tmpdir = TemporaryDirectory()
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         self.mgr = ProjectManager(projects_dir=self.projects_dir)
+        # Per-test scratch targets; the names are stable so listing /
+        # rename / find-project-for-target assertions can match
+        # without hardcoding a host path. ``target_code`` is the
+        # default; siblings (a, b, other) cover the multi-project
+        # cases without leaking host /tmp.
+        scratch = Path(self.tmpdir.name)
+        self.target_code = str(scratch / "code")
+        self.target_other = str(scratch / "other")
+        self.target_a = str(scratch / "a")
+        self.target_b = str(scratch / "b")
 
     def tearDown(self):
         self.tmpdir.cleanup()
 
     def test_create(self):
-        p = self.mgr.create("myapp", "/tmp/code", description="test app")
+        p = self.mgr.create("myapp", self.target_code, description="test app")
         self.assertEqual(p.name, "myapp")
         self.assertEqual(p.description, "test app")
         self.assertTrue((self.projects_dir / "myapp.json").exists())
 
     def test_create_rejects_traversal_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("../../etc", "/tmp/code")
+            self.mgr.create("../../etc", self.target_code)
 
     def test_create_rejects_slash_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("foo/bar", "/tmp/code")
+            self.mgr.create("foo/bar", self.target_code)
 
     def test_create_rejects_dotfile_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create(".hidden", "/tmp/code")
+            self.mgr.create(".hidden", self.target_code)
 
     def test_create_rejects_underscore_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("_report", "/tmp/code")
+            self.mgr.create("_report", self.target_code)
 
     def test_create_rejects_empty_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("", "/tmp/code")
+            self.mgr.create("", self.target_code)
 
     def test_create_rejects_reserved_name(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("none", "/tmp/code")
+            self.mgr.create("none", self.target_code)
 
     def test_create_rejects_reserved_name_case_insensitive(self):
         with self.assertRaises(ValueError):
-            self.mgr.create("None", "/tmp/code")
+            self.mgr.create("None", self.target_code)
 
     def test_create_duplicate_raises(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         with self.assertRaises(ValueError):
-            self.mgr.create("myapp", "/tmp/code")
+            self.mgr.create("myapp", self.target_code)
 
     def test_create_custom_output_dir(self):
         out = Path(self.tmpdir.name) / "custom_out"
-        p = self.mgr.create("myapp", "/tmp/code", output_dir=str(out))
+        p = self.mgr.create("myapp", self.target_code, output_dir=str(out))
         self.assertEqual(p.output_dir, str(out))
         self.assertTrue(out.exists())
 
     def test_load(self):
-        self.mgr.create("myapp", "/tmp/code", description="loaded")
+        self.mgr.create("myapp", self.target_code, description="loaded")
         p = self.mgr.load("myapp")
         self.assertIsNotNone(p)
         self.assertEqual(p.description, "loaded")
@@ -214,8 +238,8 @@ class TestProjectManager(unittest.TestCase):
         self.assertIsNone(self.mgr.load("nonexistent"))
 
     def test_list_projects(self):
-        self.mgr.create("a", "/tmp/a")
-        self.mgr.create("b", "/tmp/b")
+        self.mgr.create("a", self.target_a)
+        self.mgr.create("b", self.target_b)
         projects = self.mgr.list_projects()
         names = [p.name for p in projects]
         self.assertIn("a", names)
@@ -225,18 +249,18 @@ class TestProjectManager(unittest.TestCase):
         self.assertEqual(self.mgr.list_projects(), [])
 
     def test_delete(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         self.mgr.delete("myapp")
         self.assertIsNone(self.mgr.load("myapp"))
 
     def test_delete_keeps_output_by_default(self):
-        p = self.mgr.create("myapp", "/tmp/code")
+        p = self.mgr.create("myapp", self.target_code)
         output_dir = Path(p.output_dir)
         self.mgr.delete("myapp")
         self.assertTrue(output_dir.exists())
 
     def test_delete_purge(self):
-        p = self.mgr.create("myapp", "/tmp/code")
+        p = self.mgr.create("myapp", self.target_code)
         output_dir = Path(p.output_dir)
         self.mgr.delete("myapp", purge=True)
         self.assertFalse(output_dir.exists())
@@ -246,47 +270,47 @@ class TestProjectManager(unittest.TestCase):
             self.mgr.delete("nonexistent")
 
     def test_rename(self):
-        self.mgr.create("old", "/tmp/code")
+        self.mgr.create("old", self.target_code)
         p = self.mgr.rename("old", "new")
         self.assertEqual(p.name, "new")
         self.assertIsNone(self.mgr.load("old"))
         self.assertIsNotNone(self.mgr.load("new"))
 
     def test_rename_to_existing_raises(self):
-        self.mgr.create("a", "/tmp/a")
-        self.mgr.create("b", "/tmp/b")
+        self.mgr.create("a", self.target_a)
+        self.mgr.create("b", self.target_b)
         with self.assertRaises(ValueError):
             self.mgr.rename("a", "b")
 
     def test_rename_validates_new_name(self):
-        self.mgr.create("a", "/tmp/a")
+        self.mgr.create("a", self.target_a)
         with self.assertRaises(ValueError):
             self.mgr.rename("a", "none")
 
     def test_delete_clears_active_symlink(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         active = self.mgr.projects_dir / ".active"
         active.symlink_to("myapp.json")
         self.mgr.delete("myapp")
         self.assertFalse(active.is_symlink())
 
     def test_delete_preserves_other_active_symlink(self):
-        self.mgr.create("myapp", "/tmp/code")
-        self.mgr.create("other", "/tmp/other")
+        self.mgr.create("myapp", self.target_code)
+        self.mgr.create("other", self.target_other)
         active = self.mgr.projects_dir / ".active"
         active.symlink_to("other.json")
         self.mgr.delete("myapp")
         self.assertTrue(active.is_symlink())
 
     def test_rename_updates_active_symlink(self):
-        self.mgr.create("old", "/tmp/code")
+        self.mgr.create("old", self.target_code)
         active = self.mgr.projects_dir / ".active"
         active.symlink_to("old.json")
         self.mgr.rename("old", "new")
         self.assertEqual(os.readlink(active), "new.json")
 
     def test_update_notes(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         p = self.mgr.update_notes("myapp", "new notes")
         self.assertEqual(p.notes, "new notes")
         # Verify persisted
@@ -294,22 +318,22 @@ class TestProjectManager(unittest.TestCase):
         self.assertEqual(p2.notes, "new notes")
 
     def test_update_description(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         p = self.mgr.update_description("myapp", "new desc")
         self.assertEqual(p.description, "new desc")
 
     def test_find_project_for_target(self):
-        self.mgr.create("myapp", "/tmp/code")
-        found = self.mgr.find_project_for_target("/tmp/code")
+        self.mgr.create("myapp", self.target_code)
+        found = self.mgr.find_project_for_target(self.target_code)
         self.assertIsNotNone(found)
         self.assertEqual(found.name, "myapp")
 
     def test_find_project_for_target_not_found(self):
-        self.mgr.create("myapp", "/tmp/code")
-        self.assertIsNone(self.mgr.find_project_for_target("/tmp/other"))
+        self.mgr.create("myapp", self.target_code)
+        self.assertIsNone(self.mgr.find_project_for_target(self.target_other))
 
     def test_remove_run(self):
-        p = self.mgr.create("myapp", "/tmp/code")
+        p = self.mgr.create("myapp", self.target_code)
         run_dir = Path(p.output_dir) / "scan-20260406"
         run_dir.mkdir()
         (run_dir / "findings.json").write_text("{}")
@@ -320,7 +344,7 @@ class TestProjectManager(unittest.TestCase):
         self.assertTrue((to_dir / "scan-20260406" / "findings.json").exists())
 
     def test_remove_run_requires_to_path(self):
-        self.mgr.create("myapp", "/tmp/code")
+        self.mgr.create("myapp", self.target_code)
         with self.assertRaises(ValueError):
             self.mgr.remove_run("myapp", "scan-20260406")
 

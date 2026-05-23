@@ -20,7 +20,8 @@ class TestProjectReport(unittest.TestCase):
             start_run(run_dir, "scan")
             complete_run(run_dir)
             (run_dir / "findings.json").write_text(json.dumps(findings))
-        return Project(name="test", target="/tmp/code", output_dir=str(output_dir))
+        return Project(name="test", target=str(Path(tmpdir) / "code"),
+                       output_dir=str(output_dir))
 
     def test_merged_findings(self):
         with TemporaryDirectory() as d:
@@ -68,7 +69,8 @@ class TestProjectReport(unittest.TestCase):
         with TemporaryDirectory() as d:
             output_dir = Path(d) / "empty"
             output_dir.mkdir()
-            p = Project(name="test", target="/tmp", output_dir=str(output_dir))
+            p = Project(name="test", target=str(Path(d) / "code"),
+                        output_dir=str(output_dir))
             stats = generate_project_report(p)
             self.assertEqual(stats["findings"], 0)
             self.assertEqual(stats["runs"], 0)
