@@ -367,7 +367,6 @@ class QueryRunner:
                     # container registry; seccomp blocks UDP (no DNS
                     # exfil — the proxy resolves on behalf). Landlock
                     # pins writes to the codeql pack cache dir.
-                    from pathlib import Path
                     codeql_cache = Path.home() / ".codeql"
                     codeql_cache.mkdir(parents=True, exist_ok=True)
                     # Retry the download up to 3x with exponential
