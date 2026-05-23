@@ -56,6 +56,14 @@ Does the code at the stated location match the finding description?
 Is the source-to-sink flow real, or did the scanner fabricate a connection?
 Is this code reachable from an entry point, or is it dead code?
 
+If the metadata block contains a "Reachability:" section, use it as evidence:
+- "Verdict: NOT_CALLED" — the static call-graph resolver found no callers in the project. Before marking exploitable, identify a plausible reach mechanism the substrate could miss (framework dispatch the resolver didn't recognise, dynamic dispatch via reflection/registry lookups, public API surface called by external consumers, plugin entry points). If no plausible mechanism exists, mark is_exploitable=False with ruling="unreachable" or "dead_code" — the vulnerability shape may still be a true positive (is_true_positive=True) but it isn't exploitable in this deployment.
+- "Verdict: REACHABLE via ..." — reachability is established via a runtime-dispatch mechanism (framework decorator or registration call); treat as live, focus on exploit feasibility.
+- "Caller graph: N direct, M transitive" with N=0 but uncertain > 0 — the substrate found indirection it cannot resolve (string-dispatch / reflect / plugin registries). Treat as potentially reachable; note the indirection class in your reasoning.
+- "Caller graph: N direct, M transitive" with N > 0 — reachability is established; focus on exploit feasibility.
+
+The absence of a "Reachability:" section means the substrate couldn't compute reachability for this function (non-Python/JS/TS/Go/Java file, inventory build failed, or the function wasn't found in the project). Reason from the source code in that case — don't infer reachability from the absence alone.
+
 **Stage D: Ruling**
 Is this test code, example code, or documentation?
 Does exploitation require another vulnerability as a prerequisite?
@@ -112,7 +120,95 @@ def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
     if metadata.get("priority") == "high":
         reason = metadata.get("priority_reason", "high-priority")
         parts.append(f"Architectural role: {reason} (from /understand --map)")
+    reach_block = _format_reachability_block(metadata)
+    if reach_block:
+        parts.append(reach_block)
     return "\n".join(parts)
+
+
+def _format_reachability_block(metadata: Dict[str, Any]) -> str:
+    """Render reachability evidence — fires whenever ANY reachability
+    signal is present on the function.
+
+    Surfaces data already computed by
+    :mod:`core.orchestration.reachability_enrichment` (the pre-pass
+    that marks ``priority="low"`` for NOT_CALLED functions and
+    populates per-function caller counts + direct caller names).
+    Pre-C1 the analysis prompt rendered only ``priority="high"`` —
+    the rest of the reachability picture was invisible to the LLM
+    even though it sat in the per-finding metadata. C1 surfaces it
+    so the LLM can integrate reachability into its is_exploitable
+    reasoning instead of guessing.
+
+    No verdict mutation; this is information-only. See the
+    ``REACHABILITY ENGAGEMENT`` section of the task prompt for how
+    the LLM should use the data.
+
+    Output shape (only emits the lines whose data is present):
+
+        Reachability:
+          Verdict: NOT_CALLED (reachability:not_called)
+          Caller graph: 3 direct, 12 transitive, 1 uncertain (indirection masking)
+          Direct callers: auth.py:handle_login, api/users.py:create_user
+    """
+    lines = []
+
+    priority = metadata.get("priority")
+    priority_reason = metadata.get("priority_reason") or ""
+    if priority == "low":
+        lines.append(
+            f"Verdict: NOT_CALLED ({priority_reason or 'no callers in project'})"
+        )
+    elif priority_reason in (
+        "reachability:framework_callable",
+        "reachability:registered_via_call",
+    ):
+        # The reachability enricher annotates these reasons WITHOUT
+        # demoting priority — the function is reachable via runtime
+        # dispatch the static graph doesn't see. Surfacing the
+        # mechanism lets the LLM trust the reachability picture
+        # instead of seeing "no static callers" and inferring dead
+        # code.
+        mechanism = (
+            "framework decorator dispatch"
+            if priority_reason == "reachability:framework_callable"
+            else "framework registration call (handler passed as argument)"
+        )
+        lines.append(f"Verdict: REACHABLE via {mechanism}")
+
+    direct = metadata.get("caller_count_direct")
+    transitive = metadata.get("caller_count_transitive")
+    uncertain = metadata.get("caller_count_uncertain")
+    if direct is not None or transitive is not None or uncertain:
+        bits = []
+        if direct is not None:
+            bits.append(f"{direct} direct")
+        if transitive is not None and transitive != direct:
+            bits.append(f"{transitive} transitive")
+        if uncertain:
+            bits.append(
+                f"{uncertain} uncertain (indirection masking — "
+                f"getattr/reflect/dispatch)"
+            )
+        if bits:
+            lines.append(f"Caller graph: {', '.join(bits)}")
+
+    names = metadata.get("direct_caller_names") or []
+    if names:
+        # Cap at 10 so we don't blow the prompt budget on busy
+        # functions. The substrate's enricher already caps via
+        # max_direct_caller_names but defending here too.
+        shown = list(names[:10])
+        suffix = (
+            f" (+{len(names) - 10} more)"
+            if len(names) > 10
+            else ""
+        )
+        lines.append(f"Direct callers: {', '.join(shown)}{suffix}")
+
+    if not lines:
+        return ""
+    return "Reachability:\n  " + "\n  ".join(lines)
 
 
 def _build_strategy_block(
