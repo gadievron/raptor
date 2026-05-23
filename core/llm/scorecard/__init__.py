@@ -54,14 +54,14 @@ a single dict delete rather than a walk.
 # `tests/test_reasoning_cap_unique.py` is the parse-time guard.
 _MAX_REASONING_CHARS = 500
 
-from .scorecard import (
+from .scorecard import (  # noqa: E402
     ModelScorecard,
     EventType,
     Policy,
     Outcome,
     DecisionClassStats,
 )
-from .prefilter import (
+from .prefilter import (  # noqa: E402
     PrefilterDecision,
     prefilter_decision,
     record_prefilter_outcome,

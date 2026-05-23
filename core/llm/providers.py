@@ -73,7 +73,7 @@ def _safe_int(value: Any, *, default: int) -> int:
 
 
 # SDK availability flags (canonical source is detection.py)
-from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE
+from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE  # noqa: E402
 
 # Re-import the actual modules where available (config.py only sets flags)
 if OPENAI_SDK_AVAILABLE:

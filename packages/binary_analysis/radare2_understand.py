@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # feasibility. See that module's docstring for the curation policy
 # (in particular, why ubiquitous functions like malloc / printf / read
 # are deliberately NOT in this fuzz-priority composition).
-from core.function_taxonomy import (
+from core.function_taxonomy import (  # noqa: E402
     ALLOC_FUNCS as _T_ALLOC,
     ENTRY_POINT_HINTS as _ENTRY_POINT_HINTS,
     EXEC_FUNCS as _T_EXEC,

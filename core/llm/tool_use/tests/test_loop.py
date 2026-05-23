@@ -860,7 +860,7 @@ def test_cache_breakpoint_count_reflects_optins_when_supported() -> None:
 # x-source provenance validation
 # ---------------------------------------------------------------------------
 
-from core.llm.tool_use import ToolCallBlocked
+from core.llm.tool_use import ToolCallBlocked  # noqa: E402
 
 
 def _discovered_tool(name: str = "lookup") -> ToolDef:

@@ -12,16 +12,16 @@ from typing import Any, Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-from core.security.prompt_envelope import (
+from core.security.prompt_envelope import (  # noqa: E402
     ModelDefenseProfile,
     PromptBundle,
     TaintedString,
     UntrustedBlock,
     build_prompt,
 )
-from core.security.prompt_defense_profiles import CONSERVATIVE
+from core.security.prompt_defense_profiles import CONSERVATIVE  # noqa: E402
 
-from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS
+from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS  # noqa: E402
 
 ANALYSIS_SYSTEM_PROMPT = """You are a security vulnerability validator and analyst.
 

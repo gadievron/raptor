@@ -20,13 +20,13 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import os
-import shutil
-import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import os  # noqa: E402
+import shutil  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
+from tempfile import TemporaryDirectory  # noqa: E402
 
-from core.sandbox import check_net_available, run as sandbox_run
+from core.sandbox import check_net_available, run as sandbox_run  # noqa: E402
 
 
 class TestProxyEventsTargetPollution(unittest.TestCase):

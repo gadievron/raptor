@@ -30,7 +30,7 @@ except ImportError:
     print("  pip install sage-agent-sdk")
     sys.exit(1)
 
-from core.sage.scripts._common import async_memory_exists
+from core.sage.scripts._common import async_memory_exists  # noqa: E402
 
 # Parallelism cap — see register_agents.py for rationale.
 _PROPOSE_CONCURRENCY = 8

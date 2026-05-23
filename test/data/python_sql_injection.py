@@ -38,7 +38,7 @@ def login():
 
 
 # VULNERABLE: Weak cryptography
-import hashlib
+import hashlib  # noqa: E402
 
 def hash_password(password):
     """Hash password - VULNERABLE: MD5 is cryptographically weak"""
@@ -46,7 +46,7 @@ def hash_password(password):
 
 
 # VULNERABLE: Command injection
-import subprocess
+import subprocess  # noqa: E402
 
 @app.route('/convert', methods=['POST'])
 def convert_file():

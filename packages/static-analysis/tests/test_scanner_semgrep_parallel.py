@@ -33,7 +33,7 @@ _spec.loader.exec_module(_scanner_mod)
 semgrep_scan_parallel = _scanner_mod.semgrep_scan_parallel
 semgrep_scan_sequential = _scanner_mod.semgrep_scan_sequential
 
-from core.config import RaptorConfig
+from core.config import RaptorConfig  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

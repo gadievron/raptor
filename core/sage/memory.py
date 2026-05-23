@@ -17,7 +17,7 @@ from .hooks import _throttle
 logger = get_logger()
 
 # Import the original FuzzingMemory for inheritance
-from packages.autonomous.memory import FuzzingMemory, FuzzingKnowledge
+from packages.autonomous.memory import FuzzingMemory, FuzzingKnowledge  # noqa: E402
 
 
 def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:

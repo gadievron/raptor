@@ -25,7 +25,7 @@ script_dir = Path(__file__).parent
 skill_dir = script_dir.parent
 sys.path.insert(0, str(skill_dir))
 
-from src.store import EvidenceStore
+from src.store import EvidenceStore  # noqa: E402
 
 
 def check_prerequisites():

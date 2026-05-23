@@ -24,8 +24,8 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from packages.coccinelle.models import SpatchMatch, SpatchResult
-from packages.coccinelle.prereqs import (
+from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
+from packages.coccinelle.prereqs import (  # noqa: E402
     PrereqFacts,
     evaluate_finding,
     gather_prereqs,

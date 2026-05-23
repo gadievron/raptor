@@ -21,12 +21,12 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import os
-import shutil
-import sys
-import tempfile
-import unittest
-from pathlib import Path
+import os  # noqa: E402
+import shutil  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 
 def _mount_ns_usable() -> bool:

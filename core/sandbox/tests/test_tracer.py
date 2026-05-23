@@ -17,18 +17,18 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import ctypes
-import json
-import os
-import platform
-import struct
-import subprocess
-import sys
-import time
+import ctypes  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import platform  # noqa: E402
+import struct  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
 
-import pytest
+import pytest  # noqa: E402
 
-from core.sandbox import tracer
+from core.sandbox import tracer  # noqa: E402
 
 
 # Skip the whole module on archs the tracer doesn't support (currently

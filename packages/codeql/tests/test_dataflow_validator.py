@@ -114,18 +114,18 @@ class TestInferBVProfileInvalidHints:
 # ---------------------------------------------------------------------
 
 
-from pathlib import Path as _Path
-from unittest.mock import MagicMock
+from pathlib import Path as _Path  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
 
-from core.dataflow.sanitizer_evidence import (
+from core.dataflow.sanitizer_evidence import (  # noqa: E402
     PROVENANCE_LLM,
     SEMANTICS_SQL_ESCAPE,
     CandidateValidator,
     SanitizerEvidence,
     StepAnnotation,
 )
-from core.security.prompt_envelope import UntrustedBlock
-from packages.codeql.dataflow_validator import (
+from core.security.prompt_envelope import UntrustedBlock  # noqa: E402
+from packages.codeql.dataflow_validator import (  # noqa: E402
     DataflowPath,
     DataflowStep,
     SANITIZER_EVIDENCE_INSTRUCTIONS,

@@ -85,10 +85,10 @@ def _cache_unless_none(func: Callable) -> Callable:
     wrapper.cache_info = cache_info  # type: ignore[attr-defined]
     return wrapper
 
-from core.http import HttpError
-from core.http.egress_backend import EgressClient
+from core.http import HttpError  # noqa: E402
+from core.http.egress_backend import EgressClient  # noqa: E402
 
-from cve_diff.infra.rate_limit import TokenBucket
+from cve_diff.infra.rate_limit import TokenBucket  # noqa: E402
 
 _UNAUTH_CAPACITY = 50
 _AUTH_CAPACITY = 5000

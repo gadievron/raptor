@@ -22,13 +22,13 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import logging
-import os
+import logging  # noqa: E402
+import os  # noqa: E402
 
-import pytest
+import pytest  # noqa: E402
 
-from core.sandbox import ptrace_probe
-from core.sandbox import state
+from core.sandbox import ptrace_probe  # noqa: E402
+from core.sandbox import state  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

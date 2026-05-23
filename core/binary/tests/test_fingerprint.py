@@ -31,7 +31,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from core.binary.fingerprint import (
+from core.binary.fingerprint import (  # noqa: E402
     BUCKETS,
     CapabilityFingerprint,
     FINGERPRINT_SCHEMA_VERSION,
@@ -39,7 +39,7 @@ from core.binary.fingerprint import (
     bucket_imports,
     capability_fingerprint,
 )
-from packages.binary_analysis.radare2_understand import (
+from packages.binary_analysis.radare2_understand import (  # noqa: E402
     BinaryContextMap,
 )
 

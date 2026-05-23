@@ -14,13 +14,13 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import os
-import subprocess
-import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import os  # noqa: E402
+import subprocess  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
+from tempfile import TemporaryDirectory  # noqa: E402
 
-from core.sandbox import (
+from core.sandbox import (  # noqa: E402
     check_landlock_available,
     check_net_available,
     sandbox,

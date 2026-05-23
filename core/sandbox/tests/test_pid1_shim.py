@@ -26,12 +26,12 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import os
-import signal
-import subprocess
-import tempfile
-import unittest
-from pathlib import Path
+import os  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 # Shim path resolved from repo root — test file lives at
 # core/sandbox/tests/test_pid1_shim.py, so parents[3] is the repo root.

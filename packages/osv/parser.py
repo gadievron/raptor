@@ -22,7 +22,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-from .types import (
+from .types import (  # noqa: E402
     OsvAffected,
     OsvRange,
     OsvRecord,

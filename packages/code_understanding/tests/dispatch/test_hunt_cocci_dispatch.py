@@ -36,8 +36,8 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod
-from packages.coccinelle.models import SpatchMatch, SpatchResult
+from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod  # noqa: E402
+from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
 
 
 # ---------------------------------------------------------------------

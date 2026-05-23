@@ -24,7 +24,7 @@ from core.logging import get_logger
 logger = get_logger()
 
 
-import re
+import re  # noqa: E402
 
 # Tightened from `[\w/.-]+\S*` which accepted any path-like
 # blob (path-traversal `../../etc/passwd`, multi-segment

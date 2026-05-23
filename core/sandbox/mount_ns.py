@@ -122,7 +122,7 @@ _SHADOW_PATHS = frozenset((
 # a missing soname). find_library returns None on failure, which CDLL
 # also rejects — but it rejects consistently with "no libc at all",
 # not "wrong libc name on this distro".
-import ctypes.util as _ctypes_util
+import ctypes.util as _ctypes_util  # noqa: E402
 _libc = ctypes.CDLL(_ctypes_util.find_library("c"), use_errno=True)
 
 
