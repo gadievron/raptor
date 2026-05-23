@@ -850,7 +850,7 @@ def _print_findings(project, detailed=False):
         if len(lines_in_group) == 1:
             loc = f"{fname}:{lines_in_group[0]}"
         else:
-            loc = f"{fname}:{','.join(str(l) for l in lines_in_group)}"
+            loc = f"{fname}:{','.join(str(line) for line in lines_in_group)}"
         loc = truncate_path(loc) if loc else "—"
 
         vtype = title_case_type(rep.get("vuln_type", ""))

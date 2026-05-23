@@ -203,8 +203,8 @@ def _pairs(n_tp: int, n_fp: int) -> list:
 def test_balance_subsample_picks_50_50_when_possible():
     pairs = _pairs(50, 50)
     chosen = _balance_subsample(pairs, target=10, seed=0)
-    tps = sum(1 for _, l in chosen if l.verdict == VERDICT_TRUE_POSITIVE)
-    fps = sum(1 for _, l in chosen if l.verdict == VERDICT_FALSE_POSITIVE)
+    tps = sum(1 for _, label in chosen if label.verdict == VERDICT_TRUE_POSITIVE)
+    fps = sum(1 for _, label in chosen if label.verdict == VERDICT_FALSE_POSITIVE)
     assert tps == 5 and fps == 5
 
 

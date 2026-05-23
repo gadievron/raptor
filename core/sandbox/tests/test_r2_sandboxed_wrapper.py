@@ -251,8 +251,8 @@ class TestR2Invocation:
         assert r.returncode == 0, r.stderr
         # Find a `{...}` JSON object in stdout.
         json_lines = [
-            l for l in r.stdout.splitlines()
-            if l.strip().startswith("{") and l.strip().endswith("}")
+            line for line in r.stdout.splitlines()
+            if line.strip().startswith("{") and line.strip().endswith("}")
         ]
         assert json_lines, (
             f"no JSON object in r2 ij output: stdout={r.stdout!r}"
@@ -364,16 +364,16 @@ class TestAdversarialIsolation:
         # Strip r2 prompts and noise; look at the lines that look like
         # interface names.
         candidate_lines = [
-            l.strip() for l in net_iface_listing.splitlines()
-            if l.strip() and not l.startswith("[")
-            and ":" not in l
-            and " " not in l.strip()
-            and len(l.strip()) < 20
+            line.strip() for line in net_iface_listing.splitlines()
+            if line.strip() and not line.startswith("[")
+            and ":" not in line
+            and " " not in line.strip()
+            and len(line.strip()) < 20
         ]
         # Filter out r2 prompts (e.g. "[0x00000000]>")
         candidate_lines = [
-            l for l in candidate_lines
-            if not l.startswith(">") and not l.startswith("0x")
+            line for line in candidate_lines
+            if not line.startswith(">") and not line.startswith("0x")
         ]
         # We should see at most {lo} in a properly isolated sandbox.
         # Don't be too strict — r2's output is noisy. Just assert that

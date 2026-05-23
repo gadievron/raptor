@@ -89,7 +89,7 @@ class TestPrintAnnotations(unittest.TestCase):
             output = buf.getvalue()
             # The login row should show source=human (project-level),
             # not source=llm (run-a).
-            login_line = [l for l in output.splitlines() if "login" in l][0]
+            login_line = [line for line in output.splitlines() if "login" in line][0]
             assert "human" in login_line
 
     def test_filter_by_status(self):

@@ -72,7 +72,7 @@ class TestDebuggerNoPathInjection:
         input_file = tmp_path / "normal.bin"
         captured = self._capture_gdb_script(debugger, "get_backtrace", input_file)
         lines = captured["script"].strip().split("\n")
-        run_lines = [l for l in lines if l.strip().startswith("run")]
+        run_lines = [line for line in lines if line.strip().startswith("run")]
         for line in run_lines:
             assert "<" not in line, f"Script contains redirect: {line}"
 

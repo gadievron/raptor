@@ -21,7 +21,7 @@ def read_random_quote() -> str:
     """Pick a random quote from the hackers-8ball file."""
     path = _ASSETS / "hackers-8ball"
     if path.exists():
-        lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
+        lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
         if lines:
             return random.choice(lines)
     return '"Hack the planet!"'

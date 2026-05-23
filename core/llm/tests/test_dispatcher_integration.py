@@ -588,8 +588,8 @@ class TestPhaseBChainE2E:
 
             # Child's own response landed on stderr (we used stderr to
             # not collide with the grandchild's stdout pass-through)
-            child_lines = [l for l in stderr.decode().splitlines()
-                           if l.startswith("{")]
+            child_lines = [line for line in stderr.decode().splitlines()
+                           if line.startswith("{")]
             assert len(child_lines) == 1, f"child output not found: {stderr.decode()!r}"
             c_payload = json.loads(child_lines[0])
             assert c_payload["who"] == "child"
@@ -618,8 +618,8 @@ class TestPhaseBChainE2E:
 
             # ---- audit log captured the dispatch events ----
             audit_lines = [
-                json.loads(l)
-                for l in (tmp_path / "audit.jsonl").read_text().splitlines()
+                json.loads(line)
+                for line in (tmp_path / "audit.jsonl").read_text().splitlines()
             ]
             dispatched = [a for a in audit_lines if a["event"] == "request.dispatch"]
             assert len(dispatched) == 2, (
@@ -795,8 +795,8 @@ class TestPhaseBChainE2EGemini:
             assert gc_payload["text"] == "gemini chain works"
 
             # Child's parsed Gemini response on stderr
-            child_lines = [l for l in stderr.decode().splitlines()
-                           if l.startswith("{")]
+            child_lines = [line for line in stderr.decode().splitlines()
+                           if line.startswith("{")]
             assert len(child_lines) == 1, f"child output not found: {stderr.decode()!r}"
             c_payload = json.loads(child_lines[0])
             assert c_payload["who"] == "child"
@@ -825,8 +825,8 @@ class TestPhaseBChainE2EGemini:
 
             # Audit confirms two dispatch events sharing one token
             audit_lines = [
-                json.loads(l)
-                for l in (tmp_path / "audit.jsonl").read_text().splitlines()
+                json.loads(line)
+                for line in (tmp_path / "audit.jsonl").read_text().splitlines()
             ]
             dispatched = [a for a in audit_lines if a["event"] == "request.dispatch"]
             assert len(dispatched) == 2

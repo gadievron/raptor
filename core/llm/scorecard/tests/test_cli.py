@@ -166,8 +166,8 @@ def test_list_event_type_reflects_chosen_slot_counts(seeded_scorecard, tmp_path)
     )
     assert rc == 0
     cheap_row = next(
-        (l for l in out_cheap.splitlines()
-         if dc in l and "gemini-2.5-pro" in l),
+        (line for line in out_cheap.splitlines()
+         if dc in line and "gemini-2.5-pro" in line),
         None,
     )
     assert cheap_row is not None, out_cheap
@@ -181,8 +181,8 @@ def test_list_event_type_reflects_chosen_slot_counts(seeded_scorecard, tmp_path)
     )
     assert rc == 0
     div_row = next(
-        (l for l in out_div.splitlines()
-         if dc in l and "gemini-2.5-pro" in l),
+        (line for line in out_div.splitlines()
+         if dc in line and "gemini-2.5-pro" in line),
         None,
     )
     assert div_row is not None, out_div
@@ -205,11 +205,11 @@ def test_list_by_savings_sorts_descending(seeded_scorecard):
         cli_mod.cmd_list,
         _make_args(path=seeded_scorecard, by_savings=True),
     )
-    lines = [l for l in out.splitlines() if "codeql:" in l]
+    lines = [line for line in out.splitlines() if "codeql:" in line]
     # Highest calls_saved (py/sql-injection on haiku, 100) should
     # appear before js/path-injection (20).
-    py_idx = next(i for i, l in enumerate(lines) if "py/sql-injection" in l and "claude" in l)
-    js_idx = next(i for i, l in enumerate(lines) if "js/path-injection" in l)
+    py_idx = next(i for i, line in enumerate(lines) if "py/sql-injection" in line and "claude" in line)
+    js_idx = next(i for i, line in enumerate(lines) if "js/path-injection" in line)
     assert py_idx < js_idx
 
 
@@ -222,8 +222,8 @@ def test_list_untrusted_filters_to_fall_through_only(seeded_scorecard):
     assert "js/path-injection" in out
     # py/sql-injection (haiku) is short-circuit, must not appear.
     haiku_py_lines = [
-        l for l in out.splitlines()
-        if "py/sql-injection" in l and "claude-haiku-4-5" in l
+        line for line in out.splitlines()
+        if "py/sql-injection" in line and "claude-haiku-4-5" in line
     ]
     assert haiku_py_lines == []
 

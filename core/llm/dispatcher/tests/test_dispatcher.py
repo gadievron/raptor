@@ -770,8 +770,8 @@ class TestSpawnHelperTokenIsolation:
             assert proc.returncode == 0, f"worker failed: {stderr.decode()}"
             output = stdout.decode()
             assert "TOKEN=" in output
-            token_line = next(l for l in output.splitlines() if l.startswith("TOKEN="))
-            env_line = next(l for l in output.splitlines() if l.startswith("ENV="))
+            token_line = next(line for line in output.splitlines() if line.startswith("TOKEN="))
+            env_line = next(line for line in output.splitlines() if line.startswith("ENV="))
             token_value = token_line[len("TOKEN="):]
             env_value = env_line[len("ENV="):]
             # The token value must not appear in env — that's the

@@ -65,7 +65,7 @@ class _StubFacts:
         self.skipped_reason = None
 
     def callers_of(self, name):
-        return [(f, l) for (f, l, _c) in self._edges.get(name, [])]
+        return [(f, line) for (f, line, _c) in self._edges.get(name, [])]
 
     def enclosing(self, file_path, line):
         return self._site_to_caller.get((file_path, line))
@@ -96,7 +96,7 @@ def _patch_walk(facts, *, line_cap_check=True):
         _patch("packages.source_intel.adapter.gather_prereqs",
                return_value=facts, create=True),
         _patch("packages.source_intel.analyze._enclosing_function",
-               side_effect=lambda f, l: facts.enclosing(f, l)
+               side_effect=lambda f, line: facts.enclosing(f, line)
                if hasattr(facts, "enclosing")
                else None),
         _patch("packages.source_intel.adapter._line_uses_privileged_cap",
@@ -143,7 +143,7 @@ class TestPathIsGated:
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=False),
             patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=lambda f, l: facts.enclosing(f, l)),
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "one_hop", facts, result,
@@ -161,7 +161,7 @@ class TestPathIsGated:
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=False),
             patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=lambda f, l: facts.enclosing(f, l)),
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "a", facts, result,
@@ -178,7 +178,7 @@ class TestPathIsGated:
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=lambda f, l: facts.enclosing(f, l)),
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "leaf_fn", facts, result,
@@ -198,7 +198,7 @@ class TestPathIsGated:
             patch("packages.source_intel.adapter._line_uses_privileged_cap",
                   return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=lambda f, l: facts.enclosing(f, l)),
+                  side_effect=lambda f, line: facts.enclosing(f, line)),
         ):
             assert _path_is_gated(
                 "leaf_fn", facts, result,
