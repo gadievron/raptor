@@ -307,7 +307,12 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
             #     hooks, anything that re-renders the request line).
             # The TLS encryption protects the bytes in transit; the
             # logging exposure is at endpoints.
-            r = requests.get(
+            # All ``requests.get`` calls in this block target
+            # hardcoded provider hostnames (or operator-supplied
+            # ``api_base`` override for OpenAI / Ollama). Not SSRF
+            # — RAPTOR owns the URL prefix; ``api_base`` is the
+            # operator's own config.
+            r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 "https://generativelanguage.googleapis.com/v1beta/models",
                 headers={"x-goog-api-key": api_key},
                 timeout=timeout,
@@ -315,21 +320,21 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
             return r.status_code == 200
         elif provider == "openai":
             base = (api_base or "https://api.openai.com").rstrip("/")
-            r = requests.get(
+            r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 f"{base}/v1/models",
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=timeout,
             )
             return r.status_code == 200
         elif provider == "anthropic":
-            r = requests.get(
+            r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 "https://api.anthropic.com/v1/models",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
                 timeout=timeout,
             )
             return r.status_code == 200
         elif provider == "mistral":
-            r = requests.get(
+            r = requests.get(  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
                 "https://api.mistral.ai/v1/models",
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=timeout,
@@ -337,7 +342,7 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
             return r.status_code == 200
         elif provider == "ollama":
             base = (api_base or "http://localhost:11434").rstrip("/")
-            r = requests.get(f"{base}/api/tags", timeout=timeout)
+            r = requests.get(f"{base}/api/tags", timeout=timeout)  # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
             return r.status_code == 200
         else:
             return True  # Unknown provider — can't test, assume OK

@@ -613,40 +613,47 @@ class CorpusGenerator:
         Returns:
             Mutated seed
         """
+        # Non-cryptographic use: fuzz-corpus mutation. ``random`` is
+        # the right choice here — we want fast, well-distributed,
+        # not-cryptographically-secure entropy for input mutation.
+        # Reproducible runs need a deterministic seed source, which
+        # ``secrets`` doesn't provide. All ``random.`` calls below
+        # are suppressed inline against
+        # ``crypto.prng.random-module.python`` for the same reason.
         import random
 
         if mutation_type == "bit_flip":
             # Flip random bits
             seed = bytearray(base_seed)
-            for _ in range(random.randint(1, 10)):
+            for _ in range(random.randint(1, 10)):  # nosemgrep: crypto.prng.random-module.python
                 if seed:
-                    pos = random.randint(0, len(seed) - 1)
-                    seed[pos] ^= (1 << random.randint(0, 7))
+                    pos = random.randint(0, len(seed) - 1)  # nosemgrep: crypto.prng.random-module.python
+                    seed[pos] ^= (1 << random.randint(0, 7))  # nosemgrep: crypto.prng.random-module.python
             return bytes(seed)
 
         elif mutation_type == "byte_insert":
             # Insert random bytes
             seed = bytearray(base_seed)
-            pos = random.randint(0, len(seed))
-            seed.insert(pos, random.randint(0, 255))
+            pos = random.randint(0, len(seed))  # nosemgrep: crypto.prng.random-module.python
+            seed.insert(pos, random.randint(0, 255))  # nosemgrep: crypto.prng.random-module.python
             return bytes(seed)
 
         elif mutation_type == "byte_delete":
             # Delete random byte
             if len(base_seed) > 0:
                 seed = bytearray(base_seed)
-                pos = random.randint(0, len(seed) - 1)
+                pos = random.randint(0, len(seed) - 1)  # nosemgrep: crypto.prng.random-module.python
                 del seed[pos]
                 return bytes(seed)
             return base_seed
 
         elif mutation_type == "expand":
             # Expand the input
-            return base_seed + (base_seed * random.randint(1, 10))
+            return base_seed + (base_seed * random.randint(1, 10))  # nosemgrep: crypto.prng.random-module.python
 
         else:  # havoc - combine multiple mutations
             seed = base_seed
-            for _ in range(random.randint(1, 5)):
-                mutation = random.choice(["bit_flip", "byte_insert", "byte_delete", "expand"])
+            for _ in range(random.randint(1, 5)):  # nosemgrep: crypto.prng.random-module.python
+                mutation = random.choice(["bit_flip", "byte_insert", "byte_delete", "expand"])  # nosemgrep: crypto.prng.random-module.python
                 seed = self.generate_mutated_seed(seed, mutation)
             return seed

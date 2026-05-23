@@ -23,6 +23,8 @@ def read_random_quote() -> str:
     if path.exists():
         lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
         if lines:
+            # nosemgrep: crypto.prng.random-module.python
+            # Decorative banner quote — non-cryptographic.
             return random.choice(lines)
     return '"Hack the planet!"'
 

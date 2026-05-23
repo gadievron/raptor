@@ -252,6 +252,11 @@ class ConsistencyVerifier:
             return VerificationResult(is_valid=True, errors=[])
 
         try:
+            # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+            # ``url`` is an operator-supplied evidence URL for
+            # forensic verification (this whole module's purpose
+            # is verifying URLs from collected forensic evidence).
+            # Not SSRF — the analyst chose the URL.
             requests.get(str(url), timeout=30).raise_for_status()
             return VerificationResult(is_valid=True, errors=[])
         except requests.RequestException as e:
@@ -266,6 +271,10 @@ class ConsistencyVerifier:
             return VerificationResult(is_valid=False, errors=["No source URL specified"])
 
         try:
+            # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+            # ``url`` is an operator-supplied evidence URL for
+            # forensic verification. Same trust shape as the
+            # ``_verify_url`` method above. Not SSRF.
             resp = requests.get(str(url), timeout=30)
             resp.raise_for_status()
 

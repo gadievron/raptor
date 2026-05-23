@@ -87,6 +87,11 @@ def classify(
         return "source"
 
     if slug:
+        # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+        # ``fetch`` is a typed injected callable (parameter at
+        # line 75). The GitHub-API URL it builds is internal to
+        # the cve-diff package; ``slug`` is a vetted owner/repo
+        # form, not raw user input.
         payload = fetch(slug)
         if payload:
             repo_langs = frozenset(str(k).lower() for k in payload.keys())
