@@ -177,3 +177,76 @@ class TestSkipLogging:
             f"expected no skip-WARNs for absent languages; "
             f"got noisy warnings: {spurious}"
         )
+
+
+class TestFloorFallback:
+    """detect_languages_floor() is the last-resort tier for repos with
+    real source code but no build manifests — multi-language minimal
+    repros, fixture trees, honeyslop-shaped adversarial canaries. It
+    bypasses the confidence gate and admits any language above the
+    file-count floor. Caller (agent.py) only invokes it when the two
+    confidence-gated tiers have already returned empty.
+    """
+
+    def test_multilang_no_manifests_all_admitted(self, tmp_path: Path):
+        # honeyslop shape: 4 py + 2 js + 6 go + 4 cpp + non-source
+        # files (README, LICENSE, docs, images) that dilute the per-
+        # language ratio below the confidence threshold. Zero build
+        # files. Every language clears file_count >= 2 under floor.
+        for i in range(4):
+            _write(tmp_path, f"python/a{i}.py", "")
+        for i in range(2):
+            _write(tmp_path, f"js/a{i}.js", "")
+        for i in range(6):
+            _write(tmp_path, f"go/a{i}.go", "")
+        for i in range(4):
+            _write(tmp_path, f"c/a{i}.c", "")
+        # Decoy non-source files — match honeyslop's README/LICENSE/
+        # docs/images bulk. Need enough to push every language's
+        # ratio below its min_confidence gate (cap +0.3 on ratio
+        # means ratio < 0.2 keeps cpp/python/js below 0.5; go is
+        # gated at 0.6 so needs ratio < 0.3). 26 decoys + 16 sources
+        # = 42 total; go gets 6/42 = 0.14, well under the gate.
+        for i in range(26):
+            _write(tmp_path, f"docs/note{i}.md", "")
+
+        det = LanguageDetector(tmp_path)
+        # Confidence tiers return empty (no build files, ratios diluted).
+        assert det.detect_languages(min_files=3) == {}, (
+            "strict tier must reject — no build files, low ratios"
+        )
+        assert det.detect_languages(min_files=1) == {}, (
+            "min_files=1 retry must also reject — confidence still gates"
+        )
+
+        floor = det.detect_languages_floor(floor=2)
+        assert set(floor.keys()) >= {"python", "javascript", "go", "cpp"}, (
+            f"floor tier must admit all four; got {sorted(floor.keys())}"
+        )
+
+    def test_single_file_below_floor_rejected(self, tmp_path: Path):
+        # One .go file is below floor=2 — must NOT be admitted even
+        # in floor tier, otherwise true-empty repos or single-stray-
+        # file trees would silently trigger a scan.
+        _write(tmp_path, "scratch.go", "package main\n")
+
+        floor = LanguageDetector(tmp_path).detect_languages_floor(floor=2)
+        assert "go" not in floor
+
+    def test_floor_logs_per_language_warning(self, tmp_path: Path, monkeypatch):
+        # Operator must see a loud WARNING per admitted language so
+        # they know the scan is running on low-confidence detection.
+        # Silent low-confidence admission would defeat the whole point
+        # of having a confidence gate in the strict tiers.
+        for i in range(3):
+            _write(tmp_path, f"a{i}.py", "")
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path).detect_languages_floor(floor=2)
+
+        warns = [c.args[0] for c in mock_logger.warning.call_args_list]
+        assert any(
+            "Floor-tier include python" in w for w in warns
+        ), f"expected loud floor-include WARN for python; got: {warns}"

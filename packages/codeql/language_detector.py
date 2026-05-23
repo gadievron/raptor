@@ -227,6 +227,59 @@ class LanguageDetector:
 
         return detected
 
+    def detect_languages_floor(self, floor: int = 2) -> Dict[str, LanguageInfo]:
+        """
+        Last-resort detection tier — include any language with at least
+        ``floor`` source files, **ignoring the per-language confidence
+        threshold**. Logs a loud WARNING per language so the operator
+        knows the scan is running on low-confidence detection.
+
+        Use only when ``detect_languages`` has already returned empty
+        with min_files=1 — i.e. the target has source code present but
+        no build manifests or structural indicators that would let
+        confidence clear the gate. honeyslop-shaped trees (multi-
+        language, no build files by design) and minimal repros land
+        here. Caller is responsible for ordering: floor detection is
+        a fallback, not a default.
+
+        Args:
+            floor: Minimum source files required per language. Default 2
+                — high enough to filter out a single stray file from
+                another language, low enough to admit minimal repros.
+
+        Returns:
+            Dict mapping language name -> LanguageInfo for languages
+            meeting only the file-count floor.
+        """
+        logger.info(
+            f"Detecting languages in: {self.repo_path} (floor tier, "
+            f"floor={floor}, ignoring confidence gate)"
+        )
+        stats = self._scan_repository()
+
+        detected = {}
+        for lang, patterns in self.LANGUAGE_PATTERNS.items():
+            info = self._analyze_language(lang, patterns, stats)
+            if info.file_count >= floor:
+                detected[lang] = info
+                logger.warning(
+                    f"⚠ Floor-tier include {lang}: file_count={info.file_count} "
+                    f"(floor={floor}), confidence={info.confidence:.2f} "
+                    f"(would-be-min={patterns['min_confidence']}), "
+                    f"build_files={sorted(info.build_files_found) or 'none'} "
+                    f"— low-confidence detection, verify scan results"
+                )
+
+        if not detected:
+            logger.warning(
+                f"No languages detected even at floor={floor}; "
+                f"target has no scannable source code"
+            )
+        else:
+            logger.info(f"Floor-tier detected: {len(detected)} language(s)")
+
+        return detected
+
     def _scan_repository(self) -> Dict:
         """
         Scan repository and collect file statistics.

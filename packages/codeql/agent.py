@@ -276,6 +276,26 @@ class CodeQLAgent:
                     detected = self.language_detector.detect_languages(min_files=1)
                     detected = self.language_detector.filter_codeql_supported(detected)
 
+                # Confidence-gate fallback. The min_confidence threshold
+                # in detect_languages defends against stray manifests
+                # (e.g. a `pom.xml` in a docs example dir) but is also
+                # tripped by trees with real source code and zero build
+                # files — multi-language minimal repros, fixture trees,
+                # honeyslop-shaped adversarial canaries. The two retry
+                # tiers above both gate on confidence; if both returned
+                # empty, fall back to a file-count-only floor and log
+                # loud per-language WARNINGs so the operator knows the
+                # scan is running on low-confidence detection. Better
+                # than the silent-skip footgun of the pre-fix path.
+                if not detected:
+                    logger.warning(
+                        "No languages cleared the confidence gate after "
+                        "two retries; falling back to file-count floor "
+                        "(low-confidence detection — verify results)"
+                    )
+                    detected = self.language_detector.detect_languages_floor(floor=2)
+                    detected = self.language_detector.filter_codeql_supported(detected)
+
             if not detected:
                 error = "No CodeQL-supported languages detected"
                 logger.error(error)
