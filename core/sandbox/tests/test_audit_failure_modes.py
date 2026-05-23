@@ -769,8 +769,10 @@ class TestAuditRunDirKwarg:
                         "— spawn path won't engage")
         monkeypatch.setattr(_spawn_mod, "run_sandboxed", fake_run_sandboxed)
 
-        target = tmp_path / "tgt"; target.mkdir()
-        audit_dir = tmp_path / "audit_only"; audit_dir.mkdir()
+        target = tmp_path / "tgt"
+        target.mkdir()
+        audit_dir = tmp_path / "audit_only"
+        audit_dir.mkdir()
         with ctx.sandbox(audit=True, target=str(target),
                         audit_run_dir=str(audit_dir)) as run:
             run(["true"])
@@ -810,8 +812,10 @@ class TestAuditRunDirKwarg:
         monkey = _pt.MonkeyPatch()
         try:
             monkey.setattr(_spawn_mod, "run_sandboxed", fake_run_sandboxed)
-            target = tmp_path / "tgt"; target.mkdir()
-            out = tmp_path / "out"; out.mkdir()
+            target = tmp_path / "tgt"
+            target.mkdir()
+            out = tmp_path / "out"
+            out.mkdir()
             with ctx.sandbox(audit=True, target=str(target),
                             output=str(out)) as run:
                 run(["true"])

@@ -120,7 +120,8 @@ class TestAnthropicProvider:
         )
         try:
             _, fd = d.allocate_worker(label="anthropic-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             _post_via_dispatcher(
                 d, token, "http://_/anthropic/v1/messages",
                 b'{"x":1}',
@@ -144,7 +145,8 @@ class TestOpenAIProvider:
         )
         try:
             _, fd = d.allocate_worker(label="openai-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             _post_via_dispatcher(
                 d, token, "http://_/openai/v1/chat/completions",
                 b'{"model":"gpt-5","messages":[]}',
@@ -170,7 +172,8 @@ class TestGeminiProvider:
         )
         try:
             _, fd = d.allocate_worker(label="gemini-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             _post_via_dispatcher(
                 d, token, "http://_/gemini/v1beta/models/gemini-2.5-pro:generateContent",
                 b'{"contents":[]}',
@@ -199,7 +202,8 @@ class TestUnconfiguredProvider:
         )
         try:
             _, fd = d.allocate_worker(label="unconf-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             r = _post_via_dispatcher(
                 d, token, "http://_/openai/v1/chat/completions",
                 b'{}', {},
@@ -220,7 +224,8 @@ class TestUnknownProviderPath:
         )
         try:
             _, fd = d.allocate_worker(label="unknown-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             r = _post_via_dispatcher(
                 d, token, "http://_/unknown-vendor/v1/things",
                 b'{}', {},
@@ -270,7 +275,8 @@ def test_bearer_provider_authorization_injected(
     )
     try:
         _, fd = d.allocate_worker(label=f"{provider}-test")
-        token = os.read(fd, 64).decode().strip(); os.close(fd)
+        token = os.read(fd, 64).decode().strip()
+        os.close(fd)
         _post_via_dispatcher(
             d, token, f"http://_/{provider}/{path_tail}",
             b'{"model":"x","messages":[]}',
@@ -304,7 +310,8 @@ class TestReplicateProvider:
         )
         try:
             _, fd = d.allocate_worker(label="replicate-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             _post_via_dispatcher(
                 d, token, "http://_/replicate/v1/predictions",
                 b'{"version":"x","input":{}}',
@@ -335,7 +342,8 @@ class TestAzureOpenAIProvider:
         )
         try:
             _, fd = d.allocate_worker(label="azure-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             _post_via_dispatcher(
                 d, token,
                 "http://_/azure_openai/openai/deployments/gpt-5/chat/completions"
@@ -409,7 +417,8 @@ class TestNewProvidersUnconfiguredKeyReturns503:
         )
         try:
             _, fd = d.allocate_worker(label="unconf-test")
-            token = os.read(fd, 64).decode().strip(); os.close(fd)
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
             r = _post_via_dispatcher(d, token, f"http://_{path}", b'{}', {})
             assert r.status_code == 503, (
                 f"{provider}: expected 503 with key unset, got "

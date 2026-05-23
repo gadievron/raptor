@@ -1035,8 +1035,12 @@ class TestConfigRoleValidation:
 
     def test_judge_with_analysis_ok(self):
         from core.llm.config import _validate_model_roles
-        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
-        judge = MagicMock(); judge.role = "judge"; judge.model_name = "gpt-5"
+        analysis = MagicMock()
+        analysis.role = "analysis"
+        analysis.model_name = "gemini"
+        judge = MagicMock()
+        judge.role = "judge"
+        judge.model_name = "gpt-5"
         _validate_model_roles([analysis, judge])
 
     def test_aggregate_without_analysis_raises(self):
@@ -1049,37 +1053,59 @@ class TestConfigRoleValidation:
 
     def test_multiple_aggregate_models_raises(self):
         from core.llm.config import _validate_model_roles, ConfigError
-        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gpt-5"
-        a1 = MagicMock(); a1.role = "aggregate"; a1.model_name = "claude-opus-4-6"
-        a2 = MagicMock(); a2.role = "aggregate"; a2.model_name = "gpt-5.4"
+        analysis = MagicMock()
+        analysis.role = "analysis"
+        analysis.model_name = "gpt-5"
+        a1 = MagicMock()
+        a1.role = "aggregate"
+        a1.model_name = "claude-opus-4-6"
+        a2 = MagicMock()
+        a2.role = "aggregate"
+        a2.model_name = "gpt-5.4"
         with pytest.raises(ConfigError, match="Multiple models with role 'aggregate'"):
             _validate_model_roles([analysis, a1, a2])
 
     def test_resolve_roles_includes_judge(self):
         from core.llm.config import resolve_model_roles
-        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
-        judge = MagicMock(); judge.role = "judge"; judge.model_name = "gpt-5"
+        analysis = MagicMock()
+        analysis.role = "analysis"
+        analysis.model_name = "gemini"
+        judge = MagicMock()
+        judge.role = "judge"
+        judge.model_name = "gpt-5"
         result = resolve_model_roles(analysis, [judge])
         assert result["judge_models"] == [judge]
         assert result["analysis_model"] == analysis
 
     def test_resolve_roles_includes_aggregate(self):
         from core.llm.config import resolve_model_roles
-        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
-        aggregate = MagicMock(); aggregate.role = "aggregate"; aggregate.model_name = "claude-opus-4-6"
+        analysis = MagicMock()
+        analysis.role = "analysis"
+        analysis.model_name = "gemini"
+        aggregate = MagicMock()
+        aggregate.role = "aggregate"
+        aggregate.model_name = "claude-opus-4-6"
         result = resolve_model_roles(analysis, [aggregate])
         assert result["aggregate_models"] == [aggregate]
 
     def test_multiple_analysis_models_allowed(self):
         from core.llm.config import _validate_model_roles
-        m1 = MagicMock(); m1.role = "analysis"; m1.model_name = "gemini"
-        m2 = MagicMock(); m2.role = "analysis"; m2.model_name = "gpt-5"
+        m1 = MagicMock()
+        m1.role = "analysis"
+        m1.model_name = "gemini"
+        m2 = MagicMock()
+        m2.role = "analysis"
+        m2.model_name = "gpt-5"
         _validate_model_roles([m1, m2])
 
     def test_resolve_roles_returns_analysis_models_list(self):
         from core.llm.config import resolve_model_roles
-        m1 = MagicMock(); m1.role = "analysis"; m1.model_name = "gemini"
-        m2 = MagicMock(); m2.role = "analysis"; m2.model_name = "gpt-5"
+        m1 = MagicMock()
+        m1.role = "analysis"
+        m1.model_name = "gemini"
+        m2 = MagicMock()
+        m2.role = "analysis"
+        m2.model_name = "gpt-5"
         result = resolve_model_roles(m1, [m2])
         assert len(result["analysis_models"]) == 2
         assert result["analysis_model"] == m1

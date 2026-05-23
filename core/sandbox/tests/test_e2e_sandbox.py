@@ -1733,9 +1733,12 @@ class TestE2EBuildToolCompatibility(unittest.TestCase):
             # Point it into the sandbox's output so Landlock allows writes.
             # Must pre-create — Go doesn't bootstrap GOTMPDIR itself.
             import os as _os
-            gocache = Path(out) / ".gocache"; gocache.mkdir()
-            gopath = Path(out) / ".gopath"; gopath.mkdir()
-            gotmp = Path(out) / ".gotmp"; gotmp.mkdir()
+            gocache = Path(out) / ".gocache"
+            gocache.mkdir()
+            gopath = Path(out) / ".gopath"
+            gopath.mkdir()
+            gotmp = Path(out) / ".gotmp"
+            gotmp.mkdir()
             env = dict(_os.environ)
             env["GOCACHE"] = str(gocache)
             env["GOPATH"] = str(gopath)

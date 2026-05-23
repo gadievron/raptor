@@ -126,7 +126,8 @@ class TestUsageErrors:
         assert "--not-a-real-flag" in err
 
     def test_extra_positional_rejected(self, safe_dir, tmp_path):
-        other = tmp_path / "other"; other.mkdir()
+        other = tmp_path / "other"
+        other.mkdir()
         rc, _, err = _run(str(safe_dir), str(other))
         assert rc == 3
         assert "unexpected extra argument" in err

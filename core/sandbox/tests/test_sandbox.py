@@ -1021,7 +1021,8 @@ class TestUserLimitsInvalidUtf8(unittest.TestCase):
     """_load_user_limits must not crash on non-UTF-8 config files."""
 
     def test_invalid_utf8_config(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
         import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
@@ -1057,7 +1058,8 @@ class TestUserLimitsValidation(unittest.TestCase):
     """
 
     def test_rejects_negatives_accepts_zero(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
         import json
         import tempfile
         from pathlib import Path
@@ -1089,7 +1091,8 @@ class TestUserLimitsValidation(unittest.TestCase):
 
     def test_rejects_bool(self):
         """bool is an int subclass — exclude so `true` doesn't become 1."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
         import json
         import tempfile
         from pathlib import Path

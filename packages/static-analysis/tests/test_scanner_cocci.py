@@ -109,7 +109,8 @@ def test_run_cocci_skips_when_spatch_missing(tmp_path):
     """spatch off PATH → returns [] without crash. Every consumer
     treats [] as "no SARIF added"."""
     (tmp_path / "x.c").write_text("\n")
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
     with patch(
         "packages.coccinelle.runner.is_available", return_value=False,
     ):
@@ -120,7 +121,8 @@ def test_run_cocci_skips_when_spatch_missing(tmp_path):
 def test_run_cocci_skips_when_no_c_source(tmp_path):
     """Python-only target → skipped silently (cocci is C-only)."""
     (tmp_path / "main.py").write_text("\n")
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
     with patch(
         "packages.coccinelle.runner.is_available", return_value=True,
     ):
@@ -132,7 +134,8 @@ def test_run_cocci_skips_when_no_shipped_rules_dir(tmp_path):
     """No shipped rules → skipped silently (minimal install /
     packaging strip). Don't error; let other tools provide signal."""
     (tmp_path / "x.c").write_text("\n")
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
     with patch(
         "packages.coccinelle.runner.is_available", return_value=True,
     ), patch.object(_scanner, "_shipped_cocci_rules_dir",
@@ -151,9 +154,11 @@ def test_run_cocci_writes_sarif_with_matches(tmp_path):
     ``run_cocci`` must emit a valid SARIF at out_dir/cocci.sarif
     containing the rule + match."""
     (tmp_path / "x.c").write_text("\n")
-    rules_dir = tmp_path / "rules"; rules_dir.mkdir()
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
     (rules_dir / "stub.cocci").write_text("@r@\n@@\n@@\n")
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
 
     from packages.coccinelle.models import SpatchMatch, SpatchResult
     fake_results = [SpatchResult(
@@ -184,9 +189,11 @@ def test_run_cocci_emits_sarif_even_when_no_matches(tmp_path):
     rule definitions in the driver, empty results list). Operators
     see what rules ran in the combined output."""
     (tmp_path / "x.c").write_text("\n")
-    rules_dir = tmp_path / "rules"; rules_dir.mkdir()
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
     (rules_dir / "stub.cocci").write_text("@r@\n@@\n@@\n")
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
 
     from packages.coccinelle.models import SpatchResult
     with patch(
@@ -219,7 +226,8 @@ def test_e2e_real_spatch_finds_missing_null_check(tmp_path):
     ``missing_null_check`` rule against a tiny C fixture, the
     scanner emits SARIF, and the SARIF carries the expected match.
     Pin against the shipped rule corpus so corpus drift surfaces here."""
-    src_dir = tmp_path / "src"; src_dir.mkdir()
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
     # Classic missing-NULL-check pattern — malloc result dereferenced
     # without IS_ERR/NULL check.
     (src_dir / "vuln.c").write_text(
@@ -229,7 +237,8 @@ def test_e2e_real_spatch_finds_missing_null_check(tmp_path):
         "    *p = 42;\n"
         "}\n"
     )
-    out = tmp_path / "out"; out.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
 
     sarifs = _scanner.run_cocci(tmp_path, out)
     assert sarifs, "expected SARIF emission against shipped rules"

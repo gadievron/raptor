@@ -87,8 +87,10 @@ class TestDiffAnnotations(unittest.TestCase):
         """Updating ``hash`` or ``rule_id`` doesn't count as changed
         — operators care about body + status, not file checksums."""
         with TemporaryDirectory() as d:
-            run_a = Path(d) / "a"; run_a.mkdir()
-            run_b = Path(d) / "b"; run_b.mkdir()
+            run_a = Path(d) / "a"
+            run_a.mkdir()
+            run_b = Path(d) / "b"
+            run_b.mkdir()
             write_annotation(run_a / "annotations", Annotation(
                 file="src/x.py", function="f", body="same body",
                 metadata={"source": "llm", "status": "clean",
@@ -105,8 +107,10 @@ class TestDiffAnnotations(unittest.TestCase):
 
     def test_empty_runs(self):
         with TemporaryDirectory() as d:
-            run_a = Path(d) / "a"; run_a.mkdir()
-            run_b = Path(d) / "b"; run_b.mkdir()
+            run_a = Path(d) / "a"
+            run_a.mkdir()
+            run_b = Path(d) / "b"
+            run_b.mkdir()
             result = diff_annotations(run_a, run_b)
             assert result["added"] == []
             assert result["removed"] == []
@@ -116,8 +120,10 @@ class TestDiffAnnotations(unittest.TestCase):
     def test_no_annotations_subdir(self):
         """Run dirs without ``annotations/`` subdirs treated as empty."""
         with TemporaryDirectory() as d:
-            run_a = Path(d) / "a"; run_a.mkdir()
-            run_b = Path(d) / "b"; run_b.mkdir()
+            run_a = Path(d) / "a"
+            run_a.mkdir()
+            run_b = Path(d) / "b"
+            run_b.mkdir()
             # No annotations/ in either.
             result = diff_annotations(run_a, run_b)
             assert all(len(result[k]) == 0
@@ -127,8 +133,10 @@ class TestDiffAnnotations(unittest.TestCase):
 class TestFormatDiff(unittest.TestCase):
     def test_includes_counts(self):
         with TemporaryDirectory() as d:
-            run_a = Path(d) / "a"; run_a.mkdir()
-            run_b = Path(d) / "b"; run_b.mkdir()
+            run_a = Path(d) / "a"
+            run_a.mkdir()
+            run_b = Path(d) / "b"
+            run_b.mkdir()
             write_annotation(run_b / "annotations", Annotation(
                 file="src/x.py", function="new", body="x",
                 metadata={"source": "llm", "status": "finding"},
@@ -141,8 +149,10 @@ class TestFormatDiff(unittest.TestCase):
 
     def test_status_change_rendered(self):
         with TemporaryDirectory() as d:
-            run_a = Path(d) / "a"; run_a.mkdir()
-            run_b = Path(d) / "b"; run_b.mkdir()
+            run_a = Path(d) / "a"
+            run_a.mkdir()
+            run_b = Path(d) / "b"
+            run_b.mkdir()
             write_annotation(run_a / "annotations", Annotation(
                 file="src/x.py", function="f", body="x",
                 metadata={"source": "llm", "status": "finding"},
