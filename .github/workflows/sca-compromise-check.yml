@@ -40,12 +40,12 @@ on:
     paths:
       - 'packages/sca/**'
       - 'libexec/raptor-sca-compromise-check'
-      - 'tests/sca-e2e/compromise-corpus/**'
+      - 'test/data/sca-e2e/compromise-corpus/**'
       - '.github/workflows/sca-compromise-check.yml'
   pull_request:
     paths:
       - 'libexec/raptor-sca-compromise-check'
-      - 'tests/sca-e2e/compromise-corpus/**'
+      - 'test/data/sca-e2e/compromise-corpus/**'
       - 'packages/sca/supply_chain/**'
       - 'packages/sca/findings.py'
       - 'packages/sca/thresholds.py'
@@ -88,8 +88,8 @@ jobs:
         # matched / missed) is in the run's stdout; operators
         # reproduce a regression locally via:
         #   libexec/raptor-sca-compromise-check \
-        #     tests/sca-e2e/compromise-corpus --only <fixture-name>
+        #     test/data/sca-e2e/compromise-corpus --only <fixture-name>
         run: |
           libexec/raptor-sca-compromise-check \
-            tests/sca-e2e/compromise-corpus \
+            test/data/sca-e2e/compromise-corpus \
             --no-offline

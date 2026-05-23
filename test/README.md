@@ -13,9 +13,12 @@ test/
 ├── data/
 │   ├── javascript_xss.js              # XSS sample, JS scanner target
 │   ├── python_sql_injection.py        # SQL-i sample, Python scanner target
-│   └── smt_codeql_testbench/          # CodeQL + SMT path-feasibility testbench
-│       ├── README.md
-│       └── smt_codeql_testbench.c
+│   ├── smt_codeql_testbench/          # CodeQL + SMT path-feasibility testbench
+│   │   ├── README.md
+│   │   └── smt_codeql_testbench.c
+│   └── sca-e2e/                       # SCA end-to-end harness fixtures
+│       ├── compromise-corpus/         # anchor-incident reproducers (log4shell, ua-parser-js, …)
+│       └── modes-corpus/              # check/upgrade/diff mode fixtures
 └── README.md                          # this file
 ```
 

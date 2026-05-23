@@ -643,7 +643,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument(
         "corpus", type=Path,
         help="Path to the corpus directory (typically "
-             "tests/sca-e2e/compromise-corpus).",
+             "test/data/sca-e2e/compromise-corpus).",
     )
     p.add_argument(
         "--offline", action="store_true", default=True,
