@@ -322,6 +322,19 @@ class TestConfigToName:
 
 # Integration ------------------------------------------------------------------
 
+# Marked ``integration`` so pytest.ini's default
+# ``-m "not integration and not slow"`` deselects this class in
+# regular suite runs. Reason: the tests call ``run_rule(... "p/python"
+# ...)`` which downloads the ``p/python`` rule pack from semgrep.dev
+# at scan time. Two consequences:
+#   * The default suite shouldn't depend on outbound HTTPS to
+#     semgrep.dev — flaky on sandboxed CI, fails when an unrelated
+#     test in the same process has spun up the egress-proxy with a
+#     narrower allowlist.
+#   * 6-second wall per test (real semgrep invocation) is integration
+#     territory, not unit-test cadence.
+# Opt-in with ``pytest -m integration``.
+@pytest.mark.integration
 @pytest.mark.skipif(not is_available(), reason="semgrep not installed")
 class TestIntegration:
     """Real-semgrep tests. Skipped when binary unavailable."""
