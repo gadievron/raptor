@@ -95,6 +95,26 @@ Be rigorous. False positives waste significant downstream effort (exploit genera
 patch creation, review). But do not dismiss real vulnerabilities — investigate first."""
 
 
+# Appended to the system prompt when the operator passes
+# --allow-unreachable. Switches the Stage C REACHABILITY ENGAGEMENT
+# guidance from "you must engage with reachability before marking
+# exploitable" to "reachability is informational only; evaluate the
+# inherent vulnerability shape". The addendum approach avoids
+# restructuring the multi-paragraph base prompt — the default
+# behaviour (which has been A/B validated to shift verdicts
+# correctly) stays unchanged for normal /agentic runs.
+_ALLOW_UNREACHABLE_ADDENDUM = """
+
+**ADDENDUM — IN-ISOLATION MODE (--allow-unreachable):**
+
+This analysis is running with reachability gating disabled. The operator has chosen to evaluate code in isolation (CTF challenge, vendor reference snippet, exploit-research target, or intentional dead-code review). The REACHABILITY ENGAGEMENT guidance in Stage C above is **suspended** for this run.
+
+- Reachability data shown in the metadata block (caller counts, caller names, REACHABLE-via verdicts) is INFORMATIONAL ONLY.
+- Do NOT defer based on "no callers" or "NOT_CALLED" — the operator wants the inherent vulnerability shape evaluated under plausible attacker-controllable inputs.
+- is_exploitable should reflect whether the code pattern is exploitable in isolation, NOT whether it is reachable from a project entry point.
+- The deferral rulings (unreachable, dead_code) should only be used if the FUNCTION BODY ITSELF (not its containing scope) is provably unreachable under all inputs."""
+
+
 def build_analysis_schema(has_dataflow: bool = False) -> Dict[str, str]:
     """Build the analysis schema, optionally including dataflow fields."""
     schema = dict(ANALYSIS_SCHEMA)
@@ -294,6 +314,7 @@ def build_analysis_prompt_bundle(
     file_includes: Iterable[str] = (),
     function_calls_made: Iterable[str] = (),
     ast_view: Optional[Dict[str, Any]] = None,
+    allow_unreachable: bool = False,
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -302,6 +323,12 @@ def build_analysis_prompt_bundle(
     envelope tags inside the user message. Identifiers (rule_id, file_path,
     line range, dataflow labels) are passed through named slots. Static
     instructions stay in the system message.
+
+    ``allow_unreachable=True`` appends an addendum that suspends the
+    Stage C REACHABILITY ENGAGEMENT guidance — for in-isolation
+    review where the operator wants the inherent vulnerability shape
+    evaluated regardless of static reachability. Default behaviour
+    (engagement required) is unchanged.
 
     Caller routes ``bundle.messages`` to ``LLMClient.generate_structured``
     by role (system message → ``system_prompt`` parameter; user message →
@@ -314,6 +341,8 @@ def build_analysis_prompt_bundle(
         + "\n\n"
         + ANALYSIS_TASK_INSTRUCTIONS
     )
+    if allow_unreachable:
+        system += _ALLOW_UNREACHABLE_ADDENDUM
 
     # Append CWE-specialised review strategies when context allows.
     # Each strategy contributes its key questions, prompt addendum,
@@ -583,8 +612,16 @@ def build_analysis_prompt_bundle_from_finding(
     *,
     profile: Optional[ModelDefenseProfile] = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
+    allow_unreachable: bool = False,
 ) -> PromptBundle:
-    """Bundle-shape equivalent of ``build_analysis_prompt_from_finding``."""
+    """Bundle-shape equivalent of ``build_analysis_prompt_from_finding``.
+
+    ``allow_unreachable`` threads through to
+    :func:`build_analysis_prompt_bundle` and switches the system
+    prompt's reachability-engagement text. See that function for
+    semantics. Task-level setting (the operator's --allow-unreachable
+    flag) — not a per-finding decision.
+    """
     dataflow = finding.get("dataflow", {})
     metadata = finding.get("metadata") or {}
     return build_analysis_prompt_bundle(
@@ -619,6 +656,7 @@ def build_analysis_prompt_bundle_from_finding(
         # when the function can't be located in the inventory or
         # the parser doesn't support the language.
         ast_view=finding.get("ast_view"),
+        allow_unreachable=allow_unreachable,
     )
 
 

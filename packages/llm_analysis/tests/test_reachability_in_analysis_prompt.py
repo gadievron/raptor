@@ -237,3 +237,76 @@ class TestCombinedRendering:
         assert "Reachability:" in out
         assert "Verdict: NOT_CALLED" in out
         assert "0 direct" in out
+
+
+# ---------------------------------------------------------------------------
+# C2: --allow-unreachable conditional system-prompt addendum
+# ---------------------------------------------------------------------------
+
+
+class TestAllowUnreachableAddendum:
+    """The system prompt grows an in-isolation-mode addendum when
+    the operator passes --allow-unreachable. The addendum overrides
+    the Stage C REACHABILITY ENGAGEMENT guidance — for CTF / vendor
+    snippet / exploit-research / intentional dead-code review.
+    Default behaviour (engagement required) unchanged."""
+
+    def _bundle(self, **kw):
+        from packages.llm_analysis.prompts.analysis import (
+            build_analysis_prompt_bundle,
+        )
+        return build_analysis_prompt_bundle(
+            rule_id="r", level="warning",
+            file_path="src/v.py", start_line=1, end_line=1,
+            message="m", **kw,
+        )
+
+    def _system(self, bundle):
+        return next(m.content for m in bundle.messages if m.role == "system")
+
+    def test_default_omits_addendum(self):
+        bundle = self._bundle()
+        system = self._system(bundle)
+        assert "IN-ISOLATION MODE" not in system
+        assert "suspended" not in system.lower()
+
+    def test_allow_unreachable_appends_addendum(self):
+        bundle = self._bundle(allow_unreachable=True)
+        system = self._system(bundle)
+        assert "IN-ISOLATION MODE" in system
+        assert "REACHABILITY ENGAGEMENT" in system
+        assert "suspended" in system.lower()
+
+    def test_addendum_appears_after_base_instructions(self):
+        # The addendum is meant to OVERRIDE the C1 Stage C
+        # engagement guidance — must appear AFTER it in the prompt
+        # so the LLM's last-instruction-wins behaviour favours the
+        # addendum. Use the unique Stage C lead-in phrase as the
+        # anchor (the addendum doesn't use this exact wording).
+        bundle = self._bundle(allow_unreachable=True)
+        system = self._system(bundle)
+        stage_c_pos = system.find('If the metadata block contains a "Reachability:"')
+        addendum_pos = system.find("IN-ISOLATION MODE")
+        assert stage_c_pos != -1, "Stage C engagement anchor missing"
+        assert addendum_pos != -1, "Addendum header missing"
+        assert addendum_pos > stage_c_pos, (
+            f"Addendum (pos {addendum_pos}) must follow Stage C "
+            f"engagement text (pos {stage_c_pos}) so it overrides"
+        )
+
+    def test_addendum_propagates_from_finding_builder(self):
+        # build_analysis_prompt_bundle_from_finding forwards the
+        # flag to the underlying builder.
+        from packages.llm_analysis.prompts.analysis import (
+            build_analysis_prompt_bundle_from_finding,
+        )
+        bundle = build_analysis_prompt_bundle_from_finding(
+            {
+                "rule_id": "r", "level": "warning",
+                "file_path": "src/v.py", "start_line": 1, "end_line": 1,
+                "message": "m", "metadata": {"name": "fn"},
+            },
+            allow_unreachable=True,
+        )
+        system = self._system(bundle)
+        assert "IN-ISOLATION MODE" in system

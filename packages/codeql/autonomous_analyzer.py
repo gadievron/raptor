@@ -151,6 +151,7 @@ class AutonomousCodeQLAnalyzer:
         enable_visualization=True,
         reachability_inventory=None,
         reachability_checklist_path=None,
+        allow_unreachable=False,
     ):
         """
         Initialize autonomous analyzer.
@@ -216,6 +217,14 @@ class AutonomousCodeQLAnalyzer:
         #     retry.
         self._reachability_inventory: Any = reachability_inventory
         self._reachability_checklist_path = reachability_checklist_path
+        # Operator opt-out for the in-isolation use case. When True,
+        # the prefilter NEVER short-circuits NOT_CALLED findings —
+        # full LLM analysis runs even on dead-code-looking sinks.
+        # Matched in raptor_agentic by --allow-unreachable + threaded
+        # to mark_unreachable_low_priority / demote_unreachable_paths
+        # / the analysis prompt builder so all four reachability
+        # consumer sites move together.
+        self._allow_unreachable = bool(allow_unreachable)
 
     def _check_reachability(
         self, finding: CodeQLFinding, repo_path: Path,
@@ -326,6 +335,17 @@ class AutonomousCodeQLAnalyzer:
         except ValueError:
             return None
         verdict = result.verdict.value
+        # Operator opt-out: --allow-unreachable disables the
+        # short-circuit path entirely. Return None ("prefilter
+        # had no opinion") instead of the verdict — the caller
+        # then proceeds with full LLM analysis regardless of
+        # static-graph reachability. The flag is intended for
+        # in-isolation review (CTF, snippet, vendor reference)
+        # where the operator explicitly wants to evaluate the
+        # code pattern's inherent vulnerability shape rather
+        # than its deployment reachability.
+        if self._allow_unreachable and verdict == "not_called":
+            return None
         # NOT_CALLED in the static graph doesn't mean unreachable
         # when the function is framework-registered (Flask
         # ``@app.route``, Celery ``@shared_task``, Django

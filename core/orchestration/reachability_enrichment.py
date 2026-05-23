@@ -46,6 +46,7 @@ def mark_unreachable_low_priority(
     target_path: Path,
     *,
     inventory: Optional[Dict[str, Any]] = None,
+    allow_unreachable: bool = False,
 ) -> int:
     """Walk ``checklist["files"][*]["items"]`` and mark functions
     that are provably dead (NOT_CALLED) as ``priority="low"``.
@@ -56,7 +57,21 @@ def mark_unreachable_low_priority(
     (avoids a redundant tree walk when a sibling consumer
     already built one).
 
-    Returns the count of functions marked low-priority.
+    ``allow_unreachable=True`` is the operator-opt-out for the
+    in-isolation use case (CTF challenges, vendor reference
+    snippets, exploit-research targets, intentional dead-code
+    review). When set, NOT_CALLED functions do NOT receive the
+    ``priority="low"`` demotion — the analysis prompt won't
+    surface a "Verdict: NOT_CALLED" line, and the LLM is asked to
+    evaluate the function's inherent vulnerability shape rather
+    than its deployment reachability. Framework-callable /
+    registered-via-call annotations are STILL applied (they're
+    affirmative reachability evidence regardless of mode).
+
+    Returns the count of functions marked low-priority. Zero when
+    ``allow_unreachable=True`` (nothing demoted) but still mutates
+    the checklist with the framework_callable / registered_via_call
+    annotations.
     """
     if not isinstance(checklist, dict):
         return 0
@@ -162,6 +177,12 @@ def mark_unreachable_low_priority(
                 )
                 continue
 
+            if allow_unreachable:
+                # In-isolation mode: don't demote NOT_CALLED
+                # functions. The analysis prompt will see caller
+                # counts (informational) but no "Verdict:
+                # NOT_CALLED" line that would trigger deferral.
+                continue
             func["priority"] = "low"
             func["priority_reason"] = "reachability:not_called"
             marked += 1

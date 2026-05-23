@@ -901,6 +901,8 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
 
 def _mark_unreachable_low_priority(
     agentic_out_dir: Path, target: Path,
+    *,
+    allow_unreachable: bool = False,
 ) -> int:
     """Mark dead-code functions as ``priority=low`` in the
     agentic checklist.
@@ -912,6 +914,11 @@ def _mark_unreachable_low_priority(
     complementary and run consecutively. Functions already
     marked ``priority=high`` by context-map enrichment are
     skipped (entry-point analysis trumps reachability).
+
+    ``allow_unreachable`` (from --allow-unreachable) is threaded
+    to ``mark_unreachable_low_priority``: when True, NOT_CALLED
+    functions do NOT get the priority=low demotion. Framework-
+    callable / registered-via-call annotations still apply.
 
     Returns the count of functions marked low-priority. Best-
     effort; failures logged at debug.
@@ -927,7 +934,9 @@ def _mark_unreachable_low_priority(
         checklist = load_json(checklist_path)
         if not isinstance(checklist, dict):
             return 0
-        marked = mark_unreachable_low_priority(checklist, target)
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=allow_unreachable,
+        )
         if marked:
             save_json(checklist_path, checklist)
         return marked
@@ -942,6 +951,8 @@ def _mark_unreachable_low_priority(
 def run_reachability_prepass(
     target: Path,
     agentic_out_dir: Path,
+    *,
+    allow_unreachable: bool = False,
 ) -> "ReachabilityPrepassResult":
     """Always-on companion to ``run_understand_prepass``.
 
@@ -956,6 +967,11 @@ def run_reachability_prepass(
     them to the model — so the priority=low marking shifts the
     analysis budget to live code regardless of whether the
     operator passed --understand.
+
+    ``allow_unreachable`` (from --allow-unreachable) is threaded
+    to the underlying enrichment pass. When True, NOT_CALLED
+    functions are NOT demoted (still get caller-context fields
+    + framework_callable / registered_via_call annotations).
 
     Best-effort: any failure (missing checklist, inventory build
     error, malformed call_graph) is logged at debug; the
@@ -1003,6 +1019,7 @@ def run_reachability_prepass(
             )
         marked = mark_unreachable_low_priority(
             checklist, target, inventory=inventory,
+            allow_unreachable=allow_unreachable,
         )
         # Caller-context enrichment runs AFTER the dead-code
         # marking so already-marked functions can be skipped

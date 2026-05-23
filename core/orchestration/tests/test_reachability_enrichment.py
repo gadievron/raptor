@@ -499,6 +499,60 @@ class TestRegistrationViaCallBypass:
     to it via the registration call.
     """
 
+    def test_allow_unreachable_suppresses_demotion(self, tmp_path):
+        # C2: --allow-unreachable opts out of NOT_CALLED demotion.
+        # A genuinely-dead function does NOT get priority=low.
+        target = _project(tmp_path, {
+            "src/v.py": "def dead(): pass\n",
+        })
+        checklist = _checklist({
+            "src/v.py": [{
+                "name": "dead", "kind": "function",
+                "line_start": 1, "line_end": 1,
+            }],
+        })
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        assert marked == 0
+        func = checklist["files"][0]["items"][0]
+        assert "priority" not in func, (
+            "--allow-unreachable must NOT demote NOT_CALLED functions"
+        )
+        assert "priority_reason" not in func
+
+    def test_allow_unreachable_still_annotates_framework_callable(
+        self, tmp_path,
+    ):
+        # Framework-callable annotation is affirmative reachability
+        # evidence, not a deferral signal — should still apply even
+        # under --allow-unreachable (the operator may find it useful
+        # to know which functions ARE framework-registered).
+        target = _project(tmp_path, {
+            "src/api.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "\n"
+                "@app.route('/x')\n"
+                "def handler():\n"
+                "    return 1\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/api.py": [{
+                "name": "handler", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        func = checklist["files"][0]["items"][0]
+        # framework_callable annotation still applies
+        assert func.get("priority_reason") == (
+            "reachability:framework_callable"
+        )
+
     def test_go_handler_registered_via_handlefunc_not_demoted(
         self, tmp_path,
     ):

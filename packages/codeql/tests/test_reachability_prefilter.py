@@ -446,6 +446,41 @@ def test_framework_callable_does_not_short_circuit(
 # ---------------------------------------------------------------------------
 
 
+def test_allow_unreachable_suppresses_not_called_short_circuit(tmp_path):
+    """C2: --allow-unreachable on the analyzer → the prefilter
+    returns None (no opinion) instead of 'not_called', letting
+    the caller proceed with full LLM analysis."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "v.py").write_text(
+        "def dead(): cursor.execute('x')\n"
+    )
+    a = AutonomousCodeQLAnalyzer(
+        llm_client=MagicMock(), exploit_validator=MagicMock(),
+        multi_turn_analyzer=None, enable_visualization=False,
+        allow_unreachable=True,
+    )
+    verdict = a._check_reachability(_finding("src/v.py", line=1), tmp_path)
+    assert verdict is None, (
+        f"--allow-unreachable must suppress not_called signal; "
+        f"got {verdict!r}"
+    )
+
+
+def test_default_still_returns_not_called(tmp_path):
+    """Sanity: with allow_unreachable=False (default), dead
+    function still returns 'not_called' — preserving the existing
+    short-circuit path."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "v.py").write_text(
+        "def dead(): cursor.execute('x')\n"
+    )
+    a = _analyzer()  # default constructor; allow_unreachable defaults False
+    verdict = a._check_reachability(_finding("src/v.py", line=1), tmp_path)
+    assert verdict == "not_called"
+
+
 def test_go_handler_registered_via_call_returns_registered_via_call(tmp_path):
     """Go handler passed to http.HandleFunc resolves new
     ``registered_via_call`` verdict instead of ``not_called``."""

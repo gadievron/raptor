@@ -724,6 +724,26 @@ Examples:
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI (auto-detected if not specified)")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
 
+    # Reachability gating control
+    parser.add_argument(
+        "--allow-unreachable",
+        action="store_true",
+        help=(
+            "Admit findings on functions the reachability substrate "
+            "marks NOT_CALLED. Default behaviour filters / demotes "
+            "these and the analysis prompt asks the LLM to defer. "
+            "Use when evaluating code in isolation: CTF challenges, "
+            "vendor reference snippets, exploit-research targets, "
+            "deliberate dead-code review. Does NOT change handling "
+            "of UNCERTAIN cases — those always flow through to "
+            "avoid false confidence in non-reachability. Affects 4 "
+            "wiring sites: reachability_enrichment (no priority=low "
+            "demotion), CodeQL prefilter (no short-circuit), attack-"
+            "path demoter (no demote), analysis prompt (engagement "
+            "text → informational only)."
+        ),
+    )
+
     # Mitigation analysis options (NEW)
     parser.add_argument("--binary", help="Target binary for mitigation analysis (enables pre-exploit checks)")
     parser.add_argument("--check-mitigations", action="store_true",
@@ -1172,6 +1192,7 @@ Examples:
         reachability_prepass_result = run_reachability_prepass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
+            allow_unreachable=getattr(args, "allow_unreachable", False),
         )
         if reachability_prepass_result.ran:
             logger.info(
@@ -1758,6 +1779,7 @@ Examples:
                 deep_validate=getattr(args, "deep_validate", False),
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
+                allow_unreachable=getattr(args, "allow_unreachable", False),
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
@@ -1786,6 +1808,7 @@ Examples:
             agentic_out_dir=out_dir,
             analysis_report=validate_input_report,
             block_cc_dispatch=block_cc_dispatch,
+            allow_unreachable=getattr(args, "allow_unreachable", False),
         )
         if postpass_result.ran:
             logger.info(f"Post-pass validated {postpass_result.selected_count} findings "

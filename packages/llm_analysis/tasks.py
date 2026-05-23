@@ -64,8 +64,19 @@ class AnalysisTask(DispatchTask):
     name = "analysis"
     model_role = "analysis"
 
-    def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE):
+    def __init__(
+        self,
+        profile: ModelDefenseProfile = CONSERVATIVE,
+        *,
+        allow_unreachable: bool = False,
+    ):
         self.profile = profile
+        # Operator's --allow-unreachable; threaded into the prompt
+        # builder so the system message switches from "engagement
+        # required" to "informational only" Stage C text. The
+        # substrate-side enricher skip is independent — that runs
+        # in the reachability pre-pass before AnalysisTask exists.
+        self.allow_unreachable = bool(allow_unreachable)
         self._tls = threading.local()
 
     def get_models(self, role_resolution):
@@ -87,6 +98,7 @@ class AnalysisTask(DispatchTask):
         si_blocks = evidence_blocks_for_finding(finding)
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=si_blocks,
+            allow_unreachable=self.allow_unreachable,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)

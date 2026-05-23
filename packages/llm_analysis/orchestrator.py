@@ -322,6 +322,7 @@ def orchestrate(
     deep_validate: bool = False,
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
+    allow_unreachable: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -684,7 +685,8 @@ def orchestrate(
             return prefilter_for_finding(client, item)
 
     analysis_results = dispatch_task(
-        AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
+        AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
+        findings, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
         prefilter_fn=prefilter_fn,
     )
@@ -713,7 +715,8 @@ def orchestrate(
             # primary path even though the same Claude model was
             # behind it.
             analysis_results = dispatch_task(
-                AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
+                AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
+        findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
 
