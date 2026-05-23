@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -160,19 +161,40 @@ class WitnessStore:
         # that subsequent puts would skip (since blob_path.exists()
         # was True), producing on-disk corruption invisible to
         # later readers.
+        # ``.tmp`` paths are made unique per (pid, thread) so two
+        # concurrent ``put()`` calls writing the same hash don't
+        # race on the same temp file — the original ``.bin.tmp`` /
+        # ``.json.tmp`` suffix collided when N threads wrote identical
+        # bytes, with N-1 callers raising ``FileNotFoundError`` on
+        # the second ``os.replace`` (the first one had already
+        # consumed the shared tempfile). End state was still correct
+        # (dedup by hash) but most callers got an exception. The
+        # pid+tid suffix keeps the existing crash-mid-write guarantee
+        # (each tempfile is still atomically renamed onto the final
+        # path) while making same-hash concurrent writes succeed.
+        suffix = f".{os.getpid()}.{threading.get_ident()}.tmp"
         if not blob_path.exists():
-            blob_tmp = blob_path.with_suffix(".bin.tmp")
+            blob_tmp = blob_path.with_suffix(".bin" + suffix)
             blob_tmp.write_bytes(data)
-            os.replace(blob_tmp, blob_path)
+            try:
+                os.replace(blob_tmp, blob_path)
+            except FileNotFoundError:
+                # Lost the race: another writer replaced the .tmp out
+                # from under us. The final blob_path now holds the
+                # same bytes (verified by hash); nothing to do.
+                pass
 
         # Atomic manifest write. Pre-fix ``write_text`` was direct
         # and a crash mid-write left a malformed JSON file forever
         # — list_witnesses skipped it with a warning but get_witness
         # raised, and there was no recovery path other than manual
         # cleanup.
-        manifest_tmp = manifest_path.with_suffix(".json.tmp")
+        manifest_tmp = manifest_path.with_suffix(".json" + suffix)
         manifest_tmp.write_text(manifest_text, encoding="utf-8")
-        os.replace(manifest_tmp, manifest_path)
+        try:
+            os.replace(manifest_tmp, manifest_path)
+        except FileNotFoundError:
+            pass
 
         logger.debug(
             "WitnessStore.put: hash=%s len=%d source=%s outcome=%s",
