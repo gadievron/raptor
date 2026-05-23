@@ -390,3 +390,101 @@ def test_enrich_caller_context_uncertain_caller_counted_separately(
     assert enriched == 1
     func = checklist["files"][0]["items"][0]
     assert func["caller_count_uncertain"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Framework-callable bypass — functions with framework-dispatch
+# decorators must NOT be demoted to priority=low even when the static
+# call graph shows zero callers.
+# ---------------------------------------------------------------------------
+
+
+class TestFrameworkCallableBypass:
+    def test_flask_route_handler_not_demoted(self, tmp_path):
+        # A Flask route handler has no in-project callers — only
+        # the Flask runtime invokes it via the registered route.
+        # Pre-fix this regressed to priority=low; the LLM analysis
+        # then deferred on it. With S1, the framework-callable
+        # check skips the demotion.
+        target = _project(tmp_path, {
+            "src/api.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "\n"
+                "@app.route('/users')\n"
+                "def list_users():\n"
+                "    return []\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/api.py": [{
+                "name": "list_users", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low", (
+            "Flask @app.route handler must not be demoted — "
+            "framework dispatches to it at runtime"
+        )
+        # The diagnostic annotation should mark it as
+        # framework-callable so operators can see WHY this didn't
+        # get a priority downgrade.
+        assert func.get("priority_reason") == (
+            "reachability:framework_callable"
+        )
+
+    def test_django_receiver_naked_decorator_not_demoted(self, tmp_path):
+        # Django's @receiver is the bare-name form covered by S1b.
+        # Validates that S1b's naked-name set propagates through
+        # to the consumer wiring.
+        target = _project(tmp_path, {
+            "src/signals.py": (
+                "from django.dispatch import receiver\n"
+                "from django.db.models.signals import post_save\n"
+                "\n"
+                "@receiver(post_save)\n"
+                "def update_profile(sender, instance, **kw):\n"
+                "    pass\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/signals.py": [{
+                "name": "update_profile", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low"
+
+    def test_genuinely_dead_function_still_demoted(self, tmp_path):
+        # A function with no callers AND no framework-dispatch
+        # decorator IS dead code — the framework-callable bypass
+        # must not over-fire on non-decorated functions.
+        target = _project(tmp_path, {
+            "src/v.py": (
+                "def dead(): pass\n"
+                "def alive(): pass\n"
+            ),
+            "src/main.py": (
+                "from src.v import alive\n"
+                "alive()\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/v.py": [
+                {"name": "dead", "kind": "function",
+                 "line_start": 1, "line_end": 1},
+                {"name": "alive", "kind": "function",
+                 "line_start": 2, "line_end": 2},
+            ],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        funcs = checklist["files"][0]["items"]
+        dead = next(f for f in funcs if f["name"] == "dead")
+        alive = next(f for f in funcs if f["name"] == "alive")
+        assert dead["priority"] == "low"
+        assert dead["priority_reason"] == "reachability:not_called"
+        assert "priority" not in alive  # called → no demotion at all

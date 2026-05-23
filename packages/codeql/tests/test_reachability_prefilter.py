@@ -348,3 +348,92 @@ def test_no_short_circuit_when_called(tmp_path, monkeypatch):
     # Got past the early-exit (analysis was attempted).
     assert result.skipped_reason is None
     assert result.reachability_verdict == "called"
+
+
+# ---------------------------------------------------------------------------
+# Framework-callable bypass — functions registered with framework
+# dispatch (Flask @app.route, Celery @shared_task, etc.) have no
+# static callers but ARE reachable at runtime. The prefilter must
+# NOT short-circuit them as "not_called" — full LLM analysis runs.
+# ---------------------------------------------------------------------------
+
+
+def test_reachability_flask_route_returns_framework_callable(tmp_path):
+    """A Flask route handler with no static callers must return
+    the new ``framework_callable`` verdict, not ``not_called``."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "api.py").write_text(
+        "from flask import Flask, request\n"
+        "app = Flask(__name__)\n"
+        "\n"
+        "@app.route('/users')\n"
+        "def list_users():\n"
+        "    return request.args.get('q')\n"
+    )
+    a = _analyzer()
+    finding = _finding("src/api.py", line=6)
+    verdict = a._check_reachability(finding, tmp_path)
+    assert verdict == "framework_callable", (
+        f"Flask route handler must resolve framework_callable "
+        f"(reachable via Flask runtime dispatch), got {verdict!r}"
+    )
+
+
+def test_reachability_django_receiver_returns_framework_callable(tmp_path):
+    """Naked-decorator framework dispatch (S1b coverage)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "signals.py").write_text(
+        "from django.dispatch import receiver\n"
+        "from django.db.models.signals import post_save\n"
+        "\n"
+        "@receiver(post_save)\n"
+        "def update_profile(sender, instance, **kw):\n"
+        "    cursor.execute(sender)\n"
+    )
+    a = _analyzer()
+    finding = _finding("src/signals.py", line=6)
+    verdict = a._check_reachability(finding, tmp_path)
+    assert verdict == "framework_callable"
+
+
+def test_framework_callable_does_not_short_circuit(
+    tmp_path, monkeypatch,
+):
+    """End-to-end: a framework-callable finding must NOT be
+    short-circuited; full analysis runs and skipped_reason stays
+    None."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "api.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask(__name__)\n"
+        "\n"
+        "@app.route('/q')\n"
+        "def handler():\n"
+        "    return 1\n"
+    )
+
+    a = _analyzer()
+    canned = _finding("src/api.py", line=6)
+    monkeypatch.setattr(
+        a, "parse_sarif_finding", lambda r, run: canned,
+    )
+    monkeypatch.setattr(
+        a, "read_vulnerable_code", lambda f, p: "stub",
+    )
+    fake_analysis = MagicMock(is_exploitable=False)
+    monkeypatch.setattr(
+        a, "analyze_vulnerability",
+        lambda *args, **kwargs: fake_analysis,
+    )
+
+    result = a.analyze_finding_autonomous(
+        sarif_result={}, sarif_run={},
+        repo_path=tmp_path, out_dir=tmp_path / "out",
+    )
+    # Crucial: framework_callable must NOT trigger the short-
+    # circuit. skipped_reason stays None; analysis ran.
+    assert result.skipped_reason is None
+    assert result.reachability_verdict == "framework_callable"

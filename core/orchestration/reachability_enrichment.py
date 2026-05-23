@@ -79,7 +79,10 @@ def mark_unreachable_low_priority(
 
     try:
         from core.inventory.reachability import (
-            Verdict, function_called,
+            InternalFunction,
+            Verdict,
+            function_called,
+            is_framework_callable,
         )
     except ImportError:
         return 0
@@ -122,6 +125,29 @@ def mark_unreachable_low_priority(
             except ValueError:
                 continue
             if result.verdict != Verdict.NOT_CALLED:
+                continue
+
+            # NOT_CALLED in the static graph — but the function may
+            # still be reachable via framework dispatch (Flask
+            # ``@app.route``, Celery ``@shared_task``, Django
+            # ``@receiver``, etc.). The substrate's
+            # ``is_framework_callable`` recognises these. Without
+            # this check, framework-registered handlers regress to
+            # ``priority="low"`` and downstream consumers (LLM
+            # analysis prompt's reachability engagement, attack-
+            # path demoter) treat them as dead code — false
+            # negatives on any web/task/signal-heavy codebase.
+            line = int(func.get("line_start") or 0)
+            target = InternalFunction(
+                file_path=rel_path, name=name, line=line,
+            )
+            if is_framework_callable(inventory, target):
+                # Optionally annotate so operators / downstream
+                # consumers can see this function was static-
+                # uncalled but framework-reachable.
+                func["priority_reason"] = (
+                    "reachability:framework_callable"
+                )
                 continue
 
             func["priority"] = "low"

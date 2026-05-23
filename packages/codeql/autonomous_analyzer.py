@@ -113,9 +113,14 @@ class AutonomousAnalysisResult:
     total_duration_seconds: float
     # Reachability prefilter outcome — set when the inventory-based
     # resolver was consulted before the expensive LLM stages.
-    # ``"called"`` / ``"not_called"`` / ``"uncertain"`` / None
-    # (when the prefilter couldn't determine, e.g. non-Python file
-    # or sink line not in any function).
+    # ``"called"`` / ``"not_called"`` / ``"uncertain"`` /
+    # ``"framework_callable"`` / None (when the prefilter couldn't
+    # determine, e.g. non-Python file or sink line not in any
+    # function). ``"framework_callable"`` means the static graph
+    # found no callers BUT the function carries a framework-
+    # dispatch decorator (``@app.route``, ``@shared_task``,
+    # ``@receiver``, etc.) — treated as reachable; full LLM
+    # analysis still runs.
     reachability_verdict: Optional[str] = None
     # Set to a non-None reason when the analyzer short-circuited
     # without running deep analysis. Today the only value is
@@ -217,10 +222,16 @@ class AutonomousCodeQLAnalyzer:
         finding's sink line reached from anywhere in the project?
 
         Returns one of ``"called"`` / ``"not_called"`` /
-        ``"uncertain"`` / None (None = couldn't determine — non-
-        Python file, sink not in any function, inventory build
-        failed, etc.). The caller's policy is to short-circuit on
-        ``"not_called"`` and otherwise continue.
+        ``"uncertain"`` / ``"framework_callable"`` / None
+        (None = couldn't determine — non-Python file, sink not in
+        any function, inventory build failed, etc.). The caller's
+        policy is to short-circuit on ``"not_called"`` and
+        otherwise continue. ``"framework_callable"`` is the
+        substrate's signal that the static graph shows no callers
+        BUT a framework-dispatch decorator (Flask ``@app.route``,
+        Celery ``@shared_task``, Django ``@receiver``, etc.)
+        registers the function for runtime invocation — caller
+        proceeds with full LLM analysis.
 
         Cost: inventory build is paid once per analyzer instance
         (cached); per-finding lookup is O(N_files + N_calls in
@@ -263,7 +274,11 @@ class AutonomousCodeQLAnalyzer:
 
         try:
             from core.inventory.lookup import lookup_function
-            from core.inventory.reachability import function_called
+            from core.inventory.reachability import (
+                InternalFunction,
+                function_called,
+                is_framework_callable,
+            )
         except ImportError:
             return None
 
@@ -303,7 +318,28 @@ class AutonomousCodeQLAnalyzer:
             )
         except ValueError:
             return None
-        return result.verdict.value
+        verdict = result.verdict.value
+        # NOT_CALLED in the static graph doesn't mean unreachable
+        # when the function is framework-registered (Flask
+        # ``@app.route``, Celery ``@shared_task``, Django
+        # ``@receiver``, etc.). The substrate's
+        # ``is_framework_callable`` recognises these. Without this
+        # check, the prefilter short-circuits framework handlers
+        # before any LLM analysis runs — a false-negative class on
+        # any web / task / signal codebase.
+        if verdict == "not_called":
+            line = int(func_info.get("line_start") or 0)
+            target = InternalFunction(
+                file_path=rel_path, name=func_name, line=line,
+            )
+            if is_framework_callable(
+                self._reachability_inventory, target,
+            ):
+                # New verdict value the caller treats as "don't
+                # short-circuit". Distinct from "called" so the
+                # reachability_verdict field reports accurately.
+                return "framework_callable"
+        return verdict
 
     def _relative_path(
         self, file_path: str, repo_path: Path,

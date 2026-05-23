@@ -1251,6 +1251,13 @@ def _get_or_build_index(
 # pass-through decorators (``cache``, ``lru_cache``, ``property``,
 # ``staticmethod``, ``dataclass``) MUST NOT be in this set —
 # they don't register entry points.
+#
+# The chain-length-2 gate in ``_decorators_indicate_framework_dispatch``
+# excludes naked single-name decorators (``@receiver(...)``,
+# ``@shared_task``). For names where the framework-dispatch
+# interpretation is unambiguous even at length 1, see
+# ``_FRAMEWORK_DISPATCH_NAKED_NAMES`` below — these get an exception
+# to the chain-length gate.
 _FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
     # HTTP route methods (Flask / FastAPI / Starlette / Bottle / etc.)
     "route", "get", "post", "put", "patch", "delete", "head", "options",
@@ -1276,31 +1283,73 @@ _FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
 })
 
 
+# Single-name decorators where the framework-dispatch interpretation
+# is unambiguous enough to override the chain-length-2 gate. Entries
+# here MUST be distinctive enough that collision with user-defined
+# pass-through decorators is rare. Generic names (``task``,
+# ``fixture``, ``register``, ``handler``) are deliberately excluded
+# because a project's own ``@task`` / ``@fixture`` is more likely to
+# be a pass-through than framework dispatch — false-positive
+# promotion of pass-through-decorated dead code is the worse error
+# (silences real findings) vs false-negative on framework code
+# (caught by the chain-length-2 form which projects more commonly
+# use via ``@pytest.fixture`` / ``@celery.task``).
+#
+# Conservative starter set covers the highest-value cases where the
+# bare form is idiomatic AND the name is distinctive:
+#   * Django signals: ``@receiver(post_save, sender=User)`` — bare
+#     ``receiver`` is the standard import-pattern; chain-length-1
+#     is the dominant usage.
+#   * Celery shared tasks: ``@shared_task`` — the import-then-bare
+#     form is the recommended Celery pattern for app-agnostic tasks.
+#   * Celery periodic tasks: ``@periodic_task(...)`` — distinctive
+#     enough not to collide.
+#   * dramatiq: ``@actor`` — domain-specific term, unlikely to be a
+#     user-defined pass-through.
+_FRAMEWORK_DISPATCH_NAKED_NAMES: FrozenSet[str] = frozenset({
+    "receiver",
+    "shared_task",
+    "periodic_task",
+    "actor",
+})
+
+
 def _decorators_indicate_framework_dispatch(
     decorators: Iterable[Any],
 ) -> bool:
     """True iff any decorator on the function matches the
     framework-dispatch registration shape.
 
-    Heuristic: chain length >= 2 (decorator is a method on an
-    imported object, e.g. ``app.route``) AND the tail name is in
-    ``_FRAMEWORK_DISPATCH_TAILS``. Single-name decorators
-    (``@cache``, ``@property``) are pass-through and never flagged.
+    Two acceptance shapes:
 
-    The chain-length-2 requirement excludes both pass-through
-    decorators AND naked dispatch tokens like a bare ``@register``
-    function — the latter could be either pass-through or
-    registration; we're conservative because flagging too many
-    things as framework-callable suppresses legitimate dead-code
-    warnings.
+      * **Chain length >= 2**: decorator is a method on an imported
+        object (e.g. ``app.route``, ``pytest.fixture``,
+        ``celery_app.task``). Tail name must be in
+        ``_FRAMEWORK_DISPATCH_TAILS``. This is the dominant form
+        across the supported frameworks and the safer signal —
+        pass-through decorators are typically single names.
+      * **Chain length 1**: bare single-name decorator whose name is
+        in the narrower ``_FRAMEWORK_DISPATCH_NAKED_NAMES`` set.
+        Reserved for distinctive framework-only names (Django
+        ``@receiver``, Celery ``@shared_task``, etc.) where the
+        bare form is idiomatic. Generic names (``task``,
+        ``fixture``, ``register``) deliberately NOT in this set —
+        their bare form is more likely a user pass-through.
+
+    The split keeps the resolver from over-promoting pass-through
+    decorators (which would silence legitimate dead-code findings)
+    while admitting the bare framework-decorator patterns that
+    Django / Celery / dramatiq projects commonly use.
     """
     for chain in decorators:
         if not isinstance(chain, (list, tuple)):
             continue
-        if len(chain) < 2:
+        if not chain:
             continue
         tail = str(chain[-1])
-        if tail in _FRAMEWORK_DISPATCH_TAILS:
+        if len(chain) >= 2 and tail in _FRAMEWORK_DISPATCH_TAILS:
+            return True
+        if len(chain) == 1 and tail in _FRAMEWORK_DISPATCH_NAKED_NAMES:
             return True
     return False
 

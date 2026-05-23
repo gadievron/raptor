@@ -1311,3 +1311,108 @@ class TestFullyQualifiedCallIndexFastPath:
         lines = call_lines_of(inv, caller_fn, target)
         # The call ``com.ex.Util.helper()`` is on line 1 of Client.java.
         assert lines == (1,)
+
+
+# ---------------------------------------------------------------------------
+# Naked-name framework dispatch — bare single-name decorators that the
+# substrate must recognise as framework-callable despite chain length 1.
+# Covers Django ``@receiver``, Celery ``@shared_task`` / ``@periodic_task``,
+# dramatiq ``@actor`` — common idioms that the chain-length-2 form misses.
+# ---------------------------------------------------------------------------
+
+
+class TestNakedFrameworkDispatch:
+    def test_django_receiver_bare(self):
+        inv = _inv(_file("src/signals.py",
+            "@receiver(post_save, sender=User)\n"
+            "def update_profile_on_save(sender, instance, **kwargs):\n"
+            "    pass\n"
+        ))
+        target = InternalFunction(
+            "src/signals.py", "update_profile_on_save", 2,
+        )
+        assert is_framework_callable(inv, target) is True
+
+    def test_celery_shared_task_bare(self):
+        inv = _inv(_file("src/tasks.py",
+            "@shared_task\n"
+            "def process_payment(order_id):\n"
+            "    pass\n"
+        ))
+        target = InternalFunction("src/tasks.py", "process_payment", 2)
+        assert is_framework_callable(inv, target) is True
+
+    def test_celery_periodic_task_bare(self):
+        inv = _inv(_file("src/tasks.py",
+            "@periodic_task(run_every=60)\n"
+            "def heartbeat():\n"
+            "    pass\n"
+        ))
+        target = InternalFunction("src/tasks.py", "heartbeat", 2)
+        assert is_framework_callable(inv, target) is True
+
+    def test_dramatiq_actor_bare(self):
+        inv = _inv(_file("src/workers.py",
+            "@actor\n"
+            "def send_email(to):\n"
+            "    pass\n"
+        ))
+        target = InternalFunction("src/workers.py", "send_email", 2)
+        assert is_framework_callable(inv, target) is True
+
+    def test_bare_pass_through_decorators_not_flagged(self):
+        # ``@cache``, ``@property``, ``@dataclass`` are pass-through —
+        # function is reachable in the normal sense, but the decorator
+        # does NOT register it with any external dispatcher. The
+        # framework_callable flag is reserved for "reachable via
+        # runtime-dispatch mechanism the static graph doesn't see".
+        # If we flagged pass-through decorators as framework_callable,
+        # we'd silence legitimate dead-code findings on cached
+        # helpers, properties, etc.
+        inv = _inv(_file("src/util.py",
+            "@cache\n"
+            "def helper(x):\n"
+            "    return x * 2\n"
+            "\n"
+            "@property\n"
+            "def name(self):\n"
+            "    return self._name\n"
+            "\n"
+            "@dataclass\n"
+            "def make_thing():\n"
+            "    pass\n"
+        ))
+        for name, line in [("helper", 2), ("name", 6), ("make_thing", 10)]:
+            target = InternalFunction("src/util.py", name, line)
+            assert is_framework_callable(inv, target) is False, (
+                f"pass-through @{name}'s decorator must not flag "
+                f"framework_callable"
+            )
+
+    def test_generic_bare_names_not_flagged(self):
+        # ``@task``, ``@fixture``, ``@register``, ``@handler`` etc.
+        # are deliberately excluded from the naked set — too generic.
+        # Project-defined pass-through decorators with these names
+        # are common, and false-positive promotion silences real
+        # findings. Projects using the framework form should use the
+        # chain-length-2 idiom (``@celery.task``, ``@pytest.fixture``)
+        # which IS flagged via _FRAMEWORK_DISPATCH_TAILS.
+        inv = _inv(_file("src/app.py",
+            "@task\n"
+            "def my_task():\n"
+            "    pass\n"
+            "\n"
+            "@fixture\n"
+            "def my_fixture():\n"
+            "    pass\n"
+            "\n"
+            "@register\n"
+            "def my_handler():\n"
+            "    pass\n"
+        ))
+        for name, line in [("my_task", 2), ("my_fixture", 6), ("my_handler", 10)]:
+            target = InternalFunction("src/app.py", name, line)
+            assert is_framework_callable(inv, target) is False, (
+                f"bare @{name} is too generic to promote — "
+                f"likely a project-defined pass-through"
+            )
