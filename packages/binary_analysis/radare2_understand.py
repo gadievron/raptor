@@ -55,11 +55,13 @@ from core.function_taxonomy import (
     EXEC_FUNCS as _T_EXEC,
     FORMAT_STRING_FUNCS as _T_FMT,
     INTEGER_PARSE_FUNCS as _T_INT_PARSE,
+    IPC_FUNCS as _T_IPC,
     MACOS_DANGEROUS_SUBSTRINGS as _DANGEROUS_MACOS_SUBSTRINGS,
     MEMORY_COPY_FUNCS as _T_MEMCPY,
     NETWORK_INGEST_FUNCS as _T_NET,
     PARSER_FUNCS as _T_PARSER,
     SCAN_FAMILY_FUNCS as _T_SCAN,
+    STREAM_INPUT_FUNCS as _T_STREAM,
     STRING_OVERFLOW_FUNCS as _T_STROVF,
     TOCTOU_FUNCS as _T_TOCTOU,
 )
@@ -70,9 +72,20 @@ from core.function_taxonomy import (
 # "interesting sink" means for THIS consumer (fuzz prioritisation).
 # Other consumers (e.g. exploit_feasibility) compose different
 # subsets for different purposes.
+#
+# Deliberately omitted:
+#   * KERNEL_USERSPACE_FUNCS — kernel-side symbols don't appear in
+#     user-space binary import tables, so including them would add
+#     catalog without matches.
+#   * PROCESS_BOUNDARY_FUNCS — getenv is imported by ~half of typical
+#     /usr/bin binaries (vs. 3% for recv). Including it would defeat
+#     the ubiquity-exclusion policy that already drops `read` from
+#     NETWORK_INGEST_FUNCS. The bucket survives in fingerprint.BUCKETS
+#     where presence is informational, not prioritisational.
 _DANGEROUS_IMPORTS = frozenset(
     _T_STROVF | _T_SCAN | _T_MEMCPY | _T_FMT | _T_EXEC | _T_ALLOC
     | _T_NET | _T_PARSER | _T_INT_PARSE | _T_TOCTOU
+    | _T_STREAM | _T_IPC
 )
 
 

@@ -69,6 +69,45 @@ class TestBucketImports:
     def test_empty_input_empty_output(self):
         assert bucket_imports(set()) == {}
 
+    def test_stream_input_classified(self):
+        out = bucket_imports({"fgets", "getline", "fread"})
+        assert "stream_input" in out
+        # fread is ubiquitous — excluded from the source taxonomy
+        assert out["stream_input"] == {"fgets", "getline"}
+
+    def test_process_boundary_classified(self):
+        """Only `getenv` is the attacker-controlled source; markers
+        (secure_getenv, getauxval) are NOT in the bucket — they
+        live in PROCESS_BOUNDARY_MARKERS and would need a separate
+        bucket if we ever surface them."""
+        out = bucket_imports(
+            {"getenv", "secure_getenv", "getauxval", "malloc"},
+        )
+        assert "process_boundary" in out
+        assert out["process_boundary"] == {"getenv"}
+
+    def test_ipc_classified(self):
+        """shmat triggers; shm_open and pipe deliberately don't
+        (open-not-read / setup primitive)."""
+        out = bucket_imports(
+            {"shmat", "msgrcv", "shm_open", "pipe", "mmap"},
+        )
+        assert "ipc" in out
+        assert out["ipc"] == {"shmat", "msgrcv"}
+
+    def test_kernel_userspace_not_a_user_binary_bucket(self):
+        """KERNEL_USERSPACE_FUNCS is deliberately NOT in BUCKETS —
+        kernel-side symbols don't appear in user-space binary
+        imports, so including them would add a permanently-empty
+        bucket."""
+        out = bucket_imports(
+            {"copy_from_user", "memdup_user", "get_user"},
+        )
+        assert "kernel_userspace" not in out
+        # The whole input maps to zero buckets — kernel symbols in
+        # a user-space binary are typically just unresolved relocs.
+        assert out == {}
+
 
 class TestBucketTaxonomy:
     """The BUCKETS table is shared between fingerprint + SCA bump
@@ -81,6 +120,7 @@ class TestBucketTaxonomy:
             "exec", "network", "string_overflow", "scan",
             "memory_copy", "format_string", "alloc", "parser",
             "integer_parse", "toctou",
+            "stream_input", "process_boundary", "ipc",
         ]
 
     def test_high_severity_buckets_subset_of_buckets(self):
@@ -405,6 +445,114 @@ class TestCapabilityFingerprint:
         assert "exec" in out
         # ASCII matches captured; non-ASCII ignored
         assert out["exec"] == {"execve", "popen"}
+
+
+# ---------------------------------------------------------------------------
+# Source-side bucket E2E — compiles a small C program with the exact
+# imports we want to surface, then asserts the fingerprint primitive
+# walks all the way through (ELF parse → bucket classification → JSON
+# shape) and produces the right bucket contents. Catches regressions
+# in BUCKETS ordering, taxonomy exclusions, ELF parser drift, and the
+# schema-version constant in one go.
+# ---------------------------------------------------------------------------
+
+
+_SOURCE_SIDE_E2E_SRC = r"""
+/* Exercises every source-side bucket (issue #583). Functions are
+ * intentionally called so the linker emits them in the dynamic
+ * symbol table; the bodies don't have to be sensible. */
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/uio.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/msg.h>
+
+int main(int argc, char **argv) {
+    char buf[64];
+    fgets(buf, sizeof(buf), stdin);                 /* stream_input */
+    char *line = NULL; size_t cap = 0;
+    getline(&line, &cap, stdin);                    /* stream_input */
+    struct iovec iov = {buf, sizeof(buf)};
+    readv(0, &iov, 1);                              /* stream_input */
+    const char *home = getenv("HOME");              /* process_boundary */
+    int shmid = shmget(IPC_PRIVATE, 4096, 0666);    /* ipc */
+    void *seg = shmat(shmid, NULL, 0);              /* ipc */
+    struct { long mtype; char mtext[8]; } mbuf;
+    msgrcv(0, &mbuf, sizeof(mbuf.mtext), 1, 0);     /* ipc */
+    if (argc > 1) system(argv[1]);                  /* exec (baseline) */
+    return (int)(size_t)(home != NULL) + (seg != (void*)-1);
+}
+"""
+
+
+class TestSourceSideBucketsE2E:
+    """End-to-end: compile a real ELF that imports every source-side
+    function, fingerprint it via the tier-0 ELF parser (no radare2
+    dependency), assert the three source-side buckets surface with
+    the expected contents."""
+
+    @pytest.fixture(autouse=True)
+    def _gate(self):
+        import shutil
+        if shutil.which("gcc") is None:
+            pytest.skip("gcc not on PATH — needed to build E2E target")
+
+    def test_fingerprint_surfaces_source_side_buckets(self, tmp_path):
+        import subprocess
+        src = tmp_path / "src.c"
+        binary = tmp_path / "source_side_e2e_bin"
+        src.write_text(_SOURCE_SIDE_E2E_SRC)
+        result = subprocess.run(
+            ["gcc", "-O0", str(src), "-o", str(binary)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"gcc build failed (likely missing libc headers in CI):\n"
+                f"{result.stderr}",
+            )
+
+        fp = capability_fingerprint(binary)
+        assert fp is not None, (
+            "fingerprint primitive returned None on a freshly-built "
+            "ELF binary — tier-0 ELF parser regression"
+        )
+        assert fp.schema_version == FINGERPRINT_SCHEMA_VERSION
+        assert fp.binary_format == "elf"
+        assert fp.bits == 64
+
+        buckets = {k: set(v) for k, v in fp.capability_buckets.items()}
+
+        # Each source-side bucket must surface its contributors.
+        # Subset assertion rather than equality so a future taxonomy
+        # expansion (e.g. fgetws added to STREAM_INPUT_FUNCS) doesn't
+        # break the test as long as our intentionally-imported
+        # functions still land in their bucket.
+        assert "stream_input" in buckets, (
+            f"stream_input bucket missing from {buckets.keys()}"
+        )
+        assert {"fgets", "getline", "readv"} <= buckets["stream_input"]
+
+        assert "process_boundary" in buckets, (
+            "process_boundary bucket missing"
+        )
+        assert buckets["process_boundary"] == {"getenv"}, (
+            "process_boundary expected only {'getenv'} — markers "
+            "must NOT contaminate this bucket"
+        )
+
+        assert "ipc" in buckets, "ipc bucket missing"
+        assert {"shmat", "shmget", "msgrcv"} <= buckets["ipc"]
+
+        # Baseline: pre-existing exec bucket still works
+        assert "exec" in buckets
+        assert "system" in buckets["exec"]
+
+        # Negative: kernel_userspace is intentionally NOT a bucket
+        assert "kernel_userspace" not in buckets
 
 
 # ---------------------------------------------------------------------------

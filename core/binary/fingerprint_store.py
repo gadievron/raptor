@@ -57,7 +57,10 @@ import tempfile
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
 
-from core.binary.fingerprint import CapabilityFingerprint
+from core.binary.fingerprint import (
+    FINGERPRINT_SCHEMA_VERSION,
+    CapabilityFingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +177,21 @@ def load_fingerprint(
     fp_dict = payload.get("fingerprint")
     if not isinstance(fp_dict, dict):
         return None
+    # Embedded fingerprint shape is versioned separately from the
+    # store wrapper. Bucket-shape evolution (e.g. adding new BUCKETS
+    # in fingerprint.py) bumps FINGERPRINT_SCHEMA_VERSION; a stale
+    # baseline at the old shape would otherwise produce false-positive
+    # drift for every binary whose imports newly populate the new
+    # buckets. Treat shape mismatch as "no baseline" — operator
+    # re-fingerprints on next run.
+    fp_version = fp_dict.get("schema_version")
+    if fp_version != FINGERPRINT_SCHEMA_VERSION:
+        logger.debug(
+            "core.binary.fingerprint_store: fingerprint shape version "
+            "%s != %s for %s; treating as no baseline",
+            fp_version, FINGERPRINT_SCHEMA_VERSION, file_path,
+        )
+        return None
     try:
         return CapabilityFingerprint.from_dict(fp_dict)
     except (KeyError, TypeError, ValueError) as e:
@@ -215,6 +233,10 @@ def iter_refs(
         ref = payload.get("ref")
         fp_dict = payload.get("fingerprint")
         if not isinstance(ref, str) or not isinstance(fp_dict, dict):
+            continue
+        # See load_fingerprint() for why embedded shape version is
+        # checked separately from the wrapper.
+        if fp_dict.get("schema_version") != FINGERPRINT_SCHEMA_VERSION:
             continue
         try:
             fp = CapabilityFingerprint.from_dict(fp_dict)

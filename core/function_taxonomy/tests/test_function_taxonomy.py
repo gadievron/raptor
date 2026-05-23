@@ -17,11 +17,16 @@ from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
     INTEGER_PARSE_FUNCS,
+    IPC_FUNCS,
+    KERNEL_USERSPACE_FUNCS,
     MACOS_DANGEROUS_SUBSTRINGS,
     MEMORY_COPY_FUNCS,
     NETWORK_INGEST_FUNCS,
     PARSER_FUNCS,
+    PROCESS_BOUNDARY_FUNCS,
+    PROCESS_BOUNDARY_MARKERS,
     SCAN_FAMILY_FUNCS,
+    STREAM_INPUT_FUNCS,
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
     fortified,
@@ -33,6 +38,8 @@ ALL_DANGEROUS_CATEGORIES = [
     FORMAT_STRING_FUNCS, EXEC_FUNCS, ALLOC_FUNCS,
     NETWORK_INGEST_FUNCS, PARSER_FUNCS, INTEGER_PARSE_FUNCS,
     TOCTOU_FUNCS,
+    STREAM_INPUT_FUNCS, PROCESS_BOUNDARY_FUNCS, IPC_FUNCS,
+    KERNEL_USERSPACE_FUNCS,
 ]
 
 
@@ -143,6 +150,160 @@ class TestKeyParsersPresent(unittest.TestCase):
         self.assertIn("Py_CompileString", PARSER_FUNCS)
 
 
+# === Source-side categories (data-flow classification) ===
+
+class TestStreamInputFuncs(unittest.TestCase):
+    """STREAM_INPUT_FUNCS = bounded line / delimiter / fd-level
+    input that isn't ubiquitous. fgets/getline are the signature
+    parse-attacker-line patterns; pread/readv signal positional or
+    scatter-gather I/O."""
+
+    def test_fgets_and_getline_present(self):
+        self.assertIn("fgets", STREAM_INPUT_FUNCS)
+        self.assertIn("getline", STREAM_INPUT_FUNCS)
+        self.assertIn("getdelim", STREAM_INPUT_FUNCS)
+
+    def test_pread_readv_present(self):
+        self.assertIn("pread", STREAM_INPUT_FUNCS)
+        self.assertIn("readv", STREAM_INPUT_FUNCS)
+
+    def test_ubiquitous_read_fread_excluded(self):
+        """read/fread are ubiquitous per module policy — must not
+        be in STREAM_INPUT_FUNCS (their presence carries zero
+        fuzz-priority signal). Consumers that want them add them
+        explicitly (see exploit_feasibility.constants.INPUT_FUNCTIONS)."""
+        self.assertNotIn("read", STREAM_INPUT_FUNCS)
+        self.assertNotIn("fread", STREAM_INPUT_FUNCS)
+
+    def test_gets_not_duplicated_here(self):
+        """gets() is banned by C11 Annex K and lives in
+        STRING_OVERFLOW_FUNCS — must not be duplicated here."""
+        self.assertNotIn("gets", STREAM_INPUT_FUNCS)
+        self.assertIn("gets", STRING_OVERFLOW_FUNCS)
+
+
+class TestProcessBoundaryFuncs(unittest.TestCase):
+    """PROCESS_BOUNDARY_FUNCS = direct attacker-controlled env
+    sources. Currently only `getenv`. argv/envp are main()
+    parameters, not function calls, so out of scope (this module
+    is a function-name catalog). secure_getenv and getauxval are
+    NOT here — they're markers (see PROCESS_BOUNDARY_MARKERS)."""
+
+    def test_getenv_present(self):
+        self.assertIn("getenv", PROCESS_BOUNDARY_FUNCS)
+
+    def test_markers_not_in_funcs(self):
+        """secure_getenv returns NULL in suid context (sanitiser,
+        not source); getauxval is kernel-supplied. Both live in
+        PROCESS_BOUNDARY_MARKERS and must NOT contaminate the
+        attacker-source set that downstream consumers treat as
+        taint origins."""
+        self.assertNotIn("secure_getenv", PROCESS_BOUNDARY_FUNCS)
+        self.assertNotIn("getauxval", PROCESS_BOUNDARY_FUNCS)
+
+    def test_setenv_excluded(self):
+        """setenv/putenv are sinks (writing env), not sources of
+        attacker-controlled data."""
+        self.assertNotIn("setenv", PROCESS_BOUNDARY_FUNCS)
+        self.assertNotIn("putenv", PROCESS_BOUNDARY_FUNCS)
+
+
+class TestProcessBoundaryMarkers(unittest.TestCase):
+    """PROCESS_BOUNDARY_MARKERS = suid-context signal functions.
+    Separate from PROCESS_BOUNDARY_FUNCS because their returns are
+    NOT attacker-controlled (NULL in suid, or kernel-supplied),
+    so they're not taint sources. Their presence at a call site
+    weights the suspicion of co-located plain getenv calls."""
+
+    def test_secure_getenv_present(self):
+        self.assertIn("secure_getenv", PROCESS_BOUNDARY_MARKERS)
+
+    def test_getauxval_present(self):
+        self.assertIn("getauxval", PROCESS_BOUNDARY_MARKERS)
+
+
+class TestIpcFuncs(unittest.TestCase):
+    """IPC_FUNCS = inter-process communication source primitives.
+    Several explicit exclusions per the CVE-shape policy — see
+    docstring on the set."""
+
+    def test_sysv_shm_present(self):
+        self.assertIn("shmat", IPC_FUNCS)
+        self.assertIn("shmget", IPC_FUNCS)
+
+    def test_message_queues_present(self):
+        self.assertIn("mq_receive", IPC_FUNCS)
+        self.assertIn("msgrcv", IPC_FUNCS)
+
+    def test_mmap_excluded(self):
+        """mmap usage is dominantly file-backed read-only; the
+        attacker-controlled MAP_SHARED case is not distinguishable
+        from the call site, so the category excludes it per the
+        CVE-shape policy."""
+        self.assertNotIn("mmap", IPC_FUNCS)
+
+    def test_shm_open_excluded(self):
+        """shm_open returns an fd; the actual read goes through
+        mmap (excluded above) or read (ubiquitous). Flagging
+        shm_open alone gives a category with no live read
+        primitive — drop per the CVE-shape policy."""
+        self.assertNotIn("shm_open", IPC_FUNCS)
+
+    def test_pipe_excluded(self):
+        """pipe/mkfifo are setup primitives — the actual attacker
+        data read happens via read() on the resulting fd (which
+        is ubiquitous and excluded everywhere)."""
+        self.assertNotIn("pipe", IPC_FUNCS)
+        self.assertNotIn("mkfifo", IPC_FUNCS)
+
+
+class TestKernelUserspaceFuncs(unittest.TestCase):
+    """KERNEL_USERSPACE_FUNCS = kernel-side functions reading
+    userspace data. These do not appear in user-space binary
+    import tables — value is for source-code analysis of kernel
+    modules / drivers where userspace pointers are the canonical
+    L1 source. Covers bare copies, allocator wrappers, and
+    iovec/pages interfaces."""
+
+    def test_bare_copy_primitives_present(self):
+        self.assertIn("copy_from_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("_copy_from_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("raw_copy_from_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("__copy_from_user_inatomic",
+                      KERNEL_USERSPACE_FUNCS)
+
+    def test_get_user_present(self):
+        self.assertIn("get_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("__get_user", KERNEL_USERSPACE_FUNCS)
+
+    def test_string_variants_present(self):
+        self.assertIn("strncpy_from_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("strnlen_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("strndup_user", KERNEL_USERSPACE_FUNCS)
+
+    def test_allocator_wrappers_present(self):
+        """memdup_user-family is more common at call sites in
+        modern kernel code than bare copy_from_user."""
+        self.assertIn("memdup_user", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("memdup_user_nul", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("vmemdup_user", KERNEL_USERSPACE_FUNCS)
+
+    def test_iovec_pages_interfaces_present(self):
+        """iovec + get_user_pages cover scatter-gather + DMA paths."""
+        self.assertIn("import_iovec", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("import_single_range", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("_copy_from_iter", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("copy_from_iter_full", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("get_user_pages", KERNEL_USERSPACE_FUNCS)
+        self.assertIn("get_user_pages_fast", KERNEL_USERSPACE_FUNCS)
+
+    def test_copy_to_user_excluded(self):
+        """copy_to_user is a sink (kernel writes to user), not a
+        source — must not be in this set."""
+        self.assertNotIn("copy_to_user", KERNEL_USERSPACE_FUNCS)
+        self.assertNotIn("put_user", KERNEL_USERSPACE_FUNCS)
+
+
 # === Cross-category invariants ===
 
 class TestCrossCategory(unittest.TestCase):
@@ -249,6 +410,34 @@ class TestSizeBounds(unittest.TestCase):
 
     def test_macos_substrings_nontrivial(self):
         self.assertGreater(len(MACOS_DANGEROUS_SUBSTRINGS), 10)
+
+    def test_stream_input_size_reasonable(self):
+        n = len(STREAM_INPUT_FUNCS)
+        self.assertGreater(n, 4, f"only {n} entries — pruned too far?")
+        self.assertLess(n, 20, f"{n} entries — likely bloat")
+
+    def test_process_boundary_size_reasonable(self):
+        n = len(PROCESS_BOUNDARY_FUNCS)
+        self.assertGreaterEqual(n, 1,
+                                f"only {n} entries — pruned too far?")
+        self.assertLess(n, 10, f"{n} entries — likely bloat")
+
+    def test_process_boundary_markers_size_reasonable(self):
+        n = len(PROCESS_BOUNDARY_MARKERS)
+        self.assertGreaterEqual(n, 1)
+        self.assertLess(n, 10)
+
+    def test_ipc_size_reasonable(self):
+        n = len(IPC_FUNCS)
+        self.assertGreater(n, 2, f"only {n} entries — pruned too far?")
+        self.assertLess(n, 15, f"{n} entries — likely bloat")
+
+    def test_kernel_userspace_size_reasonable(self):
+        """Linux kernel uaccess + memdup_user + iovec/pages
+        interfaces — meaningful range is 10-40."""
+        n = len(KERNEL_USERSPACE_FUNCS)
+        self.assertGreater(n, 10, f"only {n} entries — pruned too far?")
+        self.assertLess(n, 40, f"{n} entries — likely bloat")
 
 
 if __name__ == "__main__":

@@ -49,10 +49,13 @@ from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
     INTEGER_PARSE_FUNCS,
+    IPC_FUNCS,
     MEMORY_COPY_FUNCS,
     NETWORK_INGEST_FUNCS,
     PARSER_FUNCS,
+    PROCESS_BOUNDARY_FUNCS,
     SCAN_FAMILY_FUNCS,
+    STREAM_INPUT_FUNCS,
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
 )
@@ -63,7 +66,12 @@ logger = logging.getLogger(__name__)
 # Schema version. Bump when changing the meaning of any
 # fingerprint field. Consumers check this on read and refuse to
 # diff across versions (better to recompute than mis-attribute).
-FINGERPRINT_SCHEMA_VERSION = 1
+#
+# v2: added stream_input / process_boundary / ipc buckets. A binary
+# fingerprinted under v1 may legitimately have these capabilities
+# but they were not surfaced — re-fingerprint rather than diff across
+# the bump.
+FINGERPRINT_SCHEMA_VERSION = 2
 
 
 # Per-bucket capability classification. Single source of truth —
@@ -81,6 +89,9 @@ BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
     ("parser", PARSER_FUNCS),
     ("integer_parse", INTEGER_PARSE_FUNCS),
     ("toctou", TOCTOU_FUNCS),
+    ("stream_input", STREAM_INPUT_FUNCS),
+    ("process_boundary", PROCESS_BOUNDARY_FUNCS),
+    ("ipc", IPC_FUNCS),
 )
 
 # Buckets that warrant high-severity treatment when they appear

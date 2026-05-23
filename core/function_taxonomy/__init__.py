@@ -170,6 +170,99 @@ NETWORK_INGEST_FUNCS: FrozenSet[str] = frozenset({
 })
 
 
+# === Stream / file input (non-ubiquitous variants) ===
+# Buffered line/delimiter input + non-trivial fd-level reads. The
+# ubiquitous variants (read, fread, fopen) are excluded per the
+# module-wide policy — they're in every binary so their import is
+# zero fuzz-priority signal. The variants kept here are deliberate
+# choices: someone using getline/getdelim is doing structured parsing,
+# someone using pread/readv is doing positional or scatter-gather I/O,
+# someone using fgets is reading bounded lines (common in CLI parsers
+# and network protocol handlers). gets() lives in STRING_OVERFLOW_FUNCS
+# (banned API) and is therefore excluded here to keep categories
+# disjoint.
+STREAM_INPUT_FUNCS: FrozenSet[str] = frozenset({
+    "fgets", "fgetws",
+    "getline", "getdelim",
+    "pread", "preadv", "readv",
+})
+
+
+# === Process boundary inputs (env) ===
+# argv / envp are MAIN parameters, not function calls — they appear
+# in source code but not in import tables, so they're outside this
+# module's grain (function-name catalog). The function-call shaped
+# attacker-controlled equivalent is plain getenv. secure_getenv and
+# getauxval are NOT here — they're context markers, not sources
+# (see PROCESS_BOUNDARY_MARKERS below).
+PROCESS_BOUNDARY_FUNCS: FrozenSet[str] = frozenset({
+    "getenv",
+})
+
+
+# === IPC primitives where less-privileged peers can write ===
+# Shared memory + message queues. Deliberately excluded:
+#   * mmap — most usage is file-backed read-only, not attacker-
+#     controlled shared memory, and you cannot distinguish from the
+#     call site alone (CVE-shape-determines-category policy).
+#   * shm_open — returns an fd; the actual attacker-data read goes
+#     through mmap (excluded above) or read (ubiquitous), so flagging
+#     shm_open alone yields a category with no live read primitive.
+#   * pipe / mkfifo — setup primitives, not read primitives. The
+#     actual attacker-data read happens via read() on the resulting
+#     fd (ubiquitous).
+IPC_FUNCS: FrozenSet[str] = frozenset({
+    "shmat", "shmget",
+    "mq_receive", "mq_timedreceive",
+    "msgrcv",
+})
+
+
+# === Kernel / userspace boundary (kernel-side only) ===
+# Functions called by KERNEL CODE (drivers, syscalls, kernel modules)
+# to read attacker-controlled data from less-privileged userspace.
+# These do NOT appear in user-space binary import tables, so the
+# binary-fingerprint and fuzz-priority consumers ignore them; the
+# value is for source-code analysis of kernel modules and driver
+# audits where userspace pointers are the canonical L1 source. The
+# `_*` / `__` prefixes are kept because Linux kernel symbol naming
+# uses them at the call site (no need for fortified() expansion).
+#
+# Covers three sub-families:
+#   1. Bare-copy primitives (copy_from_user, get_user, raw / inatomic)
+#   2. Allocator wrappers that copy in one call (memdup_user et al.)
+#   3. iovec / pages interfaces for scatter-gather + DMA paths
+KERNEL_USERSPACE_FUNCS: FrozenSet[str] = frozenset({
+    # Bare copies
+    "copy_from_user", "_copy_from_user",
+    "raw_copy_from_user", "__copy_from_user_inatomic",
+    "get_user", "__get_user",
+    "strncpy_from_user", "strnlen_user",
+    # Allocator wrappers (alloc + copy_from_user in one call)
+    "memdup_user", "memdup_user_nul",
+    "vmemdup_user",
+    "strndup_user",
+    # iovec / pages — scatter-gather, DMA-adjacent
+    "import_iovec", "import_single_range",
+    "_copy_from_iter", "copy_from_iter_full",
+    "get_user_pages", "get_user_pages_fast",
+})
+
+
+# === Process boundary markers (suid-context signal) ===
+# NOT a source set — separate to avoid contaminating consumers that
+# expect "attacker-controlled input lands here". These are *signals*
+# that the author was aware of suid safety (or that suid context
+# matters). Their *return values* are either NULL (secure_getenv in
+# suid) or kernel-supplied (getauxval). A static analyser uses these
+# to weight the suspicion of co-located plain getenv calls, not as
+# direct taint sources.
+PROCESS_BOUNDARY_MARKERS: FrozenSet[str] = frozenset({
+    "secure_getenv",
+    "getauxval",
+})
+
+
 # === High-CVE-density parser entry points ===
 # The biggest single signal source for fuzz prioritisation. A binary
 # that imports any of these is processing structured external input
@@ -329,6 +422,11 @@ __all__ = [
     "EXEC_FUNCS",
     "ALLOC_FUNCS",
     "NETWORK_INGEST_FUNCS",
+    "STREAM_INPUT_FUNCS",
+    "PROCESS_BOUNDARY_FUNCS",
+    "PROCESS_BOUNDARY_MARKERS",
+    "IPC_FUNCS",
+    "KERNEL_USERSPACE_FUNCS",
     "PARSER_FUNCS",
     "INTEGER_PARSE_FUNCS",
     "TOCTOU_FUNCS",
