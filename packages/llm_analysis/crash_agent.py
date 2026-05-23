@@ -199,7 +199,7 @@ The exploit should:
 2. Send the exact crashing input bytes via stdin or a file
 3. Demonstrate that the vulnerability is triggered
 
-The "code" field must contain complete, compilable C++ code only.
+The "code" field must contain complete, compilable C or C++ code.
 The "reasoning" field can contain explanations and analysis."""
 
 
@@ -214,11 +214,15 @@ The exploit must:
 4. Include full logging and visible terminal output showing the exploit in action
 
 Respond with valid JSON containing exactly these fields:
-- "code": The complete, compilable C++ exploit code as a string
+- "code": The complete, compilable C or C++ exploit code as a string
 - "reasoning": Any reasoning or explanation about the exploit technique
 
-The "code" field must contain ONLY valid C++ code that can be compiled with:
-g++ -o exploit exploit.cpp -fno-stack-protector"""
+The "code" field must contain valid C or C++ that the platform's
+default C++ compiler (``c++``, resolving to g++ on Linux, clang++ on
+macOS, etc.) can compile from a ``.cpp`` source file. Prefer plain C
+when the target source language is C — the C-style PoC is usually
+shorter and more portable. Either language is acceptable; pick what
+matches the target."""
 
 
 def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
