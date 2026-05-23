@@ -1,11 +1,6 @@
 """Tests for core.smt_solver — Z3 dependency management."""
 
-import sys
-from pathlib import Path
 import pytest
-
-# core/smt_solver/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.smt_solver import z3_available
 

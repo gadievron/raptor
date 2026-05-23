@@ -12,18 +12,11 @@ ZKPoX assembly, future calibrated IntentMatchJudge) will rely on:
 from __future__ import annotations
 
 import hashlib
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
-
-# core/witness/tests/test_types.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
-from core.witness.types import (  # noqa: E402
+from core.witness.types import (
     Witness,
     WitnessOutcome,
     WitnessSource,

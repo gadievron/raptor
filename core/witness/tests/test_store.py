@@ -7,18 +7,11 @@ hash-mismatch rejection, tolerant load on malformed manifests.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-
-# core/witness/tests/test_store.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
-from core.witness.store import WitnessStore, WitnessStoreError  # noqa: E402
-from core.witness.types import (  # noqa: E402
+from core.witness.store import WitnessStore, WitnessStoreError
+from core.witness.types import (
     Witness,
     WitnessOutcome,
     WitnessSource,
@@ -293,7 +286,7 @@ def test_put_rejects_non_json_outcome_detail(tmp_path):
         bytes_hash=compute_bytes_hash(data),
         source=WitnessSource.FUZZ,
         observed_outcome=WitnessOutcome.EXIT_SIGNAL,
-        outcome_detail={"path_obj": Path("/tmp/foo")},  # not JSON-safe
+        outcome_detail={"path_obj": tmp_path},  # Path is not JSON-safe
     )
     with pytest.raises(WitnessStoreError, match="JSON-serialisable"):
         store.put(w, data)
