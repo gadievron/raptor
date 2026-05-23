@@ -1409,6 +1409,25 @@ Examples:
                 print("⚠️  CodeQL scan failed — continuing with existing findings")
             else:
                 print("⚠️  CodeQL scan failed — no findings from any scanner")
+            # Surface the captured stderr so the operator can see WHY codeql
+            # exited non-zero. Pre-fix the agentic wrapper threw away
+            # codeql_stderr and only logged "rc={rc}", leaving the operator
+            # to spelunk through out/codeql_*/ to find the actual reason
+            # (often empty on early failure — language detector returns
+            # before writing any report).
+            stderr_tail = (codeql_stderr or "").rstrip().splitlines()[-15:]
+            if stderr_tail:
+                print("   CodeQL stderr (last 15 lines):")
+                for line in stderr_tail:
+                    print(f"     {line}")
+            if any("No CodeQL-supported languages detected" in line for line in stderr_tail):
+                print(
+                    "   Hint: language auto-detection rejected every candidate "
+                    "(typically because the target has no build files — go.mod, "
+                    "package.json, pyproject.toml, CMakeLists.txt, etc.). "
+                    "Pass --languages cpp,python,javascript,go (or a subset) "
+                    "to bypass auto-detection."
+                )
             logger.warning(f"CodeQL scan failed - rc={rc}")
             if args.codeql_only:
                 print("❌ CodeQL-only mode failed")
