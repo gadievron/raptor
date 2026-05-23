@@ -262,13 +262,13 @@ def test_split_suffix_handles_scoped_name() -> None:
 # Orchestrator integration.
 # ---------------------------------------------------------------------------
 
-def test_emits_through_supply_chain_orchestrator() -> None:
+def test_emits_through_supply_chain_orchestrator(tmp_path) -> None:
     """End-to-end: ``supply_chain.evaluate`` wires the slopsquat
     detector and produces a ``slopsquat_suspect`` finding with
     the documented shape."""
     from packages.sca.supply_chain import evaluate
     deps = [_dep("lodash-pro", "npm")]
-    findings = evaluate(target=Path("/tmp"), manifests=[], deps=deps)
+    findings = evaluate(target=tmp_path, manifests=[], deps=deps)
     slop = [f for f in findings if f.kind == "slopsquat_suspect"]
     assert len(slop) == 1
     f = slop[0]
@@ -278,13 +278,13 @@ def test_emits_through_supply_chain_orchestrator() -> None:
     assert f.evidence["reasons"] == ["popular_prefix_generic_suffix"]
 
 
-def test_orchestrator_emits_multiple_per_dep_list() -> None:
+def test_orchestrator_emits_multiple_per_dep_list(tmp_path) -> None:
     """Two suspect deps → two findings."""
     from packages.sca.supply_chain import evaluate
     deps = [
         _dep("lodash-pro", "npm"),
         _dep("@cool-utils/express-utils", "npm"),
     ]
-    findings = evaluate(target=Path("/tmp"), manifests=[], deps=deps)
+    findings = evaluate(target=tmp_path, manifests=[], deps=deps)
     slop = [f for f in findings if f.kind == "slopsquat_suspect"]
     assert len(slop) == 2
