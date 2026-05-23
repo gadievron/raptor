@@ -183,6 +183,36 @@ FILTERS: dict[str, list[str]] = {
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
+    # SCA tier — ~3,255 tests as of 2026-05-23, ≈30% of the broad
+    # ``python`` fast tier's collected count. Carving into its own
+    # gated job removes a 30-percent-of-corpus cluster from the
+    # 4-way pytest-split, evening out the fast-tier shards. Globs
+    # cover packages/sca + the 16 core/ and 3 packages/ siblings
+    # SCA actually imports (validated by test_filter_coverage.py).
+    "sca": [
+        "packages/sca/**",
+        "core/binary/**",
+        "core/config/**",
+        "core/coverage/**",
+        "core/cve/**",
+        "core/dockerfile/**",
+        "core/http/**",
+        "core/inventory/**",
+        "core/json/**",
+        "core/llm/**",
+        "core/oci/**",
+        "core/progress/**",
+        "core/sandbox/**",
+        "core/security/**",
+        "core/tar/**",
+        "core/upstream_latest/**",
+        "core/zip/**",
+        "packages/binary_analysis/**",
+        "packages/cvss/**",
+        "packages/osv/**",
+        "requirements*.txt",
+        ".github/workflows/tests.yml",
+    ],
     "orchestration": [
         "core/orchestration/**",
         "core/ast/**",

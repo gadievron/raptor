@@ -101,6 +101,7 @@ jobs:
       fuzzing: ${{ steps.filter.outputs.fuzzing }}
       sage: ${{ steps.filter.outputs.sage }}
       orchestration: ${{ steps.filter.outputs.orchestration }}
+      sca: ${{ steps.filter.outputs.sca }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
@@ -302,6 +303,7 @@ jobs:
             --ignore=packages/cve_diff/tests \
             --ignore=packages/fuzzing/tests \
             --ignore=packages/oss_forensics/tests \
+            --ignore=packages/sca \
             --ignore=core/sage/tests \
             --ignore=core/orchestration/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
@@ -318,6 +320,49 @@ jobs:
       # run in this job (group 1 only). They now have their own
       # dedicated job (`ci-lint-tests`) gated on `.github/**` changes
       # so a code-only PR doesn't pay for them.
+
+  # SCA tier: ~3,255 tests covering manifest parsers across 12 ecosystems,
+  # the dep-resolver fleet, the bumper, the supply-chain detectors, and
+  # the calibration substrate. The size class (≈30% of the broad ``python``
+  # fast tier's collected count) is why it gets carved out — a single
+  # cluster of that magnitude blew out one shard of the 4-way pytest-split
+  # before this carve-out. Internally 4-way split (same shape as fast tier).
+  python-unit-tests-sca:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.sca == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+
+      - name: Run SCA tests (group ${{ matrix.group }} of 4)
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest -n auto --splits 4 --group ${{ matrix.group }} packages/sca
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
