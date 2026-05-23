@@ -12,10 +12,10 @@ Exit codes:
 
 Usage:
 
-    libexec/raptor-sca-build-corpus
-    libexec/raptor-sca-build-corpus --out custom/dir
-    libexec/raptor-sca-build-corpus --sources kev,epss
-    libexec/raptor-sca-build-corpus --offline    # skip; for tests
+    packages/sca/scripts/raptor-sca-build-corpus
+    packages/sca/scripts/raptor-sca-build-corpus --out custom/dir
+    packages/sca/scripts/raptor-sca-build-corpus --sources kev,epss
+    packages/sca/scripts/raptor-sca-build-corpus --offline    # skip; for tests
 
 The default output dir is ``packages/sca/data/calibration/`` relative
 to RAPTOR's repo root. Override with ``--out`` for ad-hoc snapshots.
@@ -27,9 +27,12 @@ import argparse
 import sys
 from pathlib import Path
 
-# libexec scripts handle their own path setup; mirror the existing
-# pattern (see libexec/raptor-sca-run for reference).
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT))
 
 

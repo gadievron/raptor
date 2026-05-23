@@ -69,7 +69,7 @@ extracted bytes can't escape into the host filesystem.
 ## Running the harness
 
 ```
-libexec/raptor-sca-compromise-check tests/sca-e2e/compromise-corpus
+packages/sca/scripts/raptor-sca-compromise-check tests/sca-e2e/compromise-corpus
 ```
 
 The harness:

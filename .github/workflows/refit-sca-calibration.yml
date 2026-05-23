@@ -70,7 +70,7 @@ jobs:
           _RAPTOR_TRUSTED: '1'
         run: |
           set +e
-          libexec/raptor-sca-validate-corpus
+          packages/sca/scripts/raptor-sca-validate-corpus
           # Re-read the report to extract the verdict for gating.
           python <<'EOF' >> "$GITHUB_OUTPUT"
           import json, glob, os, sys

@@ -16,9 +16,9 @@ redistributed.
 
 Usage:
 
-    libexec/raptor-sca-collect-samples
-    libexec/raptor-sca-collect-samples --out custom/dir
-    libexec/raptor-sca-collect-samples --only-licenses MIT,Apache-2.0,BSD
+    packages/sca/scripts/raptor-sca-collect-samples
+    packages/sca/scripts/raptor-sca-collect-samples --out custom/dir
+    packages/sca/scripts/raptor-sca-collect-samples --only-licenses MIT,Apache-2.0,BSD
 
 Exit codes:
   0  every sample succeeded
@@ -32,7 +32,12 @@ import argparse
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT))
 
 

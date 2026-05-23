@@ -17,9 +17,9 @@ Exit codes:
 
 Usage:
 
-    libexec/raptor-sca-validate-corpus
-    libexec/raptor-sca-validate-corpus --corpus custom/dir
-    libexec/raptor-sca-validate-corpus --threshold-top-20 0.6
+    packages/sca/scripts/raptor-sca-validate-corpus
+    packages/sca/scripts/raptor-sca-validate-corpus --corpus custom/dir
+    packages/sca/scripts/raptor-sca-validate-corpus --threshold-top-20 0.6
 """
 
 from __future__ import annotations
@@ -28,7 +28,12 @@ import argparse
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT))
 
 

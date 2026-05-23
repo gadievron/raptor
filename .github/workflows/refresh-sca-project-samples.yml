@@ -65,7 +65,7 @@ jobs:
         # better than no refresh.
         run: |
           set +e
-          libexec/raptor-sca-collect-samples -v
+          packages/sca/scripts/raptor-sca-collect-samples -v
           # Don't propagate the per-sample exit code — partial
           # success still produces a useful diff.
           true
@@ -85,7 +85,7 @@ jobs:
         # unverified / needs_retune) lands in the same auto-PR.
         run: |
           set +e
-          libexec/raptor-sca-validate-corpus
+          packages/sca/scripts/raptor-sca-validate-corpus
           echo "validate exit: $?"
 
       - name: Diff?

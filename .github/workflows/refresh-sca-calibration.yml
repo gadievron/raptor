@@ -59,7 +59,7 @@ jobs:
         # PR body can quote them. Exit 0 = at least one source
         # succeeded; exit 1 = every source failed (transient global
         # event, retried at next schedule).
-        run: libexec/raptor-sca-build-corpus -v
+        run: packages/sca/scripts/raptor-sca-build-corpus -v
 
       - name: License-compliance check
         # Defence in depth: enforces the ATTRIBUTION.md cross-
@@ -85,7 +85,7 @@ jobs:
         # exit. Operators read the report directly.
         run: |
           set +e
-          libexec/raptor-sca-validate-corpus
+          packages/sca/scripts/raptor-sca-validate-corpus
           echo "validate exit: $?"
 
       - name: Diff?

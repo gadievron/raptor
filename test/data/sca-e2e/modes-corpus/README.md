@@ -41,7 +41,7 @@ upstream data (advisories, npm/PyPI version availability, etc).
 ## Running
 
 ```
-libexec/raptor-sca-modes-check tests/sca-e2e/modes-corpus
+packages/sca/scripts/raptor-sca-modes-check tests/sca-e2e/modes-corpus
 ```
 
 Exit 0 if every mode on every fixture passes its assertions; 1

@@ -122,7 +122,7 @@ RAPTOR-generated and ships under RAPTOR's MIT license. The projects
 themselves are NOT redistributed — only the scan findings (with
 file paths under the discarded clone tree stripped before storage).
 
-Populated by `libexec/raptor-sca-collect-samples`. The curated
+Populated by `packages/sca/scripts/raptor-sca-collect-samples`. The curated
 project list lives in
 `packages/sca/calibration/project_samples.py::PROJECT_SAMPLES`;
 each entry pins a git ref so re-runs are reproducible. License-
@@ -131,7 +131,7 @@ scan-touch to OSI-permissive projects when operators want to
 constrain the license footprint.
 
 `validation/<date>.json` files (created on demand by
-`libexec/raptor-sca-validate-corpus`) carry top-N precision +
+`packages/sca/scripts/raptor-sca-validate-corpus`) carry top-N precision +
 Spearman correlation metrics computed against the
 ground-truth signals. These are RAPTOR-generated and ship under
 MIT. Each report cites the snapshot date of every ground-truth
