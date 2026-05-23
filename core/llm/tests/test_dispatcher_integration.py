@@ -25,6 +25,11 @@ from core.llm.config import ModelConfig
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import LLMDispatcher
 
+# Module-level marker — every test in this file spins up a real HTTP
+# server on 127.0.0.1 and/or a real LLMDispatcher Unix socket. Three
+# tests here showed up at 12s each in the duration sweep.
+pytestmark = pytest.mark.integration
+
 
 # ---------------------------------------------------------------------------
 # Fixtures: dispatcher + captive upstream

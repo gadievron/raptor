@@ -14,6 +14,12 @@ import pytest
 
 from core.dataflow.label import VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE
 
+# Module-level marker — every test in this file spawns real Python
+# subprocesses against the corpus shims (raptor-corpus-run +
+# raptor-corpus-metrics). Skipped from default fast-tier; opt in
+# with ``pytest -m integration``.
+pytestmark = pytest.mark.integration
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 # Shims moved out of libexec/ (which is for framework-internal scripts

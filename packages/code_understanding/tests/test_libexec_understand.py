@@ -15,6 +15,10 @@ from pathlib import Path
 
 import pytest
 
+# Module-level marker — every test in this file spawns the real
+# libexec/raptor-understand binary as a subprocess (see _run() below).
+pytestmark = pytest.mark.integration
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LIBEXEC = REPO_ROOT / "libexec" / "raptor-understand"
 

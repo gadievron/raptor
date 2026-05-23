@@ -581,6 +581,7 @@ class TestHuntVariantsE2E:
             for f in funcs
         )
 
+    @pytest.mark.integration
     def test_libexec_shim_processes_variants(self, understand_run):
         """End-to-end through the libexec shim: variants.json gets
         picked up, emission counted, by_kind summary mentions
@@ -842,7 +843,10 @@ class TestParseDefinition:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestShim:
+    """Every test in this class spawns the real libexec shim as a
+    subprocess. Marker keeps the class out of default fast-tier runs."""
     def _run(self, *args, env_extra=None):
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"

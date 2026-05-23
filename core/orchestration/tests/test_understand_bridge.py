@@ -3,14 +3,11 @@
 import copy
 import json
 import os
-import sys
 import time
 import unittest.mock
 from pathlib import Path
 
-
-# core/orchestration/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+import pytest
 
 from core.orchestration.understand_bridge import (
     find_understand_output,
@@ -1721,7 +1718,10 @@ class TestEdgeCases:
 # raptor-build-checklist script
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 class TestBuildChecklistScript:
+    """Spawns the libexec/raptor-build-checklist binary as a real
+    subprocess — marker keeps the class out of default fast-tier runs."""
     def test_creates_checklist(self, tmp_path):
         """raptor-build-checklist creates checklist.json."""
         import subprocess
