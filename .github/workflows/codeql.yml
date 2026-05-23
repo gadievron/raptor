@@ -127,17 +127,22 @@ jobs:
           set -euo pipefail
           out=/tmp/changed_files.txt
           : > "$out"
+          # ``--jq`` expressions use ``?`` + ``// []`` to suppress jq's
+          # ``cannot iterate over: null`` error on diffs the API
+          # truncates or returns as an error object (compare API caps
+          # at 300 files; past that ``.files`` is omitted entirely).
+          # No list → compute_filters forces all filters true.
           case "$EVENT" in
             pull_request|pull_request_target)
               gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-                --jq '.[].filename' >> "$out"
+                --jq '(. // [])[]?.filename' >> "$out"
               ;;
             push)
               if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
                 rm -f "$out"
               else
                 gh api --paginate "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
-                  --jq '.files[].filename' >> "$out"
+                  --jq '(.files // [])[]?.filename' >> "$out"
               fi
               ;;
             *)
