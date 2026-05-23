@@ -97,6 +97,7 @@ def test_invalid_mode_errors():
     assert "Unknown mode" in (r.stdout + r.stderr)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "mode,required_keyword",
     [
@@ -182,6 +183,7 @@ def test_fuzz_accepts_autonomous():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "module",
     ["raptor", "raptor_agentic", "raptor_fuzzing", "raptor_codeql"],

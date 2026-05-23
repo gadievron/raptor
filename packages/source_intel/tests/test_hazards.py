@@ -37,6 +37,7 @@ def _finding(file_path: str, rule_id: str, sink_line: int = 5) -> Finding:
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -59,6 +60,7 @@ def test_e2e_deprecated_functions_fires(tmp_path):
     assert ("deprecated_func", "sprintf") in kinds
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -85,6 +87,7 @@ def test_e2e_deprecated_skipped_for_strncpy(tmp_path):
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

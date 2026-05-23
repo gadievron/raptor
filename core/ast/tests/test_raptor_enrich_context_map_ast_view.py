@@ -10,6 +10,13 @@ import json
 import os
 import subprocess
 import unittest
+
+import pytest
+
+# Module-level marker — every test spawns the real
+# libexec/raptor-enrich-context-map-ast-view wrapper as a subprocess.
+# Top tests at 11s; opt-in via ``pytest -m integration``.
+pytestmark = pytest.mark.integration
 from pathlib import Path
 from tempfile import TemporaryDirectory
 

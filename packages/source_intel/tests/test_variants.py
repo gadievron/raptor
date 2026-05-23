@@ -25,6 +25,7 @@ from packages.source_intel.analyze import (
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -49,6 +50,7 @@ def test_e2e_checked_alloc_fires_on_bang_check(tmp_path):
     assert r.checked_allocations[0].allocator == "kstrdup"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -70,6 +72,7 @@ def test_e2e_checked_alloc_fires_on_eq_null(tmp_path):
     assert r.checked_allocations[0].allocator == "kstrdup"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -92,6 +95,7 @@ def test_e2e_unchecked_does_not_emit_checked_alloc(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",

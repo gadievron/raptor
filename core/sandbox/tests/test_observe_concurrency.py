@@ -149,6 +149,7 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestObserveJsonlAtomicity(unittest.TestCase):
     """The tracer writes each record via O_APPEND, which POSIX
     guarantees atomic for sub-PIPE_BUF writes (~4KB on Linux).

@@ -48,6 +48,7 @@ def _finding(file_path: str, rule_id: str,
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -76,6 +77,7 @@ def test_e2e_capability_check_fires_on_capable(tmp_path):
     assert "capable" in fns
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",

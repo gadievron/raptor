@@ -41,6 +41,7 @@ def _finding(file_path: str, rule_id: str,
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -68,10 +69,7 @@ def test_e2e_unchecked_alloc_field_fires(tmp_path):
     assert ae.shape == "field"
 
 
-@pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip real-spatch E2E",
-)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -105,6 +103,11 @@ def test_e2e_unchecked_alloc_local_fires_on_kstrdup(tmp_path):
     assert locals_[0].allocator == "kstrdup"
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not shutil.which("spatch"),
+    reason="spatch not installed — skip real-spatch E2E",
+)
 def test_e2e_unchecked_alloc_skips_checked_case(tmp_path):
     """When the field IS NULL-checked after the alloc, the rule
     must NOT fire — `when !=` clauses correctly exclude checked

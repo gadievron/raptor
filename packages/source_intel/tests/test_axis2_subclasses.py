@@ -22,6 +22,7 @@ from packages.source_intel.analyze import (
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -52,6 +53,7 @@ def test_warn_evidence_empty_when_no_warns():
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -71,6 +73,7 @@ def test_e2e_null_guards_fires_on_bang(tmp_path):
     assert "bang" in kinds, f"got {kinds!r}"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

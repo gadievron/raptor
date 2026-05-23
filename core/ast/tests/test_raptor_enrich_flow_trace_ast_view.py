@@ -7,6 +7,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
+# Module-level marker — every test spawns the real
+# libexec/raptor-enrich-flow-trace-ast-view wrapper as a subprocess.
+# Top tests at 11s; opt-in via ``pytest -m integration``.
+pytestmark = pytest.mark.integration
+
 
 REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
 WRAPPER = REPO_ROOT / "libexec" / "raptor-enrich-flow-trace-ast-view"
