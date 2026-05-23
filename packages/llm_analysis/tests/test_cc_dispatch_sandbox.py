@@ -205,6 +205,7 @@ def test_invoke_cc_simple_does_NOT_set_undocumented_env_vars(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not Path.home().joinpath(".claude/.credentials.json").exists(),
     reason="no Claude Code credentials in ~/.claude — skipping live test",
@@ -297,6 +298,7 @@ def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not Path.home().joinpath(".claude/.credentials.json").exists(),
     reason="no Claude Code credentials",
