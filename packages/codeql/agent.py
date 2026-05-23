@@ -579,7 +579,7 @@ class CodeQLAgent:
                     dataflow_examples.extend(examples)
 
         if total_dataflow_paths > 0:
-            print(f"\nDataflow Analysis:")
+            print("\nDataflow Analysis:")
             print(f"  Findings with dataflow paths: {total_dataflow_paths}")
             avg_steps = total_dataflow_steps / total_dataflow_paths if total_dataflow_paths > 0 else 0
             print(f"  Average path length: {avg_steps:.1f} steps")
@@ -692,7 +692,7 @@ class CodeQLAgent:
         try:
             from tabulate import tabulate
 
-            print(f"\n  Example Dataflow Paths:")
+            print("\n  Example Dataflow Paths:")
 
             table_data = []
             for example in dataflow_examples:
@@ -713,7 +713,7 @@ class CodeQLAgent:
 
         except ImportError:
             # Fallback to simple formatting if tabulate not available
-            print(f"\n  Example Dataflow Paths:")
+            print("\n  Example Dataflow Paths:")
             for i, example in enumerate(dataflow_examples, 1):
                 print(f"    {i}. {example['rule']}: {example['source']} → {example['sink']} ({example['steps']} steps)")
         except Exception as e:

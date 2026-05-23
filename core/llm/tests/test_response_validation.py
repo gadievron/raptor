@@ -208,7 +208,7 @@ class TestValidateSimpleSchema:
     SCHEMA = {
         "is_exploitable": "boolean",
         "reasoning": "string",
-        "confidence": f"string (high/medium/low)",
+        "confidence": "string (high/medium/low)",
         "vuln_type": "string - vulnerability category",
         "cvss_vector": "string - CVSS v3.1 vector",
         "cwe_id": "string - CWE-NNN",

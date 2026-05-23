@@ -160,8 +160,8 @@ class TestUnderstandProbeFlowE2E(unittest.TestCase):
                 )
                 self.assertNotIn(
                     "EP-ADMIN", confirmed,
-                    f"EP-ADMIN was not probed; runtime confirmation "
-                    f"is a false positive",
+                    "EP-ADMIN was not probed; runtime confirmation "
+                    "is a false positive",
                 )
 
                 # SINK-DB was not probed for write. Should not be

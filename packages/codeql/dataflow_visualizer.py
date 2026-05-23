@@ -842,15 +842,15 @@ class DataflowVisualizer:
         # Add instructions
         instructions_file = self.output_dir / f"{finding_id}_dataflow_instructions.txt"
         with open(instructions_file, 'w') as f:
-            f.write(f"To render the DOT file:\n\n")
-            f.write(f"# Install Graphviz (if not already installed):\n")
-            f.write(f"# macOS: brew install graphviz\n")
-            f.write(f"# Ubuntu: sudo apt-get install graphviz\n\n")
-            f.write(f"# Render to PNG:\n")
+            f.write("To render the DOT file:\n\n")
+            f.write("# Install Graphviz (if not already installed):\n")
+            f.write("# macOS: brew install graphviz\n")
+            f.write("# Ubuntu: sudo apt-get install graphviz\n\n")
+            f.write("# Render to PNG:\n")
             f.write(f"dot -Tpng {output_file.name} -o {finding_id}_dataflow.png\n\n")
-            f.write(f"# Render to SVG:\n")
+            f.write("# Render to SVG:\n")
             f.write(f"dot -Tsvg {output_file.name} -o {finding_id}_dataflow.svg\n\n")
-            f.write(f"# Render to PDF:\n")
+            f.write("# Render to PDF:\n")
             f.write(f"dot -Tpdf {output_file.name} -o {finding_id}_dataflow.pdf\n")
 
         return output_file

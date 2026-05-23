@@ -406,7 +406,7 @@ def _render_verdict_line(agreement: dict) -> str:
         # Mixed — fall back to listing pairwise verdicts.
         return f"**Verdict:** ⚠ partial — pairwise: {pairwise}"
     if verdict == "disagree":
-        return f"**Verdict:** ✗ disagree — no two sources match"
+        return "**Verdict:** ✗ disagree — no two sources match"
     # 2-source fall-through (raw `agree`/`partial`/`disagree` from
     # the pair check)
     glyph = _VERDICT_GLYPHS.get(verdict, verdict)

@@ -555,7 +555,7 @@ def check_lang() -> str | None:
         if ts_langs:
             return f"  lang: tree-sitter ✓ ({', '.join(ts_langs)})"
         else:
-            return f"  lang: tree-sitter ✗"
+            return "  lang: tree-sitter ✗"
     except Exception:
         return None
 

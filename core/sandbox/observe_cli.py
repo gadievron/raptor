@@ -143,8 +143,8 @@ def _format_summary(profile, *, run_dir: Path, kept: bool,
     # detail tells them which cap to raise.
     if profile.budget_truncated:
         parts.append(
-            f"\n⚠️  budget truncated — AuditBudget caps fired during "
-            f"this run; profile is INCOMPLETE."
+            "\n⚠️  budget truncated — AuditBudget caps fired during "
+            "this run; profile is INCOMPLETE."
         )
         for cat, n in sorted(profile.dropped_by_category.items()):
             if n > 0:

@@ -193,7 +193,7 @@ class TestCrossCategory(unittest.TestCase):
                 self.assertIsInstance(member, str,
                                       f"non-string member: {member!r}")
                 self.assertGreater(len(member), 0,
-                                   f"empty-string member in category")
+                                   "empty-string member in category")
 
 
 # === fortified() helper ===

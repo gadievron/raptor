@@ -85,7 +85,7 @@ def check_binary(name: str, version_flag: str = "--version") -> Tuple[bool, str,
     """Check if a binary exists and get its version."""
     path = shutil.which(name)
     if not path:
-        return False, f"Not found in PATH", None
+        return False, "Not found in PATH", None
 
     try:
         result = subprocess.run(
@@ -800,7 +800,7 @@ def print_results(results: List[TestResult], verbose: bool = False):
     if optional_failed > 0:
         print(f"    {color('Optional:', Colors.YELLOW)}      {optional_failed}")
 
-    print(f"\n  * = Required dependency")
+    print("\n  * = Required dependency")
 
     if required_failed > 0:
         print(color("\n  STATUS: FAILED - Required dependencies missing!", Colors.RED + Colors.BOLD))
