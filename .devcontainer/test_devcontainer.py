@@ -114,7 +114,7 @@ def check_python_package(name: str, min_version: Optional[str] = None) -> Tuple[
             try:
                 import pkg_resources
                 version = pkg_resources.get_distribution(name).version
-            except:
+            except Exception:
                 pass
 
         if version and min_version:
@@ -153,7 +153,7 @@ def check_library(name: str) -> Tuple[bool, str]:
             )
             if name in result.stdout:
                 return True, "Found via ldconfig"
-        except:
+        except Exception:
             pass
 
     # Try pkg-config
@@ -165,7 +165,7 @@ def check_library(name: str) -> Tuple[bool, str]:
         )
         if result.returncode == 0:
             return True, "Found via pkg-config"
-    except:
+    except Exception:
         pass
 
     # Try finding .so file
@@ -198,7 +198,7 @@ int main() { return 0; }
                     timeout=10
                 )
                 return result.returncode == 0, "Supported by gcc"
-            except:
+            except Exception:
                 return False, "Failed to test"
 
         elif feature == "--coverage":
@@ -210,7 +210,7 @@ int main() { return 0; }
                     timeout=10
                 )
                 return result.returncode == 0, "Supported by gcc"
-            except:
+            except Exception:
                 return False, "Failed to test"
 
         elif feature == "-fsanitize=address":
@@ -222,7 +222,7 @@ int main() { return 0; }
                     timeout=10
                 )
                 return result.returncode == 0, "Supported by gcc (ASAN)"
-            except:
+            except Exception:
                 return False, "Failed to test"
 
         elif feature == "c++17":
@@ -242,7 +242,7 @@ int main() {
                     timeout=10
                 )
                 return result.returncode == 0, "Supported by g++"
-            except:
+            except Exception:
                 return False, "Failed to test"
 
     return False, "Unknown feature"
@@ -260,7 +260,7 @@ def check_rr_kernel() -> Tuple[bool, str]:
                 return True, f"perf_event_paranoid={value} (OK)"
             else:
                 return False, f"perf_event_paranoid={value} (needs <=1, run: echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid)"
-    except:
+    except Exception:
         return False, "Cannot read /proc/sys/kernel/perf_event_paranoid"
 
 
