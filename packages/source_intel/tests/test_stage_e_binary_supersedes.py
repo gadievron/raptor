@@ -84,12 +84,12 @@ class TestSupersessionPrefix:
 class TestRenderWithBinaryVerdict:
     def _result(self):
         return SourceIntelResult(
-            target="/tmp/x",
+            target="src",
             attributes=(
                 AttributeEvidence(
                     kind=KIND_NORETURN,
                     function_name="panic",
-                    location=("/tmp/x/f.c", 50),
+                    location=("src/f.c", 50),
                     match_source="literal",
                     raw_match="noreturn",
                 ),
@@ -143,7 +143,7 @@ class TestRenderWithBinaryVerdict:
     def test_supersession_applies_even_to_no_signal_branch(self):
         """When source_intel found nothing AND binary blocks: the
         prefix STILL fires so consumer sees the disposition."""
-        empty = SourceIntelResult(target="/tmp/x")
+        empty = SourceIntelResult(target="src")
         lines = derive_evidence_strings(
             empty,
             finding_function="foo",
@@ -159,7 +159,7 @@ class TestRenderWithBinaryVerdict:
         still leads, so the LLM understands the binary disposition
         regardless of source_intel state."""
         skipped = SourceIntelResult(
-            target="/tmp/x", skipped_reason="spatch_not_available",
+            target="src", skipped_reason="spatch_not_available",
         )
         lines = derive_evidence_strings(
             skipped,
@@ -186,12 +186,12 @@ def _path(rule_id: str = "cpp/null-dereference", file_path: str = "a.c"):
 class TestCollectorBinaryVerdict:
     def _setup_result(self):
         return SourceIntelResult(
-            target="/tmp/x",
+            target="src",
             attributes=(
                 AttributeEvidence(
                     kind=KIND_NORETURN,
                     function_name="panic",
-                    location=("/tmp/x/a.c", 10),
+                    location=("src/a.c", 10),
                     match_source="literal",
                     raw_match="noreturn",
                 ),
@@ -217,9 +217,9 @@ class TestCollectorBinaryVerdict:
             patch("packages.source_intel.llm_bridge._safe_enclosing_function",
                   return_value="panic"),
         ):
-            block = collector(_path(), Path("/tmp/x"))
+            block = collector(_path(), Path("src"))
         assert seen["dataflow"] is not None
-        assert seen["target"] == Path("/tmp/x")
+        assert seen["target"] == Path("src")
         assert isinstance(block, UntrustedBlock)
         assert "SUPERSEDED" in block.content
 
@@ -235,7 +235,7 @@ class TestCollectorBinaryVerdict:
             patch("packages.source_intel.llm_bridge._safe_enclosing_function",
                   return_value="panic"),
         ):
-            block = collector(_path(), Path("/tmp/x"))
+            block = collector(_path(), Path("src"))
         assert isinstance(block, UntrustedBlock)
         assert "SUPERSEDED" not in block.content
 
@@ -255,7 +255,7 @@ class TestCollectorBinaryVerdict:
             patch("packages.source_intel.llm_bridge._safe_enclosing_function",
                   return_value="panic"),
         ):
-            block = collector(_path(), Path("/tmp/x"))
+            block = collector(_path(), Path("src"))
         assert isinstance(block, UntrustedBlock)
         # Resolver crashed → no supersession applied; evidence renders
         # unchanged. NOT skipped.
@@ -272,6 +272,6 @@ class TestCollectorBinaryVerdict:
             patch("packages.source_intel.llm_bridge._safe_enclosing_function",
                   return_value="panic"),
         ):
-            block = collector(_path(), Path("/tmp/x"))
+            block = collector(_path(), Path("src"))
         assert isinstance(block, UntrustedBlock)
         assert "SUPERSEDED" not in block.content

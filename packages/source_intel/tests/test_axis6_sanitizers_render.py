@@ -112,7 +112,7 @@ class TestRenderSanitizersLine:
 
 class TestDeriveEvidenceStringsSanitizers:
     def test_sanitizer_line_included_when_active(self):
-        result = SourceIntelResult(target="/tmp/x")
+        result = SourceIntelResult(target="src")
         flags = BuildFlagsContext(
             extraction_confidence="kconfig",
             sanitizers_enabled=("kasan",),
@@ -129,7 +129,7 @@ class TestDeriveEvidenceStringsSanitizers:
         assert "Build-flag context" in joined
 
     def test_no_sanitizer_line_when_absent(self):
-        result = SourceIntelResult(target="/tmp/x")
+        result = SourceIntelResult(target="src")
         lines = derive_evidence_strings(
             result,
             finding_function="foo",
@@ -141,7 +141,7 @@ class TestDeriveEvidenceStringsSanitizers:
         assert "kasan" not in joined
 
     def test_only_no_signal_when_empty_evidence_and_no_sanitizers(self):
-        result = SourceIntelResult(target="/tmp/x")
+        result = SourceIntelResult(target="src")
         flags = BuildFlagsContext(
             extraction_confidence="compile_commands",
             sanitizers_enabled=(),  # no sanitizers

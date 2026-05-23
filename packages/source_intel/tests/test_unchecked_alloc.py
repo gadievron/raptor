@@ -200,23 +200,25 @@ def test_unchecked_alloc_irrelevant_for_uaf(tmp_path):
         assert v.validate(finding) == ValidatorVerdict.UNCERTAIN
 
 
-def test_unchecked_alloc_pure_helper():
+def test_unchecked_alloc_pure_helper(tmp_path):
     """Direct test of _unchecked_alloc_supports_finding."""
+    foo = str(tmp_path / "foo.c")
+    other = str(tmp_path / "other.c")
     finding = Finding(
         finding_id="t",
         producer="codeql",
         rule_id="cpp/null-dereference",
         message="t",
-        source=Step(file_path="/tmp/foo.c", line=10, column=1,
+        source=Step(file_path=foo, line=10, column=1,
                     snippet="x", label="source"),
-        sink=Step(file_path="/tmp/foo.c", line=11, column=1,
+        sink=Step(file_path=foo, line=11, column=1,
                   snippet="x", label="sink"),
         intermediate_steps=(),
         raw={},
     )
     matching = SourceIntelResult(allocations=(AllocationEvidence(
         allocator="kstrdup",
-        location=("/tmp/foo.c", 10),
+        location=(foo, 10),
         shape="field",
         target_field="name",
     ),))
@@ -224,7 +226,7 @@ def test_unchecked_alloc_pure_helper():
 
     wrong_file = SourceIntelResult(allocations=(AllocationEvidence(
         allocator="kstrdup",
-        location=("/tmp/other.c", 10),
+        location=(other, 10),
         shape="field",
         target_field="name",
     ),))
