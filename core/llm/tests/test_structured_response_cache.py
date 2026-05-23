@@ -354,8 +354,10 @@ def test_concurrent_same_key_dedupes_to_one_provider_call(
         results.append(client.generate_structured("p", schema))
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert fake.calls == 1, (
         f"expected dedup to 1 call, got {fake.calls}"
@@ -383,8 +385,10 @@ def test_concurrent_distinct_keys_run_in_parallel(tmp_path: Path) -> None:
         client.generate_structured(f"distinct-prompt-{i}", schema)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert fake.calls == 8
 

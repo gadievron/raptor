@@ -370,11 +370,16 @@ def _parse_expr(
         )
 
     def _apply(op: str, lhs: Any, rhs: Any) -> Any:
-        if op == '+':  return lhs + rhs
-        if op == '-':  return lhs - rhs
-        if op == '*':  return lhs * rhs
-        if op == '|':  return lhs | rhs
-        if op == '<<': return lhs << rhs
+        if op == '+':
+            return lhs + rhs
+        if op == '-':
+            return lhs - rhs
+        if op == '*':
+            return lhs * rhs
+        if op == '|':
+            return lhs | rhs
+        if op == '<<':
+            return lhs << rhs
         if op == '>>':
             # Route right-shift through csem so signedness picks the
             # correct arithmetic vs logical variant.
