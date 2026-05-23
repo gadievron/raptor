@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_multifile-truly-dead-suppress",
+  "verdict": "false_positive",
+  "rationale": "Static `dead_helper` in main.c, NO callers in main.c, sibling other.c has unrelated work. Multi-file PR-4 prereqs scan confirms zero callers across both files. Static-guard \u2713; pointer-ref scan returns False. Verdict NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "dead_code"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_multifile-nonstatic-called-keep",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "source_intel_axis7_multifile-nonstatic-called-keep",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_multifile_external_call/main.c",
+    "line": 5,
+    "column": 2,
+    "snippet": "strcpy(buf, user);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_multifile_external_call/main.c",
+    "line": 5,
+    "column": 2,
+    "snippet": "strcpy(buf, user);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

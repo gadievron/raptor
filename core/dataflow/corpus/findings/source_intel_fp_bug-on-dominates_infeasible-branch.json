@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fp_bug-on-dominates_infeasible-branch",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "Pointer `p` from kmalloc dereferenced at `p->field = 42` without an `if (!p) return` check; potential NULL dereference.",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fp_bug_on_dominates.c",
+    "line": 32,
+    "column": 2,
+    "snippet": "struct ctx *p = kmalloc(sizeof(*p), gfp);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fp_bug_on_dominates.c",
+    "line": 34,
+    "column": 2,
+    "snippet": "p->field = 42;",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

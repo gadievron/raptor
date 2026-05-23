@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_alias-must_check",
+  "verdict": "true_positive",
+  "rationale": "Function `aliased_alloc` annotated via `__must_check` macro (known alias for WUR per curated table). Axis-1 alias scanner DETECTS the `__must_check` macro definition but currently does NOT bind it to specific function declarations (alias-resolution emits AttributeEvidence with empty function_name). Verdict path requires `function_name in snippet`; empty function_name skips. Result: UNCERTAIN, missed TP. Documents the known alias-binding gap \u2014 per-alias cocci rules are required for full coverage (see attr_warn_unused_result.cocci header comments). Future axis-1 expansion: ship per-alias cocci rules (one per curated alias) or extend the Python alias scanner to bind to declarations.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

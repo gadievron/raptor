@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_field-shape-variant",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis5_field-shape-variant",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis5_field_shape_variant/v.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "use_buf(r->buf);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis5_field_shape_variant/v.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "use_buf(r->buf);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

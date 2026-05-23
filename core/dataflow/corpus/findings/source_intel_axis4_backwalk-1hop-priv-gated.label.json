@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_backwalk-1hop-priv-gated",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Surface: CWE-787 unbounded memcpy in `inner_work`. The function itself has no `capable()` gate \u2014 in-function axis-4 stays silent. But `inner_work` is `static` and its only caller (`ioctl_entry`) has `capable(CAP_SYS_ADMIN)` gating. 1-hop back-walk via PR-4 prereqs sees all callers gated \u2192 NOT_EXPLOITABLE (CAP_SYS_ADMIN-equivalent attacker can already do equivalent harm).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

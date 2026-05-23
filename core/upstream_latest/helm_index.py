@@ -140,7 +140,7 @@ def _fetch_index_cached(
         import yaml          # type: ignore[import-untyped]
     except ImportError as exc:
         raise UpstreamLookupError(
-            f"PyYAML not installed; cannot parse Helm index"
+            "PyYAML not installed; cannot parse Helm index"
         ) from exc
     try:
         # ``CSafeLoader`` is faster + immune to the same arbitrary-
@@ -161,8 +161,37 @@ def _fetch_index_cached(
 def _normalize_index_url(repository: str) -> str:
     """Append ``/index.yaml`` if the URL doesn't already end with
     it. Tolerate trailing slashes — many Chart.yaml entries write
-    ``https://charts.example.com`` without the trailing slash."""
+    ``https://charts.example.com`` without the trailing slash.
+
+    ``repository`` is sourced from the TARGET's ``Chart.yaml``
+    (``dependencies[].repository``) when called from the SCA
+    cascade — i.e. attacker-controlled input. Defensive validation
+    refuses non-HTTPS schemes, file://, and URLs with embedded
+    credentials before the HTTP client sees them.
+
+    SSRF threat model: a malicious Chart.yaml could point at an
+    internal metadata service or file:// path; the egress proxy
+    blocks the call at the wire level but failing fast here gives
+    a clearer error and avoids a needless network round trip.
+    """
+    from urllib.parse import urlparse
+
     repository = repository.rstrip("/")
+    parsed = urlparse(repository)
+    if parsed.scheme not in ("http", "https"):
+        raise UpstreamLookupError(
+            f"Helm index URL refused: non-http(s) scheme "
+            f"{parsed.scheme!r} in {repository!r}"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise UpstreamLookupError(
+            f"Helm index URL refused: embedded userinfo in "
+            f"{repository!r} (SSRF / credential leak)"
+        )
+    if not parsed.hostname:
+        raise UpstreamLookupError(
+            f"Helm index URL refused: no hostname in {repository!r}"
+        )
     if repository.endswith(".yaml") or repository.endswith(".yml"):
         return repository
     return f"{repository}/index.yaml"

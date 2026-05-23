@@ -77,6 +77,12 @@ from .types import (
 )
 
 
+# Cap on stranded daemon threads from timed-out tool handlers.
+# 32 is generous — operator diagnostics rarely need more than a
+# handful of recent timeouts; old ones are dropped to bound memory.
+_MAX_STRANDED_TOOL_THREADS = 32
+
+
 class ToolUseLoop:
     """Run an agentic conversation until termination.
 
@@ -702,7 +708,18 @@ class ToolUseLoop:
             # accumulating leaks via `loop._stranded_tool_threads`.
             # Don't try to kill — Python doesn't support it; the
             # daemon flag handles process-exit cleanup.
+            #
+            # Cap the list to keep memory bounded: a misbehaving
+            # handler that hangs on a blocking syscall accumulates one
+            # zombie thread per timeout, each holding its handler's
+            # stack + any FDs/sockets it opened. Drop oldest references
+            # past the cap — the threads themselves still live (daemon
+            # cleanup at process exit), we just stop holding refs.
             self._stranded_tool_threads.append(thread)
+            if len(self._stranded_tool_threads) > _MAX_STRANDED_TOOL_THREADS:
+                self._stranded_tool_threads = (
+                    self._stranded_tool_threads[-_MAX_STRANDED_TOOL_THREADS:]
+                )
             raise ToolHandlerTimeout(
                 f"tool {call.name!r} exceeded {self._tool_timeout_s}s timeout"
             )

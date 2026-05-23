@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_negative-realloc-between-frees",
+  "producer": "codeql",
+  "rule_id": "cpp/double-free",
+  "message": "source_intel_axis3_negative-realloc-between-frees",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_negative_realloc_between_frees.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "if (!p) return;",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_negative_realloc_between_frees.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "if (!p) return;",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

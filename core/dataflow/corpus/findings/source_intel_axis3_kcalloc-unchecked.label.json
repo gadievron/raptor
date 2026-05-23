@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_kcalloc-unchecked",
+  "verdict": "true_positive",
+  "rationale": "Same shape with kcalloc allocator.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kcalloc return into local p",
+    "write_site_guard": "kcalloc must succeed (returns non-NULL)",
+    "read_site_lacks_guard": true,
+    "notes": "CWE-476 unchecked-kcalloc pattern; precondition is allocator-success."
+  }
+}

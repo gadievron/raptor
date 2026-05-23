@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_multi-allocator-isolated",
+  "verdict": "true_positive",
+  "rationale": "Two allocators in one file. variant_ratio(kstrdup) = (3, 1) anomaly; variant_ratio(kmalloc) = (1, 2) idiom direction. Tests per-allocator isolation in variant_ratio. Axis-3 fires on the kstrdup_miss site \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed",
+    "read_site_lacks_guard": true,
+    "notes": "Multi-allocator fixture; tests per-allocator ratio isolation."
+  }
+}

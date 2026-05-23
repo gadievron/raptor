@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_ns_capable-userns-scoped",
+  "verdict": "true_positive",
+  "rationale": "Surface shape: CWE-787 unbounded memcpy into a fixed 128B stack buffer. Gated by `capable(CAP_SYS_ADMIN)`. ns_capable is namespace-scoped; an unprivileged user can create their own userns and self-grant CAP_SYS_ADMIN inside it. Memory-corruption reachable via ns_capable IS a privilege escalation. Axis-4 (capability_check) detects the cap call site. Verdict falls through to UNCERTAIN (no other axis fires).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

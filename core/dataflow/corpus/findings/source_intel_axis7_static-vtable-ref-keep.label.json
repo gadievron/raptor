@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_static-vtable-ref-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `my_handler` is static + has zero direct callers, but is registered as a callback in `struct ops_t my_ops = { .handler = my_handler, };`. PR-4's function_inventory.cocci doesn't see this as a `call:my_handler` (it only tracks `funcname(args)`). The axis-7 dead-code pass MUST detect the vtable assignment via `_function_referenced_as_pointer` and skip suppression. Verdict UNCERTAIN. Tests the pointer-ref guard end-to-end.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

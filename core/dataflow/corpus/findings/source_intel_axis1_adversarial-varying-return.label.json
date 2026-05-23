@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_adversarial-varying-return",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Sophisticated adversarial: function has non-trivial body and returns varying value (`r` is computed, modified, returned). Both triviality and return-value-constancy checks PASS \u2014 axis-1 trusts the WUR and fires EXPLOITABLE. Ground truth: caller has no actionable use of the return \u2014 the function's return value is meaningless. DOCUMENTED RESIDUAL GAP: this shape requires semantic understanding of return-value meaning, which is beyond structural analysis. Stage D LLM (or human review) is the intended defense layer. F1 leak EXPECTED.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

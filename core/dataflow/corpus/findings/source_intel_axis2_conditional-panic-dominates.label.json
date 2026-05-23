@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_conditional-panic-dominates",
+  "verdict": "false_positive",
+  "rationale": "Conditional panic under #ifdef CONFIG_PARANOID. Axis-2 captures the call site; conditional_on records `CONFIG_PARANOID`. Verdict still NOT_EXPLOITABLE (Stage D LLM consumes the conditional caveat downstream).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

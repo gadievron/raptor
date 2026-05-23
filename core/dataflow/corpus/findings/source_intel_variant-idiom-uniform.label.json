@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_variant-idiom-uniform",
+  "verdict": "true_positive",
+  "rationale": "Surface shape is CWE-476 null-deref on `p = kstrdup(s, 0); use_string(p);`. The project's idiom is to never NULL-check kstrdup (0 of 5 sites check). Axis-5 `variant_ratio(kstrdup)` returns (0, 5) \u2014 uniform unchecked pattern, NOT an asymmetric anomaly. Axis-3 (unchecked_alloc_local) still verdicts EXPLOITABLE \u2014 any unchecked kstrdup IS a real bug regardless of project idiom (a project-wide idiom of `not handling OOM` is a project-wide bug class, not a project-wide invariant). Axis-5 must not fabricate extra signal from the uniform pattern; this fixture tests that. Crafted, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "Crafted CWE-476 uniform variant \u2014 even though project idiom doesn't check, the lifecycle precondition is the same."
+  }
+}

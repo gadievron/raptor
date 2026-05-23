@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_malloc-verdict-passive",
+  "verdict": "true_positive",
+  "rationale": "Function `my_allocator` annotated MALLOC (ownership-transfer signal). Double-free finding on caller. Axis-1 MALLOC is verdict-passive (empty relevance) \u2014 informational only. UNCERTAIN, registers as missed TP. Documents the gap.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -82,7 +82,7 @@ def load_json(
             p.read_text(encoding="utf-8-sig"),
             parse_constant=parse_constant,
         )
-    except (json.JSONDecodeError, ValueError, OSError) as e:
+    except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         # Pre-fix this returned None silently. Operators investigating
         # "why is my config not loading" had no signal — the file
         # existed, the function returned None, downstream code
@@ -91,6 +91,11 @@ def load_json(
         # debugging "missing data" sees the JSON error and the file
         # path; not error so legitimate optional/best-effort callers
         # don't trigger alarm.
+        #
+        # RecursionError is included because deeply-nested JSON
+        # (>~500 levels) blows the Python recursion limit during
+        # json.loads — caller should see the same warn-and-None
+        # path as a JSONDecodeError rather than an uncaught crash.
         logger.warning("load_json: failed to parse %s: %s", p, e)
         return None
 
@@ -154,7 +159,7 @@ def load_json_with_comments(path: Union[str, Path]) -> Optional[Any]:
         if not stripped.strip():
             return None
         return json.loads(stripped, parse_constant=_reject_non_finite)
-    except (json.JSONDecodeError, ValueError, OSError) as e:
+    except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         logger.warning("load_json_with_comments: failed to parse %s: %s", p, e)
         return None
 

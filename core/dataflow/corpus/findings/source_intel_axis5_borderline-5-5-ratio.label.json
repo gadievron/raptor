@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_borderline-5-5-ratio",
+  "verdict": "true_positive",
+  "rationale": "5 checked kstrdup sites + 5 unchecked. variant_ratio(kstrdup) = (5, 5) \u2014 borderline 50/50 split. Axis-3 still emits EXPLOITABLE on the unchecked site (verdict drivable from axis-3 alone). Axis-5 informational ratio: no clear anomaly direction.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "Borderline variant ratio \u2014 no idiom signal."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_adversarial-long-const-return",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Medium adversarial: function body is long (passes statement-count triviality check) but every return statement returns the same literal `0`. Return-value constancy check catches this: caller has no actionable information whether they check or not. Axis-1 trust check downgrades the WUR annotation; verdict falls through to UNCERTAIN. Layer 2 of adversarial defense.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_static-sizeof-ref-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `hook` is static + no direct calls. Referenced via `sizeof(&hook)` in setup(). The pointer-ref guard recognizes `&hook` (address-of). Verdict UNCERTAIN; dead-code correctly skips.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

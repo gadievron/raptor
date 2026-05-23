@@ -38,6 +38,7 @@ on a known upstream URL and route cleanly through the proxy.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -324,6 +325,30 @@ def seed_from_config(store: CredentialStore) -> None:
         config_path = Path(config_path_str).expanduser().resolve()
     else:
         config_path = Path.home() / ".config" / "raptor" / "models.json"
+
+    # Permission posture warning: models.json carries API keys when the
+    # operator uses the inline ``api_key`` field. World-readable mode
+    # (any of ``0o004`` / ``0o040`` / group-readable on a multi-user
+    # box) means another local UID can grep the file. We don't *refuse*
+    # to load — that would be a footgun on systems where umask sets
+    # 0o644 and the operator didn't notice — but log once at WARNING so
+    # the operator can ``chmod 600`` it. Skip on Windows where POSIX
+    # bits don't have the same meaning.
+    if sys.platform != "win32":
+        try:
+            st = config_path.stat()
+            if st.st_mode & 0o077:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "models.json at %s is mode %04o — contains API keys "
+                    "when populated inline. Consider `chmod 600 %s`.",
+                    config_path, st.st_mode & 0o777, config_path,
+                )
+        except OSError:
+            # Missing file / unreadable: load_json_with_comments below
+            # will handle the "missing" case (returns None) and the
+            # operator hits the "no key configured" path naturally.
+            pass
 
     data = load_json_with_comments(config_path)
     if data is None:

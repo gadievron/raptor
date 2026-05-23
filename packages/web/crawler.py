@@ -28,6 +28,12 @@ logger = get_logger()
 
 _SENSITIVE_HIDDEN_INPUT_NAMES = {"csrf", "nonce", "state"}
 
+# Cap on HTML body fed to bs4. Defence in depth above the
+# WebClient response-cap layer. 16 MiB is generous for legitimate
+# HTML (typical pages <1 MiB) and catches the catastrophic shapes
+# (multi-GiB documents, billion-nested-<div>) that OOM bs4.
+_BS4_MAX_BYTES = 16 * 1024 * 1024
+
 
 class WebCrawler:
     """Intelligent web crawler with LLM-guided discovery."""
@@ -269,10 +275,27 @@ class WebCrawler:
         try:
             from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(response.content, "html.parser")
+            # Cap the body before handing to bs4. Without this an in-
+            # scope but misbehaving / hostile server can serve a
+            # multi-GiB document or a billion-nested-<div> tree and
+            # OOM the crawler during DOM construction. WebClient's
+            # _enforce_response_cap already bounds the buffered body
+            # at _MAX_RESPONSE_BYTES; this is defence in depth for
+            # crawler-direct response objects (e.g. test fixtures
+            # that bypass the WebClient cap layer).
+            body = response.content
+            if len(body) > _BS4_MAX_BYTES:
+                logger.warning(
+                    "WebCrawler: truncating %s body from %d to %d bytes "
+                    "before bs4 parse",
+                    self._crawl_log_label(url),
+                    len(body),
+                    _BS4_MAX_BYTES,
+                )
+                body = body[:_BS4_MAX_BYTES]
+            soup = BeautifulSoup(body, "html.parser")
 
             # Discover links
-            base_netloc = urlparse(self.client.base_url).netloc
             for link in soup.find_all("a", href=True):
                 href = link["href"]
                 absolute_url = urljoin(url, href)
@@ -290,7 +313,15 @@ class WebCrawler:
                 # the scope check to base_url instead so drift
                 # is bounded to immediate neighbours rather than
                 # transitive expansion.
-                if urlparse(absolute_url).netloc == base_netloc:
+                #
+                # Use the client's _is_in_scope which compares
+                # (scheme, hostname, port) — bare netloc carries
+                # userinfo + port and mis-compares
+                # ``http://base.com`` (port-less) against
+                # ``http://base.com:80`` (port-equal-but-explicit),
+                # and silently passes ``http://base.com`` JS-
+                # discovered downgrades when base is ``https://``.
+                if self.client._is_in_scope(absolute_url):
                     self.discovered_urls.add(absolute_url)
 
                     # Extract parameters from URL
@@ -405,10 +436,14 @@ class WebCrawler:
             for match in matches:
                 if match.startswith("/") or match.startswith("http"):
                     absolute_url = urljoin(self.client.base_url, match)
-                    if (
-                        urlparse(absolute_url).netloc
-                        == urlparse(self.client.base_url).netloc
-                    ):
+                    # Scheme-aware scope check via client._is_in_scope
+                    # — bare netloc equality silently accepted a JS-
+                    # discovered ``http://base.com/x`` against a
+                    # configured ``https://base.com`` base, since
+                    # netloc compares port-less identical and
+                    # ignores scheme. _is_in_scope compares the
+                    # (scheme, hostname, port) triple.
+                    if self.client._is_in_scope(absolute_url):
                         self.discovered_urls.add(absolute_url)
                         logger.debug(
                             f"Found API endpoint in JS: {self._crawl_log_label(absolute_url)}"

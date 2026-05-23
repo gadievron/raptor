@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_distant-panic-beyond-gate-keep",
+  "verdict": "false_positive",
+  "rationale": "Surface shape: CWE-476 null-deref of `p` at line 195. Panic at line 132 inside `if (!p) panic(...);` dominates the null path \u2014 deref unreachable when p is NULL. With axis-2 grading (_classify_abort_grade), the panic is graded SAME_PATH (depth>1: inside an if-body) and gets \u00b1300 line proximity. The 63-line distance is within proximity \u2192 NOT_EXPLOITABLE. Originally labelled TP under the old proximity-only gate (\u00b150), but that was a workaround for missing grades; with grading shipped the verdict policy correctly identifies this as FP / infeasible_branch.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

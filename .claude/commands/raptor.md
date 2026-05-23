@@ -60,7 +60,7 @@ When the user says things like:
 - "fuzz this binary" → Use `fuzz` mode
 - "test this website" → Use `web` mode
 - "find vulnerabilities" → Ask what they want to test, then choose appropriate mode
-- "check for secrets" → Use `scan` mode with `--policy_groups secrets`
+- "check for secrets" → Use `scan` mode with `--policy-groups secrets`
 
 ## After Running RAPTOR
 

@@ -252,8 +252,12 @@ def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
     practice — PTRACE_O_EXITKILL has already cleared any orphaned
     tracees, leaving the tracer with nothing to wait for).
     """
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    # time.monotonic() — wall clock (time.time()) can jump backward
+    # under NTP/manual `date` adjustments, leaving the deadline never
+    # expiring (or expiring instantly). monotonic is guaranteed
+    # non-decreasing.
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         try:
             pid, _ = os.waitpid(tracer_pid, os.WNOHANG)
         except ChildProcessError:
@@ -282,8 +286,16 @@ def _sweep_stale_audit_configs() -> None:
     or ownership changed).
     """
     import glob
+    import tempfile as _tempfile
     my_uid = os.getuid()
-    for path in glob.glob("/tmp/raptor-audit-cfg-*.json"):
+    # Sweep ``$TMPDIR`` when set, not the hardcoded ``/tmp``. On macOS
+    # ``tempfile`` defaults to a per-UID ``/var/folders/...`` path; on
+    # space-constrained Linux dev boxes ``TMPDIR=/data/tmp``. Pre-fix
+    # the hardcoded ``/tmp`` glob silently never matched the actual
+    # tempfile location on those systems, so stale audit-config files
+    # accumulated under ``$TMPDIR`` indefinitely.
+    tmp_root = _tempfile.gettempdir()
+    for path in glob.glob(f"{tmp_root}/raptor-audit-cfg-*.json"):
         try:
             st = os.lstat(path)
             if st.st_uid != my_uid:
@@ -526,7 +538,26 @@ def run_sandboxed(
             _writable = []
             for p in (writable_paths or ()):
                 _writable.append(_osp.abspath(p))
-            _writable.append("/tmp")
+            # Honour ``$TMPDIR`` when set (macOS CI, custom dev
+            # environments, ``TMPDIR=/data/tmp`` on space-constrained
+            # build hosts) — pre-fix the hardcoded ``/tmp`` caused
+            # audit's write-intent allowlist to never match the
+            # sandboxed child's actual tempfile location on those
+            # systems, so legitimate ``tempfile.mkstemp()`` writes
+            # were over-reported as would-be-blocked.
+            #
+            # Threat model: ``$TMPDIR`` is read from the auditor's
+            # environment, which the codebase treats as trusted
+            # (``RaptorConfig.get_safe_env()`` strips the
+            # shell-eval vars, and TMPDIR is honored by every
+            # libc/stdlib path anyway). If a future attacker chain
+            # leaks a tainted ``TMPDIR`` into the auditor we have
+            # a wider problem than the audit allowlist. Document
+            # the explicit dependency so a future refactor can
+            # decide to pin via ``RaptorConfig`` if the threat
+            # model tightens.
+            import tempfile as _tempfile
+            _writable.append(_tempfile.gettempdir())
             if output:
                 _writable.append(_osp.abspath(output))
             _read_allow = list(_writable)
@@ -593,7 +624,11 @@ def run_sandboxed(
             _cfd, _audit_config_path = _tf.mkstemp(
                 prefix="raptor-audit-cfg-", suffix=".json",
             )
-            _serialised = _json.dumps(audit_config).encode("utf-8")
+            # sort_keys=True — same rationale as _landlock_audit.py:
+            # the serialised audit config is hashed elsewhere for
+            # cache lookups; stable ordering keeps the identity
+            # contract intact across Python versions.
+            _serialised = _json.dumps(audit_config, sort_keys=True).encode("utf-8")
             try:
                 # os.write may write fewer bytes than requested
                 # (rare on local fs, possible on network mounts).
@@ -1374,14 +1409,16 @@ def run_sandboxed(
     # .raptor-sbx-* dir under /tmp.
     stdout_buf = b"" if capture_output else None
     stderr_buf = b"" if capture_output else None
-    deadline = time.time() + timeout if timeout else None
+    # time.monotonic() for deadline math — see _reap_tracer() above for the
+    # NTP/wall-clock-jump rationale; same hazard applies here.
+    deadline = time.monotonic() + timeout if timeout else None
     try:
         if capture_output:
             import select
             fds = [out_r, err_r]
             try:
                 while fds:
-                    remaining = (deadline - time.time()) if deadline else None
+                    remaining = (deadline - time.monotonic()) if deadline else None
                     if remaining is not None and remaining <= 0:
                         _kill_and_reap(child_pid)
                         out_str = stdout_buf.decode() if text else stdout_buf
@@ -1415,7 +1452,7 @@ def run_sandboxed(
                     pid_, status = os.waitpid(child_pid, os.WNOHANG)
                     if pid_ != 0:
                         break
-                    if time.time() > deadline:
+                    if time.monotonic() > deadline:
                         _kill_and_reap(child_pid)
                         out_str = (stdout_buf or b"").decode() if text else stdout_buf
                         err_str = (stderr_buf or b"").decode() if text else stderr_buf

@@ -172,5 +172,9 @@ def write_flow_files(
             stage_signals=stage_signals,
             stage_status=stage_status,
         ))
-    except Exception:  # noqa: BLE001 — report write must not abort pipeline
-        pass
+    except Exception as exc:  # noqa: BLE001 — report write must not abort pipeline
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "flow report write failed for %s: %s",
+            cve_id, exc, exc_info=True,
+        )

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_double-free-classic",
+  "verdict": "true_positive",
+  "rationale": "Classic CWE-415 double-free: `kfree(p)` at line 11, no reassignment, `kfree(p)` again at line 13. Axis-3 double_free.cocci matches both call sites via the `when != E = NULL/kmalloc(...)` constraint excluding reassignment paths. Verdict EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-17"
+}

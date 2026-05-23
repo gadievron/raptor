@@ -150,54 +150,57 @@ def run_rule(
         json_path = Path(tmp.name)
         cleanup_json = True
 
-    cmd = build_cmd(
-        target, config,
-        json_output_path=json_path,
-        rule_timeout=rule_timeout,
-        semgrep_bin=semgrep_bin,
-        extra_args=extra_args,
-    )
-
-    runner = subprocess_runner or subprocess.run
-
-    start = time.monotonic()
+    # Wrap the entire subprocess + parse path in try/finally so an
+    # unexpected exception (MemoryError, KeyboardInterrupt mid-parse,
+    # any future exception type the runner adds) still unlinks the
+    # tempfile. Pre-fix only TimeoutExpired / OSError were handled;
+    # everything else leaked the tempfile.
     try:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
+        cmd = build_cmd(
+            target, config,
+            json_output_path=json_path,
+            rule_timeout=rule_timeout,
+            semgrep_bin=semgrep_bin,
+            extra_args=extra_args,
         )
-    except subprocess.TimeoutExpired:
-        if cleanup_json:
-            _safe_unlink(json_path)
-        return SemgrepResult(
-            name=name, config=config, target=str(target),
-            errors=[f"Timeout after {timeout}s"],
-            returncode=-1,
-            elapsed_ms=int((time.monotonic() - start) * 1000),
-        )
-    except OSError as e:
-        if cleanup_json:
-            _safe_unlink(json_path)
-        return SemgrepResult(
-            name=name, config=config, target=str(target),
-            errors=[str(e)],
-            returncode=-1,
-            elapsed_ms=int((time.monotonic() - start) * 1000),
-        )
-    elapsed = int((time.monotonic() - start) * 1000)
 
-    sarif_text = proc.stdout or ""
-    json_text = ""
-    if json_path.exists():
+        runner = subprocess_runner or subprocess.run
+
+        start = time.monotonic()
         try:
-            json_text = json_path.read_text()
-        except OSError:
-            json_text = ""
-    if cleanup_json:
-        _safe_unlink(json_path)
+            proc = runner(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return SemgrepResult(
+                name=name, config=config, target=str(target),
+                errors=[f"Timeout after {timeout}s"],
+                returncode=-1,
+                elapsed_ms=int((time.monotonic() - start) * 1000),
+            )
+        except OSError as e:
+            return SemgrepResult(
+                name=name, config=config, target=str(target),
+                errors=[str(e)],
+                returncode=-1,
+                elapsed_ms=int((time.monotonic() - start) * 1000),
+            )
+        elapsed = int((time.monotonic() - start) * 1000)
+
+        sarif_text = proc.stdout or ""
+        json_text = ""
+        if json_path.exists():
+            try:
+                json_text = json_path.read_text()
+            except OSError:
+                json_text = ""
+    finally:
+        if cleanup_json:
+            _safe_unlink(json_path)
 
     findings = parse_sarif(sarif_text)
     parsed_json = parse_json_output(json_text)

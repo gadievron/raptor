@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_downstream-check-single-line",
+  "verdict": "false_positive",
+  "rationale": "Surface: multiplication that could overflow. Single-line downstream check `if (size > max_buf_size) return -1;` catches it. Axis 8 detects + suppresses. Verdict NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

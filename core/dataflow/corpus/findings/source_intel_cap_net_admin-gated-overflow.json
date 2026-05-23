@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_cap_net_admin-gated-overflow",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "Unbounded write of `user_data` into fixed-size buffer `setup_buf[128]` via `memcpy(setup_buf, user_data, len)`; `len` is attacker-controlled (within CAP_NET_ADMIN trust boundary).",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/cap_net_admin_gated.c",
+    "line": 37,
+    "column": 2,
+    "snippet": "int net_admin_op(const char *user_data, size_t len)",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/cap_net_admin_gated.c",
+    "line": 43,
+    "column": 2,
+    "snippet": "memcpy(setup_buf, user_data, len);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

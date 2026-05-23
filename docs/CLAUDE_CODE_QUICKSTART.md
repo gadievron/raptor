@@ -8,9 +8,13 @@ Use RAPTOR with plain English in Claude Code via slash commands!
 | Command | Use Case | Example |
 |---------|----------|---------|
 | `/raptor` | General help | `/raptor - I want to test my app` |
-| `/raptor-scan` | Scan source code | `/raptor-scan - check this repo for bugs` |
-| `/raptor-fuzz` | Fuzz binaries | `/raptor-fuzz - test ./myapp for crashes` |
-| `/raptor-web` | Test web apps | `/raptor-web - scan https://myapp.com` |
+| `/scan`   | Scan source code | `/scan - check this repo for bugs` |
+| `/fuzz`   | Fuzz binaries | `/fuzz - test ./myapp for crashes` |
+| `/web`    | Test web apps | `/web - scan https://myapp.com` |
+
+The longer `/raptor-scan` / `/raptor-fuzz` / `/raptor-web` forms are
+retained as back-compat aliases — both work, but the short form is
+canonical going forward.
 
 ## Natural Language Examples
 
@@ -18,23 +22,23 @@ Just talk naturally to Claude:
 
 ### Code Scanning
 ```
-/raptor-scan - scan this directory
-/raptor-scan - find secrets in my code
-/raptor-scan - check for SQL injection vulnerabilities
+/scan - scan this directory
+/scan - find secrets in my code
+/scan - check for SQL injection vulnerabilities
 ```
 
 ### Binary Fuzzing
 ```
-/raptor-fuzz - fuzz this binary
-/raptor-fuzz - test ./myapp for 5 minutes
-/raptor-fuzz - find crashes in /usr/local/bin/myapp
+/fuzz - fuzz this binary
+/fuzz - test ./myapp for 5 minutes
+/fuzz - find crashes in /usr/local/bin/myapp
 ```
 
 ### Web Testing
 ```
-/raptor-web - test my website
-/raptor-web - scan https://localhost:3000 for XSS
-/raptor-web - check this app for OWASP Top 10
+/web - test my website
+/web - scan https://localhost:3000 for XSS
+/web - check this app for OWASP Top 10
 ```
 
 ### General

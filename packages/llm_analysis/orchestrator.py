@@ -250,8 +250,19 @@ def build_llm_config_from_flags(
     elif auto_detect:
         try:
             llm_config = LLMConfig()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Pre-fix this swallowed silently, leaving ``llm_config``
+            # at its prior value (potentially None) and the next
+            # code path crashed deeper without a breadcrumb. Log
+            # the cause so operators can diagnose "missing models"
+            # vs "malformed models.json" vs "init bug".
+            from core.logging import get_logger as _get_logger
+            _get_logger().warning(
+                "LLMConfig auto-detect failed: %s — falling back "
+                "to default (likely no models available)",
+                exc,
+                exc_info=True,
+            )
 
     # Consensus auto-defaults are redundant with 3+ analysis models
     # — the analysis models already provide independent opinions.
@@ -380,6 +391,19 @@ def orchestrate(
     # the enrichment a no-op for every finding on the dispatch path.
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
+
+    # Phase D PR1: pre-seed source_intel for the target. One spatch
+    # invocation now serves every memory-corruption finding's
+    # evidence injection below (see source_intel_inject for
+    # per-finding fan-out). Best-effort — failures collapse to
+    # "no source_intel evidence this run" without affecting dispatch.
+    try:
+        from packages.llm_analysis.source_intel_inject import (
+            prepare_source_intel,
+        )
+        prepare_source_intel(repo_path)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("source_intel pre-seed failed (%s); continuing", e)
 
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
@@ -615,8 +639,8 @@ def orchestrate(
             )
             if not accept_weakened_defenses:
                 print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
-                print(f"  The model cannot honour the defense envelope — aborting.")
-                print(f"  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
+                print("  The model cannot honour the defense envelope — aborting.")
+                print("  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
                 return None
             from core.security.rule_of_two import (
                 NonInteractiveError, require_interactive_for_weakened_defenses,
@@ -639,10 +663,10 @@ def orchestrate(
                     _fmname, _ferr,
                 )
             print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
-            print(f"  Running with reduced defences (--accept-weakened-defenses)")
+            print("  Running with reduced defences (--accept-weakened-defenses)")
             print(f"  Reason: {_fail_summary}")
-            print(f"  Model-independent floor still applies (autofetch redaction,"
-                  f" control-char sanitisation, role separation)\n")
+            print("  Model-independent floor still applies (autofetch redaction,"
+                  " control-char sanitisation, role separation)\n")
 
     # --- Per-finding analysis ---
     results_by_id = {}
@@ -1054,8 +1078,12 @@ def orchestrate(
             print("\n  Aggregate: skipped — requires at least two analysis models")
         else:
             aggregate_payload = _build_aggregation_payload(results_by_id, correlation)
+            # Pass `findings` so AggregationTask can pull SI evidence
+            # per memory-corruption finding for tie-breaking on
+            # disputed cases (see AggregationTask.build_prompt).
             aggregate_results = dispatch_task(
-                AggregationTask(profile=profile), [aggregate_payload], dispatch_fn,
+                AggregationTask(profile=profile, findings=findings),
+                [aggregate_payload], dispatch_fn,
                 role_resolution, results_by_id, cost_tracker, max_parallel,
             )
             for r in aggregate_results:
@@ -1090,7 +1118,15 @@ def orchestrate(
         print(f"\n  Structural grouping: {n} group{'s' if n != 1 else ''} found")
 
     # --- Group analysis ---
-    group_task = GroupAnalysisTask(results_by_id=results_by_id, profile=profile)
+    # Pass `findings` so GroupAnalysisTask can call
+    # evidence_blocks_for_finding per group member — surfaces shared-
+    # hazard patterns to the cross-finding analysis (e.g. "all 3
+    # group members hit strcpy in different functions"). Without
+    # `findings`, only analysis results are available, which lack
+    # repo_path + metadata.name needed by the SI cache lookup.
+    group_task = GroupAnalysisTask(
+        results_by_id=results_by_id, findings=findings, profile=profile,
+    )
     group_results = dispatch_task(
         group_task, groups, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,

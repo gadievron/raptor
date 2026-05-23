@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fortify-skips-custom-helper",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Surface shape is a CWE-787 unbounded-write into a 128-byte stack buffer through a CUSTOM `my_memcpy()` helper. The build has FORTIFY_SOURCE=2 AND -fstack-protector-strong. FORTIFY only intercepts glibc names — `my_memcpy` is NOT in _FORTIFIED_WRITE_CALLS so axis-6 FORTIFY suppressor correctly returns False. HOWEVER: stack-protector-strong inserts canaries that detect stack-buffer-overflow at function return — converting any code-execution primitive into abort()/SIGABRT (DoS-only). Axis-6 stack_protector consumer correctly emits NOT_EXPLOITABLE on this basis. From an EXPLOITABILITY framing (the corpus's TP/FP semantic), this is a framework_mitigation FP — the bug is real but stack canary mitigates the exploitable consequence. Relabelled 2026-05-17 when axis-6 stack_protector consumer shipped; original label predated stack-protector verdict integration.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-17"
+}

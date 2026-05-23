@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_adversarial-panic-in-dead-code",
+  "verdict": "true_positive",
+  "rationale": "Real CWE-476 null-deref at `*p = 1;`. The panic at line ~11 is inside `#if 0 ... #endif` \u2014 compiled out, never runs. Axis-2 must NOT suppress based on the syntactic-only presence of panic; cocci's `enclosing_condition` machinery should mark it conditional_on=#if 0 and downstream verdict logic should treat it as never-active. If axis-2 does suppress \u2192 adversarial-tolerance gap on conditional aborts. If verdict stays UNCERTAIN (or correctly recognizes the abort is conditional) \u2192 axis-2 correctly handles this.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -52,6 +52,14 @@ logger = logging.getLogger(__name__)
 # a misuse of tar (use a different format) or a malicious bomb.
 DEFAULT_MAX_MEMBER_BYTES = 64 * 1024 * 1024
 
+# Cap on tar-member ``name`` length. PAX-format tar permits names
+# up to 8 GiB via the ``LongLink`` extension; ``tarfile`` parses the
+# full name into a Python str during ``tf.__iter__`` BEFORE any of
+# the safety checks below fire. A 100MB attacker-supplied name
+# costs ~100 MB of RAM at iter-time, far below what the per-member
+# ``size`` cap would block. Real filenames are well under 4 KiB.
+DEFAULT_MAX_NAME_LENGTH = 4 * 1024
+
 # We need a fictional "destination" path for tarfile.data_filter to
 # resolve relative paths against. The path doesn't need to exist
 # (data_filter does string-based resolution); we use a fixed
@@ -70,6 +78,7 @@ class UnsafeMemberReason(str, Enum):
     SYMLINK_UNSAFE = "symlink_unsafe"
     HARD_LINK = "hard_link"
     OVERSIZED = "oversized"
+    OVERSIZED_NAME = "oversized_name"
     UNRECOGNISED_TYPE = "unrecognised_type"
 
 
@@ -77,6 +86,7 @@ def is_safe_member(
     member: tarfile.TarInfo,
     *,
     max_size: int = DEFAULT_MAX_MEMBER_BYTES,
+    max_name_length: int = DEFAULT_MAX_NAME_LENGTH,
     allow_absolute_paths: bool = False,
 ) -> bool:
     """True if extracting ``member`` is safe under the hardening
@@ -84,6 +94,7 @@ def is_safe_member(
     callers that don't need the diagnostic detail."""
     return safe_member_reason(
         member, max_size=max_size,
+        max_name_length=max_name_length,
         allow_absolute_paths=allow_absolute_paths,
     ) == UnsafeMemberReason.SAFE
 
@@ -92,6 +103,7 @@ def safe_member_reason(
     member: tarfile.TarInfo,
     *,
     max_size: int = DEFAULT_MAX_MEMBER_BYTES,
+    max_name_length: int = DEFAULT_MAX_NAME_LENGTH,
     allow_absolute_paths: bool = False,
 ) -> UnsafeMemberReason:
     """Return the specific reason ``member`` is unsafe, or
@@ -109,7 +121,16 @@ def safe_member_reason(
     members for path-traversal, M for symlinks" counts at the
     consumer's report layer.
     """
-    # Size check first — cheap, and a 1 GB malicious entry should
+    # Name-length check first — a multi-MB tar member name (legal
+    # via PAX LongLink) has already been parsed into a Python str
+    # by tarfile.iter, but everything we do here downstream (path
+    # operations, regex matching, logging) compounds the cost on
+    # that string. Reject early so the bulk of the analysis runs
+    # on bounded names.
+    if len(member.name) > max_name_length:
+        return UnsafeMemberReason.OVERSIZED_NAME
+
+    # Size check next — cheap, and a 1 GB malicious entry should
     # be rejected before doing anything else with it.
     if member.size > max_size:
         return UnsafeMemberReason.OVERSIZED
@@ -194,6 +215,7 @@ def safe_member_reason(
 
 __all__ = [
     "DEFAULT_MAX_MEMBER_BYTES",
+    "DEFAULT_MAX_NAME_LENGTH",
     "UnsafeMemberReason",
     "is_safe_member",
     "safe_member_reason",

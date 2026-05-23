@@ -275,8 +275,14 @@ def _walk_returns_ts(
     grammar uses a different name, add it to the tuple below.
     """
     try:
-        from tree_sitter import Language, Parser
-        parser = Parser(Language(grammar_module.language()))
+        # Route through the call_graph parser cache — grammar is
+        # immutable across the program's lifetime, so a single
+        # Parser per language can be reused across every parse.
+        # Pre-cache, each ``Parser(Language(...))`` allocated
+        # libtree-sitter C state per call across thousands of files,
+        # accumulating RSS in long inventory walks.
+        from core.inventory.call_graph import _get_ts_parser
+        parser = _get_ts_parser(grammar_module.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception:                                       # noqa: BLE001
         return ()

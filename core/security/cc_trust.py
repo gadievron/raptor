@@ -39,6 +39,7 @@ Informational (no block):
 """
 
 import json
+import logging
 import os
 import stat
 import unicodedata
@@ -46,6 +47,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+# Plain stdlib logger — cc_trust runs at startup before
+# core.logging may be configured, and the trust gate must not
+# depend on lazy initialisation that could itself fail.
+_logger = logging.getLogger(__name__)
 
 
 # Process-wide trust override. Set by entry points via set_trust_override()
@@ -351,7 +357,19 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                     k = _truncate(key_str, limit=40)
                     fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
     except Exception:
-        return None  # display-time crash → fail-closed
+        # Display-time crash → fail-closed (caller treats None as
+        # ``(malformed) / treated as dangerous`` per the
+        # ``scanned is None`` branch in ``_scan_cached``).
+        # Pre-fix the failure was completely silent — a code bug
+        # (TypeError, RecursionError, MemoryError) collapsed to
+        # "no findings" with no breadcrumb, leaving operators with
+        # an unexplained blocking verdict on a benign repo.
+        _logger.warning(
+            "cc_trust._scan_settings: scan crashed on %s; treating as dangerous",
+            path,
+            exc_info=True,
+        )
+        return None
     return fs
 
 
@@ -378,6 +396,13 @@ def _scan_mcp(path: Path) -> Optional[FileScan]:
                 else:
                     fs.findings.append(Finding(f'unknown server "{n}"', _truncate(repr(cfg)), True))
     except Exception:
+        # Display-time crash → fail-closed. See _scan_settings above
+        # for the same rationale.
+        _logger.warning(
+            "cc_trust._scan_mcp: scan crashed on %s; treating as dangerous",
+            path,
+            exc_info=True,
+        )
         return None
     return fs
 

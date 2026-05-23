@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fp_dead-code-helper_unbounded-strcpy",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "`strcpy` writes attacker-controlled `s` into a fixed 16-byte stack buffer without length check; potential stack buffer overflow.",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fp_dead_code_helper.c",
+    "line": 25,
+    "column": 17,
+    "snippet": "static int unsafe_helper(const char *s)",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fp_dead_code_helper.c",
+    "line": 28,
+    "column": 2,
+    "snippet": "strcpy(buf, s);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

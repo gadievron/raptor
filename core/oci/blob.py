@@ -22,6 +22,7 @@ consumer reads into memory rather than to disk, so
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, Iterable, Set
 
 from core.tar import extract_files_from_tar
@@ -85,14 +86,21 @@ def extract_files_from_layer(
     )
 
 
+_LEADING_PREFIX_RE = re.compile(r"^(?:\.?/)+")
+
+
 def _normalise_tar_path(p: str) -> str:
     """Remove leading ``./`` and ``/`` so the same logical path
-    matches across builders that emit different shapes."""
-    while p.startswith("./"):
-        p = p[2:]
-    while p.startswith("/"):
-        p = p[1:]
-    return p
+    matches across builders that emit different shapes.
+
+    Single regex pass (constant-time amortised) replaces the
+    previous two ``while`` loops which were O(n) per leading
+    component on attacker-controlled prefixes. A malicious layer
+    entry like ``./././...`` repeated 10M times forced 10M string
+    slices through the old loops; the regex bounds peak memory
+    + CPU regardless of the leading prefix.
+    """
+    return _LEADING_PREFIX_RE.sub("", p)
 
 
 __all__ = [

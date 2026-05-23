@@ -57,10 +57,16 @@ class TestSageFuzzingMemoryAPI(unittest.TestCase):
         # with constrained `/tmp` (or when the test ran inside
         # a container with a small tmpfs) the leak eventually
         # caused unrelated failures with cryptic ENOSPC errors.
-        # Clean the tmpdir best-effort — `ignore_errors=True`
-        # so a flaky FUSE mount doesn't fail the test.
+        # ``ignore_errors`` removed — a flaky FUSE mount that
+        # makes cleanup fail SHOULD surface as a test failure,
+        # not get silently swallowed. FileNotFoundError is the
+        # only realistic-and-benign case (concurrent test pass
+        # already removed it) and we treat that specifically.
         import shutil
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        try:
+            shutil.rmtree(self.tmpdir)
+        except FileNotFoundError:
+            pass
 
     def test_record_strategy_success(self):
         """record_strategy_success should store knowledge."""
@@ -270,6 +276,148 @@ class TestSageRecallMethods(unittest.TestCase):
             self.assertEqual(
                 memory.recall_exploit_patterns("heap_overflow", {"aslr": True}), []
             )
+
+
+class TestSageFuzzingMemoryEnabledPath(unittest.TestCase):
+    """Exercise the SAGE-enabled branches of :class:`SageFuzzingMemory`.
+
+    Pre-fix every other test in this file constructed memory with
+    ``SageConfig(enabled=False)`` so the whole reason the class
+    exists — persistence to a SAGE backend — was untested. We
+    fake-out the SageClient methods (``is_available``, ``propose``,
+    ``query``) at the instance level so we can drive the enabled
+    branches without an actual SAGE server, and assert that the
+    persistence helpers (``save`` / ``remember``) DO call into the
+    client.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(self._cleanup_tmpdir)
+        self.mem_file = Path(self.tmpdir) / "test_memory.json"
+
+    def _cleanup_tmpdir(self):
+        import shutil
+        # No ``ignore_errors`` — we want a stale-handle bug to
+        # surface here instead of getting masked.
+        try:
+            shutil.rmtree(self.tmpdir)
+        except FileNotFoundError:
+            pass
+
+    def _build_enabled_memory(self):
+        """Construct a SageFuzzingMemory whose client reports
+        available and tracks propose() calls in a list we can
+        assert against."""
+        from core.sage.config import SageConfig
+        from core.sage.memory import SageFuzzingMemory
+
+        config = SageConfig(enabled=True)
+        memory = SageFuzzingMemory(
+            memory_file=self.mem_file, sage_config=config,
+        )
+        # Stub the client's network surface after construction.
+        # is_available is called once in __init__; we override
+        # the cached _sage_available flag rather than re-running
+        # the health check.
+        memory._sage_available = True
+        memory._sage_client.propose = (
+            lambda **kw: self._calls.append(("propose", kw)) or True
+        )
+        memory._sage_client.query = (
+            lambda *a, **kw: self._calls.append(("query", a, kw)) or []
+        )
+        return memory
+
+    def test_save_propagates_to_sage_when_available(self):
+        """``save()`` and ``remember()`` should both reach the SAGE
+        client when it reports available.
+
+        ``record_*`` -> ``remember()`` triggers a per-entry propose,
+        and ``save()`` walks the full knowledge set proposing again
+        so the exact count depends on which call path the operator
+        uses. We assert "at least one per knowledge entry" and that
+        every call carries the expected envelope shape (domain_tag,
+        memory_type, content prefix).
+        """
+        self._calls: list = []
+        memory = self._build_enabled_memory()
+        memory.record_strategy_success(
+            strategy_name="AFL_CMPLOG",
+            binary_hash="abc",
+            crashes_found=3,
+            exploitable_crashes=1,
+        )
+        memory.record_crash_pattern(
+            signal="SIGSEGV", function="parse_input",
+            binary_hash="abc", exploitable=True,
+        )
+
+        memory.save()
+
+        propose_calls = [c for c in self._calls if c[0] == "propose"]
+        # At minimum: one propose per knowledge entry (2). In
+        # practice ``record_* -> remember() -> propose`` plus
+        # ``save() -> propose`` runs again over the whole set, so
+        # we expect ≥ 2.
+        self.assertGreaterEqual(
+            len(propose_calls), 2,
+            f"expected ≥2 propose() calls, got {len(propose_calls)}",
+        )
+        # Domain tag + memory_type should be consistent across
+        # every call — these are the contract operators rely on
+        # for SAGE-side filtering.
+        for _, kw in propose_calls:
+            self.assertEqual(kw["domain_tag"], "raptor-fuzzing")
+            self.assertEqual(kw["memory_type"], "observation")
+            self.assertIn("Fuzzing knowledge", kw["content"])
+        # Both kinds of knowledge made it through — strategy AND
+        # crash_pattern.
+        contents = [kw["content"] for _, kw in propose_calls]
+        self.assertTrue(
+            any("strategy" in c for c in contents),
+            "no strategy propose seen",
+        )
+        self.assertTrue(
+            any("crash_pattern" in c for c in contents),
+            "no crash_pattern propose seen",
+        )
+
+    def test_save_skips_sage_when_unavailable(self):
+        """When SAGE is unavailable, ``save()`` MUST still write the
+        JSON fallback but MUST NOT call ``propose``."""
+        self._calls = []
+        memory = self._build_enabled_memory()
+        # Flip availability off — exercise the early-return branch
+        # in ``save`` and ``remember`` that the rest of the suite
+        # never reaches.
+        memory._sage_available = False
+
+        memory.record_strategy_success(
+            strategy_name="AFL_CMPLOG",
+            binary_hash="abc",
+            crashes_found=3,
+            exploitable_crashes=1,
+        )
+        memory.save()
+
+        self.assertEqual(
+            [c for c in self._calls if c[0] == "propose"],
+            [],
+            "propose() must not be called when SAGE is unavailable",
+        )
+        # JSON fallback should have landed.
+        self.assertTrue(self.mem_file.exists())
+
+    def test_stats_reflect_enabled_state(self):
+        """``get_statistics()`` should reflect whether SAGE is
+        enabled — operators consume this for /project status."""
+        self._calls = []
+        memory = self._build_enabled_memory()
+        stats = memory.get_statistics()
+        self.assertTrue(stats.get("sage_enabled"))
+        # When disabled the field flips false (covered separately
+        # via the disabled-config tests above).
 
 
 if __name__ == "__main__":

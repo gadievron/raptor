@@ -303,7 +303,11 @@ def _create_default_file(path: Path) -> None:
             lines.append(f"{entry:<{col}}// {comment}")
         lines.append("}")
         content = "\n".join(lines) + "\n"
-        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+        # pid+tid suffix — same-process threads can race on save().
+        import threading
+        tmp = path.with_name(
+            f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+        )
         try:
             tmp.write_text(content, encoding="utf-8")
             tmp.replace(path)

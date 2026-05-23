@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_wur-cwe-relevant",
+  "producer": "codeql",
+  "rule_id": "cpp/unchecked-return",
+  "message": "cpp/unchecked-return on source_intel_axis1_wur-cwe-relevant",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 27,
+    "column": 2,
+    "snippet": "risky_alloc(n);  /* return ignored \u2014 should be flagged */",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 27,
+    "column": 2,
+    "snippet": "risky_alloc(n);  /* return ignored \u2014 should be flagged */",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

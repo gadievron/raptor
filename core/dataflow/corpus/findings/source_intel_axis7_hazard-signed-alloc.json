@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_hazard-signed-alloc",
+  "producer": "codeql",
+  "rule_id": "cpp/uncontrolled-allocation-size",
+  "message": "source_intel_axis7_hazard-signed-alloc",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_hazard_signed_alloc.c",
+    "line": 5,
+    "column": 2,
+    "snippet": "return kmalloc(n * sizeof(int), 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_hazard_signed_alloc.c",
+    "line": 5,
+    "column": 2,
+    "snippet": "return kmalloc(n * sizeof(int), 0);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -61,6 +61,109 @@ _MANIFEST_ACCEPT = ", ".join([
 ])
 
 
+# Size caps on registry-returned JSON. Hostile / compromised mirror
+# can serve multi-GiB responses; cap before json.loads to bound
+# memory. 16 MiB is generous for real manifests/tags lists (typical
+# manifest <10 KiB, tags list a few MiB at most).
+_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_TAGS_BYTES = 16 * 1024 * 1024
+_MAX_TOKEN_BYTES = 256 * 1024  # token-exchange responses are tiny
+
+
+# Token-service realm allowlist per registry. Realm hosts beyond
+# the registry's own host or its documented auth subdomain are
+# rejected — closes the SSRF / credential-handover attack where a
+# malicious / compromised registry returns
+# ``WWW-Authenticate: Bearer realm="https://attacker.com/steal"``.
+# Keep this list tight; new entries require explicit knowledge of
+# the registry's token-service host.
+_REALM_HOST_ALLOWLIST: Dict[str, frozenset[str]] = {
+    "docker.io":            frozenset({"auth.docker.io"}),
+    "registry-1.docker.io": frozenset({"auth.docker.io"}),
+    "ghcr.io":              frozenset({"ghcr.io"}),
+    "quay.io":              frozenset({"quay.io"}),
+    "gcr.io":               frozenset({"gcr.io"}),
+    "registry.gitlab.com":  frozenset({"gitlab.com", "registry.gitlab.com"}),
+}
+
+
+def _validate_realm(registry: str, realm: str) -> None:
+    """Raise :class:`RegistryError` if ``realm`` is not an HTTPS
+    URL whose host is the registry itself or on the per-registry
+    token-service allowlist.
+
+    SSRF defence: see comment on ``_REALM_HOST_ALLOWLIST`` above.
+    """
+    from urllib.parse import urlsplit
+    parts = urlsplit(realm)
+    if parts.scheme != "https":
+        raise RegistryError(
+            401,
+            f"refusing non-HTTPS realm from {registry}: "
+            f"{realm!r} (SSRF defence)",
+        )
+    if not parts.hostname:
+        raise RegistryError(
+            401, f"{registry} realm has no host: {realm!r}",
+        )
+    host = parts.hostname.lower()
+    # Case-fold ``registry`` for the allowlist lookup too. Pre-fix
+    # a future caller path that passed ``"Docker.io"`` (mixed-case
+    # reference output) would miss the ``"docker.io"`` allowlist
+    # key, the ``.get(..., frozenset())`` would return empty, and
+    # the realm host comparison would fall through to a false
+    # refusal. ``parse_image_ref`` is the canonical source today
+    # and lowercases internally, but the defensive case-fold here
+    # closes that surface for any future caller path.
+    allowed = _REALM_HOST_ALLOWLIST.get(registry.lower(), frozenset())
+    if host == registry.lower() or host in allowed:
+        return
+    raise RegistryError(
+        401,
+        f"refusing realm host {host!r} for registry {registry!r} "
+        f"(not on token-service allowlist; SSRF defence)",
+    )
+
+
+def _validate_link_next(
+    raw: Optional[str], *, repository: str,
+) -> Optional[str]:
+    """Validate a ``Link: rel=next`` URL extracted from a registry
+    response. Returns the URL if it's a relative path under
+    ``/v2/<repository>/`` (the only shape the OCI spec produces
+    for tags/list pagination); returns None otherwise.
+
+    Rejection cases:
+    * Absolute URL (any scheme + host) — registry could redirect
+      us at an attacker-controlled endpoint, bypassing the
+      api_endpoint_for() + realm-validation chain.
+    * Path traversal (``..`` segments) — registry could escape
+      out of the repository scope.
+    * Cross-repo path — pagination must stay within the same
+      repository's tag list.
+    """
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    # Must be a relative path. Scheme presence (`://`) or
+    # authority-relative (`//host`) shapes are rejected.
+    if "://" in s or s.startswith("//"):
+        return None
+    if not s.startswith("/v2/"):
+        return None
+    # Path-traversal guard.
+    path = s.split("?", 1)[0]
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return None
+    # Stay within the same repository's namespace.
+    expected_prefix = f"/v2/{repository}/"
+    if not path.startswith(expected_prefix):
+        return None
+    return s
+
+
 def _parse_link_next(link_header: Optional[str]) -> Optional[str]:
     """Pull the ``<url>`` of the ``rel="next"`` entry out of an
     RFC-5988 ``Link:`` header. Returns None if no next link, or
@@ -175,6 +278,12 @@ class OciRegistryClient:
                 f"manifest GET failed for {ref.to_canonical()}: "
                 f"{resp.text[:200]}",
             )
+        if len(resp.content) > _MAX_MANIFEST_BYTES:
+            raise RegistryError(
+                resp.status_code,
+                f"manifest exceeds {_MAX_MANIFEST_BYTES}-byte cap "
+                f"for {ref.to_canonical()} (got {len(resp.content)})",
+            )
         try:
             parsed = json.loads(resp.content)
         except (ValueError, TypeError) as e:
@@ -235,6 +344,12 @@ class OciRegistryClient:
                     f"tags/list failed for {ref.repository} on "
                     f"{ref.registry}: {resp.text[:200]}",
                 )
+            if len(resp.content) > _MAX_TAGS_BYTES:
+                raise RegistryError(
+                    resp.status_code,
+                    f"tags/list exceeds {_MAX_TAGS_BYTES}-byte cap "
+                    f"for {ref.repository} (got {len(resp.content)})",
+                )
             try:
                 data = json.loads(resp.content)
             except (ValueError, TypeError) as e:
@@ -254,11 +369,18 @@ class OciRegistryClient:
             # include nulls for in-progress pushes.
             all_tags.extend(t for t in tags if isinstance(t, str) and t)
 
-            # Follow ``Link: <url>; rel="next"`` if present. The
-            # URL is relative to the registry root, but some
-            # registries return absolute URLs — normalise.
-            next_url = _parse_link_next(
+            # Follow ``Link: <url>; rel="next"`` if present.
+            # Must be a relative path under ``/v2/`` for the same
+            # repository — absolute URLs / path traversal / cross-
+            # repo references are rejected (registry-controlled URL
+            # would otherwise bypass the api_endpoint_for() routing
+            # and the realm validation; relative paths route through
+            # _authed_request as expected).
+            raw_next = _parse_link_next(
                 resp.headers.get("Link") or resp.headers.get("link"),
+            )
+            next_url = _validate_link_next(
+                raw_next, repository=ref.repository,
             )
         return all_tags
 
@@ -368,6 +490,14 @@ class OciRegistryClient:
                 f"{registry} 401 with no realm — cannot exchange "
                 f"for bearer token",
             )
+        # SSRF defence: the realm URL comes from the registry's own
+        # WWW-Authenticate header, but a compromised mirror could
+        # return e.g. ``Bearer realm="https://attacker.com/steal"``
+        # and we'd post HTTP Basic credentials to it. Constrain the
+        # realm to https + an explicit allowlist of token-service
+        # hosts per registry (most are sub-domains of the registry
+        # host; explicit list keeps the surface small).
+        _validate_realm(registry, realm)
         token = self._exchange_token(registry, realm, service, scope)
         req_headers["Authorization"] = f"Bearer {token}"
         resp.close()
@@ -421,6 +551,13 @@ class OciRegistryClient:
                 resp.status_code,
                 f"token exchange at {realm} failed: "
                 f"{resp.text[:200]}",
+            )
+        if len(resp.content) > _MAX_TOKEN_BYTES:
+            raise RegistryError(
+                resp.status_code,
+                f"token exchange response exceeds {_MAX_TOKEN_BYTES}b "
+                f"(got {len(resp.content)}) — likely hostile or "
+                f"misconfigured token service",
             )
         try:
             payload = json.loads(resp.content)

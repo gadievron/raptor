@@ -77,10 +77,21 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
         # ``--strict-mcp-config`` tells Claude Code to ignore
         # ``~/.claude.json`` and any project-scope ``.mcp.json``,
         # using only what's passed via ``--mcp-config``. Pairing it
-        # with an empty config (``{}``) gives a sub-agent zero MCP
+        # with an empty-but-shaped config gives a sub-agent zero MCP
         # servers — the right posture for raptor's per-finding
         # analysis dispatches.
-        cmd.extend(["--strict-mcp-config", "--mcp-config", "{}"])
+        #
+        # The config value must include the ``mcpServers`` key (even
+        # if its value is an empty record). Earlier versions of
+        # Claude Code accepted a bare ``{}``; recent versions reject
+        # it with ``mcpServers: Invalid input: expected record,
+        # received undefined``. Surfaced by
+        # ``test_live_cc_dispatch_no_unexpected_essential_traffic_denials``
+        # failing after a Claude Code MCP-validation tightening.
+        cmd.extend([
+            "--strict-mcp-config",
+            "--mcp-config", '{"mcpServers": {}}',
+        ])
     return cmd
 
 
@@ -178,7 +189,11 @@ def parse_cc_structured(
         # verbose output shows the bearer header), URL-embedded
         # credentials, AWS keys, etc. The error string is propagated
         # up to logs and reports that may be shared.
-        stderr_excerpt = redact_secrets((stderr or "")[:500])
+        # Also escape_nonprintable for symmetry with parse_cc_freeform
+        # below — stderr can carry ANSI / BIDI / control bytes that
+        # forge log entries on operator TTYs.
+        from core.security.prompt_output_sanitise import escape_nonprintable
+        stderr_excerpt = escape_nonprintable(redact_secrets((stderr or "")[:500]))
         return {"finding_id": finding_id, "error": f"empty output: {stderr_excerpt}"}
 
     try:
@@ -220,9 +235,11 @@ def parse_cc_structured(
     # Same redaction rationale as the empty-output path above —
     # `content` here may include partial CC envelope text from a
     # broken response that streamed Authorization headers / API keys.
+    # escape_nonprintable for symmetry with parse_cc_freeform.
+    from core.security.prompt_output_sanitise import escape_nonprintable
     return {
         "finding_id": finding_id,
-        "error": f"unparseable output: {redact_secrets(content[:200])}",
+        "error": f"unparseable output: {escape_nonprintable(redact_secrets(content[:200]))}",
     }
 
 

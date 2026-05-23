@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_mostly-checked-8-2-ratio",
+  "verdict": "true_positive",
+  "rationale": "8 checked + 2 unchecked. variant_ratio(kstrdup) = (8, 2) \u2014 mostly-checked idiom. The unchecked site stands out moderately; axis-3 still emits EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "8:2 mostly-checked variant ratio."
+  }
+}

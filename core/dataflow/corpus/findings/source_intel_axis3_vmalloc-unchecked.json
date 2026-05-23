@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_vmalloc-unchecked",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis3_vmalloc-unchecked",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 53,
+    "column": 2,
+    "snippet": "p = vmalloc(n);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 54,
+    "column": 2,
+    "snippet": "use_buf(p);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

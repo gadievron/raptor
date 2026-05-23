@@ -152,6 +152,27 @@ class VulnerabilityContext:
         self.exploitable: bool = False
         self.exploitability_score: float = 0.0
         self.exploit_code: Optional[str] = None
+        # Compilation-verification result for ``exploit_code``. ``None``
+        # means verification was not attempted (no LLM exploit emitted,
+        # or compiler unavailable / skipped); ``True`` / ``False``
+        # reflect gcc's verdict in a sandbox.
+        # ``exploit_compile_errors`` carries the parsed compiler
+        # diagnostics when compilation fails — preserved so
+        # downstream consumers (reporting, /validate, future
+        # refinement loop) can see why the LLM's exploit didn't
+        # build. Empty list means "no errors observed" or
+        # "compilation not attempted".
+        self.exploit_compiled: Optional[bool] = None
+        self.exploit_compile_errors: List[str] = []
+        # Intent-match verdict on ``exploit_code`` — whether the
+        # LLM-emitted exploit targets THIS finding or hit a
+        # different bug / didn't engage at all. Produced by
+        # ``packages.llm_analysis.intent_match.intent_match`` and
+        # stored as a dict (the dataclass's ``asdict()`` form) so
+        # ``to_dict()`` can serialise it cleanly. ``None`` means the
+        # judge was not invoked (no exploit produced, or
+        # ``--no-judge-intent`` opt-out).
+        self.intent_match: Optional[Dict[str, Any]] = None
         self.patch_code: Optional[str] = None
         self.analysis: Optional[Dict[str, Any]] = None
 
@@ -360,6 +381,25 @@ class VulnerabilityContext:
             "has_patch": self.patch_code is not None,
         }
 
+        # Surface compile-verification verdict on the finding so
+        # reporting / downstream consumers can distinguish a viable
+        # PoC from a hallucinated one. Omitted entirely when no
+        # exploit was emitted (no value to encode "not attempted on
+        # a non-existent artefact").
+        if self.exploit_code is not None:
+            result["exploit_compiled"] = self.exploit_compiled
+            if self.exploit_compile_errors:
+                result["exploit_compile_errors"] = list(
+                    self.exploit_compile_errors
+                )
+
+        # Surface the intent-match verdict when present. Only emit
+        # when actually populated — None means the judge wasn't
+        # invoked (no exploit, opt-out, or pre-judge stage) and
+        # there's no value in encoding that absence.
+        if self.intent_match is not None:
+            result["intent_match"] = dict(self.intent_match)
+
         # Add function metadata if available (from inventory checklist)
         if self.metadata:
             result["metadata"] = self.metadata
@@ -458,7 +498,10 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
                  prep_only: bool = False,
-                 synthesise_checkers: bool = True):
+                 synthesise_checkers: bool = True,
+                 verify_exploits: bool = True,
+                 judge_intent: bool = True,
+                 record_witnesses: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -467,6 +510,38 @@ class AutonomousSecurityAgentV2:
         # for variants found across the codebase. Default on; opt out
         # via ``--no-checker-synthesis`` for cost-sensitive runs.
         self.synthesise_checkers = synthesise_checkers
+        # Compile-verify every LLM-emitted exploit by shelling out to
+        # gcc in a sandboxed temp dir. Default on; opt out via
+        # ``--no-verify-exploits`` for time-sensitive runs. Wall-clock
+        # cost is ~140ms per finding in the steady state (measured on
+        # a clean linux/x86_64 host; cold-start may add sandbox
+        # init time on the first call). For a 100-finding run that's
+        # ~14s of extra wall-clock — usually below the noise threshold
+        # of the surrounding LLM calls, but the opt-out exists for
+        # benchmarks / CI surfaces where every second counts.
+        # See ``_verify_exploit_compiles`` for what the verdict
+        # populates on each ``VulnerabilityContext``.
+        self.verify_exploits = verify_exploits
+        # IntentMatchJudge v1 — heuristic-first, LLM tiebreak on
+        # ambiguous cases. Decides whether an LLM-generated exploit
+        # actually targets the finding it was generated for, or
+        # hit a different bug. Default on; opt out via
+        # ``--no-judge-intent`` for runs where the extra LLM
+        # tiebreak cost (~$0.001-0.01 per ambiguous finding) is
+        # unwanted. See ``_judge_exploit_intent`` and
+        # ``packages.llm_analysis.intent_match``.
+        self.judge_intent = judge_intent
+        # Record each LLM-emitted exploit as a canonical Witness
+        # (source=LLM_EMIT_RUN, outcome=NOT_RUN) so the bytes are
+        # available to downstream consumers (reporting, future
+        # ZKPoX) on the same data path as fuzz witnesses. Lazy: the
+        # WitnessStore is opened on the first successful exploit
+        # generation rather than eagerly, so prep-only runs never
+        # touch the filesystem. Failures are non-fatal — the
+        # exploit artefact remains on disk regardless. Default on;
+        # opt out via ``--no-record-witnesses``.
+        self.record_witnesses = record_witnesses
+        self._witness_store = None  # lazy
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -491,7 +566,7 @@ class AutonomousSecurityAgentV2:
             if self.llm_config.primary_model.cost_per_1k_tokens > 0:
                 print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
             else:
-                print(f"💰 Cost: FREE (self-hosted model)")
+                print("💰 Cost: FREE (self-hosted model)")
 
             # Warn about Ollama model limitations for exploit generation
             if "ollama" in self.llm_config.primary_model.provider.lower():
@@ -653,7 +728,7 @@ class AutonomousSecurityAgentV2:
             logger.info(f"  False positive: {validation.get('false_positive')}")
 
             if validation.get('sanitizer_details'):
-                logger.info(f"\n  Sanitizer Analysis:")
+                logger.info("\n  Sanitizer Analysis:")
                 for san_detail in validation.get('sanitizer_details', []):
                     logger.info(f"    - {san_detail.get('name')}")
                     logger.info(f"      Purpose: {san_detail.get('purpose')}")
@@ -662,7 +737,7 @@ class AutonomousSecurityAgentV2:
                         logger.info(f"      Bypass: {san_detail.get('bypass_method')[:100]}")
 
             if validation.get('attack_payload_concept'):
-                logger.info(f"\n  Attack Payload Concept:")
+                logger.info("\n  Attack Payload Concept:")
                 logger.info(f"    {validation.get('attack_payload_concept')[:200]}")
 
             # Save validation details
@@ -704,11 +779,14 @@ class AutonomousSecurityAgentV2:
                 if vuln.sanitizers_found:
                     logger.info(f"  ⚠️  Sanitizers detected: {', '.join(vuln.sanitizers_found)}")
             else:
-                logger.warning(f"⚠️  Failed to extract dataflow path")
+                logger.warning("⚠️  Failed to extract dataflow path")
 
         from packages.llm_analysis.prompts import (
             build_analysis_prompt_bundle,
             build_analysis_schema,
+        )
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
         )
 
         analysis_schema = build_analysis_schema(has_dataflow=vuln.has_dataflow)
@@ -721,6 +799,15 @@ class AutonomousSecurityAgentV2:
         function_name = meta.get("name") or ""
         file_includes = meta.get("includes") or ()
         function_calls_made = meta.get("calls") or meta.get("callees") or ()
+
+        # Pull source_intel evidence (cached during sequential-mode
+        # priming earlier in this run). Returns () for rule_ids not
+        # in the memory-corruption set or when prep failed.
+        si_blocks = evidence_blocks_for_finding({
+            "rule_id": vuln.rule_id,
+            "repo_path": str(vuln.repo_path),
+            "metadata": meta,
+        })
 
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
@@ -741,6 +828,7 @@ class AutonomousSecurityAgentV2:
             function_name=function_name,
             file_includes=file_includes,
             function_calls_made=function_calls_made,
+            extra_blocks=si_blocks,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -794,7 +882,7 @@ class AutonomousSecurityAgentV2:
 
             # Log dataflow-specific analysis
             if vuln.has_dataflow and 'source_attacker_controlled' in analysis:
-                logger.info(f"\n  Dataflow Analysis:")
+                logger.info("\n  Dataflow Analysis:")
                 logger.info(f"    Source attacker-controlled: {analysis.get('source_attacker_controlled', 'N/A')}")
                 logger.info(f"    Sanitizers effective: {analysis.get('sanitizers_effective', 'N/A')}")
                 if analysis.get('sanitizer_bypass_technique'):
@@ -850,12 +938,12 @@ class AutonomousSecurityAgentV2:
                     if validation:
                         # Update exploitability based on validation
                         if validation.get('false_positive'):
-                            logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info("⚠️  Validation marked as FALSE POSITIVE:")
                             logger.info(f"    Reason: {validation.get('false_positive_reason')}")
                             vuln.exploitable = False
                             vuln.exploitability_score = 0.0
                         elif not validation.get('is_exploitable'):
-                            logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info("⚠️  Validation determined NOT EXPLOITABLE:")
                             logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
                             vuln.exploitable = False
                             # Same null-vs-missing distinction as the
@@ -867,7 +955,7 @@ class AutonomousSecurityAgentV2:
                             vuln.exploitability_score = _conf * 0.5
                         else:
                             # Validation confirms exploitability
-                            logger.info(f"✓ Validation confirms EXPLOITABLE")
+                            logger.info("✓ Validation confirms EXPLOITABLE")
                             # Use validation confidence to refine score —
                             # fall back to existing score if missing OR
                             # explicit null (max(float, None) → TypeError).
@@ -1026,7 +1114,7 @@ class AutonomousSecurityAgentV2:
     def generate_exploit(self, vuln: VulnerabilityContext) -> bool:
 
         if not vuln.exploitable:
-            logger.debug(f"⊘ Skipping exploit generation (not exploitable)")
+            logger.debug("⊘ Skipping exploit generation (not exploitable)")
             return False
 
         # IRIS Tier 1 pre-flight gate — free CodeQL check before paying
@@ -1075,6 +1163,15 @@ class AutonomousSecurityAgentV2:
         logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
 
         from packages.llm_analysis.prompts.exploit import build_exploit_prompt_bundle
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+
+        si_blocks = evidence_blocks_for_finding({
+            "rule_id": vuln.rule_id,
+            "repo_path": str(vuln.repo_path),
+            "metadata": vuln.metadata or {},
+        })
 
         bundle = build_exploit_prompt_bundle(
             rule_id=vuln.rule_id,
@@ -1085,6 +1182,7 @@ class AutonomousSecurityAgentV2:
             code=vuln.full_code,
             surrounding_context=vuln.surrounding_context,
             feasibility=vuln.feasibility if hasattr(vuln, 'feasibility') else None,
+            extra_blocks=si_blocks,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -1116,6 +1214,42 @@ class AutonomousSecurityAgentV2:
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
+
+                # Compile-verify the LLM's output. Pre-fix, exploit_code
+                # was saved unconditionally with no signal about whether
+                # it would build — operators downstream had no way to
+                # distinguish a viable PoC from a hallucinated one. The
+                # sandbox-wrapped gcc invocation here matches the
+                # pattern /codeql --autonomous has used since v2.0; the
+                # only new thing is wiring it into /agentic's path.
+                # Verdict populates ``ExploitResult.result``-equivalent
+                # fields on the finding so reporting can surface
+                # "exploit compiled" rates per run. Gated on
+                # ``self.verify_exploits`` so operators with tight
+                # time budgets can opt out via constructor / CLI flag.
+                if self.verify_exploits:
+                    self._verify_exploit_compiles(vuln, exploit_code)
+
+                # Intent-match judgement on the (possibly compile-
+                # verified) exploit. Runs heuristics first (cheap);
+                # escalates to a 2-step LLM tiebreak on ambiguous
+                # cases. Gated on ``self.judge_intent`` so operators
+                # opting out via ``--no-judge-intent`` skip the
+                # tiebreak's LLM cost. See
+                # ``packages.llm_analysis.intent_match`` for design.
+                if self.judge_intent:
+                    self._judge_exploit_intent(vuln, exploit_code)
+
+                # Record the LLM-emitted exploit as a canonical
+                # Witness (source=LLM_EMIT_RUN, outcome=NOT_RUN).
+                # Same data path as fuzz witnesses; downstream
+                # consumers filter by ``source`` when they care
+                # about provenance. Gated on
+                # ``self.record_witnesses``; failures are non-
+                # fatal — the exploit file on disk is unaffected.
+                if self.record_witnesses:
+                    self._record_exploit_witness(vuln, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -1126,6 +1260,178 @@ class AutonomousSecurityAgentV2:
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
+
+    # File extensions that map to languages the gcc-based validator
+    # can compile. Retained as a class attribute for back-compat with
+    # external tests that mirror it onto stub agents; the canonical
+    # set now lives in ``packages.llm_analysis.exploit_verify``.
+    _COMPILABLE_EXTENSIONS = frozenset({
+        ".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp",
+    })
+
+    def _verify_exploit_compiles(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Compile-check the LLM-emitted exploit in a sandbox.
+
+        Thin wrapper around
+        :func:`packages.llm_analysis.exploit_verify.compile_verify`
+        that maps the shared helper's ``(compiled, errors)`` tuple
+        onto the finding's ``exploit_compiled`` /
+        ``exploit_compile_errors`` fields. See ``exploit_verify`` for
+        the verification mechanics, language gate, sanitisation, and
+        failure-mode semantics.
+
+        Failures here are non-fatal: the helper returns ``None`` on
+        unattempted/aborted verification rather than raising, so the
+        exploit artefact remains on disk regardless and downstream
+        reporting can distinguish "not attempted" (None) from
+        "failed to compile" (False) from "compiled cleanly" (True).
+        """
+        from packages.llm_analysis.exploit_verify import compile_verify
+        compiled, errors = compile_verify(
+            exploit_code,
+            vuln.file_path,
+            vuln.finding_id,
+            logger,
+        )
+        vuln.exploit_compiled = compiled
+        vuln.exploit_compile_errors = errors
+
+    def _judge_exploit_intent(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Run IntentMatchJudge v1 against the LLM-emitted exploit.
+
+        Skips findings the analysis pass already triaged as false
+        positives — judging an exploit for a finding the LLM
+        rejected is allocation that's not worth the cost.
+
+        Heuristic-first; LLM tiebreak only on ambiguous results.
+        Failures (LLM error, missing config) leave the verdict as
+        ``uncertain`` with the error captured in
+        ``intent_match['llm_error']`` — never raises.
+        """
+        # Skip when analysis already classified the finding as FP.
+        # No exploit can meaningfully target a non-bug. Be defensive
+        # against ``vuln.analysis`` being non-dict — the type hint
+        # says ``Optional[Dict[str, Any]]`` but in-flight pipelines
+        # have been observed to set it to other shapes (raw response
+        # strings, lists). Treat anything non-dict as "no analysis
+        # signal" and proceed to judge.
+        if isinstance(vuln.analysis, dict):
+            is_tp = vuln.analysis.get("is_true_positive")
+            if is_tp is False:
+                logger.debug(
+                    f"   · Skipping intent-match for {vuln.finding_id} "
+                    "(analysis is_true_positive=False)"
+                )
+                return
+
+        # Function name from inventory-checklist metadata. Defensive
+        # against ``vuln.metadata`` being non-dict — same shape-
+        # tolerance reasoning as for vuln.analysis above.
+        if isinstance(vuln.metadata, dict):
+            function_name = vuln.metadata.get("name")
+        else:
+            function_name = None
+
+        from dataclasses import asdict
+        from packages.llm_analysis.intent_match import intent_match
+
+        verdict = intent_match(
+            exploit_code=exploit_code,
+            finding_file_path=vuln.file_path,
+            finding_function_name=function_name,
+            finding_cwe=vuln.cwe_id,
+            finding_message=vuln.message,
+            exploit_compile_errors=list(vuln.exploit_compile_errors),
+            llm_client=self.llm,
+            logger=logger,
+        )
+        vuln.intent_match = asdict(verdict)
+
+        if verdict.verdict == "matches":
+            logger.info(
+                f"   ✓ Intent-match: matches "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        elif verdict.verdict == "off_target":
+            logger.info(
+                f"   ⚠ Intent-match: off_target "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm}) — "
+                "exploit may have hit a different bug"
+            )
+        else:
+            logger.info(
+                f"   · Intent-match: uncertain "
+                f"(used_llm={verdict.used_llm})"
+            )
+
+    def _record_exploit_witness(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Record the LLM-emitted exploit as a canonical Witness.
+
+        Lazy-opens ``self._witness_store`` against
+        ``self.out_dir / "witnesses"`` on first call so prep-only
+        runs never touch the filesystem. Reads ``compile_verify``
+        and ``intent_match`` verdicts off the finding for the
+        ``outcome_detail``; both may be ``None`` if their gates
+        were disabled.
+
+        Failures are non-fatal: a witness-store I/O error, an
+        adapter exception, or a non-UTF-8 exploit_code (LLMs
+        sometimes emit binary-looking fixtures inside code blocks)
+        all log+continue. The exploit artefact on disk is the
+        primary record; the witness is a downstream-facing
+        secondary record.
+        """
+        try:
+            if self._witness_store is None:
+                from core.witness import WitnessStore
+                self._witness_store = WitnessStore(
+                    self.out_dir / "witnesses"
+                )
+            from packages.llm_analysis.witness_adapter import (
+                witness_from_exploit,
+            )
+            target_source_path = vuln.get_full_file_path()
+            intent_verdict = None
+            intent_confidence = None
+            if vuln.intent_match is not None:
+                intent_verdict = getattr(
+                    vuln.intent_match, "verdict", None,
+                )
+                intent_confidence = getattr(
+                    vuln.intent_match, "confidence", None,
+                )
+            witness, data = witness_from_exploit(
+                exploit_code,
+                finding_id=vuln.finding_id,
+                cwe_id=vuln.cwe_id,
+                rule_id=vuln.rule_id,
+                file_path=vuln.file_path,
+                compiled=vuln.exploit_compiled,
+                compile_error_count=len(
+                    vuln.exploit_compile_errors or []
+                ),
+                intent_verdict=intent_verdict,
+                intent_confidence=intent_confidence,
+                target_source_path=target_source_path,
+            )
+            self._witness_store.put(witness, data)
+            logger.debug(
+                f"   · Recorded witness {witness.bytes_hash[:12]} "
+                f"({witness.bytes_len}B)"
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                f"   · Witness record failed for "
+                f"{vuln.finding_id}: {type(e).__name__}: {e}"
+            )
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
         logger.info("─" * 70)
@@ -1138,17 +1444,26 @@ class AutonomousSecurityAgentV2:
             logger.error(f"   ✗ File not found: {file_path}")
             return False
 
-        logger.info(f"   ✓ Reading full file for context...")
+        logger.info("   ✓ Reading full file for context...")
 
         with open(file_path) as f:
             full_file_content = f.read()
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
 
         # Load attack path if available
         attack_path = None
         if vuln.attack_path_ref:
             attack_path = self._load_attack_path(vuln.attack_path_ref)
+
+        si_blocks = evidence_blocks_for_finding({
+            "rule_id": vuln.rule_id,
+            "repo_path": str(vuln.repo_path),
+            "metadata": vuln.metadata or {},
+        })
 
         bundle = build_patch_prompt_bundle(
             rule_id=vuln.rule_id,
@@ -1161,6 +1476,7 @@ class AutonomousSecurityAgentV2:
             full_file_content=full_file_content,
             feasibility=vuln.feasibility,
             attack_path=attack_path,
+            extra_blocks=si_blocks,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -1356,6 +1672,49 @@ class AutonomousSecurityAgentV2:
             logger.info("=" * 70)
 
         unique_findings = prioritized_findings
+
+        # Phase D PR1: prime source_intel cache for sequential mode.
+        # Parallel / prep-only mode is handled by orchestrate() in the
+        # parent raptor_agentic.py process — priming there doesn't
+        # help THIS subprocess. Sequential mode (full LLM analysis
+        # happening here) needs the cache primed locally so
+        # ``tasks.py:evidence_blocks_for_finding`` finds populated
+        # state when each finding's prompt bundle is assembled.
+        #
+        # Pre-fix the per-finding ``evidence_blocks_for_finding``
+        # silently returned ``()`` because no caller had populated
+        # the cache for this subprocess — gap-#2-final-E2E surfaced
+        # the latent bug by observing zero source-intel-evidence
+        # blocks in an /agentic --sequential run despite the wiring
+        # being in place.
+        if not is_prep_only and self.repo_path:
+            logger.info(
+                "agent.py: priming source_intel cache for %s "
+                "(sequential-mode finding analysis)",
+                self.repo_path,
+            )
+            try:
+                from packages.llm_analysis.source_intel_inject import (
+                    prepare_source_intel,
+                )
+                prepare_source_intel(self.repo_path)
+            except Exception as e:  # noqa: BLE001
+                # Surface at INFO so the failure path is visible in
+                # operator logs — gap-#2 verification on /agentic
+                # subprocess made the prior debug-level log
+                # invisible, making "did this call run?" impossible
+                # to answer from the log alone.
+                logger.info(
+                    "agent.py: prepare_source_intel(%s) failed: %s — "
+                    "continuing without source_intel evidence",
+                    self.repo_path, e,
+                )
+        else:
+            logger.info(
+                "agent.py: skipping source_intel cache prime "
+                "(is_prep_only=%s, repo_path=%s)",
+                is_prep_only, self.repo_path,
+            )
 
         results = []
         analyzed = 0
@@ -1566,7 +1925,7 @@ class AutonomousSecurityAgentV2:
                                     "checker followup error", exc_info=True,
                                 )
                     else:
-                        logger.debug(f"⊘ Skipping patch generation (not exploitable)")
+                        logger.debug("⊘ Skipping patch generation (not exploitable)")
 
                 # Always include finding in results (with or without LLM analysis)
                 results.append(vuln.to_dict())
@@ -1657,18 +2016,18 @@ class AutonomousSecurityAgentV2:
                     f"(test-harness circularity); prep outcomes "
                     f"{fixture_prep_outcomes}"
                 )
-            logger.info(f"")
+            logger.info("")
             if dataflow_validated > 0:
-                logger.info(f"Dataflow Validation:")
+                logger.info("Dataflow Validation:")
                 logger.info(f"   Deep validated: {dataflow_validated} dataflow paths")
                 logger.info(f"   False positives caught: {false_positives_found}")
-                logger.info(f"")
-            logger.info(f"LLM Statistics:")
+                logger.info("")
+            logger.info("LLM Statistics:")
             logger.info(f"   Total requests: {llm_stats['total_requests']}")
             logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
             logger.info(f"   Execution time: {execution_time:.1f}s")
         if not is_prep_only:
-            logger.info(f"")
+            logger.info("")
             logger.info(f"Report saved: {report_file}")
             logger.info("=" * 70)
 
@@ -1731,6 +2090,40 @@ def main() -> None:
              "variant annotations. Use to cut LLM cost on confirmed "
              "exploitable findings — at the price of losing variant "
              "discovery.",
+    )
+    ap.add_argument(
+        "--no-verify-exploits",
+        action="store_true",
+        help="Skip the compile-verify step on LLM-emitted exploits "
+             "(default on, ~140ms per finding). Use for "
+             "benchmarks / CI surfaces where every second counts. "
+             "When disabled, exploit_compiled stays unset on each "
+             "finding (None — verification not attempted).",
+    )
+    ap.add_argument(
+        "--no-judge-intent",
+        action="store_true",
+        help="Skip the intent-match judge on LLM-emitted exploits "
+             "(default on). Judge runs 4 cheap heuristics first; "
+             "escalates ambiguous cases to a 2-step LLM tiebreak "
+             "(~$0.001-0.01 per ambiguous finding). When disabled, "
+             "intent_match stays unset on each finding (None — "
+             "judge not invoked). See "
+             "packages/llm_analysis/intent_match.py for design.",
+    )
+    ap.add_argument(
+        "--no-record-witnesses",
+        action="store_true",
+        help="Skip recording LLM-emitted exploits as canonical "
+             "Witnesses under <out>/witnesses/ (default on). "
+             "Each successful exploit generation otherwise produces "
+             "one Witness with source=LLM_EMIT_RUN, "
+             "outcome=NOT_RUN, carrying the compile + intent-match "
+             "verdicts in outcome_detail. Negligible wall-clock "
+             "cost (single sha256 + JSON write per finding); the "
+             "opt-out exists for benchmarks that compare runs "
+             "byte-for-byte and for ephemeral CI runs that don't "
+             "persist the out/ tree.",
     )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
@@ -1807,6 +2200,9 @@ def main() -> None:
         repo_path, out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
+        verify_exploits=not args.no_verify_exploits,
+        judge_intent=not args.no_judge_intent,
+        record_witnesses=not args.no_record_witnesses,
     )
 
     # Load checklist for metadata lookup

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3-negative-distant-check",
+  "verdict": "false_positive",
+  "fp_category": "infeasible_branch",
+  "rationale": "Surface shape is a CWE-476 unchecked-kstrdup-then-deref pattern that axis-3 unchecked_alloc_local.cocci will likely match. BUT the NULL check IS present — it's just in a helper function `validate(p)` called between alloc and deref. Cocci's intra-procedural `when !=` constraints can't see across function boundaries; this fixture tests whether axis-3 leaks the FP. If corpus measurement shows `validator_verdict=exploitable` here while label is false_positive → axis-3 has the interprocedural-check gap we expect. Stage D LLM would normally rescue this via path inspection. The fixture documents the known cocci-side limitation and lets us measure leak-rate empirically. Crafted, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -23,22 +23,33 @@ from core.logging import get_logger
 logger = get_logger()
 
 # SDK availability flags — canonical source, imported by other modules
+# Pre-fix these ``except ImportError`` blocks silently set the
+# availability flag to False with no diagnostic. If openai /
+# anthropic / google-genai is partially installed (broken venv,
+# missing C extension, ``pip install --no-deps`` half-finished),
+# operators saw "provider unavailable" downstream with no
+# breadcrumb pointing at the real cause. ``logger.debug`` keeps
+# normal-startup quiet but lets operators rerun with --verbose
+# to see the import-failure traceback.
 try:
     import openai as _openai_module  # noqa: F401 — availability probe
     OPENAI_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("openai SDK probe failed: %s", _e)
     OPENAI_SDK_AVAILABLE = False
 
 try:
     import anthropic as _anthropic_module  # noqa: F401 — availability probe
     ANTHROPIC_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("anthropic SDK probe failed: %s", _e)
     ANTHROPIC_SDK_AVAILABLE = False
 
 try:
     from google import genai as _genai_module  # noqa: F401 — availability probe
     GENAI_SDK_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    logger.debug("google-genai SDK probe failed: %s", _e)
     GENAI_SDK_AVAILABLE = False
 
 
@@ -147,26 +158,26 @@ def _check_litellm_installed() -> bool:
                     # iterates each one and only touches files literally
                     # under `<sitedir>/litellm*` and the matching .pth.
                     msg += (
-                        f"  Version 1.82.8 runs on ANY Python startup via a .pth file.\n"
-                        f"  Do NOT use pip to remove it — pip invokes Python, triggering the payload.\n"
-                        f"\n"
-                        f"  1. Identify your Python site-packages locations:\n"
-                        f"     python -c 'import site; print(*site.getsitepackages(), site.getusersitepackages())'\n"
-                        f"\n"
-                        f"  2. For EACH location printed above, remove the litellm package + .pth shim:\n"
-                        f"     SITE=/exact/path/from/step/1\n"
-                        f"     rm -rf \"$SITE\"/litellm \"$SITE\"/litellm-*.dist-info\n"
-                        f"     find \"$SITE\" -maxdepth 1 -name 'litellm*.pth' -delete\n"
-                        f"\n"
-                        f"  Then rotate all API keys, SSH keys, and cloud credentials.\n"
+                        "  Version 1.82.8 runs on ANY Python startup via a .pth file.\n"
+                        "  Do NOT use pip to remove it — pip invokes Python, triggering the payload.\n"
+                        "\n"
+                        "  1. Identify your Python site-packages locations:\n"
+                        "     python -c 'import site; print(*site.getsitepackages(), site.getusersitepackages())'\n"
+                        "\n"
+                        "  2. For EACH location printed above, remove the litellm package + .pth shim:\n"
+                        "     SITE=/exact/path/from/step/1\n"
+                        "     rm -rf \"$SITE\"/litellm \"$SITE\"/litellm-*.dist-info\n"
+                        "     find \"$SITE\" -maxdepth 1 -name 'litellm*.pth' -delete\n"
+                        "\n"
+                        "  Then rotate all API keys, SSH keys, and cloud credentials.\n"
                     )
                 else:
                     msg += (
-                        f"  Remove it: pip uninstall litellm\n"
+                        "  Remove it: pip uninstall litellm\n"
                     )
                 msg += (
-                    f"\n"
-                    f"  Ref: https://github.com/BerriAI/litellm/issues/24518\n"
+                    "\n"
+                    "  Ref: https://github.com/BerriAI/litellm/issues/24518\n"
                 )
                 print(msg)
                 raise SystemExit(
@@ -279,10 +290,10 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
         key_msg = ""
         if needs_keys:
             key_msg = (
-                f"\n"
-                f"  ⚠️  Some models need API keys. Either:\n"
-                f"    - Set env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.), or\n"
-                f"    - Replace placeholders in the JSON with actual keys\n"
+                "\n"
+                "  ⚠️  Some models need API keys. Either:\n"
+                "    - Set env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.), or\n"
+                "    - Replace placeholders in the JSON with actual keys\n"
             )
 
         print(
@@ -356,8 +367,15 @@ def generate_sample_config() -> str:
 
     # Add a commented example showing how to add an API key.
     # Our JSON parser strips // comments, so this is safe to copy-paste.
+    #
+    # NB the example uses ``"REDACTED"`` rather than ``"sk-ant-..."``
+    # — operators occasionally pasted the literal "..." form into
+    # models.json verbatim. The dispatcher then sent that obvious
+    # placeholder to Anthropic in the Authorization header, which
+    # rejects it with 401. The new placeholder reads as clearly
+    # non-functional and points to the env-var path as the default.
     raw += "\n// To add API keys inline (alternative to env vars):\n"
-    raw += '// {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-..."}\n'
+    raw += '// {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "REDACTED — copy your real key here"}\n'
 
     return raw
 

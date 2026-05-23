@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_multifile-static-dead-suppress",
+  "verdict": "false_positive",
+  "rationale": "Function `unused_helper` is static in main.c, zero callers in main.c, zero callers in sibling util.c. Multi-file dead-code detection: PR-4 prereqs scans the WHOLE target subtree; static guard passes; no pointer-ref. Verdict NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "dead_code"
+}

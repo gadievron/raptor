@@ -109,6 +109,20 @@ def _load_user_limits() -> dict:
                 state._user_limits_cache = {}
                 state._user_limits_cache_decided_at = time.time()
                 return state._user_limits_cache
+            # Size cap before read — config is JSON metadata (key/int
+            # pairs); 64 KiB is generous and catches a hostile or
+            # mis-edited file ballooning to multi-MiB at module-load
+            # time when the rest of the process can't yet log.
+            _CONFIG_MAX_BYTES = 64 * 1024
+            try:
+                if _CONFIG_PATH.stat().st_size > _CONFIG_MAX_BYTES:
+                    state._user_limits_cache = {}
+                    state._user_limits_cache_decided_at = time.time()
+                    return state._user_limits_cache
+            except OSError:
+                state._user_limits_cache = {}
+                state._user_limits_cache_decided_at = time.time()
+                return state._user_limits_cache
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.

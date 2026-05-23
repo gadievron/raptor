@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_double-free-classic",
+  "producer": "codeql",
+  "rule_id": "cpp/double-free",
+  "message": "source_intel_axis3_double-free-classic",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_double_free_classic.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "kfree(p);  /* DOUBLE FREE */",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_double_free_classic.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "kfree(p);  /* DOUBLE FREE */",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

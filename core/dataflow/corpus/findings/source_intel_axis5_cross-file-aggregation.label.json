@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_cross-file-aggregation",
+  "verdict": "true_positive",
+  "rationale": "Cross-file variant aggregation test: a.c has 2 checked kstrdup sites; b.c has 1 checked + 1 unchecked. Axis-5 variant_ratio(kstrdup) should aggregate across both files: (3, 1). Axis-3 fires EXPLOITABLE on the b.c unchecked site. Tests subtree-level variant_ratio computation.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "Cross-file aggregation variant."
+  }
+}

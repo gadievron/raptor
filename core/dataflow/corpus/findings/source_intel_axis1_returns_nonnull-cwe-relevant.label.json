@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_returns_nonnull-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `always_valid` annotated RETURNS_NONNULL; caller skipped NULL check. Axis-1 attrs detects RETURNS_NONNULL, rule_id `cpp/null-dereference` in relevant set \u2192 EXPLOITABLE. (Note: if `always_valid` actually CAN return null, the annotation is wrong and the deref fires.)",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

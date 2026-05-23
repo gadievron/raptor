@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_variant-idiom-uniform",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "Pointer `p` from kstrdup dereferenced via `use_string(p)` without an `if (!p) return` check.",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/variant_idiom/none_check.c",
+    "line": 26,
+    "column": 2,
+    "snippet": "p = kstrdup(s, 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/variant_idiom/none_check.c",
+    "line": 27,
+    "column": 2,
+    "snippet": "use_string(p);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

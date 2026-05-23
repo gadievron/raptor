@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_cap_dac_read_search-priv",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "Unbounded write via memcpy in source_intel_axis4_cap_dac_read_search-priv",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis4_capability_suite.c",
+    "line": 88,
+    "column": 2,
+    "snippet": "int privileged_dac_read_op(const char *user, size_t len)",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis4_capability_suite.c",
+    "line": 49,
+    "column": 2,
+    "snippet": "memcpy(buf, user, len);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

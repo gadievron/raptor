@@ -979,10 +979,23 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             kwargs.pop("env", None)  # drop any explicit None
             kwargs["env"] = RaptorConfig.get_safe_env()
         else:
-            logger.info(
-                f"Sandbox: caller supplied custom env= for "
-                f"{' '.join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or cmd!r} "
-                f"— get_safe_env() not applied; caller env passed through."
+            # Promote to WARNING — pre-fix this was INFO, which meant
+            # operators almost never noticed that a caller had passed
+            # custom env and the codebase-wide ``get_safe_env`` posture
+            # was being bypassed for that call. The bypass IS
+            # intentional (callers neutralise specific vars like
+            # ``GIT_CONFIG_GLOBAL=/dev/null``) but it should be visible
+            # in normal-verbosity logs so a stray ``env=`` argument
+            # doesn't quietly wave through ``EDITOR`` / ``PAGER`` /
+            # ``BROWSER`` from an attacker-influenced parent.
+            # ``strict_env=True`` is the safe-rebound form below.
+            logger.warning(
+                "Sandbox: caller supplied custom env= for "
+                "%s — get_safe_env() not applied; caller env "
+                "passed through. Pass strict_env=True to strip "
+                "DANGEROUS_ENV_VARS from the caller env if you "
+                "only intended to override a few keys.",
+                " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
             )
             if strict_env:
                 _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)

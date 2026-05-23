@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_backwalk-ungated-caller-keep",
+  "verdict": "true_positive",
+  "rationale": "Bug in `unrestricted_inner`. Caller `unrestricted_entry` has NO `capable()` gate. Back-walk finds an ungated path \u2192 does NOT suppress. Verdict UNCERTAIN (no other axis fires).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

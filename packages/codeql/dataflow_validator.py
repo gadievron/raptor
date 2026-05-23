@@ -9,7 +9,7 @@ if dataflow paths are truly exploitable beyond theoretical detection.
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from core.smt_solver import BVProfile
 from packages.codeql.smt_path_validator import (
@@ -39,10 +39,45 @@ logger = get_logger()
 # ``evidence_collector``, the validator calls it before each LLM round-trip
 # and folds the rendered evidence into the prompt as an additional
 # ``UntrustedBlock``. The collector takes the dataflow path and the repo
-# root and returns a :class:`SanitizerEvidence` (or ``None`` to skip).
+# root and returns one of:
+#   * :class:`SanitizerEvidence` — the legacy PR1 V2 sanitizer-extraction
+#     return type; the validator renders it via ``render_evidence_for_prompt``
+#     and wraps as ``UntrustedBlock(kind="sanitizer-evidence", …)``.
+#   * :class:`UntrustedBlock` — a pre-rendered evidence block; the validator
+#     appends it verbatim. Used by structural evidence producers (e.g.
+#     source_intel) whose evidence does not fit the SanitizerEvidence shape.
+#   * ``None`` — no evidence to contribute for this finding (skip).
 EvidenceCollector = Callable[
-    ["DataflowPath", Path], Optional[SanitizerEvidence]
+    ["DataflowPath", Path],
+    Optional[Union[SanitizerEvidence, UntrustedBlock]],
 ]
+
+
+# System-prompt addendum applied only when a source_intel-evidence block
+# was built (memory-corruption-class findings). Tells the LLM how to weigh
+# RAPTOR's pre-computed cocci-derived structural evidence: each line is a
+# distinct observation (attribute, abort proximity, allocation back-walk,
+# build-flag context), not an LLM extraction. Confidence is encoded in the
+# prose framing; the LLM is not meant to second-guess the structural fact
+# itself, only to integrate it into the exploitability verdict.
+SOURCE_INTEL_EVIDENCE_INSTRUCTIONS = (
+    "\n7. Source_intel structural evidence: A 'source-intel-evidence' "
+    "block lists pre-computed structural observations extracted by "
+    "RAPTOR's cocci-based analyser (function attributes, abort-class "
+    "calls near sink, allocation back-walks, build-flag context). "
+    "These are mechanical facts, not LLM extractions — treat each line "
+    "as a confirmed observation at the cited location. Caveats:\n"
+    "  - 'DOMINATES the sink line' is a strong signal; "
+    "'same_function' is weak (the abort may be on an unrelated path).\n"
+    "  - 'CONDITIONAL: gated by #if* X' means the evidence depends on "
+    "a build-time symbol; downweight unless the actual build enables it.\n"
+    "  - 'Source_intel skipped' or 'no signal' lines mean absence of "
+    "evidence, NOT evidence of unhardened code.\n"
+    "  - Build-flag caveats (FORTIFY_SOURCE, -fdelete-null-pointer-checks, "
+    "-fstack-protector) qualify what the compiler enforces vs. annotates "
+    "only; weigh them when reasoning about whether a primitive survives "
+    "to runtime."
+)
 
 
 # System-prompt addendum applied only when an evidence block is built. The
@@ -78,7 +113,7 @@ def _build_sanitizer_evidence_block(
     repo_path: Path,
     log,
 ) -> Optional[UntrustedBlock]:
-    """Build the optional sanitizer-evidence ``UntrustedBlock``.
+    """Build the optional evidence ``UntrustedBlock``.
 
     Returns ``None`` when:
       * no collector is configured (default for existing call sites);
@@ -88,9 +123,14 @@ def _build_sanitizer_evidence_block(
         proceeds without the evidence rather than failing the whole
         validate_path call over an extraction issue).
 
-    The rendered evidence is wrapped as ``UntrustedBlock`` because its
-    candidate ``name`` / ``qualified_name`` / ``semantics_text`` fields
-    came from LLM extraction over potentially-adversarial source.
+    The collector may return either:
+      * a :class:`SanitizerEvidence` — rendered via the existing renderer
+        and wrapped as ``UntrustedBlock(kind="sanitizer-evidence", …)``.
+        Content came from LLM extraction over potentially-adversarial
+        source, so it is treated as untrusted.
+      * a :class:`UntrustedBlock` — returned verbatim. Structural-evidence
+        producers (source_intel) render their own block content and tag
+        with their own ``kind``.
     """
     if collector is None:
         return None
@@ -98,18 +138,27 @@ def _build_sanitizer_evidence_block(
         evidence = collector(dataflow, repo_path)
     except Exception as e:  # pragma: no cover - defensive
         log.warning(
-            "Sanitizer-evidence collection failed: %s; "
+            "Evidence collection failed: %s; "
             "proceeding without evidence block",
             e,
         )
         return None
     if evidence is None:
         return None
-    return UntrustedBlock(
-        content=render_evidence_for_prompt(evidence),
-        kind="sanitizer-evidence",
-        origin="project-source-extracted",
+    if isinstance(evidence, UntrustedBlock):
+        return evidence
+    if isinstance(evidence, SanitizerEvidence):
+        return UntrustedBlock(
+            content=render_evidence_for_prompt(evidence),
+            kind="sanitizer-evidence",
+            origin="project-source-extracted",
+        )
+    log.warning(
+        "Evidence collector returned unexpected type %s; "
+        "expected SanitizerEvidence | UntrustedBlock | None",
+        type(evidence).__name__,
     )
+    return None
 
 
 @dataclass
@@ -585,6 +634,23 @@ class DataflowValidator:
             "for example:\n"
             '  "size > 0", "offset + length <= buffer_size", "ptr != NULL",\n'
             '  "flags & 0x80000000 == 0"\n\n'
+            "Emit GUARDS ONLY — Boolean predicates that gate execution. Do NOT emit "
+            "program statements (assignments, function calls without a comparison, "
+            "loops, returns). Statements like `input = realloc(input, n)` are not "
+            "conditions; skip them and instead reflect their effect via SSA-renaming "
+            "(see below).\n\n"
+            "SSA-rename across mutations. The downstream Z3 encoder assumes every "
+            "occurrence of an identifier denotes the same value (single static "
+            "assignment). If a variable is reassigned between two guards in the path, "
+            "rename later occurrences so they read as distinct values:\n"
+            "  GOOD: [\"strlen(input_pre) > 100\", \"strlen(input_post) < 50\"]\n"
+            "        (the realloc between them produced input_post)\n"
+            "  BAD:  [\"strlen(input) > 100\", \"strlen(input) < 50\"]\n"
+            "        (same name on both sides of a realloc — the solver merges them\n"
+            "        into one variable and refutes a real path).\n"
+            "When a function call appears in a condition (e.g. strlen(s)), keep the "
+            "exact call text identical across guards that reference the SAME value — "
+            "textual identity is how the solver shares variables across conditions.\n\n"
             "Also emit two per-path type hints so SMT uses the correct bitvector semantics:\n"
             "  - path_width: 32 when the dominant variables are C int/unsigned int "
             "(CWE-190 32-bit wraparound lives here); 64 for size_t/uint64_t.\n"
@@ -794,16 +860,22 @@ class DataflowValidator:
                 origin="smt:path-feasibility",
             ))
 
-        # Optional sanitizer-evidence block. Off by default; activated
-        # when DataflowValidator is constructed with an evidence_collector
-        # (PR1c-3 wires the production extractor). System prompt gets the
-        # interpretation instructions only when a block was actually built.
+        # Optional evidence block. Off by default; activated when
+        # DataflowValidator is constructed with an evidence_collector.
+        # The collector may return SanitizerEvidence (PR1 V2 LLM extractor
+        # — injection-class findings) or an UntrustedBlock directly
+        # (source_intel structural evidence — memory-corruption findings).
+        # System prompt gets per-kind interpretation instructions only
+        # when a block was actually built.
         evidence_block = _build_sanitizer_evidence_block(
             self._evidence_collector, dataflow, repo_path, self.logger
         )
         if evidence_block is not None:
             blocks.append(evidence_block)
-            system = system + SANITIZER_EVIDENCE_INSTRUCTIONS
+            if evidence_block.kind == "source-intel-evidence":
+                system = system + SOURCE_INTEL_EVIDENCE_INSTRUCTIONS
+            else:
+                system = system + SANITIZER_EVIDENCE_INSTRUCTIONS
 
         slots = {
             "rule_id": TaintedString(value=dataflow.rule_id, trust="untrusted"),

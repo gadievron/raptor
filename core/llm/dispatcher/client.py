@@ -49,7 +49,25 @@ def read_token(fd: Optional[int] = None) -> str:
         fd = int(env)
     try:
         # 64 bytes is plenty for a 32-byte url-safe token.
-        token = os.read(fd, 64).decode("ascii").strip()
+        raw = os.read(fd, 64)
+        try:
+            token = raw.decode("ascii").strip()
+        except UnicodeDecodeError as e:
+            # Scrub the raw bytes from any propagated error message:
+            # ``UnicodeDecodeError.__str__`` embeds the input bytes
+            # which IS the token. Re-raise with a generic message
+            # so a traceback in operator logs never leaks the
+            # credential. Reason ("encoding" / "position") is safe.
+            raise RuntimeError(
+                f"RAPTOR_LLM_TOKEN_FD payload was not ASCII "
+                f"({e.reason} at position {e.start})"
+            ) from None
+        finally:
+            # Drop the buffer reference before propagating any error
+            # so a `pdb` post-mortem doesn't surface the raw bytes
+            # from a local. (Best-effort; CPython may keep it alive
+            # in the frame's f_locals until GC.)
+            del raw
     finally:
         os.close(fd)
     if not token:
@@ -211,9 +229,23 @@ def relay_for_grandchild() -> tuple[str, int]:
     """
     socket_path, token = _resolve_socket_and_token(None, None)
     read_fd, write_fd = os.pipe()
-    os.write(write_fd, token.encode())
-    os.close(write_fd)
-    os.set_inheritable(read_fd, True)
+    # Pre-fix: a failure in ``os.write`` (e.g. EPIPE / EBADF) or
+    # ``os.set_inheritable`` left ``read_fd`` open, leaking an
+    # inheritable FD that pointed at a half-written token pipe.
+    # Wrap the setup so any failure closes BOTH ends before the
+    # exception propagates.
+    try:
+        try:
+            os.write(write_fd, token.encode())
+        finally:
+            os.close(write_fd)
+        os.set_inheritable(read_fd, True)
+    except OSError:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
+        raise
     return socket_path, read_fd
 
 

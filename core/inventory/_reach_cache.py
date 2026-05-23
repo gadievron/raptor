@@ -84,6 +84,14 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # suffix tracks ``_CACHE_VERSION``.
 _HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V5\n"
 
+# Hard cap on cache-file size. A genuine reachability index for a
+# kernel-scale target weighs in the low MB; anything past this is
+# either corruption or an attacker who's planted a pathological file
+# in the cache dir. Refuse rather than pickle.loads-DoS the process.
+# 64 MiB is comfortably above the largest legitimate observed cache
+# (linux kernel 6.x reachability index lands at ~12 MiB compressed).
+_MAX_INDEX_BYTES = 64 * 1024 * 1024
+
 
 def compute_fingerprint(inventory: Dict[str, Any]) -> Optional[str]:
     """Return a stable content fingerprint for ``inventory``, or
@@ -179,37 +187,94 @@ def load_index(fingerprint: Optional[str]) -> Optional["_AdjacencyIndex"]:
     #     to attacker-writable content.
     #   * Multi-user dev hosts where another user could write to
     #     a shared ``~/.cache``.
-    try:
-        st = path.lstat()                       # lstat: don't follow symlinks
-    except OSError as exc:
-        logger.debug("reach_cache: stat failed for %s: %s", path, exc)
-        return None
+    # TOCTOU defence: open the file ONCE, then validate via the
+    # opened FD's fstat(). Pre-fix the path-based ``lstat()`` then a
+    # separate ``read_bytes()`` left a race window where an attacker
+    # who could win it could swap the inode between the two calls —
+    # e.g. lstat sees a regular file, read_bytes reads a symlink. The
+    # ``O_NOFOLLOW`` flag refuses to traverse a symlink at the
+    # original path (Linux: opens fail with ELOOP). fstat on the FD
+    # is authoritative for the actually-opened inode.
     import stat as _stat
-    if _stat.S_ISLNK(st.st_mode):
-        logger.warning(
-            "reach_cache: cache entry %s is a symlink — refusing to load",
-            path,
-        )
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
         return None
-    if st.st_uid != os.getuid():
-        logger.warning(
-            "reach_cache: cache entry %s owned by uid=%d, current uid=%d — "
-            "refusing to load",
-            path, st.st_uid, os.getuid(),
-        )
-        return None
-    if st.st_mode & 0o022:
-        logger.warning(
-            "reach_cache: cache entry %s has group/world write perms "
-            "(mode=%o) — refusing to load",
-            path, st.st_mode & 0o777,
-        )
+    except OSError as exc:
+        logger.debug("reach_cache: open failed for %s: %s", path, exc)
         return None
     try:
-        blob = path.read_bytes()
-    except OSError as exc:
-        logger.debug("reach_cache: load failed for %s: %s", path, exc)
-        return None
+        try:
+            st = os.fstat(fd)
+        except OSError as exc:
+            logger.debug("reach_cache: fstat failed for %s: %s", path, exc)
+            return None
+        # ``O_NOFOLLOW`` already refused symlinks at the original
+        # path, but a separate check covers the (paranoid) shape of
+        # an O_NOFOLLOW-ignoring filesystem.
+        if _stat.S_ISLNK(st.st_mode):
+            logger.warning(
+                "reach_cache: cache entry %s is a symlink — "
+                "refusing to load",
+                path,
+            )
+            return None
+        if st.st_uid != os.getuid():
+            logger.warning(
+                "reach_cache: cache entry %s owned by uid=%d, current uid=%d — "
+                "refusing to load",
+                path, st.st_uid, os.getuid(),
+            )
+            return None
+        if st.st_mode & 0o022:
+            logger.warning(
+                "reach_cache: cache entry %s has group/world write perms "
+                "(mode=%o) — refusing to load",
+                path, st.st_mode & 0o777,
+            )
+            return None
+        # Short-circuit size check via ``st.st_size`` BEFORE any
+        # read. Pre-fix we walked the read loop up to 64 MiB before
+        # bailing on the running ``total > _MAX_INDEX_BYTES`` check
+        # — fine for the legitimate case (cache files weigh single
+        # MiB) but wasteful on a planted pathological file.
+        if st.st_size > _MAX_INDEX_BYTES:
+            logger.warning(
+                "reach_cache: cache entry %s size %d exceeds %d bytes "
+                "— refusing to load",
+                path, st.st_size, _MAX_INDEX_BYTES,
+            )
+            return None
+        try:
+            # Read via os.read in a loop until EOF — read_bytes can't
+            # take an fd directly. The pre-flight size check above
+            # bounds total memory; the in-loop check stays as
+            # defence-in-depth against TOCTOU file-growth between
+            # fstat and the reads.
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                buf = os.read(fd, 1 << 20)
+                if not buf:
+                    break
+                total += len(buf)
+                if total > _MAX_INDEX_BYTES:
+                    logger.warning(
+                        "reach_cache: cache entry %s exceeds %d bytes — "
+                        "refusing to load",
+                        path, _MAX_INDEX_BYTES,
+                    )
+                    return None
+                chunks.append(buf)
+            blob = b"".join(chunks)
+        except OSError as exc:
+            logger.debug("reach_cache: load failed for %s: %s", path, exc)
+            return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
     if not blob.startswith(_HEADER_MAGIC):
         logger.debug(
             "reach_cache: cache file %s has wrong magic; ignoring", path,

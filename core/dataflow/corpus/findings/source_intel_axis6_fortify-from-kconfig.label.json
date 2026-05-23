@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-from-kconfig",
+  "verdict": "false_positive",
+  "rationale": "Build flags from kernel .config \u2014 CONFIG_FORTIFY_SOURCE=y maps to fortify_source_level=1 in the kernel's FORTIFY implementation. _from_kconfig() in core/build/build_flags.py parses this. memcpy is intercepted by kernel FORTIFY (warns or aborts on overflow).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

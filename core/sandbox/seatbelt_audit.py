@@ -321,6 +321,15 @@ class LogStreamer:
             return False
 
         try:
+            # Pass through ``get_safe_env()`` so the warm-up child
+            # doesn't inherit shell-evaluated env vars (``TERMINAL`` /
+            # ``EDITOR`` / ``VISUAL`` / ``BROWSER`` / ``PAGER``) from
+            # an untrusted parent. ``sandbox-exec /usr/bin/true`` is
+            # benign on its own but ``get_safe_env()`` is the
+            # codebase-wide posture for subprocess spawn under
+            # untrusted-repo context — symmetry trumps the small
+            # marginal risk here.
+            from core.config import RaptorConfig
             warm_up = subprocess.Popen(
                 [
                     sandbox_exec, "-p", _WARM_UP_SBPL,
@@ -333,6 +342,7 @@ class LogStreamer:
                 # Operator Ctrl-C shouldn't kill our own warm-up
                 # probe; the probe finishes on its own.
                 start_new_session=True,
+                env=RaptorConfig.get_safe_env(),
             )
         except OSError:
             # WARNING (F070 W21 promote): the warm-up gate failing to
@@ -353,7 +363,9 @@ class LogStreamer:
 
         target_pid = warm_up.pid
 
-        assert self._proc is not None
+        # Explicit guard rather than assert — survives `python -O`.
+        if self._proc is None:
+            raise RuntimeError("seatbelt_audit: internal invariant — log-stream proc not started")
         if self._proc.stdout is None:
             try:
                 warm_up.wait(timeout=1.0)
@@ -399,6 +411,12 @@ class LogStreamer:
                     continue
         finally:
             sel.unregister(self._proc.stdout)
+            # On Linux DefaultSelector is an epoll FD; explicit
+            # close() releases the kernel-side FD immediately
+            # instead of waiting for GC. Long-lived audit scenarios
+            # that re-warm-up otherwise accumulate epoll FDs over
+            # the process lifetime.
+            sel.close()
             # Reap the warm-up child. With (deny default) the exec
             # itself is denied, so sandbox-exec exits ~immediately
             # with non-zero. Wait briefly; terminate as a safety net.
@@ -427,7 +445,9 @@ class LogStreamer:
         records to the JSONL. Robust to malformed lines (silently
         skip)."""
         try:
-            assert self._proc is not None
+            # Explicit guard — survives `python -O`.
+            if self._proc is None:
+                raise RuntimeError("seatbelt_audit._read_loop: proc not started")
             for raw_line in self._proc.stdout or ():
                 if self._stopped.is_set():
                     break

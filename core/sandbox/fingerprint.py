@@ -60,6 +60,7 @@ import ctypes.util as _ctypes_util
 import hashlib
 import logging
 import os
+import threading
 import re
 import sys
 from dataclasses import dataclass
@@ -421,13 +422,28 @@ def _trim_proc_version() -> str:
 # included in the unshare flags.
 
 _libc: ctypes.CDLL | None = None
+_libc_lock = threading.Lock()
 
 
 def _get_libc() -> ctypes.CDLL:
+    """Lazy-init the shared libc CDLL binding.
+
+    Double-checked locking: pre-fix two threads racing on first
+    access each constructed their own ``ctypes.CDLL`` object and
+    wrote to the global; second one wins but the first's calls
+    referenced a now-orphaned handle. Practical impact small
+    (CDLL is just a thin handle wrapper) but the race is real.
+    Lock ensures exactly-once construction.
+    """
     global _libc
-    if _libc is None:
-        _libc = ctypes.CDLL(_ctypes_util.find_library("c"), use_errno=True)
-    return _libc
+    if _libc is not None:
+        return _libc
+    with _libc_lock:
+        if _libc is None:
+            _libc = ctypes.CDLL(
+                _ctypes_util.find_library("c"), use_errno=True,
+            )
+        return _libc
 
 
 def set_uts(hostname: str, domainname: str) -> None:

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from core.json import save_json
-from typing import Dict
+from typing import Dict, Optional
 
 from core.llm.task_types import TaskType
 from core.logging import get_logger
@@ -292,10 +292,39 @@ def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
 class CrashAnalysisAgent:
     """LLM-powered crash analysis agent."""
 
-    def __init__(self, binary_path: Path, out_dir: Path, llm_config: LLMConfig = None):
+    def __init__(self, binary_path: Path, out_dir: Path,
+                 llm_config: LLMConfig = None,
+                 verify_exploits: bool = True,
+                 judge_intent: bool = True,
+                 record_witnesses: bool = True):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # Compile-verify every LLM-emitted exploit by shelling out to
+        # gcc in a sandboxed tempdir. Default on; opt out via
+        # ``--no-verify-exploits`` (plumbed from ``raptor_fuzzing.py``)
+        # for time-sensitive runs. Verification cost is ~150ms per
+        # crash on a clean linux/x86_64 host. Mirrors the contract
+        # in ``AutonomousSecurityAgentV2``; see
+        # ``packages.llm_analysis.exploit_verify.compile_verify``.
+        self.verify_exploits = verify_exploits
+        # IntentMatchJudge v1 — heuristic-first, LLM tiebreak on
+        # ambiguous cases. Decides whether an LLM-generated exploit
+        # targets the crash it was generated for. Default on; opt
+        # out via ``--no-judge-intent`` (plumbed from
+        # ``raptor_fuzzing.py``). Mirrors the
+        # ``AutonomousSecurityAgentV2`` contract.
+        self.judge_intent = judge_intent
+        # Record each LLM-emitted exploit as a canonical Witness
+        # alongside the fuzz-crash witnesses that
+        # ``raptor_fuzzing.py`` already records. Same data path,
+        # same WitnessStore root — the bytes_hash deduplicates if
+        # an exploit ever matches a real crash input. Default on;
+        # opt out via ``--no-record-witnesses``. Lazy store open
+        # (filesystem untouched on prep-only / failed runs);
+        # failures are non-fatal.
+        self.record_witnesses = record_witnesses
+        self._witness_store = None  # lazy
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -313,7 +342,7 @@ class CrashAnalysisAgent:
             if self.llm_config.primary_model.cost_per_1k_tokens > 0:
                 print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
             else:
-                print(f"Cost: FREE (self-hosted model)")
+                print("Cost: FREE (self-hosted model)")
 
             if "ollama" in self.llm_config.primary_model.provider.lower():
                 print()
@@ -623,6 +652,38 @@ FULL LLM RESPONSE:
 
                 logger.info(f"   ✓ Exploit generated: {len(exploit_code)} bytes")
                 logger.info(f"   ✓ Saved to: {exploit_file.name}")
+
+                # Compile-verify the LLM's output. Same pattern as
+                # the /agentic path landed in PR #572 — populates
+                # ``crash_context.exploit_compiled`` /
+                # ``exploit_compile_errors`` via the shared
+                # ``exploit_verify.compile_verify`` helper. The
+                # language gate uses the crash's source location
+                # (file:line from addr2line) when available; if
+                # source_location is empty the helper attempts gcc
+                # unconditionally, which is right for the typical
+                # /crash-analysis case of native binaries built from
+                # C/C++. Gated on ``self.verify_exploits`` so
+                # operators can opt out for time-sensitive runs.
+                if self.verify_exploits:
+                    self._verify_exploit_compiles(crash_context, exploit_code)
+
+                # Intent-match judgement on the (possibly compile-
+                # verified) exploit. Same heuristic-first / LLM-
+                # tiebreak pattern as the /agentic path. Failures
+                # are non-fatal — the verdict stays as ``uncertain``
+                # with the error captured.
+                if self.judge_intent:
+                    self._judge_exploit_intent(crash_context, exploit_code)
+
+                # Record the LLM-emitted exploit as a canonical
+                # Witness alongside the fuzz-crash witnesses from
+                # ``raptor_fuzzing.py``. Same store, same source=
+                # LLM_EMIT_RUN, outcome=NOT_RUN encoding as the
+                # /agentic path. Failures are non-fatal.
+                if self.record_witnesses:
+                    self._record_exploit_witness(crash_context, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -633,6 +694,194 @@ FULL LLM RESPONSE:
             if _is_auth_error(e):
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
+
+    def _verify_exploit_compiles(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Compile-check the LLM-emitted exploit in a sandbox.
+
+        Thin wrapper around
+        :func:`packages.llm_analysis.exploit_verify.compile_verify`
+        that maps the shared helper's ``(compiled, errors)`` tuple
+        onto the crash context's ``exploit_compiled`` /
+        ``exploit_compile_errors`` fields. See ``exploit_verify`` for
+        verification mechanics, language gate, sanitisation, and
+        failure-mode semantics.
+
+        For language gating, the target's source file is read from
+        ``crash_context.source_location`` (populated by addr2line
+        as ``path/to/file.c:42``). When source_location is empty
+        (addr2line failed or stripped binary), the helper falls
+        through to gcc unconditionally — appropriate for the
+        typical native-binary case where C/C++ is the default
+        assumption.
+        """
+        # Parse source path out of the ``file:line`` source_location
+        # (e.g. ``src/foo.c:42``). Empty string when addr2line
+        # couldn't resolve the address; ``None`` falls through the
+        # language gate without skipping.
+        target_file_path: Optional[str] = None
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(":", 1)[0]
+
+        from packages.llm_analysis.exploit_verify import compile_verify
+        compiled, errors = compile_verify(
+            exploit_code,
+            target_file_path,
+            crash_context.crash_id,
+            logger,
+        )
+        crash_context.exploit_compiled = compiled
+        crash_context.exploit_compile_errors = errors
+
+    def _judge_exploit_intent(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Run IntentMatchJudge v1 against the LLM-emitted exploit.
+
+        Thin wrapper that maps
+        :func:`packages.llm_analysis.intent_match.intent_match`'s
+        ``IntentMatchVerdict`` onto the crash context's
+        ``intent_match`` field.
+
+        For language / function metadata, reads
+        ``crash_context.source_location`` (``file:line``) and
+        ``crash_context.function_name``. The CWE is approximated
+        from ``crash_context.crash_type`` (a free-form string like
+        ``"heap_overflow"`` set by the LLM analysis step) via a
+        small lookup table.
+        """
+        target_file_path: Optional[str] = None
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(":", 1)[0]
+
+        # Best-effort crash-type → CWE mapping for the cwe_shape
+        # heuristic. crash_type is LLM-set and free-form; this
+        # covers the common shapes the analysis prompt encourages.
+        crash_type_to_cwe = {
+            "heap_overflow": "CWE-122",
+            "stack_overflow": "CWE-121",
+            "buffer_overflow": "CWE-120",
+            "use_after_free": None,  # no v1 detector
+            "null_deref": "CWE-476",
+            "integer_overflow": "CWE-190",
+            "format_string": None,  # no v1 detector
+            "command_injection": "CWE-78",
+        }
+        finding_cwe = crash_type_to_cwe.get(crash_context.crash_type)
+
+        from dataclasses import asdict
+        from packages.llm_analysis.intent_match import intent_match
+
+        verdict = intent_match(
+            exploit_code=exploit_code,
+            finding_file_path=target_file_path,
+            finding_function_name=crash_context.function_name,
+            finding_cwe=finding_cwe,
+            finding_message=crash_context.crash_type,
+            exploit_compile_errors=list(
+                crash_context.exploit_compile_errors,
+            ),
+            llm_client=self.llm,
+            logger=logger,
+        )
+        crash_context.intent_match = asdict(verdict)
+
+        if verdict.verdict == "matches":
+            logger.info(
+                f"   ✓ Intent-match: matches "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        elif verdict.verdict == "off_target":
+            logger.info(
+                f"   ⚠ Intent-match: off_target "
+                f"(confidence={verdict.confidence:.2f}, "
+                f"used_llm={verdict.used_llm})"
+            )
+        else:
+            logger.info(
+                f"   · Intent-match: uncertain "
+                f"(used_llm={verdict.used_llm})"
+            )
+
+    def _record_exploit_witness(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Record the LLM-emitted exploit as a canonical Witness.
+
+        Lazy-opens ``self._witness_store`` against
+        ``self.out_dir / "witnesses"`` on first call. Reuses the
+        same ``crash_type_to_cwe`` lookup as
+        ``_judge_exploit_intent`` (both make best-effort CWE
+        mappings on the same field).
+
+        Note ``crash_context.intent_match`` is a ``dict`` here
+        (``asdict(verdict)``) rather than the dataclass instance
+        the /agentic path holds, so we read via ``.get(...)`` not
+        attribute access.
+
+        Failures are non-fatal: the exploit artefact on disk is
+        the primary record; the witness is a downstream-facing
+        secondary record.
+        """
+        try:
+            if self._witness_store is None:
+                from core.witness import WitnessStore
+                self._witness_store = WitnessStore(
+                    self.out_dir / "witnesses"
+                )
+            from packages.llm_analysis.witness_adapter import (
+                witness_from_exploit,
+            )
+
+            # Same crash_type → CWE table as _judge_exploit_intent
+            # uses; keep them in lockstep when one is extended.
+            crash_type_to_cwe = {
+                "heap_overflow": "CWE-122",
+                "stack_overflow": "CWE-121",
+                "buffer_overflow": "CWE-120",
+                "null_deref": "CWE-476",
+                "integer_overflow": "CWE-190",
+                "command_injection": "CWE-78",
+            }
+            cwe_id = crash_type_to_cwe.get(crash_context.crash_type)
+
+            intent_verdict = None
+            intent_confidence = None
+            if isinstance(crash_context.intent_match, dict):
+                intent_verdict = crash_context.intent_match.get("verdict")
+                intent_confidence = crash_context.intent_match.get(
+                    "confidence"
+                )
+
+            witness, data = witness_from_exploit(
+                exploit_code,
+                finding_id=crash_context.crash_id,
+                cwe_id=cwe_id,
+                file_path=(
+                    crash_context.source_location.rsplit(":", 1)[0]
+                    if crash_context.source_location else None
+                ),
+                compiled=crash_context.exploit_compiled,
+                compile_error_count=len(
+                    crash_context.exploit_compile_errors or []
+                ),
+                intent_verdict=intent_verdict,
+                intent_confidence=intent_confidence,
+                target_binary_path=self.binary,
+                produced_by="crash-agent",
+            )
+            self._witness_store.put(witness, data)
+            logger.debug(
+                f"   · Recorded witness {witness.bytes_hash[:12]} "
+                f"({witness.bytes_len}B)"
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                f"   · Witness record failed for "
+                f"{crash_context.crash_id}: {type(e).__name__}: {e}"
+            )
 
     def _signal_name(self, signal: str) -> str:
         """Convert signal number to name."""

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_cap_net_admin-gated-overflow",
+  "verdict": "true_positive",
+  "rationale": "Surface shape is a CWE-787 unbounded-write into a fixed-size stack buffer. Gated by `capable(CAP_NET_ADMIN)` — but CAP_NET_ADMIN is BOUNDED (network-stack admin only; doesn't grant arbitrary memory write). A memory-corruption primitive reachable from CAP_NET_ADMIN constitutes a privilege escalation: CAP_NET_ADMIN → kernel arbitrary write. The finding stands. Source_intel axis 4 (capability_check) emits `capability:capable` at line 40, but the line carries `CAP_NET_ADMIN` which is NOT in _PRIVILEGED_CAP_CONSTANTS, so `_line_uses_privileged_cap()` returns False and `_privileged_capability_dominates()` returns False. Verdict falls through to UNCERTAIN (no other axis fires). Inspired by the privilege model of netfilter/nft bugs; crafted, not the actual CVE code.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

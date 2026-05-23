@@ -231,6 +231,14 @@ class OSVDiscoverer:
         and bare ``git@host:path`` SCP-style. We normalise every shape
         to ``https://<host>/<path>`` so downstream consumers (commit
         fetchers, slug extractors) only need to handle one form.
+
+        Returns ``""`` for inputs that produce a URL with a suspicious
+        shape (host contains ``@``, ``?``, ``#``, control bytes, or a
+        port; path contains query / fragment / null). A poisoned OSV
+        record with ``repo: "git@evil.com/cred-stealer:path?token="``
+        would otherwise normalise to a URL that downstream consumers
+        treat as a real forge — closing the SSRF / parameter-smuggling
+        gap.
         """
         if not url:
             return ""
@@ -250,4 +258,21 @@ class OSVDiscoverer:
             if ":" in rest:
                 host, path = rest.split(":", 1)
                 url = f"https://{host}/{path}"
+        # Validate the normalised URL shape. Reject if we can't parse
+        # it, if the host is missing or carries `@` (userinfo escape),
+        # `:` (port specifier passed through), or non-ASCII.
+        from urllib.parse import urlsplit
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return ""
+        if parts.scheme not in ("https", "http"):
+            return ""
+        host = parts.hostname or ""
+        if not host:
+            return ""
+        if not all(0x21 <= ord(c) <= 0x7e for c in host):
+            return ""
+        if any(c in host for c in "@:?#"):
+            return ""
         return url

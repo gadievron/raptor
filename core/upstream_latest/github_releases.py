@@ -217,7 +217,20 @@ def _fetch_cached_json(
     return cached value without HTTP. Operators wanting to force
     a refresh pass ``ttl_seconds=0``.
     """
-    cache_key = f"upstream_latest:gh:{url}"
+    # Include a fingerprint of the token in the cache key so two
+    # processes with different GitHub tokens (e.g. a personal token
+    # that sees private fork releases vs an unauthenticated probe
+    # against the same URL) don't share cached data. Pre-fix the
+    # cache key was token-agnostic — the second caller saw the
+    # first's view of the world regardless of auth differences.
+    # We hash the token rather than embed it so an inspection of
+    # the cache directory doesn't surface raw credentials.
+    if github_token:
+        from core.hash import sha256_string
+        token_fp = sha256_string(github_token)[:12]
+    else:
+        token_fp = "anon"
+    cache_key = f"upstream_latest:gh:{token_fp}:{url}"
     if cache is not None and ttl_seconds > 0:
         cached = cache.get(cache_key, ttl_seconds=ttl_seconds)
         if cached is not None:

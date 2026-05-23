@@ -165,8 +165,11 @@ class Finding:
             raw=dict(data.get("raw", {})),
         )
 
-    def to_json(self, **kwargs: Any) -> str:
-        return json.dumps(self.to_dict(), **kwargs)
+    def to_json(self, *, indent: Optional[int] = None) -> str:
+        """Render as JSON. Explicit ``indent`` signature — see
+        ``core.dataflow.label.GroundTruth.to_json`` for the
+        rationale."""
+        return json.dumps(self.to_dict(), indent=indent)
 
     @classmethod
     def from_json(cls, text: str) -> "Finding":

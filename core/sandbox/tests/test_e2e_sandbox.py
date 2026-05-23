@@ -41,7 +41,19 @@ class TestE2ENetworkBlocking(unittest.TestCase):
             ["wget", "-q", "-O", "/dev/null", "http://1.1.1.1", "--timeout=2"],
             block_network=True, capture_output=True, text=True, timeout=10,
         )
+        # Strict assertion shape: a network-block test is supposed to
+        # observe wget's "could not resolve" / "connection refused"
+        # path (exit code 4 / 6 / 7 depending on wget build), NOT
+        # arbitrary nonzero. Pre-fix ``assertNotEqual(rc, 0)`` would
+        # pass on a sandbox bug that segfaulted wget or made it
+        # ENOENT — both are nonzero but neither proves network was
+        # blocked. We accept 1-127 as "network-error-ish" (rules out
+        # signal-kill and segfault which would be 128+) plus the
+        # wget-specific codes operators see on a real block.
         self.assertNotEqual(result.returncode, 0)
+        self.assertLess(result.returncode, 128,
+            f"wget returncode={result.returncode} looks like a "
+            f"signal-kill or segfault, not a network block")
 
     def test_curl_blocked(self):
         """curl inside sandbox fails with network error."""
@@ -52,7 +64,12 @@ class TestE2ENetworkBlocking(unittest.TestCase):
             ["curl", "-s", "--connect-timeout", "2", "http://1.1.1.1"],
             block_network=True, capture_output=True, text=True, timeout=10,
         )
+        # Same strict shape as test_wget_blocked above — curl exits
+        # 6 / 7 / 28 on the realistic block paths, all < 128.
         self.assertNotEqual(result.returncode, 0)
+        self.assertLess(result.returncode, 128,
+            f"curl returncode={result.returncode} looks like a "
+            f"signal-kill or segfault, not a network block")
 
     def test_python_socket_blocked(self):
         """Python socket inside sandbox fails."""
@@ -377,7 +394,8 @@ class TestE2EPathHijackDefeated(unittest.TestCase):
             self.skipTest("User namespaces not available")
 
     def test_path_hijack_defeated(self):
-        import os, tempfile
+        import os
+        import tempfile
         from core.sandbox import state as s
         saved_unshare = s._unshare_path_cache
         saved_prlimit = s._prlimit_path_cache
@@ -926,7 +944,8 @@ class TestE2EEgressProxy(unittest.TestCase):
         into operator terminal output — colour flips, title changes,
         cursor moves that forge prior log lines.
         """
-        import logging, io
+        import logging
+        import io
         handler_buf = io.StringIO()
         handler = logging.StreamHandler(handler_buf)
         handler.setLevel(logging.DEBUG)
@@ -959,7 +978,9 @@ class TestE2EEgressProxy(unittest.TestCase):
         otherwise inject ESC into the logger via `_interpret_result`.
         Fix is a printable-char filter; this pins it.
         """
-        import logging, io, subprocess
+        import logging
+        import io
+        import subprocess
         from core.sandbox.observe import _interpret_result
 
         handler_buf = io.StringIO()

@@ -64,6 +64,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, Union
@@ -816,8 +818,23 @@ class _AdjacencyIndex:
 # (insertion order; ``dict`` preserves it). 64 inventories is a
 # generous ceiling — typical workflows have at most one "active"
 # inventory plus the occasional historical comparison.
-_INDEX_CACHE: Dict[int, Tuple[Dict[str, Any], "_AdjacencyIndex"]] = {}
+#
+# Concurrency: ``_INDEX_CACHE_LOCK`` guards all reads + writes.
+# Reachability lookups fan out from /agentic, /validate, and SCA
+# reachability worker pools — concurrent first-time queries on
+# different inventories would otherwise race the eviction sequence
+# (``len > _CACHE_MAX_ENTRIES`` check then ``next(iter(...))``
+# then ``pop``), and dict iteration is not safe across concurrent
+# mutation.
+# OrderedDict so eviction picks the least-recently-USED entry rather
+# than the oldest-by-insertion. Pre-fix the eviction at
+# ``next(iter(_INDEX_CACHE))`` always dropped the FIRST-inserted slot,
+# even if it had just been read 1ms before — anti-LRU semantics that
+# hurt the hot-cache case worst. Cache hits now ``move_to_end`` to
+# keep recently-touched entries warm.
+_INDEX_CACHE: "OrderedDict[int, Tuple[Dict[str, Any], _AdjacencyIndex]]" = OrderedDict()
 _CACHE_MAX_ENTRIES = 64
+_INDEX_CACHE_LOCK = threading.Lock()
 
 
 def _get_or_build_index(
@@ -833,15 +850,19 @@ def _get_or_build_index(
     nodes / edges exist.
     """
     inv_id = id(inventory)
-    cached = _INDEX_CACHE.get(inv_id)
-    if cached is not None:
-        cached_inv, cached_idx = cached
-        # Identity check: id() reuse can't happen while the cache
-        # holds the dict, but a paranoid check costs nothing.
-        if cached_inv is inventory:
-            return cached_idx
-        # Stale slot — collision after eviction. Drop and rebuild.
-        _INDEX_CACHE.pop(inv_id, None)
+    with _INDEX_CACHE_LOCK:
+        cached = _INDEX_CACHE.get(inv_id)
+        if cached is not None:
+            cached_inv, cached_idx = cached
+            # Identity check: id() reuse can't happen while the cache
+            # holds the dict, but a paranoid check costs nothing.
+            if cached_inv is inventory:
+                # Move to end to mark as recently-used for LRU
+                # eviction. Cheap under the existing lock.
+                _INDEX_CACHE.move_to_end(inv_id)
+                return cached_idx
+            # Stale slot — collision after eviction. Drop and rebuild.
+            _INDEX_CACHE.pop(inv_id, None)
 
     # Persistent on-disk cache lookup. Cold-start path otherwise pays
     # the ~300ms build cost every time the operator launches a fresh
@@ -853,10 +874,10 @@ def _get_or_build_index(
     persistent_fp = _reach_cache.compute_fingerprint(inventory)
     persisted = _reach_cache.load_index(persistent_fp)
     if persisted is not None:
-        _INDEX_CACHE[inv_id] = (inventory, persisted)
-        if len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
-            oldest = next(iter(_INDEX_CACHE))
-            _INDEX_CACHE.pop(oldest, None)
+        with _INDEX_CACHE_LOCK:
+            _INDEX_CACHE[inv_id] = (inventory, persisted)
+            while len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
+                _INDEX_CACHE.popitem(last=False)
         return persisted
 
     idx = _AdjacencyIndex()
@@ -1201,11 +1222,14 @@ def _get_or_build_index(
                         tail, set(),
                     ).add((fn, flag_label))
 
-    _INDEX_CACHE[inv_id] = (inventory, idx)
-    if len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
-        # Drop the oldest entry. dict preserves insertion order.
-        oldest = next(iter(_INDEX_CACHE))
-        _INDEX_CACHE.pop(oldest, None)
+    with _INDEX_CACHE_LOCK:
+        _INDEX_CACHE[inv_id] = (inventory, idx)
+        # LRU eviction (``popitem(last=False)``) — same shape as the
+        # paired insert site above. ``while`` rather than ``if`` so a
+        # future cap reduction (or test bumping max=0) doesn't leak
+        # extra entries.
+        while len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
+            _INDEX_CACHE.popitem(last=False)
 
     # Persist for the next process. Best-effort: any IO failure is
     # logged at debug and swallowed (the in-process cache is hot;

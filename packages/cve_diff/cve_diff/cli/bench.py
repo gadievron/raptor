@@ -271,8 +271,12 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
         from cve_diff.report.markdown import render_failure
         text = render_failure(cve_id, error_class, error_text)
         (output_dir / f"{cve_id}.md").write_text(text)
-    except Exception:  # noqa: BLE001 — report write must not abort bench
-        pass
+    except Exception as exc:  # noqa: BLE001 — report write must not abort bench
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "bench: failure-report write failed for %s: %s",
+            cve_id, exc, exc_info=True,
+        )
 
 
 def _write_flow(output_dir: Path, cve_id: str, result: "_CveResult",
@@ -483,7 +487,7 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         f"| Outcome | Count | % |\n"
         f"|---|---:|---:|\n"
         + "\n".join(outcome_lines) + "\n\n"
-        f"## Diff integrity — sources + agreement\n\n"
+        "## Diff integrity — sources + agreement\n\n"
         + (("\n".join(integrity_lines) + "\n\n") if integrity_lines else
            "_(no PASSes to compare)_\n\n")
         + f"## Recovery layers — what saved CVEs\n\n"
@@ -496,7 +500,7 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         f"| Tool | Total calls | CVEs that used it |\n"
         f"|---|---:|---:|\n"
         + ("\n".join(tool_lines) if tool_lines else "_(no tool calls recorded)_") + "\n\n"
-        f"## Failure cluster\n\n"
+        "## Failure cluster\n\n"
         + ("| CVE | Class | Error (first 200 chars) |\n"
            "|---|---|---|\n" + "\n".join(fail_lines) + "\n"
            if fail_lines else "_(none — all PASS)_\n")

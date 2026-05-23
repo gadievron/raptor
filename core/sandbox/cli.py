@@ -9,6 +9,7 @@ Every RAPTOR entry point that runs subprocesses should call `add_cli_args`
 during parser construction and `apply_cli_args` right after `parse_args`.
 """
 
+import argparse
 import logging
 
 from . import state
@@ -62,7 +63,7 @@ def set_cli_profile(profile: str) -> None:
     _set_cli_state(profile)
 
 
-def add_cli_args(parser) -> None:
+def add_cli_args(parser: argparse.ArgumentParser) -> None:
     """Attach `--sandbox {full,debug,network-only,none}`, `--no-sandbox`,
     `--audit`, and `--audit-verbose` to an argparse parser. Every RAPTOR
     entry point should call this so users get a consistent sandbox-
@@ -133,7 +134,10 @@ def add_cli_args(parser) -> None:
     )
 
 
-def apply_cli_args(args, parser=None) -> None:
+def apply_cli_args(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser | None = None,
+) -> None:
     """Called right after argparse parsing to propagate the user's choice
     into the sandbox module state. Safe to call when neither flag was
     passed (no-op in that case).

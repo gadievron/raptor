@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_capable-sibling-function",
+  "verdict": "true_positive",
+  "rationale": "Surface shape: CWE-787 unbounded memcpy into a fixed 128B stack buffer. The capability check is in `cap_check_sibling`, not the finding's enclosing function `finding_target_no_gate`. Axis-4 must NOT suppress \u2014 different function entirely. Verdict falls through to UNCERTAIN (no other axis fires).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

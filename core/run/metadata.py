@@ -5,6 +5,7 @@ produced it, when, and whether it succeeded. Tools use start_run/complete_run/fa
 """
 
 import contextlib
+import json
 import os
 import re
 import logging
@@ -327,8 +328,19 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
                 candidate = Path(data.get("output_dir", ""))
                 if candidate.is_dir():
                     project_dir = candidate
-    except Exception:
-        pass
+    except (FileNotFoundError, ImportError, json.JSONDecodeError, KeyError, PermissionError) as exc:
+        # Narrowed from bare Exception. Pre-fix a corrupt project
+        # JSON, a renamed field, or a PermissionError on PROJECTS_DIR
+        # all silently degraded to standalone mode — runs that
+        # should have been filed under an active project went into
+        # bare out/, and operators only noticed when /project status
+        # didn't include the run. Surface the cause.
+        from core.logging import get_logger as _get_logger
+        _get_logger().warning(
+            "run.metadata: active-project lookup failed (%s); "
+            "treating as standalone",
+            exc,
+        )
 
     if not project_dir:
         return  # Standalone mode

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_multifile-nonstatic-called-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `exported_handler` is non-static and called from sibling util.c. Multi-file PR-4 prereqs scan picks up the call from util.c \u2192 has_callers True \u2192 dead-code pass skips. Verdict UNCERTAIN (no other axis fires). Tests multi-file caller-discovery end-to-end.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

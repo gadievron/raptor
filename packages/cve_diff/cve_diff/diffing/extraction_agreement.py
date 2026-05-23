@@ -96,7 +96,13 @@ def _compare_pair(a: DiffBundle, b: DiffBundle) -> str:
     overlap = (len(inter) / len(union)) if union else 1.0
     bytes_a = max(a.bytes_size, 1)
     pct = abs(b.bytes_size - a.bytes_size) / bytes_a
-    if (a.files_changed == b.files_changed and overlap == 1.0
+    # ``overlap`` is a ratio of (intersection / union) — FP arithmetic
+    # can yield 0.9999... when the mathematical answer is 1.0.
+    # ``math.isclose`` collapses that to "agree" instead of dropping
+    # one rank to "partial".
+    import math
+    overlap_perfect = math.isclose(overlap, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+    if (a.files_changed == b.files_changed and overlap_perfect
             and pct <= _BYTES_AGREE_PCT):
         return "agree"
     if overlap >= 0.8 and pct <= _BYTES_PARTIAL_PCT:

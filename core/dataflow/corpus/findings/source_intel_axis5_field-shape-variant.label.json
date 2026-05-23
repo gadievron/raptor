@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_field-shape-variant",
+  "verdict": "true_positive",
+  "rationale": "Field-shape variant fixture. Axis-5 checked_alloc rule currently matches local-variable assignments only (`local = alloc()`), NOT struct-field assignments (`struct->fld = alloc()`). So variant_ratio counts only the local sites; field sites aren't aggregated. Axis-3 unchecked_alloc (separate rule) still fires on the field assignment via its own field-shape coverage. Tests the axis-5 scoping limit.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "r->buf field assignment from kmalloc",
+    "write_site_guard": "kmalloc must succeed",
+    "read_site_lacks_guard": true,
+    "notes": "Field-shape variant; axis-5 currently local-only."
+  }
+}

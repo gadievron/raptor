@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_mostly-unchecked-2-8-ratio",
+  "verdict": "true_positive",
+  "rationale": "2 checked + 8 unchecked. variant_ratio(kstrdup) = (2, 8) \u2014 mostly-unchecked idiom (project routinely skips checks). Axis-3 still emits EXPLOITABLE; verdict NOT downgraded based on project idiom \u2014 uniform-unchecked IS a bug class.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "2:8 mostly-unchecked variant ratio."
+  }
+}

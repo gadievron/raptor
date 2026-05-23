@@ -240,7 +240,17 @@ class TestLayer4TokenLifecycle:
             socket_path, fd = d.allocate_worker(label="expiry-test")
             token = os.read(fd, 64).decode().strip()
             os.close(fd)
-            time.sleep(0.05)
+            # No need to ``time.sleep(0.05)`` here — with
+            # ``token_ttl_s=0`` the dispatcher sets
+            # ``expires_at == issued_at``, so the *next* call into
+            # ``_validate_token`` (the POST below) compares its
+            # ``now`` against the issuance instant and immediately
+            # finds ``now >= rec.expires_at``. The old sleep was
+            # defensive against the historical case where
+            # ``token_ttl_s`` was a relative offset added at the
+            # validation side (so a non-zero ``ttl`` was needed to
+            # guarantee elapsed time), and it occasionally flaked
+            # on slow CI runners.
             transport = httpx.HTTPTransport(uds=str(d.socket_path))
             with httpx.Client(transport=transport, timeout=5.0) as c:
                 r = c.post("http://_/anthropic/v1/messages",

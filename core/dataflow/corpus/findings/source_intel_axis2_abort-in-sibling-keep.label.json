@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_abort-in-sibling-keep",
+  "verdict": "true_positive",
+  "rationale": "Surface shape: CWE-476 null-deref of `p`. abort() call exists in the SIBLING function `sibling_op_with_abort`, NOT in the finding's enclosing function `op_no_abort`. Axis-2 dominance check requires same-function attribution; the abort doesn't dominate. Verdict UNCERTAIN.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

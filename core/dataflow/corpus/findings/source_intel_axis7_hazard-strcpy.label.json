@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_hazard-strcpy",
+  "verdict": "true_positive",
+  "rationale": "Unbounded strcpy into 16-byte stack buffer. Axis-7 deprecated_functions detects `strcpy`; rule_id `cpp/unbounded-write` in relevance set \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-null-check-only",
+  "verdict": "true_positive",
+  "rationale": "Surface: krealloc with potentially-overflowing size. The downstream `if (!p) return;` is an ALLOCATOR-SUCCESS check, not a size-overflow validation. Axis 8 must NOT suppress \u2014 the relational-operator gate (require `<` or `>` in the if-condition) correctly rejects pure NULL checks. Verdict falls through to UNCERTAIN.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

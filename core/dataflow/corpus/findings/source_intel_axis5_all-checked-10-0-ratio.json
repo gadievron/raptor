@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_all-checked-10-0-ratio",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis5_all-checked-10-0-ratio",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis5_all_checked_10_0/v.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "use_string(p);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis5_all_checked_10_0/v.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "use_string(p);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

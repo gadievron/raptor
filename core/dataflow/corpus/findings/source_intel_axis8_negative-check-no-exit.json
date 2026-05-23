@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-check-no-exit",
+  "producer": "codeql",
+  "rule_id": "cpp/uncontrolled-allocation-size",
+  "message": "source_intel_axis8_negative-check-no-exit",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_check_no_exit.c",
+    "line": 12,
+    "column": 2,
+    "snippet": "int size = n * sizeof(int);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_check_no_exit.c",
+    "line": 12,
+    "column": 2,
+    "snippet": "int size = n * sizeof(int);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

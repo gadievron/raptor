@@ -57,8 +57,66 @@ _GROUND_TRUTH_KEYS: FrozenSet[str] = frozenset(
         "rationale",
         "labeler",
         "labeled_at",
+        "lifecycle_precondition",
     }
 )
+
+
+_LIFECYCLE_PRECONDITION_KEYS: FrozenSet[str] = frozenset(
+    {"field", "write_site_guard", "read_site_lacks_guard", "notes"}
+)
+
+
+@dataclass(frozen=True)
+class LifecyclePrecondition:
+    """Optional, forward-compatible annotation on CWE-476 / CWE-416
+    ground-truth records, capturing the lifecycle invariant whose
+    violation makes the bug shape consume an under-guarded field.
+
+    v1 source_intel verdict policy IGNORES this field. v2 (the future
+    annotation is precomputed during corpus seeding while the kernel
+    patch is in the labeler's head, so the v2 consumer doesn't have
+    to re-derive it later.
+
+    CVE-2026-46333 as the canonical example).
+    """
+
+    field: str
+    write_site_guard: str
+    read_site_lacks_guard: bool
+    notes: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        _require_nonempty("LifecyclePrecondition.field", self.field)
+        _require_nonempty(
+            "LifecyclePrecondition.write_site_guard", self.write_site_guard
+        )
+        if not isinstance(self.read_site_lacks_guard, bool):
+            raise ValueError(
+                "LifecyclePrecondition.read_site_lacks_guard must be bool"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {
+            "field": self.field,
+            "write_site_guard": self.write_site_guard,
+            "read_site_lacks_guard": self.read_site_lacks_guard,
+        }
+        if self.notes is not None:
+            d["notes"] = self.notes
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "LifecyclePrecondition":
+        _check_extra_fields(
+            "LifecyclePrecondition", data, _LIFECYCLE_PRECONDITION_KEYS
+        )
+        return cls(
+            field=data["field"],
+            write_site_guard=data["write_site_guard"],
+            read_site_lacks_guard=data["read_site_lacks_guard"],
+            notes=data.get("notes"),
+        )
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -95,6 +153,10 @@ class GroundTruth:
     labeler: str
     labeled_at: str
     fp_category: Optional[str] = None
+    #: Optional forward-compatible annotation for CWE-476 / CWE-416
+    #: fixtures (and structurally-related logic bugs). v1 source_intel
+    #: directly. See `LifecyclePrecondition` for shape.
+    lifecycle_precondition: Optional[LifecyclePrecondition] = None
 
     def __post_init__(self) -> None:
         _require_nonempty("GroundTruth.finding_id", self.finding_id)
@@ -125,7 +187,7 @@ class GroundTruth:
                 )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "finding_id": self.finding_id,
             "verdict": self.verdict,
@@ -134,6 +196,9 @@ class GroundTruth:
             "labeler": self.labeler,
             "labeled_at": self.labeled_at,
         }
+        if self.lifecycle_precondition is not None:
+            d["lifecycle_precondition"] = self.lifecycle_precondition.to_dict()
+        return d
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "GroundTruth":
@@ -144,6 +209,7 @@ class GroundTruth:
                 f"GroundTruth schema_version {version!r} != expected "
                 f"{SCHEMA_VERSION!r}; corpus upgrade required"
             )
+        lcp = data.get("lifecycle_precondition")
         return cls(
             finding_id=data["finding_id"],
             verdict=data["verdict"],
@@ -151,10 +217,18 @@ class GroundTruth:
             labeler=data["labeler"],
             labeled_at=data["labeled_at"],
             fp_category=data.get("fp_category"),
+            lifecycle_precondition=(
+                LifecyclePrecondition.from_dict(lcp) if lcp else None
+            ),
         )
 
-    def to_json(self, **kwargs: Any) -> str:
-        return json.dumps(self.to_dict(), **kwargs)
+    def to_json(self, *, indent: Optional[int] = None) -> str:
+        """Render as JSON. Explicit ``indent`` signature replaces
+        a catch-all ``**kwargs`` — the only kwarg any caller ever
+        passes is ``indent=2`` (corpus generator + handlabel_seed
+        for pretty-printing). The explicit shape lets mypy / ruff
+        catch typos in callers and makes the contract greppable."""
+        return json.dumps(self.to_dict(), indent=indent)
 
     @classmethod
     def from_json(cls, text: str) -> "GroundTruth":

@@ -97,6 +97,7 @@ def _build_llm(tmp_path) -> "object":
     cfg.scorecard_shadow_rate = 0.0
 
     client = LLMClient.__new__(LLMClient)
+    from collections import OrderedDict
     client.config = cfg
     client.providers = {}
     client.total_cost = 0.0
@@ -104,8 +105,9 @@ def _build_llm(tmp_path) -> "object":
     client.task_type_costs = {}
     client.short_circuits = 0
     client._stats_lock = threading.RLock()
-    client._key_locks = {}
+    client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
+    client._key_locks_cap = 4096
     client._scorecard = None
 
     # Single shared provider for both opus-stub and haiku-stub —

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_alloc_size-cwe-relevant",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "cpp/unbounded-write on source_intel_axis1_alloc_size-cwe-relevant",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 47,
+    "column": 2,
+    "snippet": "char *p = (char *)my_alloc(want);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 48,
+    "column": 2,
+    "snippet": "p[want] = 0;",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

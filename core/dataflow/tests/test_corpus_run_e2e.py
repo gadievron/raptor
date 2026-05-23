@@ -1,6 +1,6 @@
-"""End-to-end test: run the libexec shims against the real corpus.
+"""End-to-end test: run the corpus shims against the real corpus.
 
-Verifies the full pipeline (libexec shim → core module → CSV → metrics)
+Verifies the full pipeline (script → core module → CSV → metrics)
 works against the committed corpus without any LLM/network dependencies.
 """
 
@@ -16,14 +16,23 @@ from core.dataflow.label import VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_LIBEXEC = _REPO_ROOT / "libexec"
+# Shims moved out of libexec/ (which is for framework-internal scripts
+# the launcher/hooks/other libexec scripts invoke) into the dataflow
+# package's own ``scripts/`` directory. Dev-tooling co-located with
+# the module it operates on; no longer pretends to be LLM-callable
+# internal infrastructure.
+_SCRIPTS = _REPO_ROOT / "core" / "dataflow" / "scripts"
 _CORPUS = _REPO_ROOT / "core" / "dataflow" / "corpus" / "findings"
 
 
 def _shim(name: str) -> Path:
-    p = _LIBEXEC / name
+    # Strip the historical "raptor-" prefix from libexec days — the
+    # scripts no longer live in PATH-shaped /libexec so a project-
+    # qualifying prefix on the filename is redundant.
+    short = name.removeprefix("raptor-")
+    p = _SCRIPTS / short
     if not p.exists() or not p.is_file():
-        pytest.skip(f"libexec shim missing: {p}")
+        pytest.skip(f"corpus script missing: {p}")
     return p
 
 

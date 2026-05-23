@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-variable-dest-negative",
+  "verdict": "true_positive",
+  "rationale": "FORTIFY_SOURCE=2 only intercepts when destination size is compile-known via __builtin_object_size(). malloc-derived destinations defeat that (object size = unknown). The strcpy passes through unchecked. Axis-6 verdict policy DOES emit NOT_EXPLOITABLE for any unbounded-write where the call is in _FORTIFIED_WRITE_CALLS and FORTIFY>=2 \u2014 this is a documented OVER-suppression case: FORTIFY can't actually help here. Verdict will WRONGLY suppress; fixture documents the over-suppression edge.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

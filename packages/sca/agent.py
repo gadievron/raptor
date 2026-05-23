@@ -46,10 +46,23 @@ import time
 # warning that XML parsing is using the unsafe stdlib).
 try:
     import defusedxml.ElementTree as ET  # type: ignore[import-not-found]
-    _DEFUSED_XML = True
-except ImportError:
-    import xml.etree.ElementTree as ET
-    _DEFUSED_XML = False
+except ImportError as _e:
+    # Hard requirement now (PR #516 pinned defusedxml==0.7.1). Pre-
+    # fix this fell back to ``xml.etree.ElementTree`` and logged a
+    # one-time warning, which means a host with defusedxml
+    # accidentally uninstalled (failed ``pip install`` race,
+    # stripped venv, distro pkg manager swap) silently parsed
+    # untrusted pom.xml with the XXE-vulnerable stdlib parser.
+    # The threat model is "operator's target repo may carry a
+    # pom.xml crafted by an attacker via a malicious dependency",
+    # so the soft fallback was a security gap. Fail loudly at
+    # import time — operators see a clear ImportError pointing at
+    # the missing pip dep instead of a delayed XXE leak.
+    raise ImportError(
+        "defusedxml is required for SCA pom.xml parsing "
+        "(blocks XXE / billion-laughs on untrusted manifests). "
+        "Install via: pip install defusedxml==0.7.1"
+    ) from _e
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -430,27 +443,35 @@ def find_dependency_files(root: Path) -> List[Path]:
     return candidates
 
 
-_PARSE_POM_WARNED_UNSAFE = False
+# Bounded-read caps for dependency manifest parsers.
+# Legitimate manifests are <100 KiB (requirements.txt, package.json,
+# pom.xml); 4 MiB is generous for the long-tail of large monorepos
+# and catches /dev/zero-symlink / multi-GiB attacker shapes before
+# memory pressure.
+_MANIFEST_MAX_BYTES = 4 * 1024 * 1024
+
+# Bounded recursion + breadth for ``-r other.txt`` / ``-c constraints.txt``.
+# Cycle detection via _seen prevents true loops; these cap chained
+# unique-file fan-out (one file references 64 fresh includes, each
+# of which references 64 more, etc).
+_REQ_MAX_INCLUDE_DEPTH = 16
+_REQ_MAX_INCLUDE_FILES = 64
 
 
 def parse_pom(p):
-    global _PARSE_POM_WARNED_UNSAFE
-    if not _DEFUSED_XML and not _PARSE_POM_WARNED_UNSAFE:
-        # Warn once per process — operator should know they're
-        # parsing untrusted XML with the stdlib parser. Logging
-        # here rather than at import to avoid the warning when
-        # SCA isn't actually invoked.
-        try:
-            from core.logging import get_logger
-            get_logger("sca.agent").warning(
-                "defusedxml not installed — pom.xml parsing falls back to "
-                "xml.etree.ElementTree which is vulnerable to XXE / "
-                "billion-laughs in adversarial XML. `pip install defusedxml` "
-                "to enable safe parsing."
-            )
-        except Exception:
-            pass
-        _PARSE_POM_WARNED_UNSAFE = True
+    # Pre-fix this branch warned-once when defusedxml was missing and
+    # then parsed untrusted XML with vulnerable stdlib ElementTree.
+    # Now defusedxml is a hard import-time requirement (see top of
+    # this module); _DEFUSED_XML is always True or import fails.
+    # The warn-once gate is removed alongside _PARSE_POM_WARNED_UNSAFE.
+    # File-size pre-check. A 5 GiB pom.xml (legitimate manifests are
+    # well under 100 KiB) would otherwise OOM the parser. defusedxml
+    # bounds nested-entity expansion but not raw file size.
+    try:
+        if p.stat().st_size > _MANIFEST_MAX_BYTES:
+            return {"error": f"pom.xml exceeds {_MANIFEST_MAX_BYTES}-byte cap"}
+    except OSError as e:
+        return {"error": f"pom.xml stat failed: {e}"}
     try:
         tree = ET.parse(p)
         root = tree.getroot()
@@ -549,7 +570,7 @@ def parse_pom(p):
         return {'error': str(e)}
 
 
-def parse_requirements(p, _seen=None):
+def parse_requirements(p, _seen=None, _depth=0, _file_count=None):
     """Parse a pip requirements.txt-style file.
 
     Pre-fix issues addressed here:
@@ -572,15 +593,40 @@ def parse_requirements(p, _seen=None):
         spec; OSV lookups treated `1.0  # pin for CVE-XYZ` as
         the version. Strip everything after the first
         whitespace-prefixed `#`.
+
+    Bounded:
+      * ``_depth`` capped at ``_REQ_MAX_INCLUDE_DEPTH`` (16). Cycle
+        detection via ``_seen`` prevents true loops, but a chain of
+        N unique includes still recurses N levels — the default
+        Python recursion limit (~1000) is reachable from a
+        malicious repo with chained ``-r a.txt`` -> ``-r b.txt``.
+      * ``_file_count`` capped at ``_REQ_MAX_INCLUDE_FILES`` (64).
+        A breadth-amplifying fan-out (one file with 1000 fresh
+        ``-r generated_N.txt`` lines) is bounded.
+      * Per-file size capped at ``_MANIFEST_MAX_BYTES`` (4 MiB)
+        before decode. Legitimate requirements files are <100 KiB.
     """
     deps: List[str] = []
     if _seen is None:
         _seen = set()
+    if _file_count is None:
+        _file_count = [0]
+    if _depth > _REQ_MAX_INCLUDE_DEPTH:
+        return deps
+    if _file_count[0] >= _REQ_MAX_INCLUDE_FILES:
+        return deps
+    _file_count[0] += 1
     real = p.resolve(strict=False)
     if real in _seen:
         return deps
     _seen.add(real)
     try:
+        # File-size pre-check via stat — avoid loading a multi-GiB
+        # file (or /dev/zero symlink) into RAM. mtime-bypasses are
+        # not a concern here; the read below is what consumes RAM.
+        size = p.stat().st_size
+        if size > _MANIFEST_MAX_BYTES:
+            return deps
         # `encoding='utf-8-sig'` strips a leading BOM if present.
         # Pre-fix `read_text()` (default utf-8) preserved the BOM
         # as `﻿` at the start of the first logical line —
@@ -649,7 +695,11 @@ def parse_requirements(p, _seen=None):
                 # Resolve relative to the parent file's directory.
                 included_path = (p.parent / included).resolve(strict=False)
                 if included_path.exists():
-                    deps.extend(parse_requirements(included_path, _seen))
+                    deps.extend(parse_requirements(
+                        included_path, _seen,
+                        _depth=_depth + 1,
+                        _file_count=_file_count,
+                    ))
                 break
         else:
             # `-c constraints.txt` is a constraints file (NOT a
@@ -660,7 +710,11 @@ def parse_requirements(p, _seen=None):
                     included = ln[len(prefix):].strip().strip('"').strip("'")
                     included_path = (p.parent / included).resolve(strict=False)
                     if included_path.exists():
-                        deps.extend(parse_requirements(included_path, _seen))
+                        deps.extend(parse_requirements(
+                            included_path, _seen,
+                            _depth=_depth + 1,
+                            _file_count=_file_count,
+                        ))
                     break
             else:
                 deps.append(ln)
@@ -680,6 +734,13 @@ def parse_package_json(p):
         _p = _Path(p)
         if not _p.exists():
             return {'error': f'package.json not found at {p}'}
+        # File-size pre-check. A 5 GiB package.json (legitimate is
+        # almost always <100 KiB) would OOM load_json.
+        try:
+            if _p.stat().st_size > _MANIFEST_MAX_BYTES:
+                return {'error': f'package.json exceeds {_MANIFEST_MAX_BYTES}-byte cap'}
+        except OSError as e:
+            return {'error': f'package.json stat failed: {e}'}
         obj = load_json(p)
         if obj is None:
             return {'error': 'failed to parse JSON'}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_noreturn-verdict-passive",
+  "verdict": "true_positive",
+  "rationale": "Function `fatal_error` annotated NORETURN; call before deref means deref unreachable on NULL path. Currently axis-1 NORETURN is VERDICT-PASSIVE (empty relevance tuple) \u2014 informational only. Verdict returns UNCERTAIN, registering as missed TP. Documents the gap: future axis-1 expansion should integrate NORETURN with axis-2 abort-dominance machinery.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

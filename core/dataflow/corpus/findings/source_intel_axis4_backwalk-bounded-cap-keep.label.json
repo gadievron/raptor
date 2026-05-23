@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_backwalk-bounded-cap-keep",
+  "verdict": "true_positive",
+  "rationale": "Bug in `net_inner`, caller `net_entry` gates with CAP_NET_ADMIN. CAP_NET_ADMIN is BOUNDED (network admin only). 1-hop back-walk sees the caller's capable() but the constant `CAP_NET_ADMIN` is NOT in _PRIVILEGED_CAP_CONSTANTS \u2192 `_function_has_privileged_cap` returns False \u2192 back-walk doesn't suppress. Verdict UNCERTAIN. Memory-corruption from CAP_NET_ADMIN IS a privesc.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

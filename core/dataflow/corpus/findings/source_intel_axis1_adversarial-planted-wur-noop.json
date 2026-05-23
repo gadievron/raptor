@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_adversarial-planted-wur-noop",
+  "producer": "codeql",
+  "rule_id": "cpp/unchecked-return",
+  "message": "source_intel_axis1_adversarial-planted-wur-noop",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_adversarial_planted_wur_noop.c",
+    "line": 29,
+    "column": 2,
+    "snippet": "noop_wur();",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_adversarial_planted_wur_noop.c",
+    "line": 29,
+    "column": 2,
+    "snippet": "noop_wur();",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

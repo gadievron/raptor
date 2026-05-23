@@ -361,7 +361,13 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     # but they're a strictly small race window vs the bigger
     # multi-second post-summary race the prior code had).
     import os as _os
-    tmp = jsonl.with_name(f"{jsonl.name}.summarising.{_os.getpid()}")
+    import threading as _threading
+    # pid+tid suffix — two threads in the same summariser process can
+    # race on the same pid; tid disambiguates. Mirrors core/json/utils.py
+    # and core/json/cache.py.
+    tmp = jsonl.with_name(
+        f"{jsonl.name}.summarising.{_os.getpid()}.{_threading.get_ident()}"
+    )
     try:
         _os.replace(str(jsonl), str(tmp))
     except OSError:

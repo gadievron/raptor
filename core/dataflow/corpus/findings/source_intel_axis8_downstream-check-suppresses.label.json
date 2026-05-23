@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_downstream-check-suppresses",
+  "verdict": "false_positive",
+  "rationale": "Surface: arithmetic overflow `size = nex * sizeof(int)` flagged by CodeQL as uncontrolled-allocation-size. The very next downstream check `if (size < 0 || size > 4096) return -1;` rejects unsafe sizes. Axis 8 detects this pattern: var name `size` extracted from sink snippet; forward scan finds `if (... size ...)` with relational `<`/`>` + early-exit `return` within 6 lines. Verdict NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

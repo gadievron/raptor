@@ -14,6 +14,7 @@ import json
 import re
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Optional, Any, Tuple
 
@@ -23,16 +24,24 @@ from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 
 # Import for type-based error detection (optional SDKs)
+# DEBUG log on import failure so operators can diagnose partial-
+# install issues via --verbose. See core/llm/detection.py for the
+# canonical probe sites.
+import logging as _logging
+_client_log = _logging.getLogger(__name__)
+
 try:
     import openai as _openai_module
     _OPENAI_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    _client_log.debug("openai SDK probe failed (client.py): %s", _e)
     _OPENAI_AVAILABLE = False
 
 try:
     import anthropic as _anthropic_module
     _ANTHROPIC_AVAILABLE = True
-except ImportError:
+except ImportError as _e:
+    _client_log.debug("anthropic SDK probe failed (client.py): %s", _e)
     _ANTHROPIC_AVAILABLE = False
 
 logger = get_logger()
@@ -267,6 +276,22 @@ def _get_quota_guidance(model_name: str, provider: str) -> str:
         return "\n→ Rate limit exceeded (provider unspecified)"
 
 
+def _ollama_check_url() -> str:
+    """Return a /api/tags URL the operator can hit to verify Ollama.
+
+    Respects ``RaptorConfig.OLLAMA_HOST``. For remote hosts (anything
+    not localhost / 127.0.0.1) returns the literal ``[REMOTE-OLLAMA]/api/tags``
+    so error messages don't disclose the operator's remote endpoint
+    (CLAUDE.md rule: "never disclose remote OLLAMA server location"),
+    matching the convention already used by ``core.llm.detection``.
+    """
+    from core.config import RaptorConfig
+    host = RaptorConfig.OLLAMA_HOST.rstrip("/")
+    is_local = "localhost" in host or "127.0.0.1" in host
+    base = host if is_local else "[REMOTE-OLLAMA]"
+    return f"{base}/api/tags"
+
+
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
@@ -286,12 +311,19 @@ class LLMClient:
         # Per-cache-key locks. Two threads issuing the same cache key
         # serialise on its lock so only one calls the provider; the
         # second observes the first's freshly-written cache entry on
-        # its own check. Bounded by distinct keys this client sees in
-        # its lifetime — sha256-keyed locks are ~80 B each so 100k
-        # distinct keys is ~8 MB, an acceptable upper bound for what
-        # is in practice a single-run object.
-        self._key_locks: Dict[str, threading.Lock] = {}
+        # its own check. Held in an ``OrderedDict`` so we can evict
+        # least-recently-used entries once the cap is hit — pre-fix a
+        # long-running daemon process (cve-diff bench sweep at 50k+
+        # distinct prompts) saw unbounded growth here. The ~80 B per
+        # lock isn't dramatic but it's monotonic and the dict never
+        # garbage-collects on its own; the cap turns it into a fixed
+        # working-set ceiling. 4096 distinct in-flight keys is more
+        # than any current consumer needs — even agentic at 1k
+        # findings × full multi-pass chain doesn't sustain that many
+        # CONCURRENT keys.
+        self._key_locks: OrderedDict[str, threading.Lock] = OrderedDict()
         self._key_locks_guard = threading.Lock()
+        self._key_locks_cap = 4096
         # Lazy-built model scorecard. Stays None until a consumer
         # asks for it via the ``scorecard`` property; constructing
         # one is cheap but it does open a file handle and create
@@ -458,6 +490,48 @@ class LLMClient:
             if lock is None:
                 lock = threading.Lock()
                 self._key_locks[cache_key] = lock
+                # LRU evict the oldest entry if we've exceeded the
+                # cap, BUT only when the candidate lock is currently
+                # uncontended — try-acquiring it tells us whether
+                # any thread is mid-cache-fill on that key. Pre-fix
+                # we blindly popped the LRU entry; under pathological
+                # working-set concurrency (>cap distinct in-flight
+                # keys) we could evict a lock that another thread
+                # was still holding. The next caller for the same
+                # ``cache_key`` would then build a FRESH lock, two
+                # threads run the provider call concurrently for the
+                # same key, and the second writes a half-baked cache
+                # entry over the first.
+                #
+                # ``acquire(blocking=False)`` probes without waiting:
+                # success means no one's holding the lock so we can
+                # safely drop it (lock goes out of scope after the
+                # release, GC'd when the last reference clears);
+                # failure means we leave the entry in place and
+                # walk further back. If the whole dict is contended
+                # (every entry held), we exit the loop and let the
+                # cap silently exceed — better than dropping an
+                # active lock. Bounded scan: walk at most
+                # ``self._key_locks_cap`` candidates so an entirely
+                # contended dict doesn't burn O(N) CPU per insert.
+                evict_budget = self._key_locks_cap
+                while len(self._key_locks) > self._key_locks_cap and evict_budget > 0:
+                    candidate_key, candidate_lock = next(
+                        iter(self._key_locks.items()),
+                    )
+                    if candidate_lock.acquire(blocking=False):
+                        # No-one holds it — release and drop.
+                        candidate_lock.release()
+                        self._key_locks.pop(candidate_key, None)
+                    else:
+                        # In-flight; move to end and try the next
+                        # LRU candidate.
+                        self._key_locks.move_to_end(candidate_key)
+                    evict_budget -= 1
+            else:
+                # Touch existing entries so the LRU eviction picks the
+                # genuinely cold keys, not a still-active one.
+                self._key_locks.move_to_end(cache_key)
             return lock
 
     @staticmethod
@@ -545,22 +619,31 @@ class LLMClient:
                 }, mode=0o600)
             # Reset failure counter on a successful write — recovery
             # from a transient EBUSY shouldn't carry the strike count
-            # forward.
-            self._cache_write_failures = 0
+            # forward. _stats_lock protects against torn writes under
+            # concurrent dispatch from ThreadPoolExecutor.
+            with self._stats_lock:
+                self._cache_write_failures = 0
         except Exception as e:
-            self._cache_write_failures += 1
-            if self._cache_write_failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
-                # Persistent problem (disk full, read-only FS,
-                # permission flip mid-run). Stop spamming the log
-                # and stop attempting subsequent writes.
-                self.config.enable_caching = False
+            # _stats_lock — `+= 1` decomposes to load/incr/store; under
+            # ThreadPoolExecutor dispatch the counter can lose increments
+            # without a lock, and the `enable_caching = False` flip would
+            # be a torn write across threads.
+            with self._stats_lock:
+                self._cache_write_failures += 1
+                failures = self._cache_write_failures
+                if failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
+                    # Persistent problem (disk full, read-only FS,
+                    # permission flip mid-run). Stop spamming the log
+                    # and stop attempting subsequent writes.
+                    self.config.enable_caching = False
+            if failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
                 logger.warning(
-                    f"Cache write error #{self._cache_write_failures}: {e}. "
+                    f"Cache write error #{failures}: {e}. "
                     f"Caching disabled for the remainder of this run."
                 )
             else:
                 logger.warning(
-                    f"Cache write error #{self._cache_write_failures}: {e}"
+                    f"Cache write error #{failures}: {e}"
                 )
             return
         self._maybe_evict_cache()
@@ -657,6 +740,9 @@ class LLMClient:
         from core.json import save_json
         cache_file = self.config.cache_dir / f"structured-{cache_key}.json"
         try:
+            # mode=0o600 — structured LLM responses can contain proprietary
+            # code, scan findings, and vulnerability details. Symmetric with
+            # the unstructured _save_to_cache path at line 539.
             save_json(cache_file, {
                 "result": response.result,
                 "raw": response.raw,
@@ -664,18 +750,22 @@ class LLMClient:
                 "provider": response.provider,
                 "tokens_used": response.tokens_used,
                 "timestamp": time.time(),
-            })
+            }, mode=0o600)
         except Exception as e:
-            self._cache_write_failures += 1
-            if self._cache_write_failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
-                self.config.enable_caching = False
+            # _stats_lock — see _save_to_cache above for the rationale.
+            with self._stats_lock:
+                self._cache_write_failures += 1
+                failures = self._cache_write_failures
+                if failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
+                    self.config.enable_caching = False
+            if failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
                 logger.warning(
-                    f"Structured cache write error #{self._cache_write_failures}: {e}. "
+                    f"Structured cache write error #{failures}: {e}. "
                     f"Caching disabled for the remainder of this run."
                 )
             else:
                 logger.warning(
-                    f"Structured cache write error #{self._cache_write_failures}: {e}"
+                    f"Structured cache write error #{failures}: {e}"
                 )
             return
         self._maybe_evict_cache()
@@ -848,9 +938,11 @@ class LLMClient:
                             logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                         provider = self._get_provider(model)
-                        t_start = time.time()
+                        # monotonic() — wall clock can jump under NTP/DST,
+                        # producing negative durations or fake-fast calls.
+                        t_start = time.monotonic()
                         response = provider.generate(prompt, system_prompt, **kwargs)
-                        duration = time.time() - t_start
+                        duration = time.monotonic() - t_start
 
                         # Track cost (thread-safe)
                         with self._stats_lock:
@@ -873,7 +965,16 @@ class LLMClient:
 
                         if _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
-                            logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+                            # escape_nonprintable on provider/model
+                            # — config-loaded strings, could carry
+                            # ANSI/BIDI/control bytes from a hostile
+                            # models.json edit. Defence in depth.
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Quota error for %s/%s:%s",
+                                _esc(model.provider), _esc(model.model_name),
+                                _esc(quota_guidance),
+                            )
 
                         logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
                                      f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
@@ -900,13 +1001,13 @@ class LLMClient:
             elif last_error:
                 error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
                 if tier == "local (Ollama)":
-                    error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+                    error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
             else:
                 error_msg += "\nNo enabled models available in this tier."
                 if tier == "local (Ollama)":
-                    error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+                    error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
 
@@ -1058,11 +1159,12 @@ class LLMClient:
                         cost_before = provider.total_cost
                         tokens_before = provider.total_tokens
 
-                        t_start = time.time()
+                        # monotonic() — wall clock can jump under NTP/DST.
+                        t_start = time.monotonic()
                         result_tuple = provider.generate_structured(
                             prompt, schema, system_prompt, **kwargs,
                         )
-                        duration = time.time() - t_start
+                        duration = time.monotonic() - t_start
 
                         # Calculate cost delta
                         cost_delta = provider.total_cost - cost_before
@@ -1102,7 +1204,16 @@ class LLMClient:
 
                         if _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
-                            logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+                            # escape_nonprintable on provider/model
+                            # — config-loaded strings, could carry
+                            # ANSI/BIDI/control bytes from a hostile
+                            # models.json edit. Defence in depth.
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Quota error for %s/%s:%s",
+                                _esc(model.provider), _esc(model.model_name),
+                                _esc(quota_guidance),
+                            )
 
                         logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
@@ -1125,13 +1236,13 @@ class LLMClient:
             elif last_error:
                 error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
                 if tier == "local (Ollama)":
-                    error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+                    error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
             else:
                 error_msg += "\nNo enabled models available in this tier."
                 if tier == "local (Ollama)":
-                    error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+                    error_msg += f"\n→ Check Ollama server: {_ollama_check_url()}"
                 else:
                     error_msg += "\n→ Check API keys and network connectivity"
 
@@ -1163,26 +1274,3 @@ class LLMClient:
                 "task_type_costs": dict(self.task_type_costs),
             }
 
-    def reset_stats(self) -> None:
-        """Reset usage statistics.
-
-        Per-provider counters are reset under EACH provider's own
-        `_usage_lock` (the same lock `track_usage` holds while
-        mutating those fields). Pre-fix the per-provider mutations
-        ran without that lock, racy against concurrent `track_usage`
-        calls — a track_usage in flight at reset time could either
-        write into the post-reset zero state (silently re-injecting
-        stale counts) or land on a half-updated tuple of fields.
-        """
-        with self._stats_lock:
-            self.total_cost = 0.0
-            self.request_count = 0
-            self.task_type_costs.clear()
-        for provider in self.providers.values():
-            with provider._usage_lock:
-                provider.total_tokens = 0
-                provider.total_input_tokens = 0
-                provider.total_output_tokens = 0
-                provider.total_cost = 0.0
-                provider.call_count = 0
-                provider.total_duration = 0.0

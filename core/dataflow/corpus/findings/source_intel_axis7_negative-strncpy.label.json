@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_negative-strncpy",
+  "verdict": "true_positive",
+  "rationale": "strncpy CAN be misused (no null termination if src >= n) so CodeQL finding is plausibly TP. But strncpy carries bounds \u2014 axis-7 deprecated_functions list excludes it. Verdict UNCERTAIN (axis-7 not applicable; no over-claim). Tests deprecated-list scope discipline.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

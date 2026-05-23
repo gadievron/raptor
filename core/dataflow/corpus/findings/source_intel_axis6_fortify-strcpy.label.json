@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-strcpy",
+  "verdict": "false_positive",
+  "rationale": "FORTIFY_SOURCE=2 rewrites strcpy \u2192 __strcpy_chk which aborts on overflow of the fixed-size buf[64]. Axis-6 reads fortify_source_level=2 from compile_commands.json; strcpy is in _FORTIFIED_WRITE_CALLS; sink snippet contains `strcpy` token-bounded \u2192 NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_static-addrof-ref-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `callback` is static + has zero direct calls, but is registered via `&callback` (address-of). _function_referenced_as_pointer catches this pattern. Verdict UNCERTAIN, axis-7 correctly skips dead-code.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

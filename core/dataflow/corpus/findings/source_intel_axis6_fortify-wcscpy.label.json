@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-wcscpy",
+  "verdict": "false_positive",
+  "rationale": "FORTIFY covers wide-string functions too; wcscpy in _FORTIFIED_WRITE_CALLS.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

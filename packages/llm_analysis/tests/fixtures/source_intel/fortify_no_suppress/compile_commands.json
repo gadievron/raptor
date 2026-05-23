@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "/home/raptor/raptor/packages/llm_analysis/tests/fixtures/source_intel/fortify_no_suppress",
+    "command": "gcc -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -c unbounded_mymemcpy.c -o unbounded_mymemcpy.o",
+    "file": "unbounded_mymemcpy.c"
+  }
+]

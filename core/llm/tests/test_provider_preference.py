@@ -368,8 +368,10 @@ def test_llmclient_primary_provider_raises_without_primary_model() -> None:
     client.config = cfg
     client.providers = {}
     import threading
-    client._key_locks = {}
+    from collections import OrderedDict
+    client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
+    client._key_locks_cap = 4096
 
     with pytest.raises(RuntimeError, match="primary_model"):
         _ = client.primary_provider

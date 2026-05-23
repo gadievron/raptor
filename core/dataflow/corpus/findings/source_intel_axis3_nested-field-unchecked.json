@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_nested-field-unchecked",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis3_nested-field-unchecked",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 65,
+    "column": 2,
+    "snippet": "o->sub.name = kmalloc(n, 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 66,
+    "column": 2,
+    "snippet": "use_buf(o->sub.name);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

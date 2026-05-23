@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_negative-realloc-between-frees",
+  "verdict": "false_positive",
+  "fp_category": "infeasible_branch",
+  "rationale": "False-positive cpp/double-free claim. Between the two kfree calls, `p` is reassigned to a NEW kmalloc. The second kfree frees the new allocation \u2014 not the original. Axis-3 double_free.cocci's `when != E = kmalloc(...)` constraint correctly excludes this path \u2192 no double-free evidence emitted \u2192 verdict UNCERTAIN (no over-claim).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-17"
+}

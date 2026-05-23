@@ -33,6 +33,7 @@ drops it from Phase 1.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,26 +112,48 @@ def _clean_dest(dest: Path) -> None:
         # Refuse explicitly so the error is structured.
         raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
     if any(dest.iterdir()):
-        # Use absolute path + sanitised env. Pre-fix the bare `rm`
-        # was resolved via PATH — a hostile PATH entry (a CI
-        # environment with `.` early in PATH, an operator-poisoned
-        # ~/.bashrc) could shadow `/usr/bin/rm` with an attacker
-        # binary that the destructive operation then ran.
-        # `shutil.which("rm")` resolves once at module use-time
-        # (not import — keeps the cost off the import critical
-        # path); fallback to `/usr/bin/rm` keeps the operation
-        # working on hosts where shutil.which trips on a weird
-        # PATH config. `env=` to a stripped environment so the
-        # subprocess can't pick up LD_PRELOAD / LD_LIBRARY_PATH /
-        # other code-injection vectors via the parent's env.
+        # ``shutil.rmtree`` rather than spawning ``rm -rf`` via
+        # subprocess. Pre-fix this path was a guarded subprocess
+        # invocation defending against PATH hijack on the ``rm``
+        # binary; that defence is moot once we delegate to the
+        # standard library. shutil.rmtree() is also cheaper (no fork
+        # / exec) and portable.
+        #
+        # On read-only files inside ``dest`` shutil.rmtree raises
+        # ``PermissionError``. ``onerror=`` chmods + retries — same
+        # end-state as ``rm -rf``. Any residual failure is swallowed
+        # by the callback's inner ``except OSError: pass``, so the
+        # rmtree call as a whole stays best-effort and never raises
+        # to the caller — matching the original subprocess(
+        # check=False, capture_output=True) contract that several
+        # callers rely on (e.g. error-path cleanup where the dest
+        # may be in an indeterminate state and raising would mask
+        # the original failure).
+        #
+        # Outer-level guard: a defensive try/except OSError around
+        # the call itself catches the unlikely shape where
+        # ``shutil.rmtree`` raises before reaching the per-entry
+        # walk (e.g. scandir on ``dest`` itself fails after the
+        # lstat guards above pass — racy concurrent-rename
+        # scenario). Best-effort intent preserved end to end.
         import shutil
-        rm_bin = shutil.which("rm") or "/usr/bin/rm"
-        from core.config import RaptorConfig
-        subprocess.run(
-            [rm_bin, "-rf", str(dest)],
-            capture_output=True, check=False, timeout=60,
-            env=RaptorConfig.get_safe_env(),
-        )
+        import stat as _stat_mod
+
+        def _force_remove(func, path, _exc):
+            try:
+                os.chmod(path, _stat_mod.S_IWRITE | _stat_mod.S_IREAD)
+                func(path)
+            except OSError:
+                pass
+
+        try:
+            shutil.rmtree(dest, onerror=_force_remove)
+        except OSError:
+            # ``onerror`` should have caught per-entry failures; we
+            # only reach here on rmtree's own front-of-walk error
+            # (rare). Swallow to preserve the legacy fire-and-forget
+            # contract of the subprocess-based predecessor.
+            pass
 
 
 @dataclass

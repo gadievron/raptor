@@ -1229,7 +1229,11 @@ def _merge_attack_surface(
             "_imported_from": str(understand_dir / "context-map.json"),
             "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
-        save_json(surface_path, attack_surface)
+        # mode=0o600 — attack-surface JSON lists entry points, trust
+        # boundaries, and sinks. Default umask makes this readable to
+        # other local users; on multi-tenant hosts the file is a soft-
+        # spot map for any sibling process.
+        save_json(surface_path, attack_surface, mode=0o600)
 
     unchecked_count = len(context_map.get("unchecked_flows", []))
     return {
@@ -1362,7 +1366,10 @@ def _import_flow_traces(
         imported += 1
 
     if imported > 0:
-        save_json(paths_path, existing_paths)
+        # mode=0o600 — attack-paths.json persists exploitation chains
+        # (steps, blockers, proximity scores) imported from /understand
+        # --trace. Same threat profile as attack-surface.json above.
+        save_json(paths_path, existing_paths, mode=0o600)
 
     return {"count": len(trace_files), "imported_as_paths": imported, "skipped_stale": skipped_stale}
 
@@ -1440,7 +1447,8 @@ def _import_unchecked_flow_conditions(
         imported += 1
 
     if imported > 0:
-        save_json(paths_path, existing_paths)
+        # mode=0o600 — see comment on the earlier paths_path write.
+        save_json(paths_path, existing_paths, mode=0o600)
 
     return {
         "count": len(flows),

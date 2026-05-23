@@ -300,7 +300,13 @@ class LLMProvider(ABC):
         rates = MODEL_COSTS.get(self.config.model_name)
         if not rates:
             rate = self.config.cost_per_1k_tokens or 0.0
-            if rate == 0.0:
+            # ``math.isclose`` with abs_tol collapses ±epsilon to
+            # "zero" — pre-fix ``rate == 0.0`` missed the warning
+            # when ``cost_per_1k_tokens`` was a computed near-zero
+            # float (e.g. a tiny config value or arithmetic result
+            # that didn't land exactly on the int representation).
+            import math
+            if math.isclose(rate, 0.0, abs_tol=1e-12):
                 self._warn_unknown_model_once(self.config.model_name)
             return ((input_tokens + output_tokens + thinking_tokens) / 1000) * rate
         return (
@@ -940,7 +946,15 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         except Exception as e:
-            logger.error(f"OpenAI completion failed: {e}")
+            # APIError exception bodies routinely include the request
+            # body (which may carry the prompt) and on 400/401 may echo
+            # Authorization / x-api-key headers in verbose-debug mode.
+            # Also defang ANSI/BIDI/control bytes that could forge log
+            # entries on operator TTYs.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.redaction import redact_secrets
+            logger.error("OpenAI completion failed: %s",
+                         escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
@@ -997,7 +1011,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
                     self._instructor_warned = True
                 else:
-                    logger.debug(f"Instructor fallback (repeat): {e}")
+                    from core.security.log_sanitisation import escape_nonprintable as _esc
+                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
                 # Disable Instructor for this provider — same error will repeat
                 self.instructor_client = None
 
@@ -1127,8 +1142,13 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                 if not _is_transient_openai(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_openai(exc) else "permanent"
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
-                    logger.warning(f"OpenAICompatibleProvider.turn: {err_msg}")
+                    # escape_nonprintable — exc is from the SDK and
+                    # can carry ANSI / BIDI / control bytes that
+                    # forge log entries on operator TTYs. Defang
+                    # before the warning + the TurnResponse.error.
+                    from core.security.log_sanitisation import escape_nonprintable
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    logger.warning("OpenAICompatibleProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
@@ -1505,7 +1525,12 @@ class AnthropicProvider(LLMProvider):
             )
 
         except Exception as e:
-            logger.error(f"Anthropic completion failed: {e}")
+            # Same hardening rationale as OpenAICompatibleProvider.generate
+            # above — SDK exception bodies can include prompt + headers.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.redaction import redact_secrets
+            logger.error("Anthropic completion failed: %s",
+                         escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
@@ -1560,7 +1585,8 @@ class AnthropicProvider(LLMProvider):
                     logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
                     self._instructor_warned = True
                 else:
-                    logger.debug(f"Instructor fallback (repeat): {e}")
+                    from core.security.log_sanitisation import escape_nonprintable as _esc
+                    logger.debug("Instructor fallback (repeat): %s", _esc(str(e)))
                 # Disable Instructor for this provider — same error will repeat
                 self.instructor_client = None
 
@@ -1729,8 +1755,11 @@ class AnthropicProvider(LLMProvider):
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if not _is_transient_anthropic(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_anthropic(exc) else "permanent"
-                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
-                    logger.warning(f"AnthropicProvider.turn: {err_msg}")
+                    # escape_nonprintable — see OpenAICompatibleProvider.turn
+                    # above for the rationale.
+                    from core.security.log_sanitisation import escape_nonprintable
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {escape_nonprintable(str(exc))}"
+                    logger.warning("AnthropicProvider.turn: %s", err_msg)
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
@@ -2064,7 +2093,11 @@ class GeminiProvider(LLMProvider):
             )
 
         except Exception as e:
-            logger.error(f"Gemini completion failed: {e}")
+            # Same hardening rationale as OpenAICompatibleProvider.generate.
+            from core.security.log_sanitisation import escape_nonprintable
+            from core.security.redaction import redact_secrets
+            logger.error("Gemini completion failed: %s",
+                         escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
@@ -2343,7 +2376,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         from core.config import RaptorConfig as _RaptorConfig
         _cc_env = _RaptorConfig.get_safe_env()
 
-        start = _time.time()
+        # monotonic() — wall clock can jump under NTP/DST, producing
+        # negative durations on long CC calls.
+        start = _time.monotonic()
         try:
             proc = subprocess.run(
                 cmd,
@@ -2357,7 +2392,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             raise RuntimeError(
                 f"claude -p timed out after {self._timeout_s}s"
             ) from e
-        duration = _time.time() - start
+        duration = _time.monotonic() - start
 
         if proc.returncode != 0:
             raise RuntimeError(
@@ -2454,7 +2489,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         from core.config import RaptorConfig as _RaptorConfig
         _cc_env = _RaptorConfig.get_safe_env()
 
-        start = _time.time()
+        # monotonic() — wall clock can jump under NTP/DST, producing
+        # negative durations on long CC calls.
+        start = _time.monotonic()
         try:
             proc = subprocess.run(
                 cmd,
@@ -2468,7 +2505,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             raise RuntimeError(
                 f"claude -p timed out after {self._timeout_s}s"
             ) from e
-        duration = _time.time() - start
+        duration = _time.monotonic() - start
 
         if proc.returncode != 0:
             raise RuntimeError(

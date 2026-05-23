@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_all-checked-10-0-ratio",
+  "verdict": "false_positive",
+  "rationale": "10 kstrdup sites, all checked. variant_ratio(kstrdup) = (10, 0). No anomaly, no unchecked site \u2192 axis-3 must NOT fire on the legitimate-checked site, axis-5 ratio doesn't push verdict in any direction. Tests that ALL-checked input doesn't fabricate signal. Verdict UNCERTAIN.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

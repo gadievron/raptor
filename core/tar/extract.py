@@ -117,6 +117,7 @@ def extract_files_from_tar(
     max_member_bytes: int = DEFAULT_MAX_MEMBER_BYTES,
     allow_absolute_paths: bool = False,
     expected_count: Optional[int] = None,
+    unique_keys: bool = False,
 ) -> Dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -179,6 +180,20 @@ def extract_files_from_tar(
             f = tf.extractfile(member)
             if f is None:
                 continue
+            if unique_keys and key in found:
+                # Strict-mode: refuse a tar that produces the same
+                # logical key twice. A malicious tar can populate
+                # ``found`` with attacker-chosen content under N
+                # distinct selector hits, then the legitimate file
+                # later in the stream is never read because
+                # ``expected_count`` already short-circuited the
+                # walk. Caller opts in when the selector domain
+                # guarantees uniqueness (e.g. ``wanted_paths`` is
+                # a set of distinct logical paths).
+                f.close()
+                raise ValueError(
+                    f"duplicate tar key {key!r} (unique_keys=True)"
+                )
             try:
                 found[key] = f.read()
             finally:

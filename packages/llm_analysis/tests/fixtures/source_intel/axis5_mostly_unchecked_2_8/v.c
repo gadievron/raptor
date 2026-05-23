@@ -1,0 +1,65 @@
+extern char *kstrdup(const char *s, int gfp);
+extern void use_string(const char *s);
+
+void check_0(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    if (!p) return;
+    use_string(p);
+}
+
+void check_1(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    if (!p) return;
+    use_string(p);
+}
+
+void miss_0(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_1(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_2(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_3(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_4(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_5(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_6(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+
+void miss_7(const char *s) {
+    char *p;
+    p = kstrdup(s, 0);
+    use_string(p);
+}
+

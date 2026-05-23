@@ -280,6 +280,19 @@ class AgentLoop:
                 # 1 MB to leave headroom for unusual cgit responses.
                 _TOOL_RESULT_CAP = 1 * 1024 * 1024
                 content = result.content
+                # Coerce bytes to a length-checked form before the
+                # str-only cap fires. Pre-fix the ``isinstance(str)``
+                # gate skipped bytes/bytearray content entirely, so
+                # a future tool returning bytes (no API change today
+                # but a real future shape) would slip past the cap
+                # and feed the full payload into json.loads below.
+                if isinstance(content, (bytes, bytearray)):
+                    if len(content) > _TOOL_RESULT_CAP:
+                        return
+                    try:
+                        content = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        return
                 if isinstance(content, str) and len(content) > _TOOL_RESULT_CAP:
                     # Skip parse — over-cap responses are almost
                     # certainly garbage, not legitimate JSON. Returns

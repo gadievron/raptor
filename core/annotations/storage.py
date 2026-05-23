@@ -151,6 +151,16 @@ def _validate_function_name(function: str) -> None:
 # a nested comment that some parsers handle differently.
 _FORBIDDEN_META_VALUE_SUBSTRINGS = ("-->", "<!--")
 
+# Bound metadata key + value length. Pre-cap an LLM emitter (or a
+# malicious annotation-file edit) could attach a multi-MB metadata
+# value — survives the newline/null/HTML-escape checks above but
+# bloats the on-disk annotation file and slows every subsequent
+# parse pass. Realistic legitimate metadata weighs <200 chars per
+# value (status enum, line range, hash prefix, source attribution).
+# 4 KiB per field is comfortable headroom.
+_MAX_META_KEY_LEN = 256
+_MAX_META_VALUE_LEN = 4096
+
 
 def _validate_metadata(metadata) -> None:
     """Reject metadata key/value pairs that would corrupt the
@@ -160,12 +170,21 @@ def _validate_metadata(metadata) -> None:
     for k, v in dict(metadata).items():
         if not isinstance(k, str) or not k:
             raise ValueError(f"metadata key must be a non-empty string: {k!r}")
+        if len(k) > _MAX_META_KEY_LEN:
+            raise ValueError(
+                f"metadata key exceeds {_MAX_META_KEY_LEN} chars: {len(k)}"
+            )
         if any(c in k for c in "\n\r\x00=\"' "):
             raise ValueError(
                 f"metadata key may not contain newline / quote / equals / "
                 f"space characters: {k!r}"
             )
         v_str = str(v)
+        if len(v_str) > _MAX_META_VALUE_LEN:
+            raise ValueError(
+                f"metadata value for {k!r} exceeds {_MAX_META_VALUE_LEN} "
+                f"chars: {len(v_str)}"
+            )
         if any(c in v_str for c in "\n\r\x00"):
             raise ValueError(
                 f"metadata value for {k!r} may not contain newline / null "

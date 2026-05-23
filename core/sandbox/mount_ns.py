@@ -208,13 +208,22 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
     # 2. Fresh tmpfs to become the new root. Either caller provides the
     # path (typical: parent pre-created via tempfile.mkdtemp so the
     # name is random and a same-UID attacker can't pre-plant the stub
-    # as a symlink to an interesting target), or fall back to a
-    # pid-based name for standalone use.
-    if root_path:
-        root = root_path
-    else:
-        root = f"/tmp/.raptor-sbx-{os.getpid()}"
-        os.makedirs(root, exist_ok=True)
+    # as a symlink to an interesting target). The previous fallback —
+    # ``/tmp/.raptor-sbx-{getpid()}`` — was predictable: a same-UID
+    # attacker who could win the PID-reuse race could pre-plant the
+    # path as a symlink to a chosen target, and ``makedirs(exist_ok=
+    # True)`` would accept it. The subsequent bind-mount then
+    # operated on the symlink target. Require ``root_path`` from a
+    # ``tempfile.mkdtemp`` (random suffix) — refuse the fallback so
+    # the predictable PID path can never be reached.
+    if not root_path:
+        raise RuntimeError(
+            "mount_ns: root_path is required (use tempfile.mkdtemp "
+            "for a random-suffix path; the prior predictable "
+            "/tmp/.raptor-sbx-<pid> fallback was a same-UID "
+            "symlink-pre-plant target)"
+        )
+    root = root_path
     _mount("tmpfs", root, "tmpfs", 0, "mode=755")
 
     # 3. Create standard-dir mount points in the new tmpfs root. We own

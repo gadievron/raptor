@@ -727,22 +727,458 @@ class TestFreeVariableFallback:
         assert r.feasible is True
 
     @_requires_z3
-    def test_two_calls_distinct_free_vars(self):
-        """Two textually-identical calls produce *distinct* placeholders.
+    def test_identical_calls_share_placeholder_within_condition(self):
+        """Textually-identical calls within ONE condition string share
+        a placeholder.
 
-        Calls aren't assumed pure, so ``strlen(s) == strlen(s)`` is
-        satisfiable — but ``strlen(s) != strlen(s)`` is also satisfiable
-        (different anon vars).  This is the conservative stance: the
-        solver never claims infeasibility from elided subterms.
+        Pre-fix every call match allocated a fresh anon var, so
+        ``strlen(s) != strlen(s)`` was satisfiable (two independent
+        unconstrained vars).  That contradicted the writer's intent:
+        an LLM emitting the same ``strlen(s)`` twice means "the same
+        value", and ``X != X`` is unsat for any single ``X``.  Post-
+        fix the two occurrences share one Z3 var so the equality
+        ``strlen(s) == strlen(s)`` is a tautology and the inequality
+        ``strlen(s) != strlen(s)`` is unsat.
         """
         sat_eq = check_path_feasibility([
             PathCondition("strlen(s) == strlen(s)", step_index=0),
         ])
-        sat_ne = check_path_feasibility([
+        unsat_ne = check_path_feasibility([
             PathCondition("strlen(s) != strlen(s)", step_index=0),
         ])
         assert sat_eq.feasible is True
-        assert sat_ne.feasible is True
+        assert unsat_ne.feasible is False
+
+    @_requires_z3
+    def test_identical_calls_share_placeholder_across_conditions(self):
+        """Textually-identical calls in DIFFERENT condition strings
+        within one ``check_path_feasibility`` batch share a placeholder.
+
+        Pre-fix each condition's ``_substitute_calls`` call allocated
+        fresh anon vars, so the realistic Tier-4 path
+        ``[strlen(input) > 100, strlen(input) < 50]`` (two conditions,
+        one batch) encoded as ``_anon_0 > 100 AND _anon_1 < 50`` —
+        trivially sat, missing the obvious contradiction.  Post-fix
+        the second ``strlen(input)`` reuses the first's placeholder,
+        making the contradiction visible and refuting the path.
+        """
+        r = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert r.feasible is False
+        # Refutation should name the conflicting conditions in the
+        # unsat core.
+        assert any("strlen(input)" in u for u in r.unsatisfied)
+
+    @_requires_z3
+    def test_dedup_resets_between_batches(self):
+        """Dedup is scoped to one ``check_path_feasibility`` call.
+
+        Two separate batches that both mention ``strlen(input)`` get
+        independent anon vars — the conservative impure-call default
+        applies at batch boundaries because that's the only scope at
+        which the LLM can't textually express same-value intent.
+        """
+        # Batch 1: refuted because both conditions in one batch share
+        # the strlen(input) placeholder.
+        batch1 = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert batch1.feasible is False
+        # Batch 2: re-running the SAME conditions gets fresh state and
+        # the same refutation — confirms the refutation isn't sticky
+        # process-global state from batch 1.
+        batch2 = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("strlen(input) < 50", step_index=1),
+        ])
+        assert batch2.feasible is False
+        # Batch 3: one condition per batch — each batch allocates fresh
+        # vars, so neither batch alone has a contradiction.
+        b3a = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+        ])
+        b3b = check_path_feasibility([
+            PathCondition("strlen(input) < 50", step_index=0),
+        ])
+        assert b3a.feasible is True
+        assert b3b.feasible is True
+
+    @_requires_z3
+    def test_distinct_call_texts_remain_distinct(self):
+        """Different call texts still get distinct placeholders.
+
+        Pins the existing ``first(x)`` vs ``second(y)`` contract: only
+        EXACT text matches dedup.  Different function names or
+        different arguments mean different placeholders even within
+        one batch.
+        """
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_dedup_distinguishes_whitespace_and_argument_variations(self):
+        """Dedup is literal text equality — whitespace and argument
+        differences keep calls distinct.
+
+        ``strlen(s)`` vs ``strlen( s )`` differ in whitespace; treat as
+        distinct (we can't prove the whitespace is semantically
+        irrelevant without parsing the inner expression).  ``strlen(a)``
+        vs ``strlen(b)`` are distinct functions of distinct arguments.
+        """
+        # Whitespace-different forms in one batch shouldn't dedup —
+        # the resulting two anon vars let the inequality be sat.
+        r1 = check_path_feasibility([
+            PathCondition("strlen(s) != strlen( s )", step_index=0),
+        ])
+        assert r1.feasible is True
+        # Different-argument forms shouldn't dedup either.
+        r2 = check_path_feasibility([
+            PathCondition("strlen(a) != strlen(b)", step_index=0),
+        ])
+        assert r2.feasible is True
+
+    @_requires_z3
+    def test_anon_counter_progresses_across_distinct_calls(self):
+        """Counter still progresses when call texts differ — keeps the
+        pre-existing 'no index collision' guarantee for the cross-
+        condition case with non-identical call texts."""
+        # Two textually-distinct calls in one batch must produce TWO
+        # placeholders, not one. If both got `_anon_0` they'd share a
+        # Z3 var and the joint constraint
+        # `first(x) != 0 AND second(y) == 0` would still be sat —
+        # but for the wrong reason. The clean signal is two anon
+        # entries in the model.
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.feasible is True
+        anon_names = [k for k in r.model if k.startswith("_anon_")]
+        # At least two distinct anon entries (one per distinct call).
+        # Counts may be higher if model_completion fills extras, but
+        # the lower bound is what matters here.
+        assert len(anon_names) >= 2
+        assert "_anon_0" in r.model
+        assert "_anon_1" in r.model
+
+
+# ---------------------------------------------------------------------------
+# D2: assignment-shape detection + mutation barrier on call dedup
+# ---------------------------------------------------------------------------
+
+class TestAssignmentShapeBarrier:
+    """Conditions that look like program statements (assignment,
+    compound assignment, increment/decrement) route to
+    ASSIGNMENT_SHAPED rejection and break the call-dedup window.
+
+    The motivating case: when the LLM emits the realistic path
+    [strlen(input) > 100, input = realloc(input, n), strlen(input) < 50]
+    the two strlen(input) references straddle a mutation. Pre-D2
+    dedup merged them under one Z3 var and refuted the (actually
+    feasible) path. Post-D2 the assignment-shaped middle step
+    clears the dedup window, so the second strlen(input) allocates
+    a fresh placeholder and the path remains feasible.
+    """
+
+    @_requires_z3
+    @pytest.mark.parametrize("text", [
+        "input = realloc(input, n)",   # bare assignment
+        "x = y + 1",                   # bare assignment, arithmetic rhs
+        "count += 1",                  # compound assignment +=
+        "count -= 1",                  # compound assignment -=
+        "x *= 2",                      # *=
+        "x /= 2",                      # /=
+        "x %= 16",                     # %=
+        "flags &= 0xff",               # &=
+        "flags |= 0x1",                # |=
+        "flags ^= mask",               # ^=
+        "x <<= 4",                     # shift compound
+        "x >>= 4",
+        "i++",                         # post-increment
+        "++i",                         # pre-increment
+        "i--",                         # post-decrement
+        "--i",                         # pre-decrement
+    ])
+    def test_assignment_shape_rejected(self, text):
+        """Each assignment-shape variant goes to ASSIGNMENT_SHAPED,
+        not UNRECOGNIZED_FORM."""
+        r = check_path_feasibility([PathCondition(text, step_index=0)])
+        assert text in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == text)
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED, (
+            f"expected ASSIGNMENT_SHAPED, got {rej.kind.value} for {text!r}"
+        )
+        assert "SSA-rename" in rej.hint or "guards" in rej.hint.lower()
+
+    @_requires_z3
+    @pytest.mark.parametrize("text", [
+        "x == 0",                      # equality, NOT assignment
+        "x != 0",                      # inequality
+        "x <= 100",                    # le, NOT shift-compound
+        "x >= 100",                    # ge
+        "x < y",                       # lt, no `--` despite literal
+        "x > -1",                      # gt with negative literal (single `-`)
+        "flags & 0xff == 0",           # bitmask alignment
+        "size > 0",                    # plain relational
+    ])
+    def test_relational_ops_not_misdetected(self, text):
+        """Relational operators must not be misread as assignment."""
+        r = check_path_feasibility([PathCondition(text, step_index=0)])
+        # Either tautology, parsed successfully, or rejected for a
+        # different reason (e.g. range, recognised pattern mismatch),
+        # but NEVER ASSIGNMENT_SHAPED — that would mean the regex
+        # confused a relational operator for an assignment.
+        for rej in r.unknown_reasons:
+            assert rej.kind is not RejectionKind.ASSIGNMENT_SHAPED, (
+                f"relational form misdetected as ASSIGNMENT_SHAPED: {text!r}"
+            )
+
+    @_requires_z3
+    def test_realloc_mutation_breaks_dedup(self):
+        """The motivating case from PR review.
+
+        Two strlen(input) references straddle a realloc. Pre-D2
+        the dedup merged them into one Z3 var → unsat → false
+        refutation. Post-D2 the assignment-shaped step clears the
+        dedup window so the second strlen(input) allocates a fresh
+        placeholder → feasible. The middle step itself shows up in
+        unknown_reasons as ASSIGNMENT_SHAPED.
+        """
+        r = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("input = realloc(input, n)", step_index=1),
+            PathCondition("strlen(input) < 50", step_index=2),
+        ])
+        # The mutation step is flagged structurally.
+        assert "input = realloc(input, n)" in r.unknown
+        mutation_rej = next(
+            x for x in r.unknown_reasons
+            if x.text == "input = realloc(input, n)"
+        )
+        assert mutation_rej.kind is RejectionKind.ASSIGNMENT_SHAPED
+        # Path is feasible — pre-D2 this returned False (false
+        # refutation under the broken SSA assumption).
+        assert r.feasible is True
+        # Both strlen(input) calls produced anon entries in the
+        # label store so downstream tooling can render meaningful
+        # witnesses.
+        anon_values = set(
+            text for placeholder, text in
+            # `anon_var_map` is the public-facing label store on the
+            # result. Two distinct placeholders → two label entries
+            # for the same text "strlen(input)".
+            r.anon_var_map.items()
+        )
+        assert "strlen(input)" in anon_values
+        # The label store should carry TWO entries with the same
+        # text (one per side of the mutation barrier), even though
+        # the visible-by-text value is one string.
+        strlen_placeholders = [
+            p for p, t in r.anon_var_map.items()
+            if t == "strlen(input)"
+        ]
+        assert len(strlen_placeholders) == 2, (
+            f"expected 2 distinct placeholders for strlen(input) "
+            f"straddling the mutation, got {strlen_placeholders}"
+        )
+
+    @_requires_z3
+    def test_dedup_resumes_within_post_mutation_segment(self):
+        """Within a SINGLE segment between mutation barriers, dedup
+        still works.
+
+        Two strlen(input) calls AFTER one mutation must dedup with
+        each other (they're in the same post-mutation segment), even
+        though they don't dedup with the pre-mutation segment.
+        """
+        r = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("input = realloc(input, n)", step_index=1),
+            # Both of these reference the post-mutation strlen(input);
+            # they should share a placeholder so the contradiction
+            # surfaces and the post-mutation sub-path is refuted.
+            PathCondition("strlen(input) > 200", step_index=2),
+            PathCondition("strlen(input) < 50", step_index=3),
+        ])
+        # The post-mutation segment is internally contradictory
+        # (>200 AND <50), so the overall verdict is infeasible —
+        # even though the pre-mutation segment is independent.
+        assert r.feasible is False
+        # Two label entries for strlen(input): one pre-barrier
+        # (singleton in its segment) and one post-barrier (shared
+        # across the two post-barrier guards).
+        strlen_placeholders = [
+            p for p, t in r.anon_var_map.items()
+            if t == "strlen(input)"
+        ]
+        assert len(strlen_placeholders) == 2
+
+    @_requires_z3
+    def test_multiple_mutation_barriers(self):
+        """Three segments, two mutation barriers, three strlen(input)
+        references — each gets its own placeholder."""
+        r = check_path_feasibility([
+            PathCondition("strlen(input) > 100", step_index=0),
+            PathCondition("input = realloc(input, n)", step_index=1),
+            PathCondition("strlen(input) > 50", step_index=2),
+            PathCondition("input = strdup(input)", step_index=3),
+            PathCondition("strlen(input) < 200", step_index=4),
+        ])
+        # All three strlen guards are individually satisfiable and
+        # — because each is in its own segment with a fresh
+        # placeholder — they don't interfere. Path is feasible.
+        assert r.feasible is True
+        # Both mutation steps recorded.
+        mutation_texts = {
+            x.text for x in r.unknown_reasons
+            if x.kind is RejectionKind.ASSIGNMENT_SHAPED
+        }
+        assert "input = realloc(input, n)" in mutation_texts
+        assert "input = strdup(input)" in mutation_texts
+        # Three placeholders for strlen(input), one per segment.
+        strlen_placeholders = [
+            p for p, t in r.anon_var_map.items()
+            if t == "strlen(input)"
+        ]
+        assert len(strlen_placeholders) == 3
+
+    @_requires_z3
+    def test_ssa_renamed_path_is_feasible_without_barrier(self):
+        """The preferred D1 form: caller SSA-renames the identifier.
+
+        With distinct text (input_pre / input_post), no dedup happens
+        and no mutation barrier is needed. The path is feasible and
+        no ASSIGNMENT_SHAPED rejection appears.
+        """
+        r = check_path_feasibility([
+            PathCondition("strlen(input_pre) > 100", step_index=0),
+            PathCondition("strlen(input_post) < 50", step_index=1),
+        ])
+        assert r.feasible is True
+        assert all(
+            x.kind is not RejectionKind.ASSIGNMENT_SHAPED
+            for x in r.unknown_reasons
+        )
+
+    @_requires_z3
+    def test_assignment_in_otherwise_well_formed_condition(self):
+        """If an assignment appears EMBEDDED in something that would
+        otherwise be relational, the assignment-shape detector still
+        fires — better safe than to half-parse it.
+
+        Example: a malformed `(x = 1) > 0` is detected before the
+        relational regex sees it, so we get ASSIGNMENT_SHAPED rather
+        than a confusing partial-parse rejection.
+        """
+        r = check_path_feasibility([
+            PathCondition("(x = 1) > 0", step_index=0),
+        ])
+        assert "(x = 1) > 0" in r.unknown
+        rej = next(
+            x for x in r.unknown_reasons if x.text == "(x = 1) > 0"
+        )
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED
+
+
+# ---------------------------------------------------------------------------
+# Pin the incidental assignment-shape coverage so a "simplify this
+# regex" refactor breaks loudly. The cases below all match via
+# substring overlap with a *designed* alternation rather than by a
+# dedicated pattern; dropping the designed alternation that carries
+# them would silently regress coverage.
+#
+# See `_ASSIGNMENT_SHAPED_RE` in smt_path_validator.py for the
+# full table of designed vs incidental matches.
+# ---------------------------------------------------------------------------
+
+class TestAssignmentShapeCoverage:
+    """Pin the incidental + edge-case behaviour of _ASSIGNMENT_SHAPED_RE.
+
+    Every case here is documented as either intentional-incidental
+    coverage we want to keep, or a known-rare false positive we're
+    knowingly accepting. Tests fail if either category drifts.
+    """
+
+    @_requires_z3
+    @pytest.mark.parametrize("text,which_alternation", [
+        # Python language operators not in the designed enumeration:
+        (":=",  "bare `=` (`:` not in lookbehind exclusion)"),
+        ("**=", "trailing `*=` matches `[+\\-*/%&|^]=`"),
+        ("//=", "trailing `/=` matches `[+\\-*/%&|^]=`"),
+        ("@=",  "bare `=` (`@` not in lookbehind exclusion)"),
+        # Java language operator not in the designed enumeration:
+        (">>>=", "trailing `>>=` matches `<<=|>>=`"),
+    ])
+    def test_incidental_assignment_shapes_pinned(self, text, which_alternation):
+        """Each incidental match must keep routing to
+        ASSIGNMENT_SHAPED so a regex refactor can't silently drop
+        coverage of these operators.
+
+        ``which_alternation`` documents WHICH designed alternation
+        carries the incidental coverage — when this test fails after
+        a refactor, the message names the load-bearing pattern that
+        was removed or weakened.
+        """
+        # Wrap in a minimal condition so the parser pipeline runs.
+        # `x text y` ensures the text appears at a position where
+        # any of the alternations could fire.
+        cond_text = f"x {text} y"
+        r = check_path_feasibility([
+            PathCondition(cond_text, step_index=0),
+        ])
+        assert cond_text in r.unknown, (
+            f"expected ASSIGNMENT_SHAPED rejection for {cond_text!r} "
+            f"(carried by: {which_alternation})"
+        )
+        rej = next(x for x in r.unknown_reasons if x.text == cond_text)
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED, (
+            f"{cond_text!r} no longer matches ASSIGNMENT_SHAPED — "
+            f"check whether the regex refactor dropped the alternation "
+            f"that previously carried this case incidentally: "
+            f"{which_alternation}"
+        )
+
+    @_requires_z3
+    def test_numeric_double_negation_flagged_as_assignment(self):
+        """Documented exotic false positive: ``--x > 0`` (numeric
+        double-negation) matches the ``--`` decrement alternation
+        and routes to ASSIGNMENT_SHAPED.
+
+        Effectively never seen in real path-condition input — C
+        rejects ``--literal`` at compile time and LLMs don't emit
+        this shape. Pinned here so a future fix that special-cases
+        it can land with the existing test flipping rather than as
+        a silent behaviour change. If an operator hits this case
+        in the wild, rephrasing as ``x != 0`` or ``0 - x`` in the
+        condition string sidesteps it.
+        """
+        r = check_path_feasibility([
+            PathCondition("--x > 0", step_index=0),
+        ])
+        assert "--x > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "--x > 0")
+        assert rej.kind is RejectionKind.ASSIGNMENT_SHAPED
+
+    @_requires_z3
+    def test_single_negative_literal_not_misdetected(self):
+        """``x == -1`` and ``offset > -16`` contain a single ``-``
+        but no ``--``; the increment/decrement alternation does NOT
+        match these. Important because ``rejection.parse_literal_value``
+        accepts negative decimal literals at signed profiles."""
+        for text in ("x == -1", "offset > -16", "y >= -128"):
+            r = check_path_feasibility([PathCondition(text, step_index=0)])
+            for rej in r.unknown_reasons:
+                assert rej.kind is not RejectionKind.ASSIGNMENT_SHAPED, (
+                    f"negative literal misdetected as ASSIGNMENT_SHAPED: "
+                    f"{text!r}"
+                )
 
     @_requires_z3
     def test_call_in_bitmask_lhs(self):
@@ -806,19 +1242,13 @@ class TestFreeVariableFallback:
         assert r.unknown == []
         assert r.feasible is True
 
-    @_requires_z3
-    def test_anon_counter_progresses_across_conditions(self):
-        """Free-var allocator is seeded from existing ``vars_`` so
-        anon names don't collide across conditions in one path."""
-        # If both calls were assigned `_anon_0`, they'd share a Z3
-        # variable and 'first != 0 AND second == 0' would be unsat-ish
-        # in some encodings.  With distinct vars, both are satisfiable.
-        r = check_path_feasibility([
-            PathCondition("first(x) != 0", step_index=0),
-            PathCondition("second(y) == 0", step_index=1),
-        ])
-        assert r.unknown == []
-        assert r.feasible is True
+# Note: the "anon counter progresses across conditions" assertion
+# previously lived here. The new `test_anon_counter_progresses_across_
+# distinct_calls` (above, in this same class) subsumes it: same input
+# shape (``first(x)`` / ``second(y)``), same feasibility verdict, plus
+# the stronger assertion that two distinct anon entries appear in the
+# model. Kept the dedup-aware variant; removed the older one to avoid
+# encoding the same property twice.
 
 
 # ---------------------------------------------------------------------------

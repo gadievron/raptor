@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_malloc-verdict-passive",
+  "producer": "codeql",
+  "rule_id": "cpp/double-free",
+  "message": "cpp/double-free on source_intel_axis1_malloc-verdict-passive",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 112,
+    "column": 2,
+    "snippet": "__builtin_free(p);  /* double-free */",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 112,
+    "column": 2,
+    "snippet": "__builtin_free(p);  /* double-free */",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

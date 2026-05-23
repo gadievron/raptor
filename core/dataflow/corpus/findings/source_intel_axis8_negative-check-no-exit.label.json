@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-check-no-exit",
+  "verdict": "true_positive",
+  "rationale": "Surface: int overflow + downstream check that warns but doesn't return/goto. The bug primitive (memcpy with attacker-controlled size) is still reachable. Axis 8 requires an early-exit within 12 lines after the if; here there is none in the if-body, just a warn(). Verdict falls through to UNCERTAIN. Tests the early-exit requirement.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

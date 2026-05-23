@@ -533,8 +533,14 @@ class CorpusGenerator:
             logger.info(f"Removed {removed} duplicate seeds")
             return removed
 
-        # With coverage data, remove seeds that don't add new coverage
-        # TODO: Implement coverage-guided minimization
+        # With coverage data, remove seeds that don't add new coverage.
+        # Coverage-guided minimisation deferred: AFL++'s ``afl-cmin``
+        # already implements this end-to-end and is invoked separately
+        # by the fuzz launcher when ``--use-showmap`` is set. Calling
+        # afl-cmin here would duplicate the work and require parsing
+        # showmap output we don't currently capture. Track upgrade in
+        # the fuzzing roadmap; for now this branch returns 0 so the
+        # caller falls back to the content-hash dedupe path above.
         return 0
 
     def learn_from_crash(self, crash_input: Path, crash_type: str):

@@ -6,6 +6,7 @@ the terminal banner. No logic, no checks, no side effects.
 
 import random
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -26,9 +27,18 @@ def read_random_quote() -> str:
     return '"Hack the planet!"'
 
 
-def format_banner(logo, quote, tool_results, tool_warnings, llm_lines,
-                  llm_warnings, env_parts, env_warnings, project_line=None,
-                  lang_line=None):
+def format_banner(
+    logo: str,
+    quote: str,
+    tool_results: List[Tuple[str, bool]],
+    tool_warnings: List[str],
+    llm_lines: List[str],
+    llm_warnings: List[str],
+    env_parts: List[str],
+    env_warnings: List[str],
+    project_line: Optional[str] = None,
+    lang_line: Optional[str] = None,
+) -> str:
     """Format the startup banner from gathered data.
 
     Args:

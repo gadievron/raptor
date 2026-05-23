@@ -57,6 +57,40 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
+# Tree-sitter Parser cache. Each ``Parser(Language(ts_X.language()))``
+# construction holds C-side state (libtree-sitter allocates the
+# parser's internal stack); building per-call across thousands of
+# files in an inventory walk amplifies native allocator work +
+# accumulates RSS. The grammar is immutable across the program's
+# lifetime, so a single Parser per language can be reused for every
+# parse against that grammar.
+#
+# Keyed by ``id(language_fn)`` — each ``tree_sitter_X.language``
+# attribute is a stable module-level callable, so identity-keying
+# is sufficient. Cache populated lazily so importing this module
+# doesn't pay tree-sitter init cost if no parse happens.
+_TS_PARSER_CACHE: Dict[int, Any] = {}
+
+
+def _get_ts_parser(language_fn: Any) -> Any:
+    """Return a cached tree-sitter Parser for ``language_fn`` (a
+    grammar module's ``.language`` callable, e.g. ``ts_js.language``).
+
+    Raises ``ImportError`` if ``tree_sitter`` itself isn't installed
+    — callers already wrap the parse-site in try/except around the
+    grammar module import + ``Parser(Language(...))`` construction
+    so the additional ImportError fits the existing error path.
+    """
+    key = id(language_fn)
+    cached = _TS_PARSER_CACHE.get(key)
+    if cached is not None:
+        return cached
+    from tree_sitter import Language, Parser
+    parser = Parser(Language(language_fn()))
+    _TS_PARSER_CACHE[key] = parser
+    return parser
+
+
 # Indirection-flag values. Strings (not enum) so they round-trip
 # through JSON cleanly without a from_dict shim.
 INDIRECTION_GETATTR = "getattr"
@@ -600,7 +634,6 @@ def extract_call_graph_javascript(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_javascript as ts_js
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter JavaScript grammar not "
@@ -609,7 +642,7 @@ def extract_call_graph_javascript(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_js.language()))
+        parser = _get_ts_parser(ts_js.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                          # noqa: BLE001
         logger.debug("call_graph: JS parse failed (%s)", e)
@@ -1214,7 +1247,6 @@ def extract_call_graph_go(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_go as ts_go
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter Go grammar not installed; "
@@ -1223,7 +1255,7 @@ def extract_call_graph_go(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_go.language()))
+        parser = _get_ts_parser(ts_go.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                          # noqa: BLE001
         logger.debug("call_graph: Go parse failed (%s)", e)
@@ -1544,7 +1576,6 @@ def extract_call_graph_java(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_java as ts_java
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter Java grammar not installed; "
@@ -1553,7 +1584,7 @@ def extract_call_graph_java(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_java.language()))
+        parser = _get_ts_parser(ts_java.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                          # noqa: BLE001
         logger.debug("call_graph: Java parse failed (%s)", e)
@@ -1979,7 +2010,6 @@ def extract_call_graph_rust(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_rust as ts_rust
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter Rust grammar not installed; "
@@ -1988,7 +2018,7 @@ def extract_call_graph_rust(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_rust.language()))
+        parser = _get_ts_parser(ts_rust.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: Rust parse failed (%s)", e)
@@ -2405,7 +2435,6 @@ def extract_call_graph_ruby(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_ruby as ts_ruby
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter Ruby grammar not installed; "
@@ -2414,7 +2443,7 @@ def extract_call_graph_ruby(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_ruby.language()))
+        parser = _get_ts_parser(ts_ruby.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: Ruby parse failed (%s)", e)
@@ -2734,7 +2763,6 @@ def extract_call_graph_csharp(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_c_sharp as ts_cs
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter C# grammar not installed; "
@@ -2743,7 +2771,7 @@ def extract_call_graph_csharp(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_cs.language()))
+        parser = _get_ts_parser(ts_cs.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: C# parse failed (%s)", e)
@@ -3115,7 +3143,6 @@ def extract_call_graph_php(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_php as ts_php
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter PHP grammar not installed; "
@@ -3126,10 +3153,17 @@ def extract_call_graph_php(content: str) -> FileCallGraph:
     try:
         # tree-sitter-php exports php_only / php (with HTML mixed).
         # For .php files we use php_only, but tolerate either.
+        # NOT routed through _get_ts_parser because the language
+        # resolution path varies (language_php attr vs language()
+        # callable vs already-realised Language object) — cache
+        # identity-keying would either thrash or mis-hit. Per-call
+        # construction here; PHP parses are infrequent enough that
+        # the missed cache opportunity is acceptable.
+        from tree_sitter import Language as _PHPLanguage, Parser as _PHPParser
         lang_fn = getattr(ts_php, "language_php", None) or ts_php.language()
         if callable(lang_fn):
             lang_fn = lang_fn()
-        parser = Parser(Language(lang_fn))
+        parser = _PHPParser(_PHPLanguage(lang_fn))
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: PHP parse failed (%s)", e)
@@ -3523,7 +3557,6 @@ def extract_call_graph_c(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_c as ts_c
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter C grammar not installed; "
@@ -3532,7 +3565,7 @@ def extract_call_graph_c(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_c.language()))
+        parser = _get_ts_parser(ts_c.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: C parse failed (%s)", e)
@@ -3887,7 +3920,6 @@ def extract_call_graph_cpp(content: str) -> FileCallGraph:
     """
     try:
         import tree_sitter_cpp as ts_cpp
-        from tree_sitter import Language, Parser
     except ImportError:
         logger.debug(
             "call_graph: tree-sitter C++ grammar not installed; "
@@ -3896,7 +3928,7 @@ def extract_call_graph_cpp(content: str) -> FileCallGraph:
         return FileCallGraph()
 
     try:
-        parser = Parser(Language(ts_cpp.language()))
+        parser = _get_ts_parser(ts_cpp.language)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                              # noqa: BLE001
         logger.debug("call_graph: C++ parse failed (%s)", e)

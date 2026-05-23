@@ -136,8 +136,20 @@ def compute_summary(run_dir: Path) -> Optional[Dict[str, Any]]:
             all_groups = set(RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.keys())
             used_groups = set(semgrep_info.get("rules_applied", []))
             missing_groups = sorted(all_groups - used_groups)
-        except Exception:
-            pass
+        except (AttributeError, ImportError) as exc:
+            # Narrowed from bare Exception — pre-fix any code-bug
+            # (TypeError, KeyError on a renamed field) silently
+            # produced empty ``missing_groups``, making the coverage
+            # report claim complete policy coverage when the check
+            # itself didn't run. The audit explicitly flagged this.
+            # Surface the failure so a renamed constant doesn't
+            # quietly degrade the report.
+            from core.logging import get_logger as _get_logger
+            _get_logger().warning(
+                "coverage.summary: policy-group reflection failed: %s; "
+                "report omits policy-coverage section",
+                exc,
+            )
 
     # Per-file breakdown
     # Build sets of files examined by each tool

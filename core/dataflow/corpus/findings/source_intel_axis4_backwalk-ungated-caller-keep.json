@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_backwalk-ungated-caller-keep",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "source_intel_axis4_backwalk-ungated-caller-keep",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis4_backwalk_ungated_caller/u.c",
+    "line": 11,
+    "column": 2,
+    "snippet": "memcpy(buf, user, len);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis4_backwalk_ungated_caller/u.c",
+    "line": 11,
+    "column": 2,
+    "snippet": "memcpy(buf, user, len);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_alloc_size-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `my_alloc` annotated ALLOC_SIZE(1); caller writes p[want] but buffer is sized `want` bytes (indices 0..want-1) \u2192 off-by-one. Axis-1 attrs detects ALLOC_SIZE, rule_id `cpp/unbounded-write` in ALLOC_SIZE-relevant set \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-gets",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "unbounded-write source_intel_axis6_fortify-gets",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fortify_gets/u.c",
+    "line": 6,
+    "column": 2,
+    "snippet": "gets(buf);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fortify_gets/u.c",
+    "line": 6,
+    "column": 2,
+    "snippet": "gets(buf);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -204,8 +204,18 @@ def _entry_to_credentials(entry: dict) -> Optional[BasicCredentials]:
 # ---------------------------------------------------------------------------
 
 
+# RFC 7235 permits ``auth-param = token "=" ( token / quoted-string )``.
+# Pre-fix regex only matched quoted values; a registry sending
+# unquoted ``scope=push,pull`` silently dropped the parameter,
+# which then caused the token-exchange request to ask for a
+# different (often narrower) permission than the operator
+# expected. Now both shapes match.
+#
+# token = 1*<any CHAR except CTL or "()<>@,;:\\\"/[]?={} \t">
+# quoted-string = literal "" with optional backslash escapes.
 _WWW_AUTH_PARAM_RE = re.compile(
-    r'(?P<key>[a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*"(?P<value>[^"]*)"'
+    r'(?P<key>[a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'
+    r'(?:"(?P<qval>[^"]*)"|(?P<tval>[^\s",]+))'
 )
 
 
@@ -222,7 +232,8 @@ def parse_www_authenticate(header: str) -> Tuple[str, dict]:
     → ``("Bearer", {"realm": "...", "service": "...", "scope": "..."})``
 
     Tolerates extra whitespace, comma-vs-semicolon separators, and
-    parameters in any order. Returns ``("", {})`` for unparseable
+    parameters in any order. Accepts both quoted-string and bare
+    token shapes per RFC 7235. Returns ``("", {})`` for unparseable
     input — the caller falls back to anonymous-no-realm-known
     behaviour, which surfaces clearly later.
     """
@@ -234,7 +245,10 @@ def parse_www_authenticate(header: str) -> Tuple[str, dict]:
     params_str = parts[1] if len(parts) > 1 else ""
     params: dict = {}
     for m in _WWW_AUTH_PARAM_RE.finditer(params_str):
-        params[m.group("key").lower()] = m.group("value")
+        value = m.group("qval")
+        if value is None:
+            value = m.group("tval")
+        params[m.group("key").lower()] = value or ""
     return scheme, params
 
 

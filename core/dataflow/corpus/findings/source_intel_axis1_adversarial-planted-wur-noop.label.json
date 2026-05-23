@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_adversarial-planted-wur-noop",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Adversarial fixture per design exit criterion. Attacker planted __attribute__((warn_unused_result)) on `noop_wur` whose body is `return 0;` \u2014 a no-op. The 'unchecked return' is harmless because the function does nothing. Axis-1 trusts the annotation and currently fires EXPLOITABLE. DOCUMENTED LIMITATION: source_intel doesn't validate that WUR-annotated functions have non-trivial return semantics. The disagree-row demonstrates the adversarial-tolerance gap the design's exit criterion identified.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

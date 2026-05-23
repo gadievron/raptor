@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-null-check-only",
+  "producer": "codeql",
+  "rule_id": "cpp/uncontrolled-allocation-size",
+  "message": "source_intel_axis8_negative-null-check-only",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_null_check_only.c",
+    "line": 12,
+    "column": 2,
+    "snippet": "void *p = krealloc(old, new_size * sizeof(int), 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_null_check_only.c",
+    "line": 12,
+    "column": 2,
+    "snippet": "void *p = krealloc(old, new_size * sizeof(int), 0);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -142,6 +142,15 @@ _DNS_CACHE_TTL = 60.0
 # who are used to OS-level happy-eyeballs.
 _HAPPY_EYEBALLS_DELAY = 0.25
 
+# Per-call timeouts for the proxy's asyncio operations. Promoted from
+# inline literals so operators tuning latency/throughput have a single
+# knob to adjust. _READ_TIMEOUT_S is the per-IO read budget (between
+# successive bytes from upstream/downstream); _CONNECT_TIMEOUT_S is
+# the larger budget for CONNECT-time waits where TLS handshake +
+# happy-eyeballs eat into the window.
+_PROXY_READ_TIMEOUT_S = 10.0
+_PROXY_CONNECT_TIMEOUT_S = 30.0
+
 # Canonical filename for the per-run proxy events JSONL. Written by
 # context.py (post-sandbox flush of unregister_sandbox events). Defined
 # here so consumers of the proxy module reference one source-of-truth
@@ -512,12 +521,28 @@ class EgressProxy:
         # /scan started". 30s is well above any realistic
         # asyncio-loop-startup latency on a busy host (sub-second in
         # practice).
-        if not self._ready.wait(timeout=30.0):
+        if not self._ready.wait(timeout=_PROXY_CONNECT_TIMEOUT_S):
+            # Defensive: stop the thread so we don't leak a zombie
+            # background loop trying forever to bind. Pre-fix the
+            # raise just abandoned ``self._thread`` (daemon, so it
+            # died with the process — but every retry stacked another
+            # daemon thread on top, multiplying the bind churn).
+            self._stop_thread_best_effort()
+            # Use the actual timeout constant in the message so an
+            # operator bumping ``_PROXY_CONNECT_TIMEOUT_S`` sees a
+            # consistent error rather than the hardcoded "30s" lie.
             raise RuntimeError(
-                "egress proxy did not become ready within 30s "
-                "(thread may have crashed before signalling)"
+                f"egress proxy did not become ready within "
+                f"{_PROXY_CONNECT_TIMEOUT_S:.0f}s "
+                f"(thread may have crashed before signalling)"
             )
         if self._start_error is not None:
+            # Same cleanup: if the thread came up far enough to set
+            # ``_start_error`` but not ``_ready``, stop it before
+            # propagating so a future retry from the same process
+            # doesn't see an orphan thread holding the listening
+            # socket.
+            self._stop_thread_best_effort()
             raise RuntimeError(
                 f"egress proxy failed to start: {self._start_error}"
             ) from self._start_error
@@ -713,7 +738,7 @@ class EgressProxy:
             return cached[1]
         addrinfo = await asyncio.wait_for(
             self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
-            timeout=10.0,
+            timeout=_PROXY_READ_TIMEOUT_S,
         )
         self._dns_cache[key] = (now + _DNS_CACHE_TTL, addrinfo)
         return addrinfo
@@ -757,7 +782,7 @@ class EgressProxy:
                     reader, writer = await asyncio.wait_for(
                         asyncio.open_connection(host=ip, port=port,
                                                  family=family),
-                        timeout=10.0,
+                        timeout=_PROXY_READ_TIMEOUT_S,
                     )
                     return reader, writer, ip
                 except (OSError, asyncio.TimeoutError) as e:
@@ -781,7 +806,7 @@ class EgressProxy:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host=ip, port=port,
                                          family=family),
-                timeout=10.0,
+                timeout=_PROXY_READ_TIMEOUT_S,
             )
             return reader, writer, ip
 
@@ -880,6 +905,21 @@ class EgressProxy:
             self._loop.call_soon_threadsafe(self._loop.stop)
         except RuntimeError:
             pass  # loop already stopped
+
+    def _stop_thread_best_effort(self) -> None:
+        """Defensive cleanup helper called from ``__init__`` when the
+        proxy thread fails to come up (readiness timeout or
+        ``_start_error`` populated). Tries to stop the asyncio loop
+        if one was assigned, then joins the thread briefly. Never
+        raises — caller will re-raise its own startup error.
+        """
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
 
     def is_alive(self) -> bool:
         """True if the proxy's event-loop thread is still running.
@@ -1174,7 +1214,7 @@ class EgressProxy:
             try:
                 up_reader, up_writer = await asyncio.wait_for(
                     asyncio.open_connection(host=up_host, port=up_port),
-                    timeout=10.0,
+                    timeout=_PROXY_READ_TIMEOUT_S,
                 )
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
@@ -1195,9 +1235,9 @@ class EgressProxy:
                    f"Host: {host}:{port}\r\n\r\n").encode("latin-1")
             up_writer.write(req)
             try:
-                await asyncio.wait_for(up_writer.drain(), timeout=10.0)
+                await asyncio.wait_for(up_writer.drain(), timeout=_PROXY_READ_TIMEOUT_S)
                 resp_line = await asyncio.wait_for(
-                    up_reader.readuntil(b"\r\n"), timeout=10.0,
+                    up_reader.readuntil(b"\r\n"), timeout=_PROXY_READ_TIMEOUT_S,
                 )
             except (asyncio.TimeoutError, asyncio.IncompleteReadError,
                     ConnectionError) as e:
@@ -1457,7 +1497,7 @@ class EgressProxy:
 async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str]:
     """Read one CRLF-terminated line, max_len bytes. None on error/EOF."""
     try:
-        data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=30.0)
+        data = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=_PROXY_CONNECT_TIMEOUT_S)
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError,
             asyncio.TimeoutError):
         return None
@@ -1535,12 +1575,6 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
         else:
             _instance.add_hosts(allowed_hosts)
         return _instance
-
-
-def is_proxy_started() -> bool:
-    """True if the singleton has been created. Used by tests."""
-    with _lock:
-        return _instance is not None
 
 
 def _reset_for_tests() -> None:

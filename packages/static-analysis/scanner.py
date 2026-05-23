@@ -925,7 +925,17 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
         name = stem
 
     # Hash + size + findings — read bytes once.
+    # Size cap (128 MiB) — a hostile rule-pack producing arbitrarily
+    # large SARIF would otherwise OOM the post-scan analysis.
+    _SARIF_MAX_BYTES = 128 * 1024 * 1024
     try:
+        try:
+            if p.stat().st_size > _SARIF_MAX_BYTES:
+                # Treat oversize SARIF as unreadable — caller's
+                # existing OSError branch handles the messaging.
+                raise OSError(f"SARIF exceeds {_SARIF_MAX_BYTES}-byte cap")
+        except OSError:
+            raise
         raw = p.read_bytes()
         sarif_sha256 = sha256_bytes(raw)
         try:
@@ -1065,7 +1075,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))
     repo_path = None
 
-    logger.info(f"Starting automated code security scan")
+    logger.info("Starting automated code security scan")
     logger.info(f"Repository: {args.repo}")
     logger.info(f"Policy version: {args.policy_version}")
     logger.info(f"Policy groups: {args.policy_groups}")
@@ -1271,8 +1281,12 @@ def main():
                 print()
                 print(format_summary(cov))
                 print()
-        except Exception:
-            pass
+        except (ImportError, FileNotFoundError) as exc:
+            # Narrowed: ImportError if the optional summary module
+            # isn't installed; FileNotFoundError if checklist hasn't
+            # been created yet. Other errors propagate so they
+            # surface instead of silently dropping the summary.
+            logger.debug("scanner: coverage summary unavailable: %s", exc)
 
         result = {
             "status": "ok",
@@ -1302,8 +1316,14 @@ def main():
         if not args.keep:
             try:
                 shutil.rmtree(tmp)
-            except Exception:
-                pass
+            except OSError as exc:
+                # rmtree failure on the scratch dir — log at WARNING
+                # so the operator can spot the leak. Pre-fix this
+                # was completely silent.
+                logger.warning(
+                    "scanner: failed to clean up scratch dir %s: %s",
+                    tmp, exc,
+                )
 
 
 if __name__ == "__main__":

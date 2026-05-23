@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "/home/raptor/raptor/packages/llm_analysis/tests/fixtures/source_intel/fortify_gets",
+    "command": "gcc -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -c u.c -o out.o",
+    "file": "u.c"
+  }
+]

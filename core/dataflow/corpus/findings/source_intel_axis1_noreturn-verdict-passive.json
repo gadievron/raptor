@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_noreturn-verdict-passive",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "cpp/null-dereference on source_intel_axis1_noreturn-verdict-passive",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 100,
+    "column": 2,
+    "snippet": "fatal_error(\"null p\");",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_attribute_suite.c",
+    "line": 100,
+    "column": 2,
+    "snippet": "fatal_error(\"null p\");",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

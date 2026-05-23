@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-variable-dest-negative",
+  "producer": "codeql",
+  "rule_id": "cpp/unbounded-write",
+  "message": "unbounded-write source_intel_axis6_fortify-variable-dest-negative",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fortify_var_dest/u.c",
+    "line": 7,
+    "column": 2,
+    "snippet": "strcpy(buf, user);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/fortify_var_dest/u.c",
+    "line": 7,
+    "column": 2,
+    "snippet": "strcpy(buf, user);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -190,11 +190,24 @@ def save_checklist(output_dir, data):
         save_json(checklist_path, data)
     finally:
         if lock_file is not None:
+            # Lock-release failures are diagnostically important —
+            # a leaked advisory lock blocks every subsequent
+            # save_checklist caller from the same process. Pre-fix
+            # this was completely silent. Narrow to OSError so
+            # programming-error exceptions still propagate.
+            import logging as _logging
+            _local_logger = _logging.getLogger(__name__)
             try:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
-            except Exception:
-                pass
+            except OSError:
+                _local_logger.warning(
+                    "save_checklist: flock LOCK_UN failed for %s",
+                    lock_path, exc_info=True,
+                )
             try:
                 lock_file.close()
-            except Exception:
-                pass
+            except OSError:
+                _local_logger.warning(
+                    "save_checklist: lock file close failed for %s",
+                    lock_path, exc_info=True,
+                )

@@ -131,6 +131,23 @@ class RejectionKind(str, Enum):
     degrades to ``feasible=None``; the rejection appears once in
     ``unknown_reasons``."""
 
+    ASSIGNMENT_SHAPED = "assignment_shaped"
+    """Condition looked like a program *statement* (assignment, compound
+    assignment, increment/decrement) rather than a Boolean guard.
+    Examples: ``input = realloc(input, n)``, ``count += 1``, ``ptr++``.
+
+    These aren't path *conditions* — they're path *effects*.  Mixing
+    them into the condition list is an LLM-extraction mistake: SMT
+    expects an SSA-renamed view where every reference to a name
+    denotes the same value, but an assignment between two guards on
+    the same name means later occurrences refer to a DIFFERENT value.
+    Path-validator entry points use this kind to break the call-dedup
+    window: textually-identical free-variable calls (``strlen(input)``)
+    do NOT dedup across an assignment-shaped step, so a path like
+    ``[strlen(input) > 100, input = realloc(input,...), strlen(input)
+    < 50]`` evaluates to feasible (the two ``strlen(input)`` denote
+    different post-mutation values), not a false refutation."""
+
 
 # RejectionKinds that no encoder emits any more but that we've kept in
 # the enum for back-compat with downstream consumers that match on the

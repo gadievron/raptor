@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_variant-anomalous-unchecked",
+  "verdict": "true_positive",
+  "rationale": "Surface shape is CWE-476 null-deref: `p = kstrdup(s, 0); use_string(p);` with no `if (!p)` guard. Axis-3 (unchecked_alloc_local) detects this directly at line 86 \u2014 verdict EXPLOITABLE on axis-3 alone. Axis-5 ADDS informational corroboration: `variant_ratio(kstrdup)` returns (9, 1) \u2014 the project's idiom IS to NULL-check kstrdup (9 of 10 sites check), so this 1 unchecked site is anomalous. The asymmetry is exposed to Stage D LLM as soft context. Phase 9 axis-5 doesn't change verdict (already EXPLOITABLE from axis-3); future axis-5-expansion may use the ratio to boost confidence or flag related variants. Crafted, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kstrdup return into local p",
+    "write_site_guard": "kstrdup must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "Crafted CWE-476 anomaly variant \u2014 uniform across the kstrdup family."
+  }
+}

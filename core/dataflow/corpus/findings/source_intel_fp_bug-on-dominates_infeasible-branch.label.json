@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fp_bug-on-dominates_infeasible-branch",
+  "verdict": "false_positive",
+  "fp_category": "infeasible_branch",
+  "rationale": "Surface shape is a CWE-476 unchecked-alloc-then-deref (kmalloc with no `if (!p) return` guard before `p->field = 42`). The dereference is structurally unreachable when p == NULL because `BUG_ON(!p)` at line 33 panics the kernel before reaching the deref. Real-runtime semantics: DoS only, no memory-corruption primitive. Source_intel axis 2 (proximity) should emit `abort_proximate: BUG_ON line 33, grade=dominates` (cocci `<+...+>` path operator with `when !=` exclusions of intermediate reassignment of `p` confirms no bypass path). Stage D LLM consumes that evidence and rules infeasible_branch. Crafted fixture, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-11"
+}

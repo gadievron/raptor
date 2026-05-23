@@ -17,15 +17,29 @@ from __future__ import annotations
 import atexit
 import contextlib
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
+from .auth import CredentialStore
 from .server import LLMDispatcher
 
 
 _AUDIT_FILENAME = "audit-llm-dispatcher.jsonl"
 
 
-def dispatcher_for_run(run_dir: Path, **kwargs) -> LLMDispatcher:
+# Explicit pass-through signature, replacing an earlier ``**kwargs``
+# fan-out. Pre-fix the wildcard accepted anything — typos like
+# ``token_budget_s=10000`` (silently ignored) and undocumented
+# ``LLMDispatcher`` keyword renames could regress without a single
+# test failing because mypy/ruff have nothing to type-check the
+# argument names against. Listing the supported knobs explicitly
+# matches the ``LLMDispatcher.__init__`` contract at one place.
+def dispatcher_for_run(
+    run_dir: Path,
+    *,
+    token_ttl_s: Optional[int] = None,
+    token_budget: Optional[int] = None,
+    creds: Optional[CredentialStore] = None,
+) -> LLMDispatcher:
     """Return a fresh ``LLMDispatcher`` whose audit log lives inside
     ``run_dir`` and whose ``run_id`` matches the run dir name.
 
@@ -33,27 +47,50 @@ def dispatcher_for_run(run_dir: Path, **kwargs) -> LLMDispatcher:
     is registered as defence-in-depth so a forgotten shutdown still
     releases the socket dir at interpreter exit.
 
-    Extra kwargs flow through to :class:`LLMDispatcher` (for tuning
-    ``token_ttl_s`` / ``token_budget`` per consumer).
+    Keyword args flow through to :class:`LLMDispatcher` for tuning
+    ``token_ttl_s`` / ``token_budget`` per consumer; ``creds`` lets
+    tests substitute a fixture credential store.
     """
     run_dir = Path(run_dir)
     if not run_dir.exists():
         raise FileNotFoundError(f"run_dir does not exist: {run_dir}")
     audit_path = run_dir / _AUDIT_FILENAME
     run_id = run_dir.name
-    d = LLMDispatcher(run_id=run_id, audit_path=audit_path, **kwargs)
+    # Use only the kwargs the caller actually set, so the dispatcher
+    # keeps its module-level defaults for the rest.
+    dispatcher_kwargs: dict = {}
+    if token_ttl_s is not None:
+        dispatcher_kwargs["token_ttl_s"] = token_ttl_s
+    if token_budget is not None:
+        dispatcher_kwargs["token_budget"] = token_budget
+    if creds is not None:
+        dispatcher_kwargs["creds"] = creds
+    d = LLMDispatcher(
+        run_id=run_id, audit_path=audit_path, **dispatcher_kwargs,
+    )
     atexit.register(d.shutdown)
     return d
 
 
 @contextlib.contextmanager
-def llm_dispatcher_in_run(run_dir: Path, **kwargs) -> Iterator[LLMDispatcher]:
+def llm_dispatcher_in_run(
+    run_dir: Path,
+    *,
+    token_ttl_s: Optional[int] = None,
+    token_budget: Optional[int] = None,
+    creds: Optional[CredentialStore] = None,
+) -> Iterator[LLMDispatcher]:
     """Context-manager flavour: dispatcher lives only inside the
     ``with`` block. Preferred when the dispatching scope is bounded
     (one analysis pass, one validation stage) — guarantees shutdown
     even on exception.
     """
-    d = dispatcher_for_run(run_dir, **kwargs)
+    d = dispatcher_for_run(
+        run_dir,
+        token_ttl_s=token_ttl_s,
+        token_budget=token_budget,
+        creds=creds,
+    )
     try:
         yield d
     finally:

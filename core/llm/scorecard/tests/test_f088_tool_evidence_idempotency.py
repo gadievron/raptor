@@ -263,11 +263,16 @@ class TestAtomicClaimAndRecord:
         original_save_json = scorecard_mod.save_json
         attempts = {"n": 0}
 
-        def flaky_save_json(p, data):
+        def flaky_save_json(p, data, **kwargs):
+            # Forward **kwargs so future signature additions on
+            # ``save_json`` (e.g. ``mode=`` added for 0o600 file
+            # perms) don't break this mock. Pre-fix the bare
+            # ``(p, data)`` signature broke when production code
+            # started passing ``mode=0o600``.
             attempts["n"] += 1
             if attempts["n"] == 1:
                 raise OSError("simulated disk failure")
-            return original_save_json(p, data)
+            return original_save_json(p, data, **kwargs)
 
         monkeypatch.setattr(scorecard_mod, "save_json", flaky_save_json)
 

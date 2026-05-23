@@ -8,7 +8,7 @@ the mechanics (threading, progress, cost, errors).
 import json
 import logging
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import ModelDefenseProfile, system_with_priming
@@ -76,7 +76,18 @@ class AnalysisTask(DispatchTask):
         return [model] if model else []
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D PR1: inject source_intel structural evidence for
+        # memory-corruption findings. ``evidence_blocks_for_finding``
+        # returns ``()`` for irrelevant rule_ids OR when the
+        # orchestrator's pre-seed wasn't called / failed for this
+        # target — no LLM-cost overhead on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -135,7 +146,18 @@ class ExploitTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        bundle = build_exploit_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D: inject source_intel structural evidence for
+        # memory-corruption findings so the exploit generator sees the
+        # same structural context the analysis step saw (allocations,
+        # hazards, sanitizer-shaped sites). Returns () for irrelevant
+        # rule_ids — no LLM-cost overhead on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_exploit_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -192,7 +214,18 @@ class PatchTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        bundle = build_patch_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D: inject source_intel structural evidence so the
+        # patch generator sees the structural context (allocations,
+        # hazards, sanitizer-shaped sites) when crafting a fix.
+        # Returns () for irrelevant rule_ids — no LLM-cost overhead
+        # on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_patch_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -261,7 +294,18 @@ class ConsensusTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        # Phase D PR1: inject source_intel structural evidence for
+        # memory-corruption findings. ``evidence_blocks_for_finding``
+        # returns ``()`` for irrelevant rule_ids OR when the
+        # orchestrator's pre-seed wasn't called / failed for this
+        # target — no LLM-cost overhead on non-target findings.
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
+        si_blocks = evidence_blocks_for_finding(finding)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=si_blocks,
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -392,6 +436,9 @@ class JudgeTask(DispatchTask):
 
     def build_prompt(self, finding):
         from core.security.prompt_envelope import UntrustedBlock
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
 
         fid = finding.get("finding_id")
         primary = self.results_by_id.get(fid, {})
@@ -408,7 +455,7 @@ class JudgeTask(DispatchTask):
         )
         primary_ruling = primary.get("ruling", "unknown")
 
-        extra_blocks = (
+        extra_blocks: tuple[UntrustedBlock, ...] = (
             UntrustedBlock(
                 content=(
                     f"Primary verdict: is_exploitable={primary_verdict}, "
@@ -417,7 +464,7 @@ class JudgeTask(DispatchTask):
                 kind="primary-analysis-reasoning",
                 origin=f"judge:{fid}",
             ),
-        )
+        ) + evidence_blocks_for_finding(finding)
 
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=extra_blocks,
@@ -484,6 +531,21 @@ class AggregationTask(DispatchTask):
     temperature = 0.2
     budget_cutoff = 0.95
 
+    def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE,
+                 findings: Optional[List[Dict[str, Any]]] = None):
+        self.profile = profile
+        # Original findings indexed by id so build_prompt can pull
+        # SI evidence per memory-corruption finding — gives the
+        # aggregator structural ground truth alongside the
+        # per-model verdicts, useful for breaking ties on disputed
+        # findings. Optional: when not provided, aggregator runs
+        # exactly as before (verdict-only synthesis).
+        self.findings_by_id = {
+            f.get("finding_id"): f for f in (findings or [])
+            if f.get("finding_id")
+        }
+        self._tls = threading.local()
+
     # Threshold value lifted from the producer so any future
     # recalibration touches one place. Kept at module load time —
     # not formatted per call — so prompt-cache keys stay stable.
@@ -509,10 +571,6 @@ class AggregationTask(DispatchTask):
         "farthest from the rest of the panel."
     )
 
-    def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE):
-        self.profile = profile
-        self._tls = threading.local()
-
     def get_models(self, role_resolution):
         return role_resolution.get("aggregate_models", [])
 
@@ -525,10 +583,29 @@ class AggregationTask(DispatchTask):
             UntrustedBlock,
             build_prompt as _build_prompt,
         )
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
 
         content = json.dumps(payload, indent=2, sort_keys=True)
         findings = payload.get("findings", [])
         models = payload.get("models", [])
+
+        # SI evidence per memory-corruption finding in the payload —
+        # helps the aggregator break ties on findings where models
+        # disagree by surfacing structural ground truth (hazards,
+        # allocations, sanitizer-shaped sites). Bounded contribution
+        # per finding (max 12 lines × ~50 chars), and the
+        # rule_id-prefix gate inside evidence_blocks_for_finding
+        # naturally filters out non-MC findings. Findings_by_id
+        # lookup is empty when AggregationTask was constructed
+        # without findings — falls back to verdict-only synthesis.
+        si_blocks: tuple[UntrustedBlock, ...] = ()
+        for finding_summary in findings:
+            fid = finding_summary.get("finding_id")
+            original = self.findings_by_id.get(fid) if fid else None
+            if original is not None:
+                si_blocks = si_blocks + evidence_blocks_for_finding(original)
 
         bundle = _build_prompt(
             system=AggregationTask._SYSTEM_TEXT,
@@ -537,7 +614,7 @@ class AggregationTask(DispatchTask):
                 content=content,
                 kind="multi-model-analysis-results",
                 origin="aggregate:orchestrator",
-            ),),
+            ),) + si_blocks,
             slots={
                 "finding_count": TaintedString(value=str(len(findings)), trust="trusted"),
                 "model_count": TaintedString(value=str(len(models)), trust="trusted"),
@@ -628,8 +705,17 @@ class GroupAnalysisTask(DispatchTask):
     temperature = 0.3
 
     def __init__(self, results_by_id: Optional[Dict[str, Dict]] = None,
+                 findings: Optional[List[Dict[str, Any]]] = None,
                  profile: ModelDefenseProfile = CONSERVATIVE):
         self.results_by_id = results_by_id or {}
+        # Index original findings by finding_id so build_prompt can
+        # call evidence_blocks_for_finding per group member without
+        # rebuilding finding shape from analysis results (which lose
+        # repo_path + metadata.name).
+        self.findings_by_id = {
+            f.get("finding_id"): f for f in (findings or [])
+            if f.get("finding_id")
+        }
         self.profile = profile
         self._tls = threading.local()
 
@@ -642,18 +728,31 @@ class GroupAnalysisTask(DispatchTask):
             TaintedString,
             build_prompt as _build_prompt,
         )
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
 
         finding_ids = group.get("finding_ids", [])
         criterion = group.get("criterion", "unknown")
         criterion_value = group.get("criterion_value", "?")
 
         summaries = []
+        si_blocks: tuple[UntrustedBlock, ...] = ()
         for fid in finding_ids:
             r = self.results_by_id.get(fid, {})
             exploitable = r.get("is_exploitable", "unknown")
             score = r.get("exploitability_score", "?")
             reasoning = (r.get("reasoning") or "")[:300]
             summaries.append(f"- {fid}: exploitable={exploitable}, score={score}\n  {reasoning}")
+
+            # SI evidence per group member — strong signal for
+            # "shared root cause" analysis when multiple group
+            # members carry the same hazard pattern. Returns () for
+            # non-memory-corruption findings, so non-MC groups
+            # naturally surface no SI noise.
+            original = self.findings_by_id.get(fid)
+            if original is not None:
+                si_blocks = si_blocks + evidence_blocks_for_finding(original)
 
         findings_text = "\n".join(summaries) if summaries else "(no prior results)"
 
@@ -664,7 +763,7 @@ class GroupAnalysisTask(DispatchTask):
                 content=findings_text,
                 kind="prior-finding-summaries",
                 origin=f"group:{criterion}={criterion_value}",
-            ),),
+            ),) + si_blocks,
             slots={
                 "criterion": TaintedString(value=str(criterion), trust="untrusted"),
                 "criterion_value": TaintedString(value=str(criterion_value), trust="untrusted"),
@@ -766,6 +865,9 @@ class RetryTask(AnalysisTask):
 
     def build_prompt(self, finding):
         from core.security.prompt_envelope import UntrustedBlock
+        from packages.llm_analysis.source_intel_inject import (
+            evidence_blocks_for_finding,
+        )
 
         fid = finding.get("finding_id")
         r = self.results_by_id.get(fid, {})
@@ -786,6 +888,13 @@ class RetryTask(AnalysisTask):
                     origin=f"retry:self-contradictory:{fid}",
                 ),
             )
+
+        # SI evidence applies to retries of the same finding just as
+        # it did in the original analysis — the structural facts
+        # (allocations, hazards, sanitizer-shaped sites) don't change
+        # between attempts, and the retry LLM benefits from the same
+        # context the primary saw.
+        extra_blocks = extra_blocks + evidence_blocks_for_finding(finding)
 
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=extra_blocks,

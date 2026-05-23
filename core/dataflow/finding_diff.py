@@ -93,7 +93,23 @@ def diff_sarif_files(
     augmented_path: Path,
 ) -> FindingDiff:
     """File-based wrapper for :func:`diff_sarif_data`. Reads both
-    SARIF JSON files and forwards the parsed dicts."""
+    SARIF JSON files and forwards the parsed dicts.
+
+    Size-capped at ``_SARIF_MAX_BYTES`` per file. A hostile CodeQL
+    rule-pack could produce a multi-GiB SARIF; the cap matches
+    ``core/sarif/parser.py``'s policy (128 MiB).
+    """
+    _SARIF_MAX_BYTES = 128 * 1024 * 1024
+    for label, path in (("baseline", baseline_path), ("augmented", augmented_path)):
+        try:
+            sz = path.stat().st_size
+        except OSError as e:
+            raise RuntimeError(f"{label} SARIF stat failed: {e}") from e
+        if sz > _SARIF_MAX_BYTES:
+            raise RuntimeError(
+                f"{label} SARIF {path} exceeds {_SARIF_MAX_BYTES}-byte cap "
+                f"(got {sz})"
+            )
     baseline = json.loads(baseline_path.read_text())
     augmented = json.loads(augmented_path.read_text())
     return diff_sarif_data(baseline, augmented)

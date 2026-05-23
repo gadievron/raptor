@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import re
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,14 +45,34 @@ _DEBIAN_URL = "https://security-tracker.debian.org/tracker/{cve_id}"
 _UBUNTU_URL = "https://ubuntu.com/security/cves.json?q={cve_id}"
 _REDHAT_URL = "https://access.redhat.com/hydra/rest/securitydata/cve/{cve_id}.json"
 
-_HREF_RE = re.compile(r'href="([^"]+)"', re.IGNORECASE)
+# Cap the href character class so an adversarial HTML response can't
+# force the regex engine to materialise a multi-megabyte string per
+# match. 4096 chars is well above any realistic href on the Debian
+# security tracker / Red Hat security data pages we scrape. Pre-fix
+# the unbounded ``[^"]+`` could in principle match the whole response
+# body if the upstream emitted a single multi-megabyte quoted value
+# — input size is already capped at the HTTP-client layer, but
+# defence-in-depth at the regex layer costs nothing.
+_HREF_RE = re.compile(r'href="([^"]{1,4096})"', re.IGNORECASE)
+
+
+# In-memory LRU cap for `_mem`. Pre-cap the dict grew without
+# bound for the lifetime of the process — bench runs that process
+# thousands of CVEs accumulated one entry per (distro, CVE) tuple,
+# each 10-100 KiB. OrderedDict + move_to_end gives true LRU; cap
+# at 10000 entries (≈1 GiB worst case, typically much less).
+_MEM_CACHE_MAX = 10000
 
 
 @dataclass
 class DistroFetcher:
     cache_enabled: bool = True
     cache_dir: Path = field(default_factory=lambda: DEFAULT_CACHE_DIR)
-    _mem: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    # OrderedDict for LRU semantics. Pre-fix this was a plain dict
+    # with monotonic growth.
+    _mem: "OrderedDict[tuple[str, str], dict[str, Any]]" = field(
+        default_factory=OrderedDict
+    )
     _disk: JsonCache | None = field(default=None, repr=False)
     # `_mem_lock` serialises access to the in-memory cache. Pre-fix
     # the `if key in self._mem ... self._mem[key] = result` sequence
@@ -96,12 +117,15 @@ class DistroFetcher:
         # serialising the network round-trips.
         with self._mem_lock:
             if key in self._mem:
+                # LRU touch: move-to-end on read marks this key
+                # as most-recently-used so eviction picks colder
+                # entries.
+                self._mem.move_to_end(key, last=True)
                 return self._mem[key]
         if self.cache_enabled and self._disk is not None:
             hit = self._disk.get(f"{distro}/{cve_id}", ttl_seconds=_CACHE_TTL)
             if isinstance(hit, dict):
-                with self._mem_lock:
-                    self._mem[key] = hit
+                self._mem_put(key, hit)
                 return hit
         result = fetcher(cve_id)
         err = result.get("error", "")
@@ -112,9 +136,24 @@ class DistroFetcher:
         if cacheable:
             if self.cache_enabled and self._disk is not None:
                 self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
-        with self._mem_lock:
-            self._mem[key] = result
+        self._mem_put(key, result)
         return result
+
+    def _mem_put(
+        self, key: tuple[str, str], value: dict[str, Any],
+    ) -> None:
+        """Insert into ``_mem`` under lock with LRU eviction at the
+        ``_MEM_CACHE_MAX`` ceiling. Pre-fix the dict grew without
+        bound; bench runs that processed thousands of CVEs
+        accumulated one entry per (distro, CVE) tuple, each
+        10-100 KiB.
+        """
+        with self._mem_lock:
+            if key in self._mem:
+                self._mem.move_to_end(key, last=True)
+            self._mem[key] = value
+            while len(self._mem) > _MEM_CACHE_MAX:
+                self._mem.popitem(last=False)
 
 
 @functools.lru_cache(maxsize=1)

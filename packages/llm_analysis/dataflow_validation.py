@@ -2375,14 +2375,18 @@ def _fraction_used(cost_tracker: Any) -> float:
     if callable(fn):
         try:
             return float(fn())
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
+            # Narrowed: TypeError if fn doesn't return numeric,
+            # ValueError on float() conversion failure,
+            # AttributeError if cost_tracker exposes the name but
+            # the implementation chained through a missing field.
             pass
     total = getattr(cost_tracker, "total_cost", None)
     budget = getattr(cost_tracker, "budget", None) or getattr(cost_tracker, "max_cost", None)
     if total is not None and budget:
         try:
             return float(total) / float(budget)
-        except Exception:
+        except (TypeError, ValueError, ZeroDivisionError):
             return 0.0
     return 0.0
 

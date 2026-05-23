@@ -418,13 +418,36 @@ def main():
                 if not path.exists():
                     print(f"File not found: {args.file}")
                     return
+                # Symlink + size guard. Pre-fix path.read_text() would
+                # follow a symlink (operator points args.file at
+                # /etc/passwd or /dev/zero) and slurp the entire file
+                # into RAM with no cap. Notes are short prose; 1 MiB
+                # is generous. Refuse symlinks outright — the legit
+                # use case is "pass a regular text file".
+                if path.is_symlink():
+                    print(f"Refusing symlinked notes file: {args.file}")
+                    return
+                try:
+                    size = path.stat().st_size
+                except OSError as e:
+                    print(f"Cannot stat {args.file}: {e}")
+                    return
+                _NOTES_MAX_BYTES = 1 * 1024 * 1024
+                if size > _NOTES_MAX_BYTES:
+                    print(
+                        f"Notes file exceeds {_NOTES_MAX_BYTES}-byte cap "
+                        f"(got {size}). Trim before passing."
+                    )
+                    return
                 mgr.update_notes(args.name, path.read_text().strip())
                 print("Notes updated.")
             elif getattr(args, "edit", False):
                 if not os.isatty(0):
                     print("--edit requires an interactive terminal. Use --file or pass text directly.")
                     return
-                import shlex, tempfile, subprocess
+                import shlex
+                import tempfile
+                import subprocess
                 p = mgr.load(args.name)
                 if not p:
                     print(f"Project '{args.name}' not found.")
@@ -1085,7 +1108,7 @@ def _do_correlate(project, json_out=False):
     # --- Suggested next runs ---
     suggested = result.get("tool_gaps", {}).get("suggested_next_runs", [])
     if suggested:
-        print(f"\n  Next steps:")
+        print("\n  Next steps:")
         for cmd in suggested:
             print(f"    → {cmd}")
 

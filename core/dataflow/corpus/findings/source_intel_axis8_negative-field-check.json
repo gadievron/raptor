@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-field-check",
+  "producer": "codeql",
+  "rule_id": "cpp/uncontrolled-allocation-size",
+  "message": "source_intel_axis8_negative-field-check",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_field_check.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "struct gaite_s *gaite = gait_base + (si * sizeof(struct gaite_s));",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_negative_field_check.c",
+    "line": 14,
+    "column": 2,
+    "snippet": "struct gaite_s *gaite = gait_base + (si * sizeof(struct gaite_s));",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

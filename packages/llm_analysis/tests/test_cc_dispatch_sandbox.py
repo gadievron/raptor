@@ -14,6 +14,7 @@ proxy host without justification, the equality check catches it.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -209,8 +210,8 @@ def test_invoke_cc_simple_does_NOT_set_undocumented_env_vars(
     reason="no Claude Code credentials in ~/.claude — skipping live test",
 )
 @pytest.mark.skipif(
-    not Path("/home/raptor/.local/bin/claude").exists(),
-    reason="claude binary not at expected path",
+    shutil.which("claude") is None,
+    reason="claude binary not found on PATH",
 )
 def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
     """Drive a real cc_dispatch invocation and assert that the LLM

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-gets",
+  "verdict": "false_positive",
+  "rationale": "FORTIFY redirects gets() to a safer variant or aborts; gets is in _FORTIFIED_WRITE_CALLS.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

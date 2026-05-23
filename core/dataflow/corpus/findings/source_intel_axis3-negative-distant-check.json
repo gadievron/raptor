@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3-negative-distant-check",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "Pointer `p` from kstrdup dereferenced via `use_string(p)`.",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_negative_distant_check.c",
+    "line": 39,
+    "column": 2,
+    "snippet": "p = kstrdup(s, 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_negative_distant_check.c",
+    "line": 42,
+    "column": 2,
+    "snippet": "use_string(p);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

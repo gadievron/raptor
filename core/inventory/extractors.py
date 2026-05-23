@@ -12,7 +12,7 @@ import re
 import logging
 import warnings
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +291,61 @@ class CExtractor:
     KNR_FUNCNAME = r'(?a)^(\w+)\s*\([\w\s,]*\)\s*$'
     FUNCNAME_OPEN_PAREN = r'(?a)^(\w+)\s*\([^)]*$'
 
+    # Multi-line function-definition opener cases the single-line
+    # patterns above miss (surfaced by source_intel E2E on curl,
+    # openssl, and linux kernel):
+    #
+    #  1. Args span multiple lines:
+    #       static CURLcode do_sendmsg(struct Curl_cfilter *cf,
+    #                                  struct Curl_easy *data,
+    #                                  ...)
+    #       {
+    #     ANSI_PATTERN needs `{` on the close-paren line; ANSI_SPLIT_PATTERN
+    #     needs both args and close-paren on one line. Neither fires.
+    #
+    #  2. Pointer-return with no space between `*` and name:
+    #       struct page *selinux_kernel_status_page(void)
+    #     ANSI_PATTERN's `\s+(\w+)` requires whitespace before the name,
+    #     which `*name` doesn't satisfy.
+    #
+    #  3. Combination of the above with split type + name:
+    #       static char *
+    #       minstrel_ht_stats_csv_dump(struct minstrel_ht_sta *mi,
+    #                                  int i, char *p)
+    #       {
+    #     KNR_FUNCNAME's prev-line heuristic catches some split cases
+    #     but bails when the args span multiple lines.
+    #
+    # MULTILINE_OPENER_PREFIX is a CHEAP trigger — matches any line
+    # that starts with `<word>...<word> <name>(` (with possible
+    # pointer sigils between type and name) OR starts with `<name>(`
+    # alone (split-type case where type is on the previous line).
+    # When triggered, the walker forward-joins lines until paren
+    # balance, then validates with MULTILINE_OPENER_FULL.
+    # Type-prefixed openers may indent slightly (function-like
+    # macros in older code); name-only openers (split-type case)
+    # MUST start at column 0 to avoid burning the 50-line walker on
+    # every indented call site like `    printf("hi");`. C function
+    # definitions live at top-level scope, so column-0 anchoring is
+    # accurate.
+    MULTILINE_OPENER_PREFIX = re.compile(
+        r'(?a)^(?:'
+        r'\s{0,4}(?:[A-Za-z_][A-Za-z_0-9]*[\s*&]+)+[A-Za-z_][A-Za-z_0-9]*\s*\('
+        r'|'
+        r'[A-Za-z_][A-Za-z_0-9]*\s*\('
+        r')'
+    )
+    MULTILINE_OPENER_FULL = re.compile(
+        r'(?a)^\s*(?:[A-Za-z_][A-Za-z_0-9]*[\s*&]+)*'
+        r'(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*\([^;{]*?\)\s*\{?'
+    )
+    # Type-only previous line (for split type + name decls):
+    # `static char *`, `struct page *`, `static __always_inline u64`.
+    # Anchored: must start with a word, end without `(`, `)`, `;`, `:`.
+    TYPE_ONLY_LINE = re.compile(
+        r'(?a)^\s*[A-Za-z_][A-Za-z_0-9]*[A-Za-z_0-9*&\s]*$'
+    )
+
     C_TYPE_HINTS = frozenset({
         'void', 'int', 'char', 'short', 'long', 'float', 'double',
         'unsigned', 'signed', 'static', 'extern', 'inline',
@@ -401,9 +456,126 @@ class CExtractor:
                                 if fwd_stripped.startswith('#'):
                                     break
 
+            # Multi-line opener path — handles the three cases
+            # documented at MULTILINE_OPENER_PREFIX. Cheap prefix
+            # match first; on hit, forward-join until paren balance,
+            # then validate against the full pattern.
+            if (name := self._multiline_opener_match(lines, i, seen)) is not None:
+                functions.append(FunctionInfo(
+                    name=name, line_start=i + 1,
+                    metadata=self._c_metadata(lines[i], name),
+                ))
+                seen.add(name)
+
             i += 1
 
         return functions
+
+    def _multiline_opener_match(
+        self, lines: list, i: int, seen: set,
+    ) -> Optional[str]:
+        """Try matching a multi-line function-definition opener
+        starting at ``lines[i]``. Returns the function name on a
+        valid match (and the body opener `{` is found within a few
+        lines after the close paren), else ``None``.
+
+        Two opener shapes accepted by ``MULTILINE_OPENER_PREFIX``:
+          * `<type>... <name>(...` — standard with type prefix on
+            this line. Args may span multiple lines.
+          * `<name>(...` with no type prefix — checked against the
+            previous line being a type-only return-type line
+            (``TYPE_ONLY_LINE``).
+
+        Forward-joins up to 50 lines until paren balance. Inline
+        ``/* ... */`` block comments are stripped per-line so paren
+        counts aren't fooled by literal parens inside comments.
+        """
+        line = lines[i]
+        if not self.MULTILINE_OPENER_PREFIX.match(line):
+            return None
+
+        # Determine which opener shape this is. If the line has no
+        # type prefix (starts directly with `<name>(`), require the
+        # previous non-blank line to be a type-only line.
+        has_type_on_line = bool(re.match(
+            r'(?a)^\s*[A-Za-z_][A-Za-z_0-9]*[\s*&]+[A-Za-z_]',
+            line,
+        ))
+        if not has_type_on_line:
+            prev_idx = i - 1
+            while prev_idx >= 0 and not lines[prev_idx].strip():
+                prev_idx -= 1
+            if prev_idx < 0:
+                return None
+            prev = lines[prev_idx].rstrip()
+            prev_stripped = re.sub(r'/\*.*?\*/', '', prev)
+            prev_stripped = re.sub(r'//.*$', '', prev_stripped)
+            if any(c in prev_stripped for c in '();:'):
+                return None
+            if prev_stripped.lstrip().startswith(('#', '/*', '//', '*')):
+                return None
+            if not self.TYPE_ONLY_LINE.match(prev_stripped):
+                return None
+
+        # Join forward until paren balance. Strip inline block
+        # comments so literal `(` / `)` inside comments don't
+        # corrupt the depth count.
+        depth = 0
+        pieces: list = []
+        terminator: Optional[int] = None
+        for j in range(i, min(i + 50, len(lines))):
+            text = lines[j].rstrip()
+            if len(text) > self._MAX_C_LINE:
+                return None
+            text_clean = re.sub(r'/\*.*?\*/', '', text)
+            text_clean = re.sub(r'//.*$', '', text_clean)
+            pieces.append(text_clean)
+            for ch in text_clean:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+            saw_paren = sum(p.count('(') for p in pieces) > 0
+            if saw_paren and depth <= 0 and j >= i:
+                terminator = j
+                break
+        if terminator is None:
+            return None
+
+        joined = ' '.join(p.strip() for p in pieces)
+        m = self.MULTILINE_OPENER_FULL.match(joined)
+        if not m:
+            return None
+        name = m.group('name')
+        if name in self.KEYWORDS or name in seen:
+            return None
+
+        # Body-definition check: look for `{` within a few lines of
+        # the terminator. A `;` instead means it's a declaration
+        # (prototype), not a definition — skip.
+        for k in range(terminator, min(terminator + 5, len(lines))):
+            tail = lines[k]
+            if k == terminator:
+                # Strip up through the close paren to inspect what
+                # follows on the same line.
+                idx = tail.find(')')
+                if idx >= 0:
+                    after = tail[idx + 1:].lstrip()
+                    if after.startswith('{'):
+                        return name
+                    if after.startswith(';'):
+                        return None
+            else:
+                t = tail.strip()
+                if t.startswith('{'):
+                    return name
+                if t.startswith(';'):
+                    return None
+                if t and not t.startswith(('//', '/*', '*')):
+                    # First non-comment, non-empty line wasn't `{`
+                    # or `;` — not a clean definition opener.
+                    return None
+        return None
 
 
 class JavaExtractor:
@@ -552,6 +724,16 @@ except ImportError:
     _TS_AVAILABLE = False
 
 
+# Per-language Parser cache. Pre-cache, ``TreeSitterExtractor(lang)``
+# constructed a fresh ``TSParser(ts_language)`` on every instance —
+# which is per-file in ``_extract_with_tree_sitter``. The grammar
+# is immutable across the program's lifetime so a single Parser
+# per language can be reused across every parse. Cache by the
+# language NAME (not Language object identity) because
+# ``_ts_language`` wraps a new Language per call.
+_TS_PARSER_BY_LANG: Dict[str, Any] = {}
+
+
 def _ts_language(lang: str):
     """Load tree-sitter language grammar. Returns None if not installed."""
     try:
@@ -579,6 +761,24 @@ def _ts_language(lang: str):
         return Language(ts.language())
     except ImportError:
         return None
+
+
+def _ts_parser_for(lang: str):
+    """Return a cached ``TSParser`` for ``lang``, or None if the
+    grammar isn't installed. Mirrors ``_get_ts_parser`` in
+    ``core/inventory/call_graph.py`` but keyed by language NAME so
+    repeated ``TreeSitterExtractor(lang)`` constructions across
+    many files share one Parser per grammar.
+    """
+    cached = _TS_PARSER_BY_LANG.get(lang)
+    if cached is not None:
+        return cached
+    ts_lang = _ts_language(lang)
+    if ts_lang is None:
+        return None
+    parser = TSParser(ts_lang)
+    _TS_PARSER_BY_LANG[lang] = parser
+    return parser
 
 
 class TreeSitterExtractor:
@@ -613,10 +813,10 @@ class TreeSitterExtractor:
         self.language = language
         self.func_types = self._FUNC_TYPES.get(language, ())
         self.class_types = self._CLASS_TYPES.get(language, ())
-        ts_lang = _ts_language(language)
-        if not ts_lang:
+        parser = _ts_parser_for(language)
+        if parser is None:
             raise RuntimeError(f"tree-sitter grammar not available for {language}")
-        self.parser = TSParser(ts_lang)
+        self.parser = parser
 
     def extract(self, filepath: str, content: str, _tree=None) -> List[FunctionInfo]:
         if _tree is None:
@@ -768,6 +968,14 @@ class TreeSitterExtractor:
                 return child.text.decode()
             # C/C++: name is inside function_declarator
             if child.type == "function_declarator":
+                return self._get_name(child)
+            # C/C++: pointer-return functions wrap the
+            # function_declarator inside a pointer_declarator. Without
+            # this case, every `static char *foo(...)`-style decl is
+            # silently dropped from the inventory — surfaced by
+            # source_intel E2E on linux net/ (rc80211_minstrel_ht_debugfs.c
+            # `minstrel_ht_stats_csv_dump`).
+            if child.type == "pointer_declarator":
                 return self._get_name(child)
             # Go: name is inside field_identifier for methods.
             # C++: same node type covers in-class method declarations
@@ -1263,7 +1471,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
     """
     lines = content.splitlines()
     total = len(lines)
-    blank = sum(1 for l in lines if not l.strip())
+    blank = sum(1 for line in lines if not line.strip())
 
     # Use cached tree if provided
     if _tree is not None:
@@ -1272,9 +1480,8 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
 
     if _TS_AVAILABLE:
         try:
-            ts_lang = _ts_language(language)
-            if ts_lang:
-                parser = TSParser(ts_lang)
+            parser = _ts_parser_for(language)
+            if parser is not None:
                 tree = parser.parse(content.encode())
                 comment_lines = _count_comment_lines_ts(tree.root_node)
                 return max(0, total - blank - comment_lines)

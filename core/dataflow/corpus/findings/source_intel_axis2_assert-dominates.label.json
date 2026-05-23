@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_assert-dominates",
+  "verdict": "false_positive",
+  "rationale": "Surface shape: CWE-476 null-deref of `p` at line 62. `assert(...)` at the line above aborts execution if p is NULL, so deref is unreachable on NULL path. Axis 2 abort_proximate.cocci detects the assert call site with same_function grade; \u00b150 line proximity satisfied. Verdict NOT_EXPLOITABLE (DoS only).",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

@@ -11,7 +11,7 @@ Handles HTTP requests with safety features:
 """
 
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from urllib.parse import urlparse, urljoin
 
 import requests
@@ -21,6 +21,17 @@ from core.security.redaction import redact_secrets
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _MAX_REDIRECTS = 10
+
+# Cap on buffered response body. A hostile in-scope endpoint can
+# serve multi-GB responses (or chunked-encoding slowloris) and OOM
+# the scanner. 128 MiB is generous for real HTML / API responses
+# (typical pages <1 MiB) and catches the catastrophic shapes.
+_MAX_RESPONSE_BYTES = 128 * 1024 * 1024
+
+# Cap on request_history length — without this, long-running scans
+# against large targets accumulate hundreds of MB (full request +
+# response captured per call) until process exit.
+_MAX_REQUEST_HISTORY = 1024
 
 logger = get_logger()
 
@@ -43,8 +54,13 @@ class WebClient:
             'User-Agent': 'RAPTOR Security Scanner (Authorized Testing)',
         })
 
-        # Request history
-        self.request_history: List[Dict[str, Any]] = []
+        # Request history — bounded ring buffer. Pre-cap, long scans
+        # accumulated full request/response dicts (hundreds of MB on
+        # large targets) until process exit.
+        from collections import deque
+        self.request_history: "deque[Dict[str, Any]]" = deque(
+            maxlen=_MAX_REQUEST_HISTORY,
+        )
 
         logger.info(f"Web client initialized for {base_url} (verify_ssl={verify_ssl})")
 
@@ -115,15 +131,23 @@ class WebClient:
                 timeout=self.timeout,
                 allow_redirects=False,
                 verify=self.verify_ssl,
+                stream=True,  # so we can size-cap before reading
                 **request_kwargs,
             )
             response.history = history[:]
 
+            # Bound the buffered response body. requests' default is
+            # unbounded; a hostile in-scope endpoint can serve multi-GB
+            # responses (or chunked-encoding slowloris) and OOM the
+            # scanner. Forcibly stream the body up to the cap; close
+            # the connection if the upstream tries to exceed.
             if response.status_code not in _REDIRECT_STATUSES:
+                self._enforce_response_cap(response)
                 return response
 
             next_url = self._resolve_redirect(current_url, response)
             if not next_url:
+                self._enforce_response_cap(response)
                 return response
 
             # Eagerly close the intermediate response's underlying
@@ -155,12 +179,55 @@ class WebClient:
                 request_kwargs.pop('data', None)
                 request_kwargs.pop('json', None)
 
-            # Query params/body should not be replayed to redirect targets.
+            # Query params/body should not be replayed to redirect
+            # targets. Per-call headers (including Authorization,
+            # Cookie, X-API-Key) DO survive redirects — the scope
+            # check above already enforces strict scheme+host+port
+            # equality on every redirect target, so headers only
+            # cross to same-origin endpoints. This is what
+            # authenticated scanning needs: OAuth callback chains,
+            # API-versioning redirects, streaming-API load-balancer
+            # redirects, and cookie-based session state all require
+            # the credentials to follow the redirect within the
+            # configured origin.
             request_kwargs.pop('params', None)
 
         raise requests.exceptions.TooManyRedirects(
             f"Exceeded {_MAX_REDIRECTS} redirects within configured target scope"
         )
+
+    def _enforce_response_cap(self, response: requests.Response) -> None:
+        """Read the streamed body into ``response._content`` up to
+        :data:`_MAX_RESPONSE_BYTES`. If the body exceeds the cap,
+        truncate and close the connection — the caller sees a body
+        of exactly ``_MAX_RESPONSE_BYTES`` bytes rather than the
+        process OOMing on a hostile multi-GB response.
+        """
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= _MAX_RESPONSE_BYTES:
+                    logger.warning(
+                        "WebClient: response body exceeded %d-byte cap "
+                        "at %s; truncating",
+                        _MAX_RESPONSE_BYTES,
+                        self._redact_for_logging(response.url or "<unknown>"),
+                    )
+                    try:
+                        response.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
+            response._content = b"".join(chunks)
+        except requests.exceptions.RequestException:
+            # Let the caller see whatever was buffered; do not raise
+            # from the cap-enforcer.
+            response._content = b"".join(chunks) if chunks else b""
 
     def get(self, path: str, params: Optional[Dict] = None,
             headers: Optional[Dict] = None) -> requests.Response:
@@ -254,3 +321,22 @@ class WebClient:
             'avg_duration': total_duration / total_requests if total_requests > 0 else 0,
             'status_codes': status_codes,
         }
+
+    def close(self) -> None:
+        """Close the underlying ``requests.Session`` and free its
+        connection pool. Idempotent.
+
+        Without this, long-lived scanner processes that instantiate
+        ``WebClient`` per target accumulate one urllib3 connection
+        pool (sockets + SSL contexts) per scan until process exit.
+        """
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001 — close() must not raise
+            pass
+
+    def __enter__(self) -> "WebClient":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()

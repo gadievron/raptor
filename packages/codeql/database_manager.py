@@ -218,8 +218,18 @@ class DatabaseManager:
                 # Combine with repo path to ensure uniqueness
                 combined = f"{repo_path}:{git_hash}"
                 return sha256_string(combined)[:16]
-        except Exception:
-            pass
+        except (subprocess.SubprocessError, OSError) as exc:
+            # Narrowed from bare Exception. ``subprocess.run`` raises
+            # SubprocessError subclasses (TimeoutExpired,
+            # CalledProcessError) and OSError on exec failure.
+            # Programming bugs (TypeError on a renamed kwarg) should
+            # still propagate so they surface in tests. Falls through
+            # to the directory-structure hash below either way.
+            logger.debug(
+                "codeql DM: git rev-parse failed for %s: %s; "
+                "falling back to directory hash",
+                repo_path, exc,
+            )
 
         # Fallback: hash directory structure and file sizes (no
         # mtime). Iterative accumulator (mixing many inputs into

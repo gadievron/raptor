@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fortify-suppresses-memcpy",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Surface shape is a CWE-787 unbounded-write into a 128-byte stack buffer via memcpy(). The compile_commands.json sibling shows `-D_FORTIFY_SOURCE=2`, so glibc rewrites memcpy() to __memcpy_chk(), which validates `len <= __builtin_object_size(setup_buf, 0)` (=128) at runtime and aborts on violation. The bug primitive is gated by FORTIFY — exploitation reduced to abort()/SIGABRT (no memory corruption). Source_intel axis 6 (build_flags) reads `fortify_source_level=2` from compile_commands.json; axis-6 consumer `_fortify_source_blocks_finding()` sees rule_id=`cpp/unbounded-write` and `memcpy` in the sink snippet (it's in _FORTIFIED_WRITE_CALLS) → emit NOT_EXPLOITABLE. Crafted fixture, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

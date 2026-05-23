@@ -88,14 +88,16 @@ def _client(
 
     client = LLMClient.__new__(LLMClient)
     import threading
+    from collections import OrderedDict
     client.config = cfg
     client.providers = {}
     client.total_cost = 0.0
     client.request_count = 0
     client.task_type_costs = {}
     client._stats_lock = threading.RLock()
-    client._key_locks = {}
+    client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
+    client._key_locks_cap = 4096
     return client
 
 
@@ -404,7 +406,8 @@ def test_ttl_expired_entry_treated_as_miss(tmp_path: Path) -> None:
     assert fake.calls == 1
 
     # Back-date the cache entry to 2 minutes ago.
-    import json, time
+    import json
+    import time
     cache_files = list(client.config.cache_dir.glob("structured-*.json"))
     assert len(cache_files) == 1
     data = json.loads(cache_files[0].read_text(encoding="utf-8"))

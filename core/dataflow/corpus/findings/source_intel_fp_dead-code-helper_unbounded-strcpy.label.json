@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fp_dead-code-helper_unbounded-strcpy",
+  "verdict": "false_positive",
+  "fp_category": "dead_code",
+  "rationale": "Surface shape is a CWE-120 unbounded strcpy into a 16-byte stack buffer — would be a real bug if reachable. `unsafe_helper` is `static` and has zero callers anywhere in the codebase (orphan dead code). The bug primitive cannot be triggered. Source_intel composes with PR-4's `engine/coccinelle/prereqs/function_inventory.cocci`: the rule emits a `def:unsafe_helper` record but no matching `call:unsafe_helper`, which is the orphan-static-helper signal already shipped on main. Stage D LLM consumes the evidence and rules dead_code. Crafted fixture, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-11"
+}

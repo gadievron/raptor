@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_wur-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `risky_alloc` annotated WUR (warn_unused_result); call site at line 27 ignores the return. Source_intel axis 1 (attrs) detects WUR via cocci, finds `risky_alloc` in the sink snippet, rule_id `cpp/unchecked-return` is in WUR-relevant set \u2192 EXPLOITABLE. Verdict-active path E2E.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

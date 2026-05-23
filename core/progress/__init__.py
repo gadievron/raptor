@@ -182,9 +182,31 @@ class HackerProgress:
         sys.stderr.flush()
 
     def finish(self, message: str = "Complete"):
-        """Finish progress and move to new line."""
-        elapsed = self._format_time(time.time() - self.start_time)
-        sys.stderr.write(f"\r\033[K{self._CHECK} {message} ({elapsed})\n")
+        """Finish progress and move to new line.
+
+        Emits a final state line BEFORE the checkmark so the
+        last counter value is visible even when the throttle
+        (``now - last_update < 1.0`` in ``update()``) suppressed
+        the previous emit. Pre-fix: a tight loop that called
+        ``update(current=N)`` for the last increment and then
+        ``finish()`` <1s later would skip the final ``N/N``
+        render entirely and leave the operator looking at a
+        stale earlier value before the checkmark — e.g.
+        ``9/10 ✓ Complete``.
+        """
+        elapsed_seconds = time.time() - self.start_time
+        elapsed = self._format_time(elapsed_seconds)
+        # Force-flush the final counter line unconditionally
+        # (bypassing the 1s throttle in ``update``).
+        if self.total:
+            progress = f"{self.current}/{self.total}"
+            sys.stderr.write(
+                f"\r\033[K{self._CHECK} {message} {progress} ({elapsed})\n"
+            )
+        else:
+            sys.stderr.write(
+                f"\r\033[K{self._CHECK} {message} ({elapsed})\n"
+            )
         sys.stderr.flush()
 
     def __enter__(self):

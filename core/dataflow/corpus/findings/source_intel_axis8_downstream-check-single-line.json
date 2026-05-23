@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_downstream-check-single-line",
+  "producer": "codeql",
+  "rule_id": "cpp/uncontrolled-allocation-size",
+  "message": "source_intel_axis8_downstream-check-single-line",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_downstream_check_radeon_style.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "int size = pitch * cpp * maxy;",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis8_downstream_check_radeon_style.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "int size = pitch * cpp * maxy;",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_conditional-wur",
+  "verdict": "true_positive",
+  "rationale": "Function `conditional_alloc` annotated WUR only when CONFIG_HARDENED_KSTRDUP is defined. Axis-1 detects WUR but evidence carries `conditional_on=CONFIG_HARDENED_KSTRDUP`. Verdict policy still emits EXPLOITABLE (Stage D LLM is expected to attenuate based on build context if needed). Tests that the conditional capture mechanism doesn't suppress the verdict path.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

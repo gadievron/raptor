@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_nonnull-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `requires_nonnull` annotated NONNULL; caller passes `q` which may be NULL. Axis-1 attrs detects NONNULL, rule_id `cpp/null-dereference` in NONNULL-relevant set \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

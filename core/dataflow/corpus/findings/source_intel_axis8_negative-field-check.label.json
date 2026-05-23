@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis8_negative-field-check",
+  "verdict": "true_positive",
+  "rationale": "Surface: pointer arithmetic `gaite = base + (si * sizeof(...))` with attacker-controlled `si`. Downstream `if (gaite->count == 0) return -1;` checks a FIELD of gaite (the value at the computed pointer), NOT the pointer or the offset. Doesn't mitigate the overflow \u2014 gaite may point out-of-bounds, and reading `gaite->count` from OOB memory is undefined. Axis 8 must NOT suppress: the var-rel regex (`var <relop>`) requires the comparison to be on the variable itself, not a field via `->`. Verdict UNCERTAIN. Inspired by s390/kvm/interrupt.c:3337.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

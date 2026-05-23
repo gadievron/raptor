@@ -32,6 +32,26 @@ logger = get_logger()
 
 
 # ---------------------------------------------------------------------------
+# Default token budgets when MODEL_LIMITS doesn't carry an entry for a
+# specific model. Centralised so a model bump only needs one edit, not
+# the four-to-six call-sites that previously each spelled out the
+# integers inline:
+#
+#   - ``_build_anthropic_config``        : Anthropic frontier (1M context, 32k output)
+#   - ``_build_openai_config``           : OpenAI frontier (1M context, 32k output)
+#   - ``_build_ollama_config`` cold path : conservative local model defaults
+#   - ``_get_configured_models`` ``max_tokens=64000`` user-supplied model entries
+#
+# Operators can override per-model via models.json; these are the
+# floors used when MODEL_LIMITS / models.json don't carry a value.
+_DEFAULT_MAX_CONTEXT_FRONTIER: int = 1_000_000   # current frontier (Sonnet/Opus 4.x, GPT-4.x)
+_DEFAULT_MAX_CONTEXT_LOCAL: int = 32_000          # local-quant Ollama default
+_DEFAULT_MAX_OUTPUT_FRONTIER: int = 32_000        # frontier output cap
+_DEFAULT_MAX_OUTPUT_USER_CONFIGURED: int = 64_000  # models.json-supplied model output cap
+_DEFAULT_MAX_OUTPUT_LOCAL: int = 4_096            # local quant safe default
+
+
+# ---------------------------------------------------------------------------
 # Config file reading
 # ---------------------------------------------------------------------------
 
@@ -160,11 +180,48 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
                         # Determine max_tokens and max_context from config or limits
                         limits = MODEL_LIMITS.get(entry_model, {})
-                        max_tokens = model_entry.get('max_output', limits.get('max_output', 64000))
-                        max_context = model_entry.get('max_context', limits.get('max_context', 32000))
+                        max_tokens = model_entry.get(
+                            'max_output',
+                            limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
+                        )
+                        max_context = model_entry.get(
+                            'max_context',
+                            limits.get('max_context', _DEFAULT_MAX_CONTEXT_LOCAL),
+                        )
 
-                        # Set api_base for non-Anthropic providers
-                        api_base = PROVIDER_ENDPOINTS.get(entry_provider)
+                        # Set api_base for non-Anthropic providers. For
+                        # ``ollama`` specifically, prefer the operator-
+                        # configured ``RaptorConfig.OLLAMA_HOST`` over
+                        # the ``localhost:11434`` default; otherwise an
+                        # operator running a remote Ollama server gets a
+                        # ``Connection refused`` against their loopback
+                        # interface even though the rest of the codebase
+                        # (``_build_ollama_config`` /
+                        # ``_ollama_check_url``) correctly honours the
+                        # configured host. Explicit ``api_base`` in
+                        # ``model_entry`` wins over both — handled below
+                        # via the ``Optional overrides from config``
+                        # path.
+                        if entry_provider == "ollama":
+                            from core.config import RaptorConfig
+                            # Reuse the same scheme/url validator
+                            # the cold-start path uses
+                            # (``_build_ollama_config``). Pre-fix
+                            # the user-config branch took
+                            # ``OLLAMA_HOST`` raw — an operator who
+                            # forgot the scheme (``example.com:11434``
+                            # instead of ``http://example.com:11434``)
+                            # got a broken ``api_base`` here even
+                            # though the cold-start path would have
+                            # surfaced the same misconfig as a
+                            # ValueError. Run through the validator
+                            # so both paths fail the same way.
+                            ollama_base = _validate_ollama_url(
+                                RaptorConfig.OLLAMA_HOST,
+                            )
+                            api_base = f"{ollama_base.rstrip('/')}/v1"
+                        else:
+                            api_base = PROVIDER_ENDPOINTS.get(entry_provider)
 
                         # Optional overrides from config
                         timeout = model_entry.get('timeout', 120)
@@ -219,8 +276,8 @@ def _build_anthropic_config() -> Optional['ModelConfig']:
         provider="anthropic",
         model_name=default_model,
         api_key=os.getenv("ANTHROPIC_API_KEY"),
-        max_tokens=limits.get("max_output", 32000),
-        max_context=limits.get("max_context", 1000000),
+        max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
+        max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
         temperature=0.7,
         cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,
     )
@@ -254,8 +311,14 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
         model_name=default_model,
         api_key=api_key,
         api_base=PROVIDER_ENDPOINTS[provider_name],
+        # OpenAI-family providers (OpenAI, Mistral, Cohere) — historical
+        # default tuned for GPT-4.x-class models. Frontier defaults
+        # would over-allocate for older models still routed through this
+        # builder; the per-model ``MODEL_LIMITS`` entry takes precedence
+        # when present so the fallback only kicks in for unfamiliar
+        # models.
         max_tokens=limits.get("max_output", 8192),
-        max_context=limits.get("max_context", 128000),
+        max_context=limits.get("max_context", 128_000),
         temperature=0.7,
         cost_per_1k_tokens=avg_cost,
     )
@@ -287,13 +350,15 @@ def _build_ollama_config() -> Optional['ModelConfig']:
     if limits is None:
         logger.info(
             f"Model '{selected_model}' not in MODEL_LIMITS — using defaults "
-            f"(max_context=32000, max_output=4096). Override in models.json if needed."
+            f"(max_context={_DEFAULT_MAX_CONTEXT_LOCAL}, "
+            f"max_output={_DEFAULT_MAX_OUTPUT_LOCAL}). "
+            f"Override in models.json if needed."
         )
-        max_output = 4096
-        max_context = 32000
+        max_output = _DEFAULT_MAX_OUTPUT_LOCAL
+        max_context = _DEFAULT_MAX_CONTEXT_LOCAL
     else:
-        max_output = limits.get("max_output", 4096)
-        max_context = limits.get("max_context", 32000)
+        max_output = limits.get("max_output", _DEFAULT_MAX_OUTPUT_LOCAL)
+        max_context = limits.get("max_context", _DEFAULT_MAX_CONTEXT_LOCAL)
     return ModelConfig(
         provider="ollama",
         model_name=selected_model,
@@ -453,13 +518,25 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
     costs = MODEL_COSTS.get(model_name, {})
     cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
 
+    # Honour the operator-configured remote Ollama host (see
+    # ``_get_configured_models`` for the same fix in the cold-start
+    # path); ``PROVIDER_ENDPOINTS["ollama"]`` is a localhost default
+    # that's wrong for any operator running Ollama on a separate
+    # machine. Validator surface mirrors ``_build_ollama_config`` so
+    # an OLLAMA_HOST without a scheme fails the same way here.
+    if provider == "ollama":
+        from core.config import RaptorConfig
+        ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
+        api_base = f"{ollama_base.rstrip('/')}/v1"
+    else:
+        api_base = PROVIDER_ENDPOINTS.get(provider)
     return ModelConfig(
         provider=provider,
         model_name=model_name,
         api_key=api_key,
-        api_base=PROVIDER_ENDPOINTS.get(provider),
+        api_base=api_base,
         max_tokens=entry.get("max_output", limits.get("max_output", 8192)),
-        max_context=entry.get("max_context", limits.get("max_context", 32000)),
+        max_context=entry.get("max_context", limits.get("max_context", _DEFAULT_MAX_CONTEXT_LOCAL)),
         timeout=entry.get("timeout", 120),
         temperature=0.7,
         cost_per_1k_tokens=cost_per_1k,
@@ -489,17 +566,27 @@ def _build_fast_model_for(primary: 'ModelConfig') -> Optional['ModelConfig']:
     costs = MODEL_COSTS.get(fast_name, {})
     cost_per_1k = (costs.get("input", 0.0) + costs.get("output", 0.0)) / 2
 
+    # Same Ollama-host fix as the cold-start + user-config paths —
+    # inherit ``primary.api_base`` for Ollama since the primary was
+    # built with the operator-configured ``OLLAMA_HOST`` already, and
+    # the localhost default in ``PROVIDER_ENDPOINTS`` would override
+    # it. For other providers ``PROVIDER_ENDPOINTS`` is correct
+    # (api.openai.com etc.).
+    if primary.provider == "ollama":
+        api_base = primary.api_base
+    else:
+        api_base = PROVIDER_ENDPOINTS.get(primary.provider) or primary.api_base
     return ModelConfig(
         provider=primary.provider,
         model_name=fast_name,
         api_key=primary.api_key,
-        api_base=PROVIDER_ENDPOINTS.get(primary.provider) or primary.api_base,
+        api_base=api_base,
         # Fast-tier work (verdicts, classification) is short-output by
         # design — no need to inherit the primary's max_tokens, which
         # may be sized for code-generation. Use the catalog default,
         # which is already provider-appropriate for the small model.
-        max_tokens=limits.get("max_output", 4096),
-        max_context=limits.get("max_context", 32000),
+        max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_LOCAL),
+        max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_LOCAL),
         timeout=primary.timeout,
         # Lower temperature than the primary's default — the workloads
         # routed here (yes/no, classify) don't benefit from sampling
@@ -958,15 +1045,3 @@ class LLMConfig:
                 return model
         return self.primary_model
 
-    def get_available_models(self) -> List[ModelConfig]:
-        """Get list of all available models (primary + fallbacks)."""
-        models = [self.primary_model] if self.primary_model else []
-        if self.enable_fallback:
-            models.extend(self.fallback_models)
-        return [m for m in models if m.enabled]
-
-    def get_retry_delay(self, api_base: Optional[str] = None) -> float:
-        """Get appropriate retry delay based on server location."""
-        if api_base and ("localhost" not in api_base and "127.0.0.1" not in api_base):
-            return self.retry_delay_remote
-        return self.retry_delay

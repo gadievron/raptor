@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis5_kmalloc-variant-3-1-ratio",
+  "verdict": "true_positive",
+  "rationale": "kmalloc variant of axis-5 (not kstrdup). 3 checked + 1 unchecked \u2192 variant_ratio(kmalloc) = (3, 1). Axis-3 fires EXPLOITABLE on the unchecked site. Tests axis-5 generality beyond kstrdup.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kmalloc return into local p",
+    "write_site_guard": "kmalloc must succeed before use",
+    "read_site_lacks_guard": true,
+    "notes": "kmalloc variant \u2014 same lifecycle precondition as kstrdup."
+  }
+}

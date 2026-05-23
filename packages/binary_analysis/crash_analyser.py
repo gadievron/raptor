@@ -17,7 +17,7 @@ from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import platform
 
 from core.config import RaptorConfig
@@ -59,6 +59,28 @@ class CrashContext:
 
     # Generated artifacts
     exploit_code: Optional[str] = None
+
+    # Compile-verification result for ``exploit_code``. ``None`` means
+    # verification was not attempted (no LLM exploit emitted, target
+    # language unsupported, or compiler unavailable / skipped);
+    # ``True`` / ``False`` reflect gcc's verdict in a sandbox.
+    # ``exploit_compile_errors`` carries the parsed compiler
+    # diagnostics when compilation fails — preserved so downstream
+    # consumers (reporting, future refinement loop) can see why the
+    # LLM's exploit didn't build. Empty list means "no errors
+    # observed" or "compilation not attempted". Mirrors the contract
+    # defined in ``packages.llm_analysis.exploit_verify``.
+    exploit_compiled: Optional[bool] = None
+    exploit_compile_errors: List[str] = field(default_factory=list)
+
+    # Intent-match verdict on ``exploit_code`` — whether the
+    # LLM-emitted exploit targets THIS crash specifically. Produced
+    # by ``packages.llm_analysis.intent_match.intent_match`` and
+    # stored as a dict (the dataclass's ``asdict()`` form). ``None``
+    # means the judge was not invoked (no exploit, opt-out via
+    # ``--no-judge-intent``, or pre-judge stage). Mirrors the
+    # contract on ``VulnerabilityContext.intent_match``.
+    intent_match: Optional[Dict] = None
 
 
 class CrashAnalyser:
@@ -571,35 +593,41 @@ class CrashAnalyser:
 
     def _run_lldb_analysis(self, input_file: Path) -> str:
         """Run LLDB to analyze crash (macOS)."""
-        # Create temp files for LLDB stdout/stderr
-        lldb_out = tempfile.NamedTemporaryFile(mode='w', suffix='_lldb_out.txt', delete=False)
-        lldb_err = tempfile.NamedTemporaryFile(mode='w', suffix='_lldb_err.txt', delete=False)
-        lldb_out.close()
-        lldb_err.close()
-
-        # LLDB commands - different syntax from GDB
-        lldb_commands = [
-            "settings set auto-confirm true",
-            "process handle SIGTRAP -s true -n true",  # Stop on traps
-            "process handle SIGSEGV -s true -n true",  # Stop on segfaults
-            "process handle SIGABRT -s true -n true",  # Stop on aborts
-            "process handle SIGBUS -s true -n true",   # Stop on bus errors
-            "process handle SIGILL -s true -n true",   # Stop on illegal instructions
-            "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
-            f"process launch -o {lldb_out.name} -e {lldb_err.name}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
-            "register read",                   # Get register state
-            "thread backtrace --extended true", # Get full backtrace
-            "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
-            "memory read --size 4 --format x --count 20 $sp",  # Examine stack
-            "process kill",  # Make sure process is killed
-            "quit",
-        ]
-
-        # Write commands to temporary file. Pull the create+write inside
-        # the try so a failing write doesn't leak the stub before we reach
-        # the existing finally-unlink below.
+        # Initialise to None so the outer finally can safely reference
+        # these even when an exception fires between mkstemp and the
+        # inner try. Pre-fix mkstemp ran outside the try, leaving the
+        # two _lldb_*.txt files behind on any early raise.
+        lldb_out = None
+        lldb_err = None
         cmd_file = None
         try:
+            lldb_out = tempfile.NamedTemporaryFile(
+                mode='w', suffix='_lldb_out.txt', delete=False,
+            )
+            lldb_err = tempfile.NamedTemporaryFile(
+                mode='w', suffix='_lldb_err.txt', delete=False,
+            )
+            lldb_out.close()
+            lldb_err.close()
+
+            # LLDB commands - different syntax from GDB
+            lldb_commands = [
+                "settings set auto-confirm true",
+                "process handle SIGTRAP -s true -n true",  # Stop on traps
+                "process handle SIGSEGV -s true -n true",  # Stop on segfaults
+                "process handle SIGABRT -s true -n true",  # Stop on aborts
+                "process handle SIGBUS -s true -n true",   # Stop on bus errors
+                "process handle SIGILL -s true -n true",   # Stop on illegal instructions
+                "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
+                f"process launch -o {lldb_out.name} -e {lldb_err.name}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
+                "register read",                   # Get register state
+                "thread backtrace --extended true", # Get full backtrace
+                "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
+                "memory read --size 4 --format x --count 20 $sp",  # Examine stack
+                "process kill",  # Make sure process is killed
+                "quit",
+            ]
+
             with tempfile.NamedTemporaryFile(
                 mode='w', suffix='_lldb_commands.txt', delete=False,
             ) as cmd_f:
@@ -651,11 +679,20 @@ class CrashAnalyser:
                     cmd_file.unlink()
                 except OSError:
                     pass
-            try:
-                Path(lldb_out.name).unlink()
-                Path(lldb_err.name).unlink()
-            except OSError:
-                pass
+            # lldb_out / lldb_err may be None if the very first
+            # NamedTemporaryFile constructor raised before
+            # assignment. Guard each unlink individually so a stub
+            # failure on _err doesn't leak _out.
+            if lldb_out is not None:
+                try:
+                    Path(lldb_out.name).unlink()
+                except OSError:
+                    pass
+            if lldb_err is not None:
+                try:
+                    Path(lldb_err.name).unlink()
+                except OSError:
+                    pass
 
     def _run_lldb_fallback(self, input_file: Path) -> str:
         """Fallback LLDB analysis with simpler commands."""

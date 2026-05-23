@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis4_cap_dac_read_search-priv",
+  "verdict": "false_positive",
+  "rationale": "Surface shape: CWE-787 unbounded memcpy into a fixed 128B stack buffer. Gated by `capable(CAP_DAC_READ_SEARCH)`. DAC read/search bypass = read any file. Axis-4 (capability_check) detects the cap call site. Constant `CAP_DAC_READ_SEARCH` IS in _PRIVILEGED_CAP_CONSTANTS \u2192 verdict policy emits NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

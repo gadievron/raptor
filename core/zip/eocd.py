@@ -150,7 +150,11 @@ def _parse_eocd(
         fh.seek(zip64_eocd_off)
         zip64_eocd = fh.read(56)
     else:
-        assert blob is not None
+        # Defensive: caller invariant is that exactly one of {fh, blob}
+        # is non-None. Use explicit raise rather than assert so the
+        # check survives `python -O`.
+        if blob is None:
+            raise RuntimeError("eocd: internal invariant — fh and blob both None")
         zip64_eocd = blob[zip64_eocd_off:zip64_eocd_off + 56]
     if zip64_eocd[:4] != _ZIP64_EOCD_SIG:
         return None

@@ -203,7 +203,26 @@ def build_inventory(
                 for fp in file_list
             }
             for future in as_completed(futures):
-                _collect_result(future.result())
+                # Per-future exception isolation: pre-fix a single
+                # worker raising (tree-sitter parser bug, encoding
+                # issue, or any unforeseen extractor error) bubbled
+                # up through ``future.result()`` and killed the
+                # whole ``as_completed`` loop, abandoning every other
+                # in-flight future. The inventory was then partial
+                # without the operator seeing why. Now: the failing
+                # file is logged at WARNING (file path included so
+                # the operator can reproduce), counted as a skip,
+                # and the rest of the pool finishes.
+                fp = futures[future]
+                try:
+                    _collect_result(future.result())
+                except Exception as exc:
+                    logger.warning(
+                        "inventory: per-file extractor raised on "
+                        "%s — skipping (%s: %s)",
+                        fp, exc.__class__.__name__, exc,
+                    )
+                    skipped += 1
     else:
         for filepath in file_list:
             _collect_result(

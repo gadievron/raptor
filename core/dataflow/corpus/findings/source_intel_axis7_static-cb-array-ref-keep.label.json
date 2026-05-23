@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_static-cb-array-ref-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `op_a` is static + has zero direct calls, but is included in a callback array `ops[] = { op_a, op_b }`. The pointer-ref guard scans for bare identifier in array-element context. Verdict UNCERTAIN; axis-7 skips dead-code suppression.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

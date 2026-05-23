@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-from-makefile",
+  "verdict": "false_positive",
+  "rationale": "Build flags extracted from Makefile CFLAGS \u2014 `-D_FORTIFY_SOURCE=2` parsed via _from_makefile() best-effort regex. Verdict policy honors the lower-confidence source.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

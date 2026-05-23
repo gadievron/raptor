@@ -380,17 +380,12 @@ class BinaryUnderstand:
                 f"r2 sandbox wrapper missing: {_wrapper}. "
                 f"Reinstall RAPTOR or check libexec/ is intact."
             )
-        _r2_scratch = _tempfile.mkdtemp(prefix="r2-sandbox-")
-        _env_overrides = {
-            "R2PIPE_R2": str(_wrapper),
-            "OUTPUT_DIR": _r2_scratch,
-            "R2_TARGET_DIR": str(self.binary.parent),
-            # The wrapper's trust-marker gate refuses to run without
-            # one of these env vars present — set it explicitly so
-            # operators running outside Claude Code (e.g. CI) still
-            # get the sandboxed path.
-            "_RAPTOR_TRUSTED": "1",
-        }
+        # mkdtemp now happens inside the try below — pre-fix it ran
+        # outside, so KeyboardInterrupt / MemoryError between the
+        # mkdtemp call and entering the try block left the scratch
+        # dir behind. Initialise to None so the finally can safely
+        # reference it on the early-raise path.
+        _r2_scratch: Optional[str] = None
         # Single try/finally guarding env-restore + scratch cleanup —
         # MUST wrap r2pipe.open() itself, not just the post-open
         # analysis. A failure in r2pipe.open (wrapper crash, mount-ns
@@ -407,6 +402,20 @@ class BinaryUnderstand:
         ctx = BinaryContextMap(binary_path=self.binary)
         _saved_env: Dict[str, Optional[str]] = {}
         try:
+            # mkdtemp inside the try — pre-fix this ran outside, so
+            # KeyboardInterrupt / MemoryError between mkdtemp and
+            # entering the try left the scratch dir behind.
+            _r2_scratch = _tempfile.mkdtemp(prefix="r2-sandbox-")
+            _env_overrides = {
+                "R2PIPE_R2": str(_wrapper),
+                "OUTPUT_DIR": _r2_scratch,
+                "R2_TARGET_DIR": str(self.binary.parent),
+                # The wrapper's trust-marker gate refuses to run
+                # without one of these env vars present — set it
+                # explicitly so operators running outside Claude
+                # Code (e.g. CI) still get the sandboxed path.
+                "_RAPTOR_TRUSTED": "1",
+            }
             with _ANALYSE_ENV_LOCK:
                 _saved_env = {k: _os.environ.get(k) for k in _env_overrides}
                 _os.environ.update(_env_overrides)
@@ -474,7 +483,10 @@ class BinaryUnderstand:
             # the namespace and the dir's contents (if any) are
             # ours to remove.
             import shutil as _shutil
-            _shutil.rmtree(_r2_scratch, ignore_errors=True)
+            # _r2_scratch can be None if the early-raise path
+            # (mkdtemp inside try just below) never assigned it.
+            if _r2_scratch is not None:
+                _shutil.rmtree(_r2_scratch, ignore_errors=True)
 
         logger.info(
             f"radare2 analysis: {len(ctx.interesting_functions)} interesting funcs, "

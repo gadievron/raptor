@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis6_fortify-snprintf",
+  "verdict": "false_positive",
+  "rationale": "FORTIFY rewrites snprintf \u2192 __snprintf_chk which verifies the dest-size argument against compile-known object size. snprintf is in _FORTIFIED_WRITE_CALLS.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "framework_mitigation"
+}

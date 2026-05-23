@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_access-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `writer` annotated ACCESS(write_only, 1, 2); the annotation declares `out` is written `n` bytes. If caller passes mismatched `want`, bounds are violated. Axis-1 attrs detects ACCESS, rule_id `cpp/unbounded-write` in relevant set \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

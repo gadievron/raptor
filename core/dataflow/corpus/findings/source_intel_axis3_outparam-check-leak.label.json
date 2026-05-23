@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_outparam-check-leak",
+  "verdict": "false_positive",
+  "rationale": "Interprocedural check: `if (validate_outparam(&p) < 0) return;` \u2014 pattern uses `&p` (addr-of) not bare `p`. Current guard regex requires bare identifier; doesn't catch this. Documents axis-3 known limit: out-param checks aren't recognized. Verdict will WRONGLY emit EXPLOITABLE \u2192 disagrees; fixture records the FP-leak shape for future fixing.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

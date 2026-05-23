@@ -23,6 +23,7 @@ from pathlib import Path
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from core.config import RaptorConfig
 from core.json import save_json
 
 from core.logging import get_logger
@@ -213,11 +214,11 @@ def run_autonomous_workflow(args):
                     if analysis.exploit_code:
                         logger.info(f"  Exploit generated: {len(analysis.exploit_code)} bytes")
                         if analysis.exploit_compiled:
-                            logger.info(f"  ✓ Exploit compiled successfully")
+                            logger.info("  ✓ Exploit compiled successfully")
                         else:
-                            logger.info(f"  ⚠ Exploit failed to compile")
+                            logger.info("  ⚠ Exploit failed to compile")
                 else:
-                    logger.info(f"❌ Not exploitable")
+                    logger.info("❌ Not exploitable")
 
             except Exception as e:
                 logger.error(f"Analysis failed: {e}", exc_info=True)
@@ -252,10 +253,10 @@ def run_autonomous_workflow(args):
         print(f"Fast-tier saved: {short_circuits} full ANALYSE call{'s' if short_circuits != 1 else ''}")
     print(f"\nOutput: {agent.out_dir}")
     print(f"  Scan results: {len(scan_result.sarif_files)} SARIF files")
-    print(f"  Autonomous analysis: autonomous/")
-    print(f"  Exploits: exploits/")
+    print("  Autonomous analysis: autonomous/")
+    print("  Exploits: exploits/")
     if not args.no_visualizations:
-        print(f"  Visualizations: autonomous/visualizations/")
+        print("  Visualizations: autonomous/visualizations/")
     print(f"{'=' * 70}\n")
 
 
@@ -285,21 +286,55 @@ Examples:
     parser.add_argument("--languages", help="Comma-separated languages")
     parser.add_argument("--build-command", help="Custom build command")
     parser.add_argument("--out", help="Output directory")
-    parser.add_argument("--force", action="store_true", help="Force database recreation")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Delete and recreate the CodeQL database from scratch. Slow — "
+             "5-30min on real repos. Default is to reuse a cached database "
+             "keyed by repo + source SHA. Pass this only when the cache is "
+             "known stale (e.g. local edits the content hash didn't pick up); "
+             "do NOT pass it habitually as it throws away every cached build.",
+    )
     parser.add_argument("--extended", action="store_true", help="Use extended security suites")
     parser.add_argument("--min-files", type=int, default=3, help="Min files to detect language")
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI")
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
-    parser.add_argument("--max-findings", type=int, default=20, help="Max findings to analyze")
+    # ``--max-findings`` default 20 is intentionally HIGHER than
+    # ``raptor_agentic.py``'s default 10: codeql-only mode does one
+    # pass per finding (filter + summarise), while agentic does the
+    # full multi-pass LLM analysis chain — which costs ~3-5x more
+    # per finding. Keep the two defaults aligned with their cost
+    # envelopes; operators who want the same ceiling pass
+    # ``--max-findings 20`` to agentic explicitly.
+    parser.add_argument("--max-findings", type=int, default=20, help="Max findings to analyze (default: 20; agentic default is 10 due to higher per-finding LLM cost)")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations")
     parser.add_argument("--trust-repo", action="store_true",
                         help="Trust the target repo's config and skip safety checks "
                              "(.claude/settings*.json, .mcp.json, codeql-pack.yml, "
                              "qlpack.yml, .github/codeql/codeql-config.yml).")
+    parser.add_argument(
+        "--phase-timeout", type=int,
+        default=RaptorConfig.CODEQL_TIMEOUT, metavar="SECONDS",
+        help=(
+            "Wall-clock timeout in seconds for the CodeQL database "
+            "creation phase. Default: %(default)s (sourced from "
+            "RaptorConfig.CODEQL_TIMEOUT). Set to 0 to disable the "
+            "timeout entirely — useful for kernel-scale targets where "
+            "DB extraction can take hours. The query-execution phase "
+            "uses RaptorConfig.CODEQL_ANALYZE_TIMEOUT separately."
+        ),
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
+    # Apply --phase-timeout to the framework-wide RaptorConfig.CODEQL_TIMEOUT
+    # so package-internal subprocess calls in
+    # ``packages/codeql/database_manager.py`` pick up the override
+    # without per-call plumbing. Same pattern intended for
+    # /agentic + /fuzz: entry-point CLI flag mutates the named
+    # RaptorConfig constant once at startup.
+    if args.phase_timeout != RaptorConfig.CODEQL_TIMEOUT:
+        RaptorConfig.CODEQL_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
     # caller-supplied paths against project trust state). Pre-fix

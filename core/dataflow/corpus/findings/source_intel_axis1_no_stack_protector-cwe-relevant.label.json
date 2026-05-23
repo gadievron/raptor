@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_no_stack_protector-cwe-relevant",
+  "verdict": "true_positive",
+  "rationale": "Function `unsafe_handler` explicitly opts out of stack canary via NO_STACK_PROTECTOR attribute; the unbounded strcpy into a stack buffer becomes much more easily exploitable (no canary check on return). Axis-1 attrs detects NO_STACK_PROTECTOR, rule_id `cpp/unbounded-write` in relevant set \u2192 EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

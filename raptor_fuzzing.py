@@ -40,7 +40,24 @@ logger = get_logger()
 def main() -> None:
     # So much more needed here but this is a start for us. :-)
     ap = argparse.ArgumentParser(
-        description="RAPTOR Fuzzing Mode - Binary fuzzing with LLM analysis"
+        description="RAPTOR Fuzzing Mode - Binary fuzzing with LLM analysis",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  # One-hour AFL++ fuzz of /usr/bin/foo with the default 10-crash cap:
+  python3 raptor_fuzzing.py --binary /usr/bin/foo --duration 3600
+
+  # Autonomous run with explicit goal + memory persistence:
+  python3 raptor_fuzzing.py --binary ./target --autonomous \\
+      --goal 'find heap overflow' --memory-file mem.json
+
+  # Force the orchestrator (libFuzzer + telemetry) and stop after planning:
+  python3 raptor_fuzzing.py --binary ./target --orchestrator --plan-only
+
+  # Force the legacy AFL++-only path (e.g. for reproducing pre-orchestrator
+  # behaviour):
+  python3 raptor_fuzzing.py --binary ./target --legacy
+""",
     )
 
     ap.add_argument("--binary", required=True, help="Path to binary to fuzz")
@@ -56,19 +73,53 @@ def main() -> None:
     ap.add_argument("--recompile-guide", action="store_true", help="Show guide for recompiling binary with AFL instrumentation and sanitizers")
     ap.add_argument("--use-showmap", action="store_true", help="Run afl-showmap after fuzzing for coverage analysis")
     ap.add_argument("--autonomous", action="store_true", help="Enable autonomous mode with intelligent decision-making and learning")
-    ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default: ~/.raptor/fuzzing_memory.json)")
+    ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default resolves to ${HOME}/.raptor/fuzzing_memory.json — note: under 'sudo -E' HOME expands to root, not the operator's home)")
     ap.add_argument("--goal", help="High-level goal to achieve (e.g., 'find heap overflow', 'target parser code')")
 
     # New orchestrator-driven path: capability detection, libFuzzer support,
     # binary_understand via radare2, live telemetry. Default on macOS where
     # AFL++ has shmem issues; can be forced or disabled with these flags.
-    ap.add_argument("--orchestrator", action="store_true",
+    # ``--orchestrator`` and ``--legacy`` are mutually exclusive — passing
+    # both at once previously silently let ``--legacy`` win (since the path
+    # selection branch checked ``args.legacy`` first), which was confusing
+    # for operators who set both in environments / CI matrices.
+    path_group = ap.add_mutually_exclusive_group()
+    path_group.add_argument("--orchestrator", action="store_true",
                     help="Force the new orchestrator pipeline (libFuzzer + AFL++ "
                          "with target detection, capability checks, telemetry)")
-    ap.add_argument("--legacy", action="store_true",
+    path_group.add_argument("--legacy", action="store_true",
                     help="Force the legacy AFL++-only fuzzing path")
     ap.add_argument("--plan-only", action="store_true",
                     help="With --orchestrator, print the plan and exit without running")
+    ap.add_argument(
+        "--no-verify-exploits",
+        action="store_true",
+        help="Skip the compile-verify step on LLM-emitted exploits "
+             "(default on, ~150ms per crash). Use for "
+             "benchmarks / CI surfaces where every second counts. "
+             "When disabled, exploit_compiled stays unset on each "
+             "crash context (None — verification not attempted).",
+    )
+    ap.add_argument(
+        "--no-judge-intent",
+        action="store_true",
+        help="Skip the intent-match judge on LLM-emitted exploits "
+             "(default on). Judge runs 4 cheap heuristics first; "
+             "escalates ambiguous cases to a 2-step LLM tiebreak "
+             "(~$0.001-0.01 per ambiguous crash). When disabled, "
+             "intent_match stays unset on each crash context "
+             "(None — judge not invoked).",
+    )
+    ap.add_argument(
+        "--no-record-witnesses",
+        action="store_true",
+        help="Skip recording LLM-emitted exploits as canonical "
+             "Witnesses under <out>/analysis/witnesses/ (default "
+             "on). The fuzz crashes themselves are recorded as "
+             "Witnesses regardless under <out>/witnesses/ — this "
+             "flag only affects the secondary LLM-exploit "
+             "Witnesses produced by ``CrashAnalysisAgent``.",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -133,8 +184,16 @@ def main() -> None:
         llm = None
         try:
             llm = get_client()
-        except Exception:
-            pass
+        except Exception as e:
+            # Fall through to llm=None (orchestrator handles
+            # no-LLM mode) but surface why so operators can see
+            # whether a config issue is silently downgrading
+            # them to non-LLM fuzzing.
+            logger.debug(
+                "Fuzzing orchestrator: LLM client init failed: %s; "
+                "proceeding without LLM",
+                e,
+            )
 
         orch = FuzzingOrchestrator(llm=llm)
         plan = orch.plan(binary_path)
@@ -171,12 +230,12 @@ def main() -> None:
         for key, value in result.items():
             print(f"  {key}: {value}")
         print(f"\nOutput: {out_dir}")
-        print(f"  fuzzing_plan.json     -- target detection and fuzzer choice")
-        print(f"  capability_report.json -- host capability snapshot")
-        print(f"  fuzz-summary.json     -- final campaign telemetry")
-        print(f"  fuzz-events.jsonl     -- full event stream")
+        print("  fuzzing_plan.json     -- target detection and fuzzer choice")
+        print("  capability_report.json -- host capability snapshot")
+        print("  fuzz-summary.json     -- final campaign telemetry")
+        print("  fuzz-events.jsonl     -- full event stream")
         if (out_dir / "binary-context-map.json").exists():
-            print(f"  binary-context-map.json -- radare2 adversarial analysis")
+            print("  binary-context-map.json -- radare2 adversarial analysis")
         print("=" * 70)
         sys.exit(0)
 
@@ -217,9 +276,20 @@ def main() -> None:
         logger.info("AUTONOMOUS MODE ENABLED")
         logger.info("=" * 70)
 
-        # Initialize fuzzing memory for learning
+        # Initialize fuzzing memory for learning. Log the resolved
+        # path so the operator can spot a wrong ~ expansion
+        # (e.g. under ``sudo -E``, HOME resolves to /root, not the
+        # operator's home, and the default
+        # ``~/.raptor/fuzzing_memory.json`` ends up in the wrong
+        # tree without warning).
         memory_file = Path(args.memory_file) if args.memory_file else None
         memory = FuzzingMemory(memory_file)
+        try:
+            resolved_memory_path = memory_file.expanduser().resolve() if memory_file else None
+        except (OSError, RuntimeError):
+            resolved_memory_path = memory_file
+        if resolved_memory_path is not None:
+            logger.info(f"Fuzzing memory path: {resolved_memory_path}")
 
         # Initialize autonomous planner
         planner = FuzzingPlanner(memory=memory)
@@ -292,7 +362,7 @@ def main() -> None:
             max_crashes=args.max_crashes,
         )
 
-        print(f"\n✓ Fuzzing complete:")
+        print("\n✓ Fuzzing complete:")
         print(f"  - Duration: {args.duration}s")
         print(f"  - Unique crashes: {num_crashes}")
         print(f"  - Crashes dir: {crashes_dir}")
@@ -351,11 +421,50 @@ def main() -> None:
         print(f"\nCollected {len(crashes)} unique crashes")
         print(f"   Analysing top {min(len(crashes), args.max_crashes)}")
 
+        # Record each crash as a canonical Witness for downstream
+        # consumers (reporting, future ZKPoX bundle assembly,
+        # future calibrated IntentMatchJudge). AFL++ surfaces a
+        # crash only after observing the target exit via a signal
+        # on these bytes — they're the cleanest "verified witness"
+        # the framework has. Failures here are non-fatal: the
+        # crashes themselves remain on disk in their AFL-native
+        # form even if the canonical Witness write fails.
+        try:
+            from core.witness import WitnessStore
+            from packages.fuzzing.witness_adapter import witness_from_crash
+            witness_store = WitnessStore(out_dir / "witnesses")
+            recorded = 0
+            for crash in crashes:
+                try:
+                    witness, data = witness_from_crash(
+                        crash, target_binary_path=binary_path,
+                    )
+                    witness_store.put(witness, data)
+                    recorded += 1
+                except Exception as e:  # noqa: BLE001 — best-effort
+                    logger.warning(
+                        f"failed to record witness for crash "
+                        f"{crash.crash_id}: {type(e).__name__}: {e}"
+                    )
+            if recorded:
+                print(
+                    f"   Recorded {recorded}/{len(crashes)} crashes "
+                    f"as Witnesses → {out_dir / 'witnesses'}"
+                )
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                f"Witness-store setup failed: {type(e).__name__}: {e}; "
+                f"continuing without canonical Witness records"
+            )
+
         # Analyse crashes
         crash_analyser = CrashAnalyser(binary_path)
         llm_agent = CrashAnalysisAgent(
             binary_path=binary_path,
             out_dir=out_dir / "analysis",
+            verify_exploits=not args.no_verify_exploits,
+            judge_intent=not args.no_judge_intent,
+            record_witnesses=not args.no_record_witnesses,
         )
 
         # Initialize multi-turn analyser if autonomous mode
@@ -401,7 +510,7 @@ def main() -> None:
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
-                print(f"⊘ Duplicate crash - same stack trace as previous crash")
+                print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
 
@@ -536,13 +645,13 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("RAPTOR FUZZING COMPLETE")
     print("=" * 70)
-    print(f"\n Summary:")
+    print("\n Summary:")
     print(f"   Total crashes: {num_crashes}")
     print(f"   analysed: {analysed}")
     print(f"   Exploitable: {exploitable}")
     print(f"   Exploits generated: {exploits_generated}")
 
-    print(f"\n Outputs:")
+    print("\n Outputs:")
     print(f"   AFL output: {out_dir / 'afl_output'}")
     print(f"   Crashes: {crashes_dir}")
     print(f"   Analysis: {out_dir / 'analysis'}")
@@ -596,7 +705,7 @@ def main() -> None:
     print(f"   Report: {report_file}")
 
     if args.autonomous and memory:
-        print(f"\n Autonomous Learning:")
+        print("\n Autonomous Learning:")
         stats = memory.get_statistics()
         print(f"   Knowledge entries: {stats['total_knowledge']}")
         print(f"   Average confidence: {stats['average_confidence']:.2f}")

@@ -41,6 +41,7 @@ from urllib import parse as _urlparse
 import urllib3
 from urllib3.exceptions import (
     HTTPError as _U3HTTPError,
+    LocationValueError as _U3LocationValueError,
     MaxRetryError,
     ProxyError as _U3ProxyError,
     ReadTimeoutError,
@@ -60,6 +61,15 @@ from core.http import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Permanent classes inside the urllib3 ``HTTPError`` umbrella that
+# we do NOT want the transient-retry loop to retry. Pre-fix the
+# blanket ``_U3HTTPError`` catch retried every subclass — including
+# config-error shapes like ``LocationValueError`` (raised on a
+# malformed URL the operator can't fix by waiting). Multiplied
+# latency on permanent failures without any chance of recovery.
+_U3_PERMANENT_HTTPERROR = (_U3LocationValueError,)
+
 
 # Backoff schedule for transient errors (5xx, 429). Length is chosen so
 # the cumulative sleep (1+2+5+15+60+300 = 383s) fits comfortably under
@@ -857,6 +867,15 @@ class UrllibClient:
                     ) from last_exc
                 time.sleep(min(delay, remaining))
                 continue
+            except _U3_PERMANENT_HTTPERROR as e:
+                # Permanent — config error (malformed URL, etc.).
+                # Don't retry; fail fast so the caller sees the
+                # immediate cause instead of an "exhausted retries"
+                # wrapper.
+                raise HttpError(
+                    f"core.http: permanent error fetching "
+                    f"{_safe_url_for_log(url)}: {e}",
+                ) from e
             except (MaxRetryError, ReadTimeoutError, SSLError, _U3HTTPError,
                     TimeoutError, ConnectionError) as e:
                 last_exc = e
@@ -1186,7 +1205,10 @@ class UrllibClient:
                 target = target.replace(tzinfo=timezone.utc)
             delta = (target - datetime.now(timezone.utc)).total_seconds()
             return max(1, min(int(delta), 1800))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError catches absurd dates a hostile server can
+            # send (e.g. year=9999999) where parsedate_to_datetime
+            # constructs a datetime that overflows ``int(delta)``.
             return None
 
 

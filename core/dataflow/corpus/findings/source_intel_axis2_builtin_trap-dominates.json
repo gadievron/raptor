@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_builtin_trap-dominates",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis2_builtin_trap-dominates",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis2_abort_suite.c",
+    "line": 55,
+    "column": 2,
+    "snippet": "*p = 1;",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis2_abort_suite.c",
+    "line": 55,
+    "column": 2,
+    "snippet": "*p = 1;",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

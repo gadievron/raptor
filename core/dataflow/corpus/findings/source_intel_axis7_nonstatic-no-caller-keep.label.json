@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_nonstatic-no-caller-keep",
+  "verdict": "true_positive",
+  "rationale": "Function `public_handler` is non-static \u2014 its callers may live in other translation units we don't have. PR-4 reports zero callers within the target subtree, but static-guard check returns False \u2192 dead-code pass skipped. Verdict falls through to UNCERTAIN (no other axis fires). Tests that the static-linkage check prevents false dead-code claims.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

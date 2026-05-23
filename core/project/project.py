@@ -506,7 +506,11 @@ class ProjectManager:
         auto_marker.unlink(missing_ok=True)
         if name is not None:
             # Per-process tmp slot — see docstring.
-            tmp_link = self.projects_dir / f".active.tmp.{os.getpid()}"
+            # pid+tid suffix — two threads in the same process can race
+            # on set_active(); tid disambiguates. Mirrors core/json
+            # tempfile pattern.
+            import threading
+            tmp_link = self.projects_dir / f".active.tmp.{os.getpid()}.{threading.get_ident()}"
             tmp_link.unlink(missing_ok=True)
             tmp_link.symlink_to(f"{name}.json")
             os.rename(str(tmp_link), str(active_link))

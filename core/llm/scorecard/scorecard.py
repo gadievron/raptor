@@ -119,6 +119,15 @@ class EventType:
     # Threshold + outlier identification live in
     # :mod:`core.llm.semantic_entropy`.
     REASONING_DIVERGENCE = "reasoning_divergence"
+    # IntentMatchJudge v1 verdict on whether an LLM-generated exploit
+    # targets the finding it was generated for. Producer:
+    # :mod:`packages.llm_analysis.intent_match`. Keyed by
+    # (generator_model, judge_model). ``correct`` = ``matches``
+    # verdict; ``incorrect`` = ``off_target``; ``unknown`` =
+    # ``uncertain`` (no calibrated answer). v1 is a weak signal —
+    # heuristic-first with a 2-step LLM tiebreak, no ground-truth
+    # calibration.
+    EXPLOIT_INTENT_MATCH = "exploit_intent_match"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -128,6 +137,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.TOOL_EVIDENCE,
     EventType.OPERATOR_FEEDBACK,
     EventType.REASONING_DIVERGENCE,
+    EventType.EXPLOIT_INTENT_MATCH,
 )
 
 
@@ -185,17 +195,6 @@ class DecisionClassStats:
     policy_override: PolicyOverride
     events: Dict[str, _EventCounts]
     disagreement_samples: List[Dict[str, str]] = field(default_factory=list)
-
-    def cheap_total(self) -> int:
-        """Convenience: total observations for the cheap-short-circuit
-        event type. The denominator for the trust gate."""
-        return self.events[EventType.CHEAP_SHORT_CIRCUIT].total()
-
-    def cheap_miss_count(self) -> int:
-        """Convenience: count of times cheap was wrong (the cell's
-        ``incorrect`` count for cheap_short_circuit)."""
-        return self.events[EventType.CHEAP_SHORT_CIRCUIT].incorrect
-
 
 def _wilson_upper_bound(successes: int, failures: int, *,
                          z: float = 1.96) -> float:
@@ -748,13 +747,27 @@ class ModelScorecard:
                     # file, which stays stable across this rename;
                     # other processes block on the same .lock until
                     # we exit and release.
-                    save_json(self.scorecard.path, self.data)
+                    # mode=0o600 — scorecard captures model-routing info,
+                    # finding IDs, decision classes, and reasoning samples
+                    # that may incidentally include sensitive snippets.
+                    save_json(self.scorecard.path, self.data, mode=0o600)
             finally:
                 if self.lock_fh is not None:
                     try:
                         fcntl.flock(self.lock_fh.fileno(), fcntl.LOCK_UN)
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        # Unlock failures are non-fatal — the fd close
+                        # below releases any kernel-held advisory lock
+                        # via close-on-fd-release semantics. Pre-fix
+                        # the bare swallow hid genuinely interesting
+                        # cases (filesystem revoked the lock,
+                        # underlying device disappeared) — log at
+                        # DEBUG so they surface under ``--verbose``
+                        # without flooding normal runs.
+                        logger.debug(
+                            "scorecard: flock unlock failed on %s: %s",
+                            self.scorecard.path, e,
+                        )
                     self.lock_fh.close()
             return False
 

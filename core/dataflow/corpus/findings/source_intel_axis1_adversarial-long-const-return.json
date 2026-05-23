@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis1_adversarial-long-const-return",
+  "producer": "codeql",
+  "rule_id": "cpp/unchecked-return",
+  "message": "source_intel_axis1_adversarial-long-const-return",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_adversarial_long_const_return.c",
+    "line": 32,
+    "column": 2,
+    "snippet": "long_const_return(42);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis1_adversarial_long_const_return.c",
+    "line": 32,
+    "column": 2,
+    "snippet": "long_const_return(42);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

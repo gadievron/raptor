@@ -148,7 +148,18 @@ class TestFindDisagreements(TestCase):
 
 class TestNewAndResolved(TestCase):
     def _make_run_dirs(self, names):
+        # ``addCleanup`` wires up shutil.rmtree so the mkdtemp'd dir
+        # is removed after the test method even when an assertion
+        # fails or the test raises. Pre-fix the helper called
+        # ``tempfile.mkdtemp`` without any teardown — every call
+        # leaked a directory under ``$TMPDIR`` for the full pytest
+        # session, accumulating to dozens of stale dirs across the
+        # CorrelateProject + NewAndResolved + BuildToolGaps suites.
+        # On constrained-tmpfs CI runners the leak occasionally
+        # surfaced as cryptic ENOSPC failures in unrelated tests.
+        import shutil
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         dirs = []
         for n in names:
             p = Path(d) / n
@@ -218,7 +229,11 @@ class TestNewAndResolved(TestCase):
 
 class TestBuildToolGaps(TestCase):
     def _make_run_dirs(self, names):
+        # See TestNewAndResolved._make_run_dirs for the rationale —
+        # same helper, same addCleanup-driven teardown.
+        import shutil
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         dirs = []
         for n in names:
             p = Path(d) / n
@@ -395,7 +410,10 @@ class TestCorrelateProject(TestCase):
 
         run_specs: list of (run_name, command, findings_list)
         """
+        # addCleanup-driven teardown; see TestNewAndResolved.
+        import shutil
         base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(base), ignore_errors=True)
         runs_dir = base / "runs"
         runs_dir.mkdir()
 

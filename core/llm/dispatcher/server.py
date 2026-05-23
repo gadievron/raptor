@@ -46,14 +46,28 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import httpx
+
+from core.security.log_sanitisation import escape_nonprintable
 
 from .auth import CredentialStore, ProviderRule, build_rules
 
 
 _logger = logging.getLogger(__name__)
+
+
+def _scrub(value: Optional[str]) -> Optional[str]:
+    """Defang nonprintable + ANSI escapes in operator-visible
+    fields (``worker_label``, ``reason``) before they hit the
+    audit log or stdlib logger. Pre-fix a malicious model name
+    or framework-supplied label could embed control sequences
+    that corrupted terminal output / log-tail viewers — same
+    threat model as ``core/security/prompt_output_sanitise``."""
+    if value is None:
+        return None
+    return escape_nonprintable(value)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +83,31 @@ _TOKEN_DEFAULT_BUDGET = 10_000       # requests per worker run — agentic
                                      # workflows over many findings can
                                      # easily clear 1k LLM calls.
 _TOKEN_HEADER = "X-Raptor-Token"
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read an int from the environment with a default + floor.
+
+    Used to let an operator override the dispatcher TTL/budget
+    without code edits. Out-of-range or non-numeric values fall
+    back to ``default`` silently (with a debug-level log) so a
+    typo doesn't break dispatcher startup.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.debug("llm-dispatcher: ignoring non-int %s=%r", name, raw)
+        return default
+    if value < minimum:
+        _logger.debug(
+            "llm-dispatcher: ignoring %s=%d below minimum %d",
+            name, value, minimum,
+        )
+        return default
+    return value
 
 
 @dataclass
@@ -153,13 +192,32 @@ class LLMDispatcher:
         run_id: str,
         *,
         audit_path: Optional[Path] = None,
-        token_ttl_s: int = _TOKEN_DEFAULT_TTL_S,
-        token_budget: int = _TOKEN_DEFAULT_BUDGET,
+        token_ttl_s: Optional[int] = None,
+        token_budget: Optional[int] = None,
         creds: Optional[CredentialStore] = None,
     ) -> None:
         self.run_id = run_id
-        self._token_ttl_s = token_ttl_s
-        self._token_budget = token_budget
+        # TTL/budget resolution order: explicit caller arg →
+        # ``RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S`` / ``..._BUDGET`` env →
+        # module default. Operators on long kernel-scale runs can
+        # bump TTL without code edits; tests can pass a tiny value
+        # via the call site.
+        self._token_ttl_s = (
+            token_ttl_s
+            if token_ttl_s is not None
+            else _env_int(
+                "RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S",
+                _TOKEN_DEFAULT_TTL_S,
+            )
+        )
+        self._token_budget = (
+            token_budget
+            if token_budget is not None
+            else _env_int(
+                "RAPTOR_LLM_DISPATCHER_TOKEN_BUDGET",
+                _TOKEN_DEFAULT_BUDGET,
+            )
+        )
 
         self._creds = creds or CredentialStore()
         self._rules: dict[str, ProviderRule] = build_rules(self._creds)
@@ -287,7 +345,23 @@ class LLMDispatcher:
             self._tokens[token] = rec
 
         read_fd, write_fd = os.pipe()
-        os.write(write_fd, token.encode("ascii"))
+        try:
+            os.write(write_fd, token.encode("ascii"))
+        except OSError:
+            # OS-level write failure (BrokenPipeError, ENOSPC,
+            # EBADF after a fork-race). Close BOTH FDs to avoid
+            # leaking the pipe — pre-fix only the success path
+            # closed write_fd and the read_fd was returned to the
+            # caller, so a failed write leaked both ends.
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+            raise
         os.close(write_fd)
         # Mark inheritable so subprocess.Popen(pass_fds=...) can
         # forward it to the child. By default Python sets CLOEXEC.
@@ -302,60 +376,117 @@ class LLMDispatcher:
         return str(self.socket_path), read_fd
 
     def shutdown(self) -> None:
-        """Stop the server thread and remove the socket directory."""
+        """Stop the server thread and remove the socket directory.
+
+        Pre-fix every step silently swallowed any exception and the
+        audit event was emitted as ``status="ok"`` regardless. A
+        deadlocked-but-throwing ``server.shutdown()`` or an
+        ``unlink``/``rmdir`` blocked by a still-bound socket left the
+        dispatcher reporting clean stop while a tempdir leaked + the
+        process may have kept accepting on a half-shut server.
+        Each step's failure now logs at WARNING with the traceback,
+        and the audit event records ``status="partial"`` with a
+        reason summary when anything went wrong.
+        """
+        errors: List[str] = []
         try:
             self._server.shutdown()
         except Exception:
-            pass
+            _logger.warning(
+                "llm-dispatcher: server.shutdown() failed", exc_info=True,
+            )
+            errors.append("shutdown")
         try:
             self._server.server_close()
         except Exception:
-            pass
+            _logger.warning(
+                "llm-dispatcher: server.server_close() failed", exc_info=True,
+            )
+            errors.append("server_close")
         # Remove socket file then dir
         try:
             self.socket_path.unlink(missing_ok=True)
         except Exception:
-            pass
+            _logger.warning(
+                "llm-dispatcher: socket unlink failed for %s",
+                self.socket_path, exc_info=True,
+            )
+            errors.append("socket_unlink")
         try:
             self._sock_dir.rmdir()
         except Exception:
-            pass
+            _logger.warning(
+                "llm-dispatcher: sock_dir rmdir failed for %s "
+                "(leak — operator may need to clean manually)",
+                self._sock_dir, exc_info=True,
+            )
+            errors.append("sock_dir_rmdir")
         self._audit(AuditEvent(
             ts=time.time(), event="server.stop",
             peer_pid=None, peer_uid=None,
             token_id=None, worker_label=None,
-            status="ok",
+            status="ok" if not errors else "partial",
+            reason=",".join(errors) if errors else None,
         ))
 
     # ---- internal ----
 
     def _audit(self, ev: AuditEvent) -> None:
+        # Defang nonprintable / ANSI escapes on operator-visible
+        # fields. ``token_id`` is already a hex prefix (12 chars)
+        # so it doesn't need scrubbing, and ``event`` / ``status``
+        # are internally produced strings.
+        safe_worker = _scrub(ev.worker_label)
+        safe_reason = _scrub(ev.reason)
         # Always log via stdlib logger for terminal visibility.
         _logger.info(
             "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
             ev.event, ev.status, ev.peer_pid, ev.peer_uid,
-            ev.token_id or "-", ev.worker_label or "-",
-            f" reason={ev.reason}" if ev.reason else "",
+            ev.token_id or "-", safe_worker or "-",
+            f" reason={safe_reason}" if safe_reason else "",
         )
         if self._audit_path is None:
             return
         with self._audit_lock:
             try:
-                with open(self._audit_path, "a", encoding="utf-8") as fh:
+                # Open with mode 0o600 — audit log records worker labels,
+                # peer UIDs/PIDs, token-id prefixes, and request paths.
+                # The socket dir is already 0o700 / sockets 0o600; this
+                # closes the symmetric gap.
+                fd = os.open(
+                    self._audit_path,
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                    0o600,
+                )
+                with os.fdopen(fd, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "ts": ev.ts,
                         "event": ev.event,
                         "peer_pid": ev.peer_pid,
                         "peer_uid": ev.peer_uid,
                         "token_id": ev.token_id,
-                        "worker_label": ev.worker_label,
+                        "worker_label": safe_worker,
                         "status": ev.status,
-                        "reason": ev.reason,
+                        "reason": safe_reason,
                         **ev.extra,
                     }) + "\n")
-            except OSError:
-                # Audit failures must not break the dispatcher.
-                pass
+            except OSError as e:
+                # Audit failures must NEVER break the dispatcher (an
+                # out-of-disk shouldn't crash an in-flight LLM
+                # session). But silent swallow hid an entire
+                # production incident: the audit log path was
+                # unwritable for the whole run, every event was
+                # dropped, and the operator only found out when
+                # /project status reported empty audit metrics.
+                # Surface ONCE via stdlib logger at WARNING — the
+                # ``_audit_warned`` flag stops the per-event flood.
+                if not getattr(self, "_audit_warned", False):
+                    _logger.warning(
+                        "llm-dispatcher: audit log write failed for %s "
+                        "(further failures will be silent): %s",
+                        self._audit_path, e,
+                    )
+                    self._audit_warned = True
 
     def _validate_token(self, raw: str | None) -> tuple[Optional[_TokenRecord], Optional[str]]:
         """L3 + L4 — return (record, None) on success, (None, reason)

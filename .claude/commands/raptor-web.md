@@ -1,63 +1,10 @@
 ---
-description: Web application security scanner (alpha)
+description: Web application security scanner (alpha) (alias for /web)
 ---
 
-# RAPTOR Web Application Scanner
+# /raptor-web - alias for /web
 
-WARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.
+This command is retained as a back-compat alias. The canonical
+slash-command is `/web` — please use that going forward.
 
-You are helping the user scan a web application for security vulnerabilities.
-
-1. **Understand the target**: Get the web application URL
-   - Full URL (e.g., https://example.com)
-   - Ask about authentication if needed
-   - Ask about scope (crawl depth, max pages)
-
-2. **Run RAPTOR web scan**: Execute the web scanning command:
-   ```bash
-   python3 raptor.py web --url <url>
-   ```
-
-3. **Analyze results**: After the scan:
-   - Summarize vulnerabilities found (XSS, SQLi, CSRF, etc.)
-   - Show severity ratings
-   - Explain how to exploit them (if safe to do so)
-   - Show generated patches or mitigation advice
-
-4. **Help fix issues**: Offer to:
-   - Explain each vulnerability type
-   - Suggest secure coding practices
-   - Help implement fixes
-
-## Example Commands
-
-Basic web scan:
-```bash
-python3 raptor.py web --url https://example.com
-```
-
-<!--
-Pre-fix this section showed `python3 raptor.py web
---url https://example.com --auth-token "Bearer xyz"`,
-but `raptor.py web` doesn't accept `--auth-token`.
-The web scanner doesn't currently support
-authenticated scanning — operators following the
-example got "unrecognized arguments: --auth-token".
-Drop the example until authenticated-scan support
-lands.
--->
-
-(Authenticated scanning is not currently supported by
-`raptor.py web`. Track future support via the web-
-scanner roadmap; for now, scan only unauthenticated
-endpoints.)
-
-## Important Notes
-
-- Only scan applications you own or have permission to test
-- Web scanning looks for OWASP Top 10 vulnerabilities
-- Results are saved to `out/web_scan_<timestamp>/`
-
-Be ethical and responsible with security testing!
-
----
+See: web.md

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis2_dominates-at-entry",
+  "verdict": "false_positive",
+  "fp_category": "infeasible_branch",
+  "rationale": "Unconditional BUG() at function entry \u2014 DOMINATES grade via _classify_abort_grade (depth 1, no preceding return). With DOMINATES grade, the proximity gate is DROPPED: the abort dominates regardless of distance. Sink at line 82 (71 lines after BUG) is unreachable. Verdict NOT_EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}
