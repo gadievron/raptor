@@ -110,6 +110,16 @@ Examples:
              "intent_match stays unset on each crash context "
              "(None — judge not invoked).",
     )
+    ap.add_argument(
+        "--no-record-witnesses",
+        action="store_true",
+        help="Skip recording LLM-emitted exploits as canonical "
+             "Witnesses under <out>/analysis/witnesses/ (default "
+             "on). The fuzz crashes themselves are recorded as "
+             "Witnesses regardless under <out>/witnesses/ — this "
+             "flag only affects the secondary LLM-exploit "
+             "Witnesses produced by ``CrashAnalysisAgent``.",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -454,6 +464,7 @@ Examples:
             out_dir=out_dir / "analysis",
             verify_exploits=not args.no_verify_exploits,
             judge_intent=not args.no_judge_intent,
+            record_witnesses=not args.no_record_witnesses,
         )
 
         # Initialize multi-turn analyser if autonomous mode

@@ -295,7 +295,8 @@ class CrashAnalysisAgent:
     def __init__(self, binary_path: Path, out_dir: Path,
                  llm_config: LLMConfig = None,
                  verify_exploits: bool = True,
-                 judge_intent: bool = True):
+                 judge_intent: bool = True,
+                 record_witnesses: bool = True):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -314,6 +315,16 @@ class CrashAnalysisAgent:
         # ``raptor_fuzzing.py``). Mirrors the
         # ``AutonomousSecurityAgentV2`` contract.
         self.judge_intent = judge_intent
+        # Record each LLM-emitted exploit as a canonical Witness
+        # alongside the fuzz-crash witnesses that
+        # ``raptor_fuzzing.py`` already records. Same data path,
+        # same WitnessStore root — the bytes_hash deduplicates if
+        # an exploit ever matches a real crash input. Default on;
+        # opt out via ``--no-record-witnesses``. Lazy store open
+        # (filesystem untouched on prep-only / failed runs);
+        # failures are non-fatal.
+        self.record_witnesses = record_witnesses
+        self._witness_store = None  # lazy
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -665,6 +676,14 @@ FULL LLM RESPONSE:
                 if self.judge_intent:
                     self._judge_exploit_intent(crash_context, exploit_code)
 
+                # Record the LLM-emitted exploit as a canonical
+                # Witness alongside the fuzz-crash witnesses from
+                # ``raptor_fuzzing.py``. Same store, same source=
+                # LLM_EMIT_RUN, outcome=NOT_RUN encoding as the
+                # /agentic path. Failures are non-fatal.
+                if self.record_witnesses:
+                    self._record_exploit_witness(crash_context, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -784,6 +803,84 @@ FULL LLM RESPONSE:
             logger.info(
                 f"   · Intent-match: uncertain "
                 f"(used_llm={verdict.used_llm})"
+            )
+
+    def _record_exploit_witness(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Record the LLM-emitted exploit as a canonical Witness.
+
+        Lazy-opens ``self._witness_store`` against
+        ``self.out_dir / "witnesses"`` on first call. Reuses the
+        same ``crash_type_to_cwe`` lookup as
+        ``_judge_exploit_intent`` (both make best-effort CWE
+        mappings on the same field).
+
+        Note ``crash_context.intent_match`` is a ``dict`` here
+        (``asdict(verdict)``) rather than the dataclass instance
+        the /agentic path holds, so we read via ``.get(...)`` not
+        attribute access.
+
+        Failures are non-fatal: the exploit artefact on disk is
+        the primary record; the witness is a downstream-facing
+        secondary record.
+        """
+        try:
+            if self._witness_store is None:
+                from core.witness import WitnessStore
+                self._witness_store = WitnessStore(
+                    self.out_dir / "witnesses"
+                )
+            from packages.llm_analysis.witness_adapter import (
+                witness_from_exploit,
+            )
+
+            # Same crash_type → CWE table as _judge_exploit_intent
+            # uses; keep them in lockstep when one is extended.
+            crash_type_to_cwe = {
+                "heap_overflow": "CWE-122",
+                "stack_overflow": "CWE-121",
+                "buffer_overflow": "CWE-120",
+                "null_deref": "CWE-476",
+                "integer_overflow": "CWE-190",
+                "command_injection": "CWE-78",
+            }
+            cwe_id = crash_type_to_cwe.get(crash_context.crash_type)
+
+            intent_verdict = None
+            intent_confidence = None
+            if isinstance(crash_context.intent_match, dict):
+                intent_verdict = crash_context.intent_match.get("verdict")
+                intent_confidence = crash_context.intent_match.get(
+                    "confidence"
+                )
+
+            witness, data = witness_from_exploit(
+                exploit_code,
+                finding_id=crash_context.crash_id,
+                cwe_id=cwe_id,
+                file_path=(
+                    crash_context.source_location.rsplit(":", 1)[0]
+                    if crash_context.source_location else None
+                ),
+                compiled=crash_context.exploit_compiled,
+                compile_error_count=len(
+                    crash_context.exploit_compile_errors or []
+                ),
+                intent_verdict=intent_verdict,
+                intent_confidence=intent_confidence,
+                target_binary_path=self.binary,
+                produced_by="crash-agent",
+            )
+            self._witness_store.put(witness, data)
+            logger.debug(
+                f"   · Recorded witness {witness.bytes_hash[:12]} "
+                f"({witness.bytes_len}B)"
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                f"   · Witness record failed for "
+                f"{crash_context.crash_id}: {type(e).__name__}: {e}"
             )
 
     def _signal_name(self, signal: str) -> str:

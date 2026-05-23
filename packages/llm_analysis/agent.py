@@ -500,7 +500,8 @@ class AutonomousSecurityAgentV2:
                  prep_only: bool = False,
                  synthesise_checkers: bool = True,
                  verify_exploits: bool = True,
-                 judge_intent: bool = True):
+                 judge_intent: bool = True,
+                 record_witnesses: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -530,6 +531,17 @@ class AutonomousSecurityAgentV2:
         # unwanted. See ``_judge_exploit_intent`` and
         # ``packages.llm_analysis.intent_match``.
         self.judge_intent = judge_intent
+        # Record each LLM-emitted exploit as a canonical Witness
+        # (source=LLM_EMIT_RUN, outcome=NOT_RUN) so the bytes are
+        # available to downstream consumers (reporting, future
+        # ZKPoX) on the same data path as fuzz witnesses. Lazy: the
+        # WitnessStore is opened on the first successful exploit
+        # generation rather than eagerly, so prep-only runs never
+        # touch the filesystem. Failures are non-fatal — the
+        # exploit artefact remains on disk regardless. Default on;
+        # opt out via ``--no-record-witnesses``.
+        self.record_witnesses = record_witnesses
+        self._witness_store = None  # lazy
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -1228,6 +1240,16 @@ class AutonomousSecurityAgentV2:
                 if self.judge_intent:
                     self._judge_exploit_intent(vuln, exploit_code)
 
+                # Record the LLM-emitted exploit as a canonical
+                # Witness (source=LLM_EMIT_RUN, outcome=NOT_RUN).
+                # Same data path as fuzz witnesses; downstream
+                # consumers filter by ``source`` when they care
+                # about provenance. Gated on
+                # ``self.record_witnesses``; failures are non-
+                # fatal — the exploit file on disk is unaffected.
+                if self.record_witnesses:
+                    self._record_exploit_witness(vuln, exploit_code)
+
                 return True
             else:
                 logger.warning("   ✗ LLM response did not contain valid code")
@@ -1346,6 +1368,69 @@ class AutonomousSecurityAgentV2:
             logger.info(
                 f"   · Intent-match: uncertain "
                 f"(used_llm={verdict.used_llm})"
+            )
+
+    def _record_exploit_witness(
+        self, vuln: VulnerabilityContext, exploit_code: str,
+    ) -> None:
+        """Record the LLM-emitted exploit as a canonical Witness.
+
+        Lazy-opens ``self._witness_store`` against
+        ``self.out_dir / "witnesses"`` on first call so prep-only
+        runs never touch the filesystem. Reads ``compile_verify``
+        and ``intent_match`` verdicts off the finding for the
+        ``outcome_detail``; both may be ``None`` if their gates
+        were disabled.
+
+        Failures are non-fatal: a witness-store I/O error, an
+        adapter exception, or a non-UTF-8 exploit_code (LLMs
+        sometimes emit binary-looking fixtures inside code blocks)
+        all log+continue. The exploit artefact on disk is the
+        primary record; the witness is a downstream-facing
+        secondary record.
+        """
+        try:
+            if self._witness_store is None:
+                from core.witness import WitnessStore
+                self._witness_store = WitnessStore(
+                    self.out_dir / "witnesses"
+                )
+            from packages.llm_analysis.witness_adapter import (
+                witness_from_exploit,
+            )
+            target_source_path = vuln.get_full_file_path()
+            intent_verdict = None
+            intent_confidence = None
+            if vuln.intent_match is not None:
+                intent_verdict = getattr(
+                    vuln.intent_match, "verdict", None,
+                )
+                intent_confidence = getattr(
+                    vuln.intent_match, "confidence", None,
+                )
+            witness, data = witness_from_exploit(
+                exploit_code,
+                finding_id=vuln.finding_id,
+                cwe_id=vuln.cwe_id,
+                rule_id=vuln.rule_id,
+                file_path=vuln.file_path,
+                compiled=vuln.exploit_compiled,
+                compile_error_count=len(
+                    vuln.exploit_compile_errors or []
+                ),
+                intent_verdict=intent_verdict,
+                intent_confidence=intent_confidence,
+                target_source_path=target_source_path,
+            )
+            self._witness_store.put(witness, data)
+            logger.debug(
+                f"   · Recorded witness {witness.bytes_hash[:12]} "
+                f"({witness.bytes_len}B)"
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                f"   · Witness record failed for "
+                f"{vuln.finding_id}: {type(e).__name__}: {e}"
             )
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
@@ -2026,6 +2111,20 @@ def main() -> None:
              "judge not invoked). See "
              "packages/llm_analysis/intent_match.py for design.",
     )
+    ap.add_argument(
+        "--no-record-witnesses",
+        action="store_true",
+        help="Skip recording LLM-emitted exploits as canonical "
+             "Witnesses under <out>/witnesses/ (default on). "
+             "Each successful exploit generation otherwise produces "
+             "one Witness with source=LLM_EMIT_RUN, "
+             "outcome=NOT_RUN, carrying the compile + intent-match "
+             "verdicts in outcome_detail. Negligible wall-clock "
+             "cost (single sha256 + JSON write per finding); the "
+             "opt-out exists for benchmarks that compare runs "
+             "byte-for-byte and for ephemeral CI runs that don't "
+             "persist the out/ tree.",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -2103,6 +2202,7 @@ def main() -> None:
         synthesise_checkers=not args.no_checker_synthesis,
         verify_exploits=not args.no_verify_exploits,
         judge_intent=not args.no_judge_intent,
+        record_witnesses=not args.no_record_witnesses,
     )
 
     # Load checklist for metadata lookup
