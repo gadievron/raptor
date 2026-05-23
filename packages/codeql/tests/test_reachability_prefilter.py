@@ -437,3 +437,47 @@ def test_framework_callable_does_not_short_circuit(
     # circuit. skipped_reason stays None; analysis ran.
     assert result.skipped_reason is None
     assert result.reachability_verdict == "framework_callable"
+
+
+# ---------------------------------------------------------------------------
+# S2: registered_via_call — JS / Go function-as-argument registration.
+# A handler passed as identifier argument to http.HandleFunc / app.get /
+# router.use must NOT short-circuit; full LLM analysis runs.
+# ---------------------------------------------------------------------------
+
+
+def test_go_handler_registered_via_call_returns_registered_via_call(tmp_path):
+    """Go handler passed to http.HandleFunc resolves new
+    ``registered_via_call`` verdict instead of ``not_called``."""
+    try:
+        import tree_sitter_go  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("tree_sitter_go not installed")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.go").write_text(
+        'package main\n'
+        'import "net/http"\n'
+        'func handler(w http.ResponseWriter, r *http.Request) {\n'
+        '\tcursor.Execute(r.URL.Query().Get("q"))\n'
+        '}\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", handler)\n'
+        '}\n'
+    )
+    a = _analyzer()
+    # Need a JS / Go finding shape — _finding builds Python-style;
+    # for Go we use src/main.go directly.
+    from packages.codeql.autonomous_analyzer import CodeQLFinding
+    finding = CodeQLFinding(
+        rule_id="go/sql-injection", rule_name="x", message="x",
+        level="error",
+        file_path="src/main.go", start_line=4, end_line=4,
+        snippet="cursor.Execute(...)",
+    )
+    verdict = a._check_reachability(finding, tmp_path)
+    assert verdict == "registered_via_call", (
+        f"Go handler registered via http.HandleFunc must resolve "
+        f"registered_via_call, got {verdict!r}"
+    )

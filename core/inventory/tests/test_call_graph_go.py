@@ -442,3 +442,111 @@ def test_package_main_captured():
         'func main() {}\n'
     )
     assert g.package_name == "main"
+
+
+# ---------------------------------------------------------------------------
+# argument_identifiers extraction — load-bearing for downstream
+# function-as-argument registration detection (net/http, gin, echo).
+# Tests pin: bare identifiers captured, non-identifiers (strings,
+# composite literals, selectors, function literals) skipped, ordering
+# preserved.
+# ---------------------------------------------------------------------------
+
+
+def test_go_argument_identifiers_http_handlefunc():
+    g = extract_call_graph_go(
+        'package main\n'
+        'import "net/http"\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", handler)\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain[-1] == "HandleFunc")
+    assert call.argument_identifiers == ["handler"]
+
+
+def test_go_argument_identifiers_gin_get():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func setup(r *gin.Engine) {\n'
+        '\tr.GET("/users", listUsers)\n'
+        '\tr.POST("/users", createUser)\n'
+        '}\n'
+    )
+    get_call = next(c for c in g.calls if c.chain[-1] == "GET")
+    post_call = next(c for c in g.calls if c.chain[-1] == "POST")
+    assert get_call.argument_identifiers == ["listUsers"]
+    assert post_call.argument_identifiers == ["createUser"]
+
+
+def test_go_argument_identifiers_multiple_with_middleware():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func setup(r *gin.Engine) {\n'
+        '\tr.GET("/admin", authMW, adminPanel)\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain[-1] == "GET")
+    assert call.argument_identifiers == ["authMW", "adminPanel"]
+
+
+def test_go_argument_identifiers_skip_string_and_composite():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", handler)\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain[-1] == "HandleFunc")
+    # String literal "/x" filtered, only handler kept.
+    assert call.argument_identifiers == ["handler"]
+
+
+def test_go_argument_identifiers_skip_function_literal():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", func(w http.ResponseWriter, r *http.Request) {})\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain[-1] == "HandleFunc")
+    # Inline `func() {}` not an identifier — skipped.
+    assert call.argument_identifiers == []
+
+
+def test_go_argument_identifiers_skip_selector():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", svc.Handle)\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain[-1] == "HandleFunc")
+    # `svc.Handle` is a selector_expression, not a bare identifier.
+    assert call.argument_identifiers == []
+
+
+def test_go_argument_identifiers_empty_no_args():
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {\n'
+        '\tinit()\n'
+        '}\n'
+    )
+    call = next(c for c in g.calls if c.chain == ["init"])
+    assert call.argument_identifiers == []
+
+
+def test_go_argument_identifiers_round_trips_via_dict():
+    """Schema round-trip: argument_identifiers survives
+    to_dict/from_dict serialisation."""
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {\n'
+        '\thttp.HandleFunc("/x", handler)\n'
+        '}\n'
+    )
+    d = g.to_dict()
+    g2 = FileCallGraph.from_dict(d)
+    call = next(c for c in g2.calls if c.chain[-1] == "HandleFunc")
+    assert call.argument_identifiers == ["handler"]

@@ -83,6 +83,7 @@ def mark_unreachable_low_priority(
             Verdict,
             function_called,
             is_framework_callable,
+            is_registered_via_call,
         )
     except ImportError:
         return 0
@@ -147,6 +148,17 @@ def mark_unreachable_low_priority(
                 # uncalled but framework-reachable.
                 func["priority_reason"] = (
                     "reachability:framework_callable"
+                )
+                continue
+            if is_registered_via_call(inventory, target):
+                # Same skip-the-demotion logic but for the JS / Go
+                # function-as-argument registration pattern
+                # (``http.HandleFunc("/x", target)``,
+                # ``app.get("/users", target)``). Annotate with a
+                # distinct reason so operators can see WHICH
+                # mechanism kept this function alive.
+                func["priority_reason"] = (
+                    "reachability:registered_via_call"
                 )
                 continue
 

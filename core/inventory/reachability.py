@@ -783,6 +783,15 @@ class _AdjacencyIndex:
     # ``definitive`` set for these, but they are NOT dead code;
     # consumers should treat them as entry points.
     framework_callable: Set[InternalFunction] = field(default_factory=set)
+    # Functions referenced as identifier arguments to a framework
+    # registration call (``http.HandleFunc("/x", handler)``,
+    # ``app.get("/users", listUsers)``, etc.). Sister to
+    # ``framework_callable`` but covers the JS / Go pattern where
+    # the framework registers handlers via call arguments rather
+    # than decorators. Populated from CallSite.argument_identifiers
+    # which the JS + Go extractors emit (other languages populate
+    # an empty list — the set just stays empty for them).
+    framework_registered: Set[InternalFunction] = field(default_factory=set)
     # ``qualified_name -> InternalFunction`` for project-defined
     # functions reachable via cross-package import. Used by
     # callers_of() to follow ExternalFunction → InternalFunction
@@ -934,6 +943,50 @@ def _get_or_build_index(
                 if fn.line == df_line:
                     idx.framework_callable.add(fn)
                     break
+
+    # Pass 1.3b: scan call sites for framework registration —
+    # ``http.HandleFunc("/x", handler)``, ``app.get("/users",
+    # listUsers)``, etc. The JS / Go pattern that mirrors Python's
+    # decorator-based framework dispatch: a handler function is
+    # passed as an identifier argument to a recognised registration
+    # method. The CallSite.argument_identifiers field carries the
+    # identifier args; ``_FRAMEWORK_REGISTRATION_TAILS`` curates
+    # the chain tails we treat as registration. Chain-length-2
+    # gate parallels the decorator detector — bare ``get(handler)``
+    # calls don't qualify (too generic), but ``app.get(handler)``
+    # does.
+    #
+    # Same-file matching only: the registered function must be
+    # defined in the same file as the registration call. Cross-file
+    # resolution (handler in handlers.js, registration in
+    # routes.js) is a follow-up — would require resolving the
+    # identifier through the file's import map, which is more
+    # invasive. Same-file covers the common Go pattern (handlers
+    # + main in same file or small package) and small Express apps.
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        for call in cg.get("calls") or []:
+            if not isinstance(call, dict):
+                continue
+            chain = call.get("chain") or []
+            if len(chain) < 2:
+                continue
+            tail = str(chain[-1])
+            if tail not in _FRAMEWORK_REGISTRATION_TAILS:
+                continue
+            arg_idents = call.get("argument_identifiers") or []
+            for ident in arg_idents:
+                candidates = idx.definitions.get((path, ident), set())
+                # Function defined in same file — register all
+                # matching InternalFunctions (only one per
+                # (path, name) typically, unless overloaded).
+                for fn in candidates:
+                    idx.framework_registered.add(fn)
 
     # Pass 1.4: capture class metadata from call_graph data. Maps
     # each method's InternalFunction to its owning class, and
@@ -1280,6 +1333,48 @@ _FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
     "query", "mutation", "subscription", "field", "resolver",
     # Build tools (e.g. nox, doit, pyinvoke)
     "session", "module_task",
+})
+
+
+# Chain tails recognised as framework registration calls — the JS /
+# Go pattern where a handler is passed as an identifier argument to a
+# routing or middleware-registration method. For
+# ``app.get("/x", handler)``, the chain tail is ``get`` and ``handler``
+# is the registered function. The set is curated against:
+# Express / Fastify / Koa / Hono (HTTP verb methods + ``use`` + ``route``),
+# Go net/http (``Handle``, ``HandleFunc``), gin / echo (capitalised HTTP
+# verbs + ``Use`` + ``Group``), chi (mixed-case verbs + ``Method`` /
+# ``MethodFunc`` / ``Mount``). The chain-length-2 gate (matching
+# ``_decorators_indicate_framework_dispatch``'s philosophy) keeps bare
+# ``get(...)`` / ``use(...)`` calls from being treated as registration:
+# they're far more likely user-defined helpers than framework calls.
+#
+# FALSE-POSITIVE awareness:
+#   * ``map.get(key)`` shape: any chain ending in ``get`` matches.
+#     Mitigation: tail-set excludes the most generic verbs that double
+#     as Map/Set accessors (``set``, ``has``); registered HTTP verbs
+#     (``get``/``post``/etc.) cannot be cleanly disambiguated without
+#     receiver-type tracking. Accepted: a function passed as the 2nd
+#     arg to a ``somethign.get(...)`` call would be promoted as
+#     framework_registered — but in practice ``map.get`` takes 1
+#     argument (the key), and 2-arg ``.get(key, default)`` calls
+#     don't pass identifier-function arguments. False-positive
+#     promotion costs accuracy on dead-code findings (the consumer
+#     skips a demotion that might have been correct); silencing
+#     real frameworks costs false negatives. Bias toward
+#     admitting the framework case.
+_FRAMEWORK_REGISTRATION_TAILS: FrozenSet[str] = frozenset({
+    # Express / Fastify / Koa / Hono — lowercase HTTP verbs + use + route.
+    "get", "post", "put", "patch", "delete", "head", "options",
+    "all", "use", "route", "param",
+    # Go gin / echo — capitalised HTTP verbs + Use + Group + Static.
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+    "Any", "Use", "Group", "Static",
+    # Go chi — mixed-case verbs + Method/MethodFunc + Mount + Handle.
+    "Get", "Post", "Put", "Patch", "Delete", "Head", "Options",
+    "Method", "MethodFunc", "Mount",
+    # Go net/http — Handle + HandleFunc on *http.ServeMux + http pkg.
+    "Handle", "HandleFunc",
 })
 
 
@@ -1941,6 +2036,32 @@ def is_framework_callable(
     return target in idx.framework_callable
 
 
+def is_registered_via_call(
+    inventory: Dict[str, Any],
+    target: InternalFunction,
+    *,
+    exclude_test_files: bool = True,
+) -> bool:
+    """True iff ``target`` is passed as an identifier argument to a
+    recognised framework registration call (``http.HandleFunc("/x",
+    target)``, ``app.get("/users", target)``, ``router.use(target)``,
+    etc.). Sister to :func:`is_framework_callable` but for the JS / Go
+    pattern where the framework registers handlers via call arguments
+    rather than decorators.
+
+    Same-file matching only: ``target`` must be defined in the same
+    file as the registration call. Cross-file resolution (handler in
+    handlers.js, registration in routes.js) requires walking the
+    file's import map and is a documented limitation — same as
+    ``is_framework_callable``'s cross-file caveats for decorators.
+
+    See ``_FRAMEWORK_REGISTRATION_TAILS`` for the registration-call
+    pattern set.
+    """
+    idx = _get_or_build_index(inventory, exclude_test_files=exclude_test_files)
+    return target in idx.framework_registered
+
+
 def callees_of(
     inventory: Dict[str, Any],
     source: InternalFunction,
@@ -2520,6 +2641,7 @@ __all__ = [
     "forward_closure",
     "function_called",
     "is_framework_callable",
+    "is_registered_via_call",
     "parse_evidence_entry",
     "reverse_closure",
     "shortest_path",

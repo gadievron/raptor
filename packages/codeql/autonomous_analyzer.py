@@ -114,13 +114,15 @@ class AutonomousAnalysisResult:
     # Reachability prefilter outcome — set when the inventory-based
     # resolver was consulted before the expensive LLM stages.
     # ``"called"`` / ``"not_called"`` / ``"uncertain"`` /
-    # ``"framework_callable"`` / None (when the prefilter couldn't
-    # determine, e.g. non-Python file or sink line not in any
-    # function). ``"framework_callable"`` means the static graph
-    # found no callers BUT the function carries a framework-
-    # dispatch decorator (``@app.route``, ``@shared_task``,
-    # ``@receiver``, etc.) — treated as reachable; full LLM
-    # analysis still runs.
+    # ``"framework_callable"`` / ``"registered_via_call"`` / None.
+    # ``"framework_callable"``: static graph found no callers BUT
+    # function carries a framework-dispatch decorator
+    # (``@app.route``, ``@shared_task``, ``@receiver``, etc.).
+    # ``"registered_via_call"``: function is passed as an identifier
+    # argument to a recognised framework registration call
+    # (``http.HandleFunc("/x", target)``, ``app.get(...)``,
+    # ``router.use(...)`` — the JS / Go equivalent of the decorator
+    # pattern). Both treated as reachable; full LLM analysis runs.
     reachability_verdict: Optional[str] = None
     # Set to a non-None reason when the analyzer short-circuited
     # without running deep analysis. Today the only value is
@@ -222,16 +224,20 @@ class AutonomousCodeQLAnalyzer:
         finding's sink line reached from anywhere in the project?
 
         Returns one of ``"called"`` / ``"not_called"`` /
-        ``"uncertain"`` / ``"framework_callable"`` / None
-        (None = couldn't determine — non-Python file, sink not in
-        any function, inventory build failed, etc.). The caller's
-        policy is to short-circuit on ``"not_called"`` and
-        otherwise continue. ``"framework_callable"`` is the
-        substrate's signal that the static graph shows no callers
-        BUT a framework-dispatch decorator (Flask ``@app.route``,
-        Celery ``@shared_task``, Django ``@receiver``, etc.)
-        registers the function for runtime invocation — caller
-        proceeds with full LLM analysis.
+        ``"uncertain"`` / ``"framework_callable"`` /
+        ``"registered_via_call"`` / None (None = couldn't determine —
+        non-Python file, sink not in any function, inventory build
+        failed, etc.). The caller's policy is to short-circuit on
+        ``"not_called"`` and otherwise continue.
+        ``"framework_callable"``: substrate found framework-dispatch
+        decorator (Flask ``@app.route``, Celery ``@shared_task``,
+        Django ``@receiver``, etc.) registering the function for
+        runtime invocation. ``"registered_via_call"``: function
+        passed as identifier argument to a recognised framework
+        registration call (``http.HandleFunc("/x", fn)``,
+        ``app.get("/users", fn)``, ``router.use(fn)``) — JS / Go
+        equivalent of decorator-driven dispatch. Both let the
+        caller proceed with full LLM analysis.
 
         Cost: inventory build is paid once per analyzer instance
         (cached); per-finding lookup is O(N_files + N_calls in
@@ -278,6 +284,7 @@ class AutonomousCodeQLAnalyzer:
                 InternalFunction,
                 function_called,
                 is_framework_callable,
+                is_registered_via_call,
             )
         except ImportError:
             return None
@@ -339,6 +346,14 @@ class AutonomousCodeQLAnalyzer:
                 # short-circuit". Distinct from "called" so the
                 # reachability_verdict field reports accurately.
                 return "framework_callable"
+            if is_registered_via_call(
+                self._reachability_inventory, target,
+            ):
+                # JS / Go function-as-argument registration
+                # (``http.HandleFunc("/x", target)``). Distinct
+                # verdict value so operators can see WHICH
+                # mechanism kept the finding alive.
+                return "registered_via_call"
         return verdict
 
     def _relative_path(

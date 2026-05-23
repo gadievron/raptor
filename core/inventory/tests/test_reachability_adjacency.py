@@ -44,6 +44,7 @@ from core.inventory.reachability import (
     callees_of,
     callers_of,
     is_framework_callable,
+    is_registered_via_call,
 )
 
 
@@ -1416,3 +1417,178 @@ class TestNakedFrameworkDispatch:
                 f"bare @{name} is too generic to promote — "
                 f"likely a project-defined pass-through"
             )
+
+
+# ---------------------------------------------------------------------------
+# Function-as-argument framework registration (JS / Go). Sister to the
+# decorator-driven framework_callable detection — covers the dominant
+# JS / Go pattern where handlers are passed as identifier arguments to
+# routing-method calls rather than decorated.
+# ---------------------------------------------------------------------------
+
+
+def _js_file(path: str, source: str) -> Dict[str, Any]:
+    """Build a JS file record using the tree-sitter extractor."""
+    from core.inventory.call_graph import extract_call_graph_javascript
+    import re
+    cg = extract_call_graph_javascript(source).to_dict()
+    items = []
+    # Naive function-def extraction for items (mirrors the
+    # production extractor's output shape closely enough for
+    # the resolver to match against).
+    for i, line in enumerate(source.splitlines(), 1):
+        m = re.match(r"\s*function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(", line)
+        if m:
+            items.append({
+                "name": m.group(1), "kind": "function",
+                "line_start": i,
+            })
+    return {
+        "path": path, "language": "javascript",
+        "items": items, "call_graph": cg,
+    }
+
+
+def _go_file(path: str, source: str) -> Dict[str, Any]:
+    """Build a Go file record using the tree-sitter extractor."""
+    from core.inventory.call_graph import extract_call_graph_go
+    import re
+    cg = extract_call_graph_go(source).to_dict()
+    items = []
+    for i, line in enumerate(source.splitlines(), 1):
+        m = re.match(r"\s*func\s+(?:\([^)]+\)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(", line)
+        if m:
+            items.append({
+                "name": m.group(1), "kind": "function",
+                "line_start": i,
+            })
+    return {
+        "path": path, "language": "go",
+        "items": items, "call_graph": cg,
+    }
+
+
+class TestRegistrationViaCall:
+    def test_express_app_get_registers_handler(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        inv = _inv(_js_file("src/api.js",
+            "function listUsers(req, res) { res.json([]); }\n"
+            "app.get('/users', listUsers);\n"
+        ))
+        target = InternalFunction("src/api.js", "listUsers", 1)
+        assert is_registered_via_call(inv, target) is True
+
+    def test_express_middleware_use_registers(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        inv = _inv(_js_file("src/app.js",
+            "function authMW(req, res, next) { next(); }\n"
+            "app.use(authMW);\n"
+        ))
+        target = InternalFunction("src/app.js", "authMW", 1)
+        assert is_registered_via_call(inv, target) is True
+
+    def test_go_http_handlefunc_registers(self):
+        try:
+            import tree_sitter_go  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_go not installed")
+        inv = _inv(_go_file("src/main.go",
+            'package main\n'
+            'import "net/http"\n'
+            'func handler(w http.ResponseWriter, r *http.Request) {}\n'
+            'func main() {\n'
+            '\thttp.HandleFunc("/x", handler)\n'
+            '}\n'
+        ))
+        target = InternalFunction("src/main.go", "handler", 3)
+        assert is_registered_via_call(inv, target) is True
+
+    def test_go_gin_get_registers(self):
+        try:
+            import tree_sitter_go  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_go not installed")
+        inv = _inv(_go_file("src/api.go",
+            'package api\n'
+            'func listUsers(c *gin.Context) {}\n'
+            'func setup(r *gin.Engine) {\n'
+            '\tr.GET("/users", listUsers)\n'
+            '}\n'
+        ))
+        target = InternalFunction("src/api.go", "listUsers", 2)
+        assert is_registered_via_call(inv, target) is True
+
+    def test_undecorated_uncalled_function_not_registered(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        # ``orphan`` is defined but never passed as an arg or called.
+        inv = _inv(_js_file("src/u.js",
+            "function orphan() {}\n"
+            "function user() { console.log('hello'); }\n"
+        ))
+        target = InternalFunction("src/u.js", "orphan", 1)
+        assert is_registered_via_call(inv, target) is False
+
+    def test_bare_get_not_registration(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        # Bare ``get(handler)`` is too generic — chain length 1.
+        # Not treated as framework registration; the user-defined
+        # ``get(x)`` is more likely a getter than HTTP routing.
+        inv = _inv(_js_file("src/u.js",
+            "function handler() {}\n"
+            "get(handler);\n"
+        ))
+        target = InternalFunction("src/u.js", "handler", 1)
+        assert is_registered_via_call(inv, target) is False
+
+    def test_handler_in_string_arg_not_registered(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        # A function name appearing only in a string literal
+        # ``app.get('/handler')`` is NOT being passed as a function
+        # reference — only identifier args register.
+        inv = _inv(_js_file("src/u.js",
+            "function handler() {}\n"
+            "app.get('handler');\n"
+        ))
+        target = InternalFunction("src/u.js", "handler", 1)
+        assert is_registered_via_call(inv, target) is False
+
+    def test_arrow_function_inline_does_not_register_named_handler(self):
+        try:
+            import tree_sitter_javascript  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_javascript not installed")
+        # ``app.get('/x', (req, res) => handler())`` — handler is
+        # referenced inside the arrow body (a call site), not
+        # passed as the argument identifier. Not registration.
+        # ``handler`` would show as CALLED via the static graph
+        # if the arrow itself is reachable, but
+        # is_registered_via_call is about being passed by name.
+        inv = _inv(_js_file("src/u.js",
+            "function handler() {}\n"
+            "app.get('/x', (req, res) => handler());\n"
+        ))
+        target = InternalFunction("src/u.js", "handler", 1)
+        assert is_registered_via_call(inv, target) is False

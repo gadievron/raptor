@@ -488,3 +488,47 @@ class TestFrameworkCallableBypass:
         assert dead["priority"] == "low"
         assert dead["priority_reason"] == "reachability:not_called"
         assert "priority" not in alive  # called → no demotion at all
+
+
+class TestRegistrationViaCallBypass:
+    """S2: JS / Go function-as-argument registration. A handler
+    passed as an identifier argument to a routing call
+    (``http.HandleFunc("/x", handler)``, ``app.get("/users",
+    handler)``) must NOT be demoted to priority=low even though
+    the static graph shows no callers — the framework dispatches
+    to it via the registration call.
+    """
+
+    def test_go_handler_registered_via_handlefunc_not_demoted(
+        self, tmp_path,
+    ):
+        try:
+            import tree_sitter_go  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_go not installed")
+        target = _project(tmp_path, {
+            "src/main.go": (
+                'package main\n'
+                'import "net/http"\n'
+                'func handler(w http.ResponseWriter, r *http.Request) {}\n'
+                'func main() {\n'
+                '\thttp.HandleFunc("/x", handler)\n'
+                '}\n'
+            ),
+        })
+        checklist = _checklist({
+            "src/main.go": [{
+                "name": "handler", "kind": "function",
+                "line_start": 3, "line_end": 3,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low", (
+            "Go handler registered via http.HandleFunc must not "
+            "be demoted — framework dispatches to it at runtime"
+        )
+        assert func.get("priority_reason") == (
+            "reachability:registered_via_call"
+        )
