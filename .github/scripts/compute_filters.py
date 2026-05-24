@@ -63,6 +63,7 @@ FILTERS: dict[str, list[str]] = {
         "core/orchestration/**",
         "core/sandbox/**",
         "core/smt_solver/**",
+        "core/witness/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
