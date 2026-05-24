@@ -59,7 +59,7 @@ class TestProbeCapability(unittest.TestCase):
 class TestBinaryContextMap(unittest.TestCase):
     def test_to_dict_roundtrips(self):
         ctx = BinaryContextMap(
-            binary_path=Path("/tmp/sample"),
+            binary_path=Path("./sample"),
             arch="x86", bits=64, binary_format="elf",
         )
         ctx.entry_points.append(FunctionInfo(name="main", address=0x401000))
@@ -82,7 +82,7 @@ class TestBinaryContextMap(unittest.TestCase):
 
     def test_write_creates_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            ctx = BinaryContextMap(binary_path=Path("/tmp/sample"))
+            ctx = BinaryContextMap(binary_path=Path("./sample"))
             out = ctx.write(Path(tmp) / "ctx.json")
             self.assertTrue(out.exists())
             data = json.loads(out.read_text())
@@ -239,14 +239,14 @@ class TestBinaryUnderstand(unittest.TestCase):
     def test_analyse_binary_context_writes_shared_artifact(self, mock_understand):
         with tempfile.TemporaryDirectory() as tmpdir:
             out = Path(tmpdir) / "binary-context-map.json"
-            ctx = BinaryContextMap(binary_path=Path("/tmp/sample"))
+            ctx = BinaryContextMap(binary_path=Path("./sample"))
             mock_understand.return_value.analyse.return_value = ctx
 
-            result = analyse_binary_context(Path("/tmp/sample"), out_path=out, llm=None)
+            result = analyse_binary_context(Path("./sample"), out_path=out, llm=None)
 
             self.assertIs(result, ctx)
             self.assertTrue(out.exists())
-            mock_understand.assert_called_once_with(Path("/tmp/sample"), llm=None)
+            mock_understand.assert_called_once_with(Path("./sample"), llm=None)
 
 
 class TestSandboxWiring(unittest.TestCase):
@@ -458,7 +458,7 @@ class TestTransitiveCallers(unittest.TestCase):
         sinks_with_callers: dict mapping sink_name → list of caller
         names. caller names must be in interesting_names.
         """
-        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
         for i, n in enumerate(interesting_names):
             ctx.interesting_functions.append(
                 FunctionInfo(name=n, address=0x1000 + i * 0x100, size=64),
@@ -589,7 +589,7 @@ class TestTransitiveCallers(unittest.TestCase):
     def test_no_sinks_no_op(self):
         """If dangerous_sinks is empty, the method must not raise."""
         understand = self._make_understand()
-        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
         ctx.interesting_functions.append(
             FunctionInfo(name="any", address=0x1000),
         )
@@ -673,7 +673,7 @@ class TestTransitiveCallers(unittest.TestCase):
         is the operator-visible outcome of the whole transitive
         analysis."""
         understand = self._make_understand()
-        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        ctx = BinaryContextMap(binary_path=Path("./stub"))
         # parse_msg has NO direct dangerous calls but transitively
         # reaches strcpy via two helpers.
         parse_msg = FunctionInfo(

@@ -556,13 +556,13 @@ class TestCliDispatch:
         from packages.sca.cli import _dispatch_fix
         from unittest.mock import patch
         with patch("packages.sca.update.main", return_value=0) as m:
-            _dispatch_fix(["/path", "--cve-only", "--allow-major", "--out", "/tmp/o"])
+            _dispatch_fix(["/path", "--cve-only", "--allow-major", "--out", "./out"])
             args = m.call_args[0][0]
             assert "--target" in args
             assert "/path" in args
             assert "--allow-major" in args
             assert "--out" in args
-            assert "/tmp/o" in args
+            assert "./out" in args
 
     def test_fix_findings_with_positional_drops_positional(self):
         """fix /path --findings /f.json drops the positional (--findings wins)."""
@@ -580,7 +580,7 @@ class TestCliDispatch:
 
     def test_positional_to_target_flag_only_flags(self):
         from packages.sca.cli import _positional_to_target_flag
-        result = _positional_to_target_flag(["--allow-major", "--out", "/tmp"])
+        result = _positional_to_target_flag(["--allow-major", "--out", "."])
         assert "--target" not in result
 
     def test_fix_harden_routes_to_harden(self):
@@ -614,13 +614,13 @@ class TestParseArgs:
         assert args.apply
 
     def test_out_flag(self):
-        args = optimise._parse_args(["/path", "--out", "/tmp/o"])
-        assert args.out == "/tmp/o"
+        args = optimise._parse_args(["/path", "--out", "./out"])
+        assert args.out == "./out"
 
     def test_all_flags(self):
         args = optimise._parse_args([
             "/path", "--apply", "--allow-major", "--git-patch",
-            "--offline", "--no-cache", "--cache-root", "/tmp/c",
+            "--offline", "--no-cache", "--cache-root", "./cache",
             "-vv",
         ])
         assert args.allow_major
@@ -628,7 +628,7 @@ class TestParseArgs:
         assert args.apply
         assert args.offline
         assert args.no_cache
-        assert args.cache_root == "/tmp/c"
+        assert args.cache_root == "./cache"
         assert args.verbose == 2
 
     def test_no_hash_pin_flag_default_off(self):

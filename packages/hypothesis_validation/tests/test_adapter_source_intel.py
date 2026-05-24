@@ -32,15 +32,15 @@ def _q(**kwargs) -> str:
 
 
 def _attr_result(*attrs) -> SourceIntelResult:
-    return SourceIntelResult(target="/tmp/x", attributes=tuple(attrs))
+    return SourceIntelResult(target="src", attributes=tuple(attrs))
 
 
 def _abort_result(*aborts) -> SourceIntelResult:
-    return SourceIntelResult(target="/tmp/x", aborts=tuple(aborts))
+    return SourceIntelResult(target="src", aborts=tuple(aborts))
 
 
 def _alloc_result(*allocs) -> SourceIntelResult:
-    return SourceIntelResult(target="/tmp/x", allocations=tuple(allocs))
+    return SourceIntelResult(target="src", allocations=tuple(allocs))
 
 
 # ---- describe / availability ------------------------------------------
@@ -76,7 +76,7 @@ class TestSourceIntelAdapterMeta:
 class TestQueryValidation:
     def setup_method(self):
         self.adapter = SourceIntelAdapter()
-        self.target = Path("/tmp/x")
+        self.target = Path("src")
 
     def test_empty_rule(self):
         ev = self.adapter.run("", self.target)
@@ -132,12 +132,12 @@ class TestAttrsAxis:
         result = _attr_result(
             AttributeEvidence(
                 kind=KIND_WUR, function_name="kmalloc",
-                location=("/tmp/x/mm/slab.c", 100),
+                location=("src/mm/slab.c", 100),
                 match_source="literal", raw_match="warn_unused_result",
             ),
             AttributeEvidence(
                 kind=KIND_NORETURN, function_name="panic",
-                location=("/tmp/x/kernel/panic.c", 50),
+                location=("src/kernel/panic.c", 50),
                 match_source="literal", raw_match="noreturn",
             ),
         )
@@ -164,12 +164,12 @@ class TestAttrsAxis:
         result = _attr_result(
             AttributeEvidence(
                 kind=KIND_WUR, function_name="kmalloc",
-                location=("/tmp/x/mm/slab.c", 100),
+                location=("src/mm/slab.c", 100),
                 match_source="literal", raw_match="warn_unused_result",
             ),
             AttributeEvidence(
                 kind=KIND_NORETURN, function_name="kmalloc",
-                location=("/tmp/x/mm/slab.c", 100),
+                location=("src/mm/slab.c", 100),
                 match_source="literal", raw_match="noreturn",
             ),
         )
@@ -193,12 +193,12 @@ class TestAttrsAxis:
         result = _attr_result(
             AttributeEvidence(
                 kind=KIND_WUR, function_name="kmalloc",
-                location=("/tmp/x/mm/slab.c", 100),
+                location=("src/mm/slab.c", 100),
                 match_source="literal", raw_match="x",
             ),
             AttributeEvidence(
                 kind=KIND_WUR, function_name="kmalloc",
-                location=("/tmp/x/other/file.c", 10),
+                location=("src/other/file.c", 10),
                 match_source="literal", raw_match="x",
             ),
         )
@@ -223,7 +223,7 @@ class TestAbortsAxis:
     def test_abort_match(self, tmp_path):
         result = _abort_result(
             AbortEvidence(
-                macro="panic", location=("/tmp/x/f.c", 50),
+                macro="panic", location=("src/f.c", 50),
                 enclosing_function="do_thing", grade=GRADE_DOMINATES,
             ),
         )
@@ -249,7 +249,7 @@ class TestAllocationsAxis:
         result = _alloc_result(
             AllocationEvidence(
                 allocator="kmalloc",
-                location=("/tmp/x/f.c", 200),
+                location=("src/f.c", 200),
                 shape="field",
                 enclosing_function="do_thing",
                 target_field="data",
@@ -299,7 +299,7 @@ class TestCaching:
         cached = _attr_result(
             AttributeEvidence(
                 kind=KIND_WUR, function_name="kmalloc",
-                location=("/tmp/x/f.c", 1),
+                location=("src/f.c", 1),
                 match_source="literal", raw_match="x",
             ),
         )
@@ -339,7 +339,7 @@ class TestCaching:
 class TestSkipReason:
     def test_skipped_result_returns_error_evidence(self, tmp_path):
         result = SourceIntelResult(
-            target="/tmp/x", skipped_reason="spatch_not_available",
+            target="src", skipped_reason="spatch_not_available",
         )
         adapter = SourceIntelAdapter()
         with (

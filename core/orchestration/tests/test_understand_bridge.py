@@ -213,14 +213,14 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(
             out_root, "understand_20260401_120000",
-            checklist={"target_path": "/tmp/vulns", "files": []},
+            checklist={"target_path": "./vulns", "files": []},
         )
 
         # validate_dir outside out/ with no siblings
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir == out_root / "understand_20260401_120000"
 
     def test_tier3_no_match_for_wrong_target(self, tmp_path, monkeypatch):
@@ -232,13 +232,13 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(
             out_root, "understand_20260401_120000",
-            checklist={"target_path": "/tmp/vulns", "files": []},
+            checklist={"target_path": "./vulns", "files": []},
         )
 
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/other")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./other")
         assert result_dir is None
 
     def test_returns_none_when_no_candidates(self, tmp_path, monkeypatch):
@@ -250,7 +250,7 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir is None
 
     def test_ignores_dirs_without_context_map(self, tmp_path):

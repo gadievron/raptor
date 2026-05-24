@@ -75,7 +75,7 @@ def test_options_from_args_round_trips_default_flags() -> None:
     """Parsing an empty arg list (just a target) must build a
     valid RunOptions with all defaults."""
     p = _parser_with_scan_args()
-    args = p.parse_args(["/tmp/target"])
+    args = p.parse_args(["./target"])
     apply_no_llm_umbrella(args)
     opts = options_from_args(args)
     # Sanity: defaults match the dataclass defaults.
@@ -89,7 +89,7 @@ def test_options_from_args_propagates_new_flags() -> None:
     ``RunOptions``."""
     p = _parser_with_scan_args()
     args = p.parse_args([
-        "/tmp/target",
+        "./target",
         "--no-progress",
         "--spdx",
         "--no-llm",
@@ -108,7 +108,7 @@ def test_no_llm_umbrella_zeros_dependent_flags() -> None:
     pay an LLM bill)."""
     p = _parser_with_scan_args()
     args = p.parse_args([
-        "/tmp/target",
+        "./target",
         "--no-llm",
         "--review-maintainers",
         "--llm-inline-installs",
@@ -142,7 +142,7 @@ def test_run_options_fields_covered_by_options_from_args() -> None:
         "enable_transitive_expansion",
     }
     p = _parser_with_scan_args()
-    args = p.parse_args(["/tmp/target"])
+    args = p.parse_args(["./target"])
     apply_no_llm_umbrella(args)
     opts = options_from_args(args)
     defaults = RunOptions()
@@ -191,7 +191,7 @@ def test_each_flag_flips_the_expected_run_option(
     This catches the cli.py-was-missing-emit_spdx_sbom class of
     bug: a flag is parsed but never plumbed."""
     p = _parser_with_scan_args()
-    args = p.parse_args(["/tmp/target", flag])
+    args = p.parse_args(["./target", flag])
     apply_no_llm_umbrella(args)
     opts = options_from_args(args)
     assert getattr(opts, attr) == expected, (

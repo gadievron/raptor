@@ -34,10 +34,10 @@ def _reset():
 def _finding(**kw):
     base = {
         "rule_id": "cpp/null-dereference",
-        "file_path": "/tmp/x/a.c",
+        "file_path": "src/a.c",
         "start_line": 10,
         "end_line": 10,
-        "repo_path": "/tmp/x",
+        "repo_path": "src",
         "function": "panic",
     }
     base.update(kw)
@@ -46,12 +46,12 @@ def _finding(**kw):
 
 def _result_with_evidence():
     return SourceIntelResult(
-        target="/tmp/x",
+        target="src",
         attributes=(
             AttributeEvidence(
                 kind=KIND_NORETURN,
                 function_name="panic",
-                location=("/tmp/x/a.c", 10),
+                location=("src/a.c", 10),
                 match_source="literal",
                 raw_match="noreturn",
             ),

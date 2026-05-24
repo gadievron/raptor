@@ -25,40 +25,45 @@ from packages.sca.calibration.project_samples import (
 )
 
 
-_FAKE_FINDINGS = [
-    {
-        "vuln_type": "sca:vulnerable_dependency",
-        "finding_id": "sca:vulnerable_dependency:PyPI:django:CVE-X",
-        "severity": "high",
-        "file": "/tmp/raptor-sca-sample-XXX/django/setup.py",  # tempdir path
-        "sca": {
-            "ecosystem": "PyPI",
-            "name": "django",
-            "version": "4.2.0",
-            "purl": "pkg:pypi/django@4.2.0",
-            "advisory": {"osv_id": "GHSA-x"},
-            "in_kev": False,
-            "epss": 0.05,
-            "cvss_score": 7.5,
-            "reachability": {"verdict": "imported"},
-            "raptor_risk_estimate": 0.65,
-            "risk_components": {"calibration_status": "unverified"},
+def _fake_findings(sample_root: Path):
+    """Build the canonical fake-findings list rooted under the
+    caller's hermetic sample dir. The vulnerable-dependency entry
+    must have its ``file`` under ``sample_root`` so the path-strip
+    tests can verify the prefix is removed."""
+    return [
+        {
+            "vuln_type": "sca:vulnerable_dependency",
+            "finding_id": "sca:vulnerable_dependency:PyPI:django:CVE-X",
+            "severity": "high",
+            "file": str(sample_root / "django" / "setup.py"),
+            "sca": {
+                "ecosystem": "PyPI",
+                "name": "django",
+                "version": "4.2.0",
+                "purl": "pkg:pypi/django@4.2.0",
+                "advisory": {"osv_id": "GHSA-x"},
+                "in_kev": False,
+                "epss": 0.05,
+                "cvss_score": 7.5,
+                "reachability": {"verdict": "imported"},
+                "raptor_risk_estimate": 0.65,
+                "risk_components": {"calibration_status": "unverified"},
+            },
         },
-    },
-    {
-        "vuln_type": "sca:hygiene:loose_pin",   # filtered out
-        "finding_id": "sca:hygiene:loose_pin:django",
-        "severity": "low",
-        "sca": {"ecosystem": "PyPI", "name": "django"},
-    },
-    {
-        "vuln_type": "sca:license:warned",      # filtered out
-        "finding_id": "sca:license:warned:PyPI:django",
-        "severity": "medium",
-        "sca": {"ecosystem": "PyPI", "name": "django",
-                 "spdx": "GPL-3.0"},
-    },
-]
+        {
+            "vuln_type": "sca:hygiene:loose_pin",   # filtered out
+            "finding_id": "sca:hygiene:loose_pin:django",
+            "severity": "low",
+            "sca": {"ecosystem": "PyPI", "name": "django"},
+        },
+        {
+            "vuln_type": "sca:license:warned",      # filtered out
+            "finding_id": "sca:license:warned:PyPI:django",
+            "severity": "medium",
+            "sca": {"ecosystem": "PyPI", "name": "django",
+                     "spdx": "GPL-3.0"},
+        },
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -66,24 +71,27 @@ _FAKE_FINDINGS = [
 # ---------------------------------------------------------------------------
 
 
-def test_sanitise_keeps_only_vuln_findings():
-    out = _sanitise_findings(_FAKE_FINDINGS, Path("/tmp/raptor-sca-sample-X"))
+def test_sanitise_keeps_only_vuln_findings(tmp_path):
+    sample_root = tmp_path / "sample"
+    out = _sanitise_findings(_fake_findings(sample_root), sample_root)
     assert len(out) == 1
     assert out[0]["finding_id"] == "sca:vulnerable_dependency:PyPI:django:CVE-X"
 
 
-def test_sanitise_strips_tempdir_paths():
+def test_sanitise_strips_tempdir_paths(tmp_path):
     """The output must NOT contain any file path under the
     discarded clone dir — second runs would have different
     tempdir suffixes and we don't want path leakage."""
-    out = _sanitise_findings(_FAKE_FINDINGS, Path("/tmp/raptor-sca-sample-X"))
+    sample_root = tmp_path / "sample"
+    out = _sanitise_findings(_fake_findings(sample_root), sample_root)
     serialised = json.dumps(out)
-    assert "/tmp/raptor-sca-sample-XXX" not in serialised
+    assert str(sample_root) not in serialised
     assert "setup.py" not in serialised
 
 
-def test_sanitise_preserves_validation_relevant_fields():
-    out = _sanitise_findings(_FAKE_FINDINGS, Path("/tmp/x"))
+def test_sanitise_preserves_validation_relevant_fields(tmp_path):
+    sample_root = tmp_path / "sample"
+    out = _sanitise_findings(_fake_findings(sample_root), sample_root)
     f = out[0]
     # Fields needed for validation: score, severity, kev/epss
     # signals, advisory id.
@@ -98,13 +106,13 @@ def test_sanitise_preserves_validation_relevant_fields():
     assert f["advisory"] == {"osv_id": "GHSA-x"}
 
 
-def test_sanitise_empty_input():
-    assert _sanitise_findings([], Path("/tmp/x")) == []
+def test_sanitise_empty_input(tmp_path):
+    assert _sanitise_findings([], tmp_path) == []
 
 
-def test_sanitise_skips_malformed_entries():
+def test_sanitise_skips_malformed_entries(tmp_path):
     bad = [None, "string", 42, {"vuln_type": "sca:vulnerable_dependency"}]
-    out = _sanitise_findings(bad, Path("/tmp/x"))
+    out = _sanitise_findings(bad, tmp_path)
     # The dict-without-sca survives but with mostly None fields.
     assert len(out) == 1
 
