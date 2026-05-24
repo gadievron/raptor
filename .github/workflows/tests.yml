@@ -35,6 +35,15 @@ env:
   # pytest.ini) so it covers every tier here but NOT local `pytest`,
   # where it would dump on pdb / breakpoint sessions.
   PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
+  # Default-tier slow-test guard (root conftest.py). Fails the run if any
+  # test's call phase exceeds this many seconds — the preventive backstop
+  # for "real I/O that should be mocked" landing in the fast tier (the
+  # 14s/20s/84s class the --durations sweep found). 10s is well above the
+  # slowest legit default-tier test (~3s) with headroom for runner
+  # variance, and well below faulthandler's 120s hang net. NOT set in
+  # nightly.yml — its `-m "slow or integration"` tests are legitimately
+  # slow. A genuinely-heavy new test should be marked @pytest.mark.slow.
+  RAPTOR_MAX_TEST_SECONDS: "10"
   # Opt the runner into Node.js 24 for JavaScript actions.
   # GitHub deprecated Node.js 20 on 2025-09-19; runners enforce
   # Node 24 by default from 2026-06-02 and remove Node 20 on
