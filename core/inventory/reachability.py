@@ -430,6 +430,42 @@ def function_called(
                     file_has_evidence = True
                     evidence.append((path, int(call.get("line", 0) or 0)))
 
+        # Same-file bare-name fast-path. When chain is
+        # ``[target_func]`` AND this file's path-derived module
+        # matches target_module, treat as a hit. The import-map
+        # path can't address this case: a function defined in the
+        # same file isn't "imported", so it has no import-map
+        # entry for its name to resolve against.
+        #
+        # Particularly load-bearing for C/C++ (no symbol-level
+        # imports for in-file functions) — pre-fix the resolver
+        # said NOT_CALLED for every C bare-name same-file call,
+        # which cascaded to false-negative reachability for any
+        # function called only by another same-file function in
+        # a longer reach chain. Also fixes the equivalent Python
+        # / JS / Go / Rust gap when a same-file caller uses the
+        # bare-name form.
+        #
+        # Defensive: skip when the bare name is shadowed by an
+        # import in THIS file. The import-map path above is
+        # authoritative for shadowed bare-name calls (Python
+        # shadows the local def with the import at module scope;
+        # JS / TS behaves the same with named-import binding).
+        if not file_has_evidence:
+            file_module = _file_path_to_module(path)
+            if file_module == target_module:
+                for call in calls:
+                    chain = call.get("chain") or []
+                    if len(chain) != 1 or chain[0] != target_func:
+                        continue
+                    if chain[0] in imports:
+                        continue
+                    file_has_evidence = True
+                    evidence.append(
+                        (path, int(call.get("line", 0) or 0)),
+                    )
+                    break
+
         if file_has_evidence:
             continue
 
@@ -1737,6 +1773,41 @@ def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
                     idx.qualified_to_internal[alias_full] = target_internal
                     added += 1
     return added
+
+
+def _file_path_to_module(rel_path: str) -> Optional[str]:
+    """Universal file-path → module conversion used by the same-file
+    bare-name fast-path in ``function_called``.
+
+    ``c/heartbeat.c`` → ``c.heartbeat``;
+    ``packages/foo/bar.py`` → ``packages.foo.bar``;
+    ``src/api/handler.rs`` → ``src.api.handler``.
+
+    Matches the convention ``core.orchestration.reachability_enrichment.
+    _path_to_module`` uses for the prepass — the prepass passes module-
+    qualified names like ``c.heartbeat.read_u16_be`` to function_called,
+    so the resolver needs to recognise the same module form to match
+    same-file bare-name calls against them.
+
+    Differs from ``_path_derived_module`` above: this helper is
+    language-agnostic (strips ANY single suffix) and emits just the
+    module, not a function-qualified candidate list. The two helpers
+    serve different fast-paths and intentionally diverge in scope.
+
+    Returns ``None`` for paths with no extension (extensionless
+    scripts, Makefile-shaped artefacts) — those don't participate
+    in module-style namespacing.
+    """
+    if not rel_path:
+        return None
+    from pathlib import PurePosixPath
+    p = PurePosixPath(rel_path.replace("\\", "/"))
+    if not p.suffix:
+        return None
+    parts = list(p.with_suffix("").parts)
+    if not parts:
+        return None
+    return ".".join(parts)
 
 
 def _path_derived_module(

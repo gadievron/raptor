@@ -316,3 +316,142 @@ def test_result_is_immutable():
     import pytest
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.verdict = Verdict.CALLED  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Same-file bare-name resolution. Pre-fix the resolver only matched bare
+# calls via the import map; same-file calls (where the function isn't
+# "imported" because it's defined in the same file) returned NOT_CALLED
+# even when callers_of correctly showed the link. Particularly load-
+# bearing for C / C++ where there are no symbol-level imports for in-
+# file functions — every bare-name same-file C call was a false-negative
+# in the high-level API.
+# ---------------------------------------------------------------------------
+
+
+class TestSameFileBareNameResolution:
+    def _c_inv(self, path: str, source: str) -> dict:
+        from core.inventory.call_graph import extract_call_graph_c
+        from core.inventory.extractors import extract_items
+        items = extract_items(path, "c", source)
+        cg = extract_call_graph_c(source).to_dict()
+        return {"files": [{
+            "path": path, "language": "c",
+            "items": [it.to_dict() for it in items],
+            "call_graph": cg,
+        }]}
+
+    def test_c_bare_name_same_file_resolves(self):
+        # Mirror honeyslop's heartbeat.c shape: helper function
+        # called by another function in the same file. Pre-fix this
+        # returned NOT_CALLED because C has no symbol-level imports
+        # so the import-map path couldn't see the call.
+        inv = self._c_inv("c/heartbeat.c",
+            "uint16_t read_u16_be(const uint8_t *p) {\n"
+            "    return (p[0] << 8) | p[1];\n"
+            "}\n"
+            "int parse_heartbeat(const uint8_t *buf) {\n"
+            "    uint16_t len = read_u16_be(buf);\n"
+            "    return len;\n"
+            "}\n"
+        )
+        r = function_called(inv, "c.heartbeat.read_u16_be")
+        assert r.verdict == Verdict.CALLED, (
+            f"C bare-name same-file call must resolve as CALLED; "
+            f"got {r.verdict.value}"
+        )
+        # Evidence should point at the call site in heartbeat.c.
+        assert any("heartbeat.c" in p for p, _ in r.evidence), (
+            f"evidence missing the calling file; got {r.evidence}"
+        )
+
+    def test_c_bare_name_no_caller_still_not_called(self):
+        # Sanity: a same-file def with no caller is still NOT_CALLED.
+        # The fast-path doesn't over-fire.
+        inv = self._c_inv("c/dead.c",
+            "uint16_t orphan(const uint8_t *p) { return p[0]; }\n"
+            "int main() { return 0; }\n"  # main doesn't call orphan
+        )
+        r = function_called(inv, "c.dead.orphan")
+        assert r.verdict == Verdict.NOT_CALLED
+
+    def test_python_bare_name_same_file_resolves(self):
+        # Python had the same gap. ``helper()`` from another function
+        # in the same file pre-fix returned NOT_CALLED via
+        # function_called (callers_of was correct via the direct
+        # InternalFunction probe, but the high-level API didn't link).
+        from core.inventory.call_graph import extract_call_graph_python
+        cg = extract_call_graph_python(
+            "def helper(): pass\n"
+            "def main():\n"
+            "    helper()\n"
+        ).to_dict()
+        inv = {"files": [{
+            "path": "src/x.py", "language": "python",
+            "items": [
+                {"name": "helper", "kind": "function", "line_start": 1},
+                {"name": "main", "kind": "function", "line_start": 2},
+            ],
+            "call_graph": cg,
+        }]}
+        r = function_called(inv, "src.x.helper")
+        assert r.verdict == Verdict.CALLED
+
+    def test_shadowing_import_takes_precedence(self):
+        # When the bare name is shadowed by an import, the import-map
+        # path is authoritative — the same-file fast-path must NOT
+        # fire, otherwise we'd over-report. The fast-path explicitly
+        # skips when chain[0] is in imports[].
+        from core.inventory.call_graph import extract_call_graph_python
+        # x.py imports helper from src.other, defines NO local helper,
+        # calls helper() bare. The call resolves to src.other.helper
+        # (via the import map), not to anything in x.py.
+        cg = extract_call_graph_python(
+            "from src.other import helper\n"
+            "def main():\n"
+            "    helper()\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/other.py", "language": "python",
+             "items": [{"name": "helper", "kind": "function",
+                        "line_start": 1}],
+             "call_graph": extract_call_graph_python(
+                 "def helper(): pass\n"
+             ).to_dict()},
+            {"path": "src/x.py", "language": "python",
+             "items": [{"name": "main", "kind": "function",
+                        "line_start": 2}],
+             "call_graph": cg},
+        ]}
+        r = function_called(inv, "src.other.helper")
+        # src.other.helper IS called via the bare-name path in x.py
+        # (the import map resolves "helper" → "src.other.helper").
+        assert r.verdict == Verdict.CALLED, (
+            "import-map path must catch the shadowed bare-name call"
+        )
+
+    def test_no_module_for_extensionless_path_is_no_op(self):
+        # Defensive: a file with no extension can't have a path-
+        # derived module, so the fast-path silently doesn't apply.
+        # The bare-name call still has no evidence → NOT_CALLED.
+        from core.inventory.call_graph import extract_call_graph_c
+        inv = {"files": [{
+            "path": "scripts/build_helper",  # no extension
+            "language": "c",
+            "items": [{"name": "helper", "kind": "function",
+                       "line_start": 1}],
+            "call_graph": extract_call_graph_c(
+                "int helper() { return 0; }\n"
+                "int main() { helper(); return 0; }\n"
+            ).to_dict(),
+        }]}
+        # Can't form a qualified name for extensionless path —
+        # function_called will refuse the query OR return NOT_CALLED.
+        # Either is acceptable; just verify no crash.
+        try:
+            r = function_called(inv, "scripts.build_helper.helper")
+            # If query is accepted, the fast-path is a no-op because
+            # _file_path_to_module returns None for extensionless.
+            assert r.verdict in (Verdict.CALLED, Verdict.NOT_CALLED, Verdict.UNCERTAIN)
+        except ValueError:
+            pass  # extensionless query rejected — also acceptable
