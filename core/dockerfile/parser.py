@@ -1,4 +1,4 @@
-"""Tokenise a Dockerfile into an ordered list of :class:`Instruction`.
+r"""Tokenise a Dockerfile into an ordered list of :class:`Instruction`.
 
 Each instruction carries:
   * ``directive`` — the keyword (``FROM``, ``RUN``, ``COPY``, …),
