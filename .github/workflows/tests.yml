@@ -26,6 +26,15 @@ concurrency:
 env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
+  # CI-only hang net: dump every worker's Python stack if any single
+  # test runs >120s, then let it continue (the dump is the signal, not
+  # a failure). The slowest legit default-tier test is a few seconds —
+  # slow/integration tests are gated out of these runs — so 120s only
+  # fires on a genuine hang, surfacing the stuck call in ~2 min instead
+  # of waiting out the job timeout. Set via PYTEST_ADDOPTS (not
+  # pytest.ini) so it covers every tier here but NOT local `pytest`,
+  # where it would dump on pdb / breakpoint sessions.
+  PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
   # Opt the runner into Node.js 24 for JavaScript actions.
   # GitHub deprecated Node.js 20 on 2025-09-19; runners enforce
   # Node 24 by default from 2026-06-02 and remove Node 20 on
