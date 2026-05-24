@@ -8,10 +8,21 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
+from core.inventory.reach_witness import (
+    STRUCTURALLY_SUPPRESSIBLE_KINDS,
+    verdict_from_classification,
+)
 from packages.codeql.autonomous_analyzer import (
     AutonomousCodeQLAnalyzer,
     CodeQLFinding,
 )
+
+
+def _suppresses(verdict, earned=STRUCTURALLY_SUPPRESSIBLE_KINDS) -> bool:
+    """Mirror the caller's hard-skip decision: a verdict hard-suppresses
+    iff its witness may_suppress on the earned set (empty earned set =
+    --allow-unreachable mode)."""
+    return verdict_from_classification(verdict).may_suppress(earned)
 
 
 def _analyzer() -> AutonomousCodeQLAnalyzer:
@@ -75,9 +86,10 @@ def test_path_to_module_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_reachability_called_for_used_function(tmp_path):
-    """A function that's called from another function in the
-    project returns ``"called"``."""
+def test_reachability_reachable_for_used_function(tmp_path):
+    """A function reachable from an entry (here: called by ``main``)
+    returns ``"reachable"`` under the entry-aware classifier — and is
+    not hard-suppressed."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "vuln.py").write_text(
@@ -92,7 +104,8 @@ def test_reachability_called_for_used_function(tmp_path):
     a = _analyzer()
     finding = _finding("src/vuln.py", line=2)
     verdict = a._check_reachability(finding, tmp_path)
-    assert verdict == "called"
+    assert verdict == "reachable"
+    assert _suppresses(verdict) is False
 
 
 def test_reachability_not_called_for_dead_function(tmp_path):
@@ -264,48 +277,85 @@ def test_checklist_path_invalid_falls_back_to_build(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_short_circuit_on_not_called(tmp_path, monkeypatch):
-    """When the prefilter returns ``"not_called"``,
-    analyze_finding_autonomous returns immediately — the
-    expensive dataflow validator + LLM stages are NOT invoked."""
+def test_sound_witness_short_circuits(tmp_path, monkeypatch):
+    """A SOUND, corpus-earned witness (module_aborts) hard-suppresses:
+    analyze_finding_autonomous returns immediately, before the expensive
+    dataflow validator + LLM stages."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('retired')\n"
+        "def dead(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = _analyzer()
+    canned = _finding("src/disabled.py", line=3)
+    monkeypatch.setattr(a, "parse_sarif_finding", lambda r, run: canned)
+    a.dataflow_validator = MagicMock()
+    a.dataflow_validator.validate_finding.side_effect = AssertionError(
+        "dataflow validator was invoked despite short-circuit"
+    )
+    result = a.analyze_finding_autonomous(
+        sarif_result={}, sarif_run={},
+        repo_path=tmp_path, out_dir=tmp_path / "out",
+    )
+    assert result.skipped_reason == "reachability_module_aborts"
+    assert result.reachability_verdict == "module_aborts"
+    assert result.exploitable is False
+    a.dataflow_validator.validate_finding.assert_not_called()
+
+
+def test_allow_unreachable_disables_hard_skip_in_analyze(tmp_path, monkeypatch):
+    """Wiring: with allow_unreachable=True the analyzer's earned set is
+    empty, so even a module_aborts finding is NOT short-circuited — the
+    pipeline proceeds (dataflow validator IS reached)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('retired')\n"
+        "def dead(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = AutonomousCodeQLAnalyzer(
+        llm_client=MagicMock(), exploit_validator=MagicMock(),
+        multi_turn_analyzer=None, enable_visualization=False,
+        allow_unreachable=True,
+    )
+    canned = _finding("src/disabled.py", line=3)
+    monkeypatch.setattr(a, "parse_sarif_finding", lambda r, run: canned)
+    # Stop the pipeline right after the skip gate so we don't exercise the
+    # whole analysis — a sentinel proves we got PAST the short-circuit.
+    monkeypatch.setattr(
+        a, "read_vulnerable_code",
+        MagicMock(side_effect=RuntimeError("reached past skip gate")),
+    )
+    try:
+        a.analyze_finding_autonomous(
+            sarif_result={}, sarif_run={},
+            repo_path=tmp_path, out_dir=tmp_path / "out",
+        )
+        reached = False
+    except RuntimeError as e:
+        reached = "past skip gate" in str(e)
+    assert reached, "allow_unreachable must NOT short-circuit module_aborts"
+
+
+def test_not_called_no_longer_hard_suppresses(tmp_path):
+    """U11: not_called is HEURISTIC — it does NOT hard-suppress (surface-
+    only). The prefilter still classifies it, but the caller's
+    may_suppress() decision declines to skip."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "vuln.py").write_text(
         "def dead(q):\n"
         "    cursor.execute(q)\n"
-        "\n"
-        "def other():\n"
-        "    pass\n"
     )
-    (src / "main.py").write_text(
-        "from src.vuln import other\nother()\n"
-    )
-
     a = _analyzer()
-    # Stub out the parser to skip SARIF shape parsing in this test.
-    canned = _finding("src/vuln.py", line=2)
-    monkeypatch.setattr(
-        a, "parse_sarif_finding", lambda r, run: canned,
+    verdict = a._check_reachability(_finding("src/vuln.py", line=2), tmp_path)
+    assert verdict == "not_called"
+    assert _suppresses(verdict) is False, (
+        "not_called is heuristic and must not hard-suppress"
     )
-
-    # Replace the dataflow_validator with a mock so we can assert
-    # it was never called (short-circuit happened before stage 3).
-    a.dataflow_validator = MagicMock()
-    a.dataflow_validator.validate_finding.side_effect = AssertionError(
-        "dataflow validator was invoked despite short-circuit"
-    )
-
-    result = a.analyze_finding_autonomous(
-        sarif_result={}, sarif_run={},
-        repo_path=tmp_path, out_dir=tmp_path / "out",
-    )
-    assert result.skipped_reason == "reachability_not_called"
-    assert result.reachability_verdict == "not_called"
-    assert result.exploitable is False
-    # The dataflow validator must NOT have been invoked — its
-    # side_effect would have raised. The short-circuit fires
-    # before stage 3.
-    a.dataflow_validator.validate_finding.assert_not_called()
 
 
 def test_no_short_circuit_when_called(tmp_path, monkeypatch):
@@ -446,25 +496,19 @@ def test_framework_callable_does_not_short_circuit(
 # ---------------------------------------------------------------------------
 
 
-def test_allow_unreachable_suppresses_not_called_short_circuit(tmp_path):
-    """C2: --allow-unreachable on the analyzer → the prefilter
-    returns None (no opinion) instead of 'not_called', letting
-    the caller proceed with full LLM analysis."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "v.py").write_text(
-        "def dead(): cursor.execute('x')\n"
-    )
-    a = AutonomousCodeQLAnalyzer(
-        llm_client=MagicMock(), exploit_validator=MagicMock(),
-        multi_turn_analyzer=None, enable_visualization=False,
-        allow_unreachable=True,
-    )
-    verdict = a._check_reachability(_finding("src/v.py", line=1), tmp_path)
-    assert verdict is None, (
-        f"--allow-unreachable must suppress not_called signal; "
-        f"got {verdict!r}"
-    )
+def test_allow_unreachable_empties_earned_set_so_nothing_suppresses(tmp_path):
+    """Under --allow-unreachable the caller's earned set is empty, so NO
+    verdict hard-suppresses — even the sound module_aborts / lexical_dead.
+    The prefilter still classifies (for reporting); the decision declines."""
+    for verdict in ("module_aborts", "lexical_dead", "not_called"):
+        # allow-unreachable: earned set empty -> nothing suppresses
+        assert _suppresses(verdict, earned=frozenset()) is False, (
+            f"{verdict} must not suppress under allow_unreachable"
+        )
+    # sanity: in default mode the sound witnesses DO suppress
+    assert _suppresses("module_aborts") is True
+    assert _suppresses("lexical_dead") is True
+    assert _suppresses("not_called") is False   # heuristic, never suppresses
 
 
 def test_default_still_returns_not_called(tmp_path):
@@ -578,12 +622,12 @@ def test_allow_unreachable_suppresses_module_abort(tmp_path):
         multi_turn_analyzer=None, enable_visualization=False,
         allow_unreachable=True,
     )
+    # The prefilter still classifies module_aborts (for reporting); under
+    # --allow-unreachable the caller's earned set is empty, so it does not
+    # hard-suppress (the operator wants in-isolation evaluation).
     verdict = a._check_reachability(_finding("src/disabled.py", line=3), tmp_path)
-    # With the gate suppressed, the sink falls through to the call-
-    # graph verdict. `sink` IS called by `entry`'s peer... here there's
-    # no caller, so it's not_called — but --allow-unreachable also
-    # suppresses not_called → None. The key assertion: NOT module_aborts.
-    assert verdict != "module_aborts"
+    assert verdict == "module_aborts"
+    assert _suppresses(verdict, earned=frozenset()) is False
 
 
 def test_function_above_abort_not_module_aborts(tmp_path):
@@ -647,4 +691,5 @@ def test_allow_unreachable_suppresses_lexical_dead(tmp_path):
         allow_unreachable=True,
     )
     verdict = a._check_reachability(_finding("src/mod.py", line=3), tmp_path)
-    assert verdict != "lexical_dead"
+    assert verdict == "lexical_dead"
+    assert _suppresses(verdict, earned=frozenset()) is False

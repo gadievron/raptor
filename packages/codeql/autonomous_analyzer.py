@@ -125,9 +125,12 @@ class AutonomousAnalysisResult:
     # pattern). Both treated as reachable; full LLM analysis runs.
     reachability_verdict: Optional[str] = None
     # Set to a non-None reason when the analyzer short-circuited
-    # without running deep analysis. Today the only value is
-    # ``"reachability_not_called"`` (sink function provably dead
-    # code); future iterations may add more.
+    # without running deep analysis. The reachability prefilter
+    # hard-skips ONLY on a SOUND witness — ``"reachability_module_aborts"``
+    # (file aborts on load before the sink binds) or
+    # ``"reachability_lexical_dead"`` (sink defined in an always-false
+    # guard). Heuristic verdicts (``not_called`` / ``no_path_from_entry``)
+    # are surface-only: recorded in ``reachability_verdict`` but NOT skipped.
     skipped_reason: Optional[str] = None
 
 
@@ -299,14 +302,7 @@ class AutonomousCodeQLAnalyzer:
 
         try:
             from core.inventory.lookup import lookup_function
-            from core.inventory.reachability import (
-                InternalFunction,
-                function_called,
-                is_framework_callable,
-                is_lexically_dead,
-                is_registered_via_call,
-                module_aborts_on_load,
-            )
+            from core.inventory.reach_audit import classify_reachability
         except ImportError:
             return None
 
@@ -322,102 +318,26 @@ class AutonomousCodeQLAnalyzer:
         func_name = func_info.get("name")
         if not isinstance(func_name, str) or not func_name:
             return None
-
-        # Build the qualified name. For Python files we derive the
-        # module from the relative path; for other languages the
-        # resolver handles the dotted-chain matching directly off
-        # the inventory's call_graph data, but we still need a
-        # qualified name to query. ``<module>.<func>`` works for
-        # both — when the file isn't Python, the lookup just won't
-        # match and we get NOT_CALLED, which the caller treats
-        # conservatively (skip if the verdict is the answer; the
-        # None return from non-callable lookups falls through).
         rel_path = self._relative_path(finding.file_path, repo_path)
         if rel_path is None:
             return None
         module = self._path_to_module(rel_path)
         if not module:
             return None
-        qualified = f"{module}.{func_name}"
 
-        # S4: whole-file module-load-abort gate, checked before the
-        # call-graph verdict because it trumps CALLED. If the file's
-        # top-level execution unconditionally aborts (raise
-        # ImportError / throw new Error / init() panic /
-        # compile_error!) before this function's def runs, the sink
-        # is dead regardless of static call edges — peers calling it
-        # are equally dead. Short-circuit like not_called. The
-        # framework_callable / registered_via_call escape hatches
-        # below do NOT apply: registration code beneath the abort
-        # never executes. Respects --allow-unreachable (operator
-        # opt-out for in-isolation review).
-        if not self._allow_unreachable:
-            abort = module_aborts_on_load(
-                self._reachability_inventory, rel_path,
-            )
-            if abort is not None:
-                abort_line = int(abort.get("line") or 0)
-                func_line = int(func_info.get("line_start") or 0)
-                if abort_line and func_line and func_line > abort_line:
-                    return "module_aborts"
-            # S3: lexical-dead gate. Function defined inside an
-            # always-false guard (if False: / if (false) /
-            # #[cfg(any())]) never binds — dead regardless of call
-            # edges, and decorator/registration code inside the dead
-            # scope never runs. Trumps the framework escape hatches.
-            if is_lexically_dead(
-                self._reachability_inventory, rel_path, func_name,
-                int(func_info.get("line_start") or 0),
-            ):
-                return "lexical_dead"
-
-        try:
-            result = function_called(
-                self._reachability_inventory, qualified,
-            )
-        except ValueError:
-            return None
-        verdict = result.verdict.value
-        # Operator opt-out: --allow-unreachable disables the
-        # short-circuit path entirely. Return None ("prefilter
-        # had no opinion") instead of the verdict — the caller
-        # then proceeds with full LLM analysis regardless of
-        # static-graph reachability. The flag is intended for
-        # in-isolation review (CTF, snippet, vendor reference)
-        # where the operator explicitly wants to evaluate the
-        # code pattern's inherent vulnerability shape rather
-        # than its deployment reachability.
-        if self._allow_unreachable and verdict == "not_called":
-            return None
-        # NOT_CALLED in the static graph doesn't mean unreachable
-        # when the function is framework-registered (Flask
-        # ``@app.route``, Celery ``@shared_task``, Django
-        # ``@receiver``, etc.). The substrate's
-        # ``is_framework_callable`` recognises these. Without this
-        # check, the prefilter short-circuits framework handlers
-        # before any LLM analysis runs — a false-negative class on
-        # any web / task / signal codebase.
-        if verdict == "not_called":
-            line = int(func_info.get("line_start") or 0)
-            target = InternalFunction(
-                file_path=rel_path, name=func_name, line=line,
-            )
-            if is_framework_callable(
-                self._reachability_inventory, target,
-            ):
-                # New verdict value the caller treats as "don't
-                # short-circuit". Distinct from "called" so the
-                # reachability_verdict field reports accurately.
-                return "framework_callable"
-            if is_registered_via_call(
-                self._reachability_inventory, target,
-            ):
-                # JS / Go function-as-argument registration
-                # (``http.HandleFunc("/x", target)``). Distinct
-                # verdict value so operators can see WHICH
-                # mechanism kept the finding alive.
-                return "registered_via_call"
-        return verdict
+        # Delegate to the shared, entry-aware classifier — the same
+        # precedence the /agentic enrichment prepass uses: module_aborts ->
+        # lexical_dead -> entry-reachability (reachable / no_path_from_entry)
+        # -> framework / registration -> 1-hop called / not_called. Using
+        # the entry-aware classifier means an exported / public entry with
+        # no in-project caller no longer reads not_called. The CALLER
+        # decides whether a verdict hard-suppresses, via the witness
+        # chokepoint may_suppress() (sound + corpus-earned only) — so
+        # --allow-unreachable handling lives there, not here.
+        return classify_reachability(
+            self._reachability_inventory, rel_path, func_name,
+            int(func_info.get("line_start") or 0), module,
+        )
 
     def _relative_path(
         self, file_path: str, repo_path: Path,
@@ -1170,27 +1090,31 @@ class AutonomousCodeQLAnalyzer:
         reachability_verdict = self._check_reachability(
             finding, repo_path,
         )
-        if reachability_verdict in (
-            "not_called", "module_aborts", "lexical_dead",
-        ):
-            if reachability_verdict == "module_aborts":
-                self.logger.info(
-                    "⏭️  Sink's file aborts on load (raise/throw/panic "
-                    "before binding) — skipping expensive analysis",
-                )
-                skipped_reason = "reachability_module_aborts"
-            elif reachability_verdict == "lexical_dead":
-                self.logger.info(
-                    "⏭️  Sink's function is in an always-false guard "
-                    "(if False / #[cfg(any())]) — skipping analysis",
-                )
-                skipped_reason = "reachability_lexical_dead"
-            else:
-                self.logger.info(
-                    "⏭️  Sink function not called from project — "
-                    "skipping expensive analysis",
-                )
-                skipped_reason = "reachability_not_called"
+        # Hard-suppress (skip the expensive LLM analysis) ONLY on a SOUND,
+        # corpus-earned witness — module_aborts / lexical_dead. Heuristic
+        # verdicts (not_called, no_path_from_entry) are surface-only: they
+        # still get full analysis (the enrichment prepass soft-demotes
+        # them), because 1-hop / entry-completeness assumptions can miss
+        # reflection, cross-file, or address-of edges. --allow-unreachable
+        # empties the earned set so nothing is hard-suppressed in the
+        # in-isolation review mode.
+        if reachability_verdict:
+            from core.inventory.reach_witness import (
+                STRUCTURALLY_SUPPRESSIBLE_KINDS,
+                verdict_from_classification,
+            )
+            earned = (frozenset() if self._allow_unreachable
+                      else STRUCTURALLY_SUPPRESSIBLE_KINDS)
+            suppress = verdict_from_classification(
+                reachability_verdict,
+            ).may_suppress(earned)
+        else:
+            suppress = False
+        if suppress:
+            self.logger.info(
+                "⏭️  Sink unreachable (%s — sound witness) — skipping "
+                "expensive analysis", reachability_verdict,
+            )
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,
@@ -1202,7 +1126,7 @@ class AutonomousCodeQLAnalyzer:
                 refinement_iterations=0,
                 total_duration_seconds=time.time() - start_time,
                 reachability_verdict=reachability_verdict,
-                skipped_reason=skipped_reason,
+                skipped_reason=f"reachability_{reachability_verdict}",
             )
 
         # Stage 2: Read vulnerable code

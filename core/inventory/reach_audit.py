@@ -69,17 +69,21 @@ def classify_reachability(
         return "lexical_dead"
 
     target = InternalFunction(file_path=file_path, name=name, line=line)
+    # Specific reachable reasons first — framework decorator dispatch and
+    # function-as-argument registration — so they surface as their own
+    # (informative) verdicts rather than being absorbed into the general
+    # "reachable" by entry-reachability (which also counts them as entries).
+    if is_framework_callable(inventory, target):
+        return "framework_callable"
+    if is_registered_via_call(inventory, target):
+        return "registered_via_call"
+    # General entry-point forward reachability.
     er = entry_reachability(inventory, target)
     if er == "reachable":
         return "reachable"
     if er == "no_path_from_entry":
         return "no_path_from_entry"
-    # er == "uncertain": fall through to framework / 1-hop logic.
-
-    if is_framework_callable(inventory, target):
-        return "framework_callable"
-    if is_registered_via_call(inventory, target):
-        return "registered_via_call"
+    # er == "uncertain": fall through to the 1-hop verdict.
     try:
         verdict = function_called(inventory, f"{module}.{name}").verdict
     except ValueError:
