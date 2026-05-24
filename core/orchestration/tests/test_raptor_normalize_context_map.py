@@ -8,7 +8,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
+# parents[3] climbs: [0] tests/ -> [1] orchestration/ -> [2] core/ -> [3] repo root.
+# Derive from __file__ rather than os.environ["RAPTOR_DIR"]: it doesn't KeyError
+# when the env var is unset, and it correctly resolves to *this* checkout (e.g. a
+# git worktree), not whatever RAPTOR_DIR happens to point at.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-normalize-context-map"
 
 
