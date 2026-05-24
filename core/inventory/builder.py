@@ -27,6 +27,8 @@ from .exclusions import (
 )
 from .extractors import extract_items, count_sloc
 from .call_graph import (
+    extract_call_graph_c,
+    extract_call_graph_cpp,
     extract_call_graph_csharp,
     extract_call_graph_go,
     extract_call_graph_java,
@@ -580,6 +582,26 @@ def _process_single_file(
             ).to_dict()
         elif language == 'php':
             record['call_graph'] = extract_call_graph_php(
+                content,
+            ).to_dict()
+        elif language == 'c':
+            # S5: wire the existing extract_call_graph_c into the
+            # dispatch. The walker has been present (and tested in
+            # core/inventory/tests) for a while but was orphaned —
+            # C files were getting empty call_graph records, so
+            # function_called returned no useful data for any C
+            # finding and the analysis prompt's Reachability: block
+            # was absent for every C scan. Closes RAPTOR's largest
+            # whole-language reachability blind spot.
+            record['call_graph'] = extract_call_graph_c(
+                content,
+            ).to_dict()
+        elif language == 'cpp':
+            # S5: same wiring story for C++. _CppCallGraph inherits
+            # from _CCallGraph; adds class/namespace/qualified-id
+            # handling. Covers .cpp / .cc / .cxx / .hpp (per the
+            # languages.py extension map).
+            record['call_graph'] = extract_call_graph_cpp(
                 content,
             ).to_dict()
         return record
