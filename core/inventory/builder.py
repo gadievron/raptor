@@ -41,7 +41,7 @@ from .call_graph import (
 from .diff import compare_inventories
 from .dead_scope import detect_dead_scopes
 from .module_load_abort import detect_module_load_abort
-from .translation_view import preprocess_view
+from .translation_view import detect_macro_call_targets, preprocess_view
 
 logger = logging.getLogger(__name__)
 
@@ -631,6 +631,17 @@ def _process_single_file(
             record['call_graph'] = extract_call_graph_cpp(
                 parse_text,
             ).to_dict()
+        # U4 (macro-masking): record the function names invoked inside
+        # function-like macro bodies. tree-sitter sees a macro call as a
+        # call to the macro, not its expansion, so a function reachable
+        # only via a macro reads NOT_CALLED. The resolver consults this to
+        # downgrade such verdicts to UNCERTAIN (FN-safe). C/C++ only;
+        # scanned from parse_text so macros inside blanked #if 0 don't
+        # count. Stored only when non-empty to keep inventory size flat.
+        if language in ('c', 'cpp') and isinstance(record.get('call_graph'), dict):
+            macro_targets = detect_macro_call_targets(parse_text)
+            if macro_targets:
+                record['call_graph']['macro_call_targets'] = sorted(macro_targets)
         # S4: file-level module-load-abort gate. When the file's
         # top-level execution unconditionally aborts (raise
         # ImportError / throw new Error / init() panic /

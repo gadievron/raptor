@@ -118,6 +118,79 @@ def detect_preprocessor_dead_ranges(content: str) -> List[Tuple[int, int]]:
     return ranges
 
 
+_FUNC_MACRO_DEF = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]*\(([^)]*)\)(.*)$", re.MULTILINE,
+)
+_CALL_IN_BODY = re.compile(r"\b([A-Za-z_]\w*)[ \t]*\(")
+# Control-flow / operator keywords that look like calls but aren't.
+_C_NON_CALL_KW = frozenset({
+    "if", "while", "for", "switch", "return", "sizeof", "defined",
+    "do", "else", "case", "alignof", "_Alignof", "static_assert",
+    "_Static_assert", "catch",
+})
+
+
+def _strip_c_literals_comments(s: str) -> str:
+    """Blank string / char literals and comments in a (logical) macro body
+    so call-shaped text inside them isn't mistaken for a routed call. Walks
+    char-by-char; `//` ends the logical line. Returns the body with those
+    spans removed."""
+    out: List[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "/" and i + 1 < n and s[i + 1] == "*":
+            j = s.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        if c == "/" and i + 1 < n and s[i + 1] == "/":
+            break
+        if c == '"' or c == "'":
+            q = c
+            i += 1
+            while i < n:
+                if s[i] == "\\":
+                    i += 2
+                    continue
+                if s[i] == q:
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def detect_macro_call_targets(content: str) -> set:
+    """Function names invoked inside *function-like* macro bodies.
+
+    tree-sitter sees a macro invocation as a call to the macro name, not to
+    whatever the body expands to — so a function reachable *only* via a
+    macro (``#define CALL_F() f()``) reads NOT_CALLED in the static graph.
+    The resolver treats any name in this set as UNCERTAIN rather than
+    NOT_CALLED, closing that false negative. C/C++ only.
+
+    Targeted, not blanket: a file using ordinary ``UPPER()`` macros doesn't
+    taint every NOT_CALLED — only the specific names a macro body calls.
+    String literals and comments in the body are stripped first so
+    call-shaped text inside them (``"foo()"``, ``/* bar() */``) isn't
+    mistaken for a routed call.
+    """
+    if not content or "define" not in content:
+        return set()
+    joined = content.replace("\\\n", " ")     # fold line-continuations
+    targets: set = set()
+    for m in _FUNC_MACRO_DEF.finditer(joined):
+        macro_name = m.group(1)
+        body = _strip_c_literals_comments(m.group(3))
+        for c in _CALL_IN_BODY.finditer(body):
+            name = c.group(1)
+            if name != macro_name and name not in _C_NON_CALL_KW:
+                targets.add(name)
+    return targets
+
+
 def _blank_ranges(content: str, ranges: List[Tuple[int, int]]) -> str:
     """Replace the body of each dead range with same-length spaces, keeping
     newlines so byte/line offsets — and therefore the identity line_map —
@@ -221,5 +294,6 @@ __all__ = [
     "TranslationView",
     "preprocess_view",
     "detect_preprocessor_dead_ranges",
+    "detect_macro_call_targets",
     "_C_FAMILY",
 ]
