@@ -304,6 +304,22 @@ def plan(
     for m in manifests:
         raw_deps.extend(parse_manifest(m))
 
+    # Derive the project's (arch, libc) platform matrix once for the
+    # whole run, from the target's committed build artifacts (Dockerfile
+    # FROM / buildx platforms / CI runs-on). Threaded into the promotion-
+    # safety check so a bump that drops a wheel-tag the project's declared
+    # platforms require demotes to review_required — same protection the
+    # ``bump`` subcommand gets. Static file-walk, no network, so it runs
+    # even under ``offline``. Defaults to {(x86_64, glibc 2.17)} when the
+    # repo declares no platforms (see platform_matrix.discover docs).
+    try:
+        from .platform_matrix import discover_platform_matrix
+        platform_matrix = discover_platform_matrix(target)
+    except Exception as exc:                          # noqa: BLE001
+        logger.debug("sca.harden: platform-matrix discovery failed "
+                     "(%s); promotion compat-check degrades to skip", exc)
+        platform_matrix = None
+
     out: List[HardenCandidate] = []
     for dep in raw_deps:
         if dep.commented_out:
@@ -318,7 +334,8 @@ def plan(
         out.append(_plan_one(dep, registries=registries, osv=osv,
                              kev=kev, epss=epss,
                              offline=offline, allow_major=allow_major,
-                             pin_only=pin_only))
+                             pin_only=pin_only,
+                             platform_matrix=platform_matrix))
     return out
 
 
@@ -332,6 +349,7 @@ def _plan_one(
     offline: bool,
     allow_major: bool,
     pin_only: bool = False,
+    platform_matrix=None,
 ) -> HardenCandidate:
     cand = HardenCandidate(
         ecosystem=dep.ecosystem,
@@ -490,6 +508,7 @@ def _plan_one(
         sc_findings = _evaluate_promotion_safety(
             dep=dep, target_version=target_version,
             registries=registries,
+            platform_matrix=platform_matrix,
         )
         if sc_findings:
             kinds = sorted({f.kind for f in sc_findings})
@@ -709,6 +728,7 @@ def _evaluate_promotion_safety(
     dep: Dependency,
     target_version: str,
     registries: Dict[str, Any],
+    platform_matrix=None,
 ) -> List[Any]:
     """Run ``evaluate_bump_supply_chain`` for ``dep → target_version``.
 
@@ -756,6 +776,7 @@ def _evaluate_promotion_safety(
             target_version=target_version,
             pypi_client=pypi_client,
             npm_client=npm_client,
+            platform_matrix=platform_matrix,
         )
     except Exception as e:                          # noqa: BLE001
         # Evaluator should be exception-safe for production callers,
