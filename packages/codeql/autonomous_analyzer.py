@@ -234,10 +234,17 @@ class AutonomousCodeQLAnalyzer:
 
         Returns one of ``"called"`` / ``"not_called"`` /
         ``"uncertain"`` / ``"framework_callable"`` /
-        ``"registered_via_call"`` / None (None = couldn't determine —
+        ``"registered_via_call"`` / ``"module_aborts"`` /
+        ``"lexical_dead"`` / None (None = couldn't determine —
         non-Python file, sink not in any function, inventory build
         failed, etc.). The caller's policy is to short-circuit on
-        ``"not_called"`` and otherwise continue.
+        ``"not_called"``, ``"module_aborts"`` and ``"lexical_dead"``
+        and otherwise continue. ``"module_aborts"``: the file's top-
+        level execution unconditionally aborts before the sink's
+        function binds — dead regardless of call edges (S4).
+        ``"lexical_dead"``: the sink's function is defined inside an
+        always-false guard (if False: / #[cfg(any())]) and never
+        binds — dead regardless of call edges (S3).
         ``"framework_callable"``: substrate found framework-dispatch
         decorator (Flask ``@app.route``, Celery ``@shared_task``,
         Django ``@receiver``, etc.) registering the function for
@@ -293,7 +300,9 @@ class AutonomousCodeQLAnalyzer:
                 InternalFunction,
                 function_called,
                 is_framework_callable,
+                is_lexically_dead,
                 is_registered_via_call,
+                module_aborts_on_load,
             )
         except ImportError:
             return None
@@ -327,6 +336,37 @@ class AutonomousCodeQLAnalyzer:
         if not module:
             return None
         qualified = f"{module}.{func_name}"
+
+        # S4: whole-file module-load-abort gate, checked before the
+        # call-graph verdict because it trumps CALLED. If the file's
+        # top-level execution unconditionally aborts (raise
+        # ImportError / throw new Error / init() panic /
+        # compile_error!) before this function's def runs, the sink
+        # is dead regardless of static call edges — peers calling it
+        # are equally dead. Short-circuit like not_called. The
+        # framework_callable / registered_via_call escape hatches
+        # below do NOT apply: registration code beneath the abort
+        # never executes. Respects --allow-unreachable (operator
+        # opt-out for in-isolation review).
+        if not self._allow_unreachable:
+            abort = module_aborts_on_load(
+                self._reachability_inventory, rel_path,
+            )
+            if abort is not None:
+                abort_line = int(abort.get("line") or 0)
+                func_line = int(func_info.get("line_start") or 0)
+                if abort_line and func_line and func_line > abort_line:
+                    return "module_aborts"
+            # S3: lexical-dead gate. Function defined inside an
+            # always-false guard (if False: / if (false) /
+            # #[cfg(any())]) never binds — dead regardless of call
+            # edges, and decorator/registration code inside the dead
+            # scope never runs. Trumps the framework escape hatches.
+            if is_lexically_dead(
+                self._reachability_inventory, rel_path, func_name,
+                int(func_info.get("line_start") or 0),
+            ):
+                return "lexical_dead"
 
         try:
             result = function_called(
@@ -1127,11 +1167,27 @@ class AutonomousCodeQLAnalyzer:
         reachability_verdict = self._check_reachability(
             finding, repo_path,
         )
-        if reachability_verdict == "not_called":
-            self.logger.info(
-                "⏭️  Sink function not called from project — "
-                "skipping expensive analysis",
-            )
+        if reachability_verdict in (
+            "not_called", "module_aborts", "lexical_dead",
+        ):
+            if reachability_verdict == "module_aborts":
+                self.logger.info(
+                    "⏭️  Sink's file aborts on load (raise/throw/panic "
+                    "before binding) — skipping expensive analysis",
+                )
+                skipped_reason = "reachability_module_aborts"
+            elif reachability_verdict == "lexical_dead":
+                self.logger.info(
+                    "⏭️  Sink's function is in an always-false guard "
+                    "(if False / #[cfg(any())]) — skipping analysis",
+                )
+                skipped_reason = "reachability_lexical_dead"
+            else:
+                self.logger.info(
+                    "⏭️  Sink function not called from project — "
+                    "skipping expensive analysis",
+                )
+                skipped_reason = "reachability_not_called"
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,
@@ -1143,7 +1199,7 @@ class AutonomousCodeQLAnalyzer:
                 refinement_iterations=0,
                 total_duration_seconds=time.time() - start_time,
                 reachability_verdict=reachability_verdict,
-                skipped_reason="reachability_not_called",
+                skipped_reason=skipped_reason,
             )
 
         # Stage 2: Read vulnerable code

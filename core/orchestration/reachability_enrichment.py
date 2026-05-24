@@ -98,7 +98,9 @@ def mark_unreachable_low_priority(
             Verdict,
             function_called,
             is_framework_callable,
+            is_lexically_dead,
             is_registered_via_call,
+            module_aborts_on_load,
         )
     except ImportError:
         return 0
@@ -120,6 +122,17 @@ def mark_unreachable_low_priority(
         if not isinstance(funcs, list):
             continue
 
+        # S4: whole-file module-load-abort gate. Looked up once per
+        # file. When set, the file's top-level execution
+        # unconditionally aborts (raise ImportError / throw new Error
+        # / init() panic / compile_error!), so any function whose
+        # ``def`` lies at or below the abort line never binds — dead
+        # regardless of in-file call edges or framework registration.
+        file_abort = module_aborts_on_load(inventory, rel_path)
+        abort_line = (
+            int(file_abort.get("line") or 0) if file_abort else 0
+        )
+
         for func in funcs:
             if not isinstance(func, dict):
                 continue
@@ -133,6 +146,43 @@ def mark_unreachable_low_priority(
                 continue
             name = func.get("name")
             if not isinstance(name, str) or not name:
+                continue
+
+            # S4 gate. A function defined STRICTLY below the abort
+            # line never has its ``def`` / decorator executed, so it
+            # can't be registered or called — dead even when the
+            # static graph shows in-file callers (those callers are
+            # equally dead). Trumps the framework_callable /
+            # registered_via_call checks below for exactly this
+            # reason: registration code that never runs registers
+            # nothing. Functions ABOVE the abort line may have
+            # completed registration before the abort fired, so they
+            # fall through to normal call-graph logic. Respects
+            # ``allow_unreachable`` like the NOT_CALLED path.
+            if abort_line and not allow_unreachable:
+                func_line = int(func.get("line_start") or 0)
+                if func_line and func_line > abort_line:
+                    func["priority"] = "low"
+                    func["priority_reason"] = (
+                        "reachability:module_aborts"
+                    )
+                    marked += 1
+                    continue
+
+            # S3: lexical-dead gate. A function defined inside an
+            # always-false guard (``if False:`` / ``if (false) {…}``
+            # / ``#[cfg(any())]``) never binds — the guard body never
+            # runs / compiles. Trumps CALLED (two dead-scope functions
+            # calling each other read as mutually CALLED) and the
+            # framework checks below (a decorator inside dead scope
+            # never registers anything). Respects ``allow_unreachable``.
+            if not allow_unreachable and is_lexically_dead(
+                inventory, rel_path, name,
+                int(func.get("line_start") or 0),
+            ):
+                func["priority"] = "low"
+                func["priority_reason"] = "reachability:lexical_dead"
+                marked += 1
                 continue
 
             qualified = f"{module}.{name}"

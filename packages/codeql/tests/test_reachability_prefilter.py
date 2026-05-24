@@ -516,3 +516,135 @@ def test_go_handler_registered_via_call_returns_registered_via_call(tmp_path):
         f"Go handler registered via http.HandleFunc must resolve "
         f"registered_via_call, got {verdict!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# S4: module-load-abort gate
+# ---------------------------------------------------------------------------
+
+
+def test_reachability_module_aborts_for_sink_below_abort(tmp_path):
+    """Sink in a file that raises ImportError at load → the prefilter
+    returns the ``module_aborts`` verdict even though a same-file peer
+    calls the sink (CALLED in the static graph)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('module disabled')\n"
+        "def entry(q):\n"
+        "    return sink(q)\n"
+        "def sink(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = _analyzer()
+    verdict = a._check_reachability(_finding("src/disabled.py", line=5), tmp_path)
+    assert verdict == "module_aborts", (
+        f"sink below a module-load abort must resolve module_aborts, "
+        f"got {verdict!r}"
+    )
+
+
+def test_module_abort_trumps_framework_callable_in_prefilter(tmp_path):
+    """A Flask route handler below a module-load abort → module_aborts,
+    NOT framework_callable (the decorator never runs)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "api.py").write_text(
+        "from flask import Flask, request\n"
+        "app = Flask(__name__)\n"
+        "raise ImportError('disabled')\n"
+        "\n"
+        "@app.route('/users')\n"
+        "def list_users():\n"
+        "    return cursor.execute(request.args.get('q'))\n"
+    )
+    a = _analyzer()
+    verdict = a._check_reachability(_finding("src/api.py", line=7), tmp_path)
+    assert verdict == "module_aborts"
+
+
+def test_allow_unreachable_suppresses_module_abort(tmp_path):
+    """--allow-unreachable disables the module-abort gate too —
+    the operator wants in-isolation evaluation."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "disabled.py").write_text(
+        "raise ImportError('disabled')\n"
+        "def sink(q):\n"
+        "    cursor.execute(q)\n"
+    )
+    a = AutonomousCodeQLAnalyzer(
+        llm_client=MagicMock(), exploit_validator=MagicMock(),
+        multi_turn_analyzer=None, enable_visualization=False,
+        allow_unreachable=True,
+    )
+    verdict = a._check_reachability(_finding("src/disabled.py", line=3), tmp_path)
+    # With the gate suppressed, the sink falls through to the call-
+    # graph verdict. `sink` IS called by `entry`'s peer... here there's
+    # no caller, so it's not_called — but --allow-unreachable also
+    # suppresses not_called → None. The key assertion: NOT module_aborts.
+    assert verdict != "module_aborts"
+
+
+def test_function_above_abort_not_module_aborts(tmp_path):
+    """A sink whose function is defined ABOVE the abort line must NOT
+    get the module_aborts verdict (its def ran before the abort)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mixed.py").write_text(
+        "def early(q):\n"            # line 1
+        "    cursor.execute(q)\n"    # line 2
+        "raise SystemExit(1)\n"      # line 3
+        "def late(q):\n"            # line 4
+        "    cursor.execute(q)\n"   # line 5
+    )
+    (src / "main.py").write_text(
+        "from src.mixed import early\n"
+        "early('x')\n"
+    )
+    a = _analyzer()
+    verdict = a._check_reachability(_finding("src/mixed.py", line=2), tmp_path)
+    assert verdict != "module_aborts"
+
+
+# ---------------------------------------------------------------------------
+# S3: lexical-dead gate
+# ---------------------------------------------------------------------------
+
+
+def test_reachability_lexical_dead_for_sink_in_if_false(tmp_path):
+    """Sink in a function defined inside `if False:` → lexical_dead,
+    even though a same-scope peer calls it (CALLED in the graph)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod.py").write_text(
+        "if False:\n"
+        "    def dead_a(q):\n"
+        "        return dead_b(q)\n"
+        "    def dead_b(q):\n"
+        "        cursor.execute(q)\n"
+    )
+    a = _analyzer()
+    verdict = a._check_reachability(_finding("src/mod.py", line=5), tmp_path)
+    assert verdict == "lexical_dead", (
+        f"sink inside if False: must resolve lexical_dead, "
+        f"got {verdict!r}"
+    )
+
+
+def test_allow_unreachable_suppresses_lexical_dead(tmp_path):
+    """--allow-unreachable disables the lexical-dead gate too."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod.py").write_text(
+        "if False:\n"
+        "    def dead(q):\n"
+        "        cursor.execute(q)\n"
+    )
+    a = AutonomousCodeQLAnalyzer(
+        llm_client=MagicMock(), exploit_validator=MagicMock(),
+        multi_turn_analyzer=None, enable_visualization=False,
+        allow_unreachable=True,
+    )
+    verdict = a._check_reachability(_finding("src/mod.py", line=3), tmp_path)
+    assert verdict != "lexical_dead"

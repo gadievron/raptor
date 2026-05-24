@@ -59,6 +59,8 @@ Is this code reachable from an entry point, or is it dead code?
 If the metadata block contains a "Reachability:" section, use it as evidence:
 - "Verdict: NOT_CALLED" — the static call-graph resolver found no callers in the project. Before marking exploitable, identify a plausible reach mechanism the substrate could miss (framework dispatch the resolver didn't recognise, dynamic dispatch via reflection/registry lookups, public API surface called by external consumers, plugin entry points). If no plausible mechanism exists, mark is_exploitable=False with ruling="unreachable" or "dead_code" — the vulnerability shape may still be a true positive (is_true_positive=True) but it isn't exploitable in this deployment.
 - "Verdict: REACHABLE via ..." — reachability is established via a runtime-dispatch mechanism (framework decorator or registration call); treat as live, focus on exploit feasibility.
+- "Verdict: MODULE_ABORTS_ON_LOAD" — the file's top-level execution unconditionally aborts (raise ImportError, throw new Error, init() panic, compile_error!) before this function's definition runs. The function is never importable/callable in this deployment, regardless of in-file call edges — peers that appear to call it are equally dead, since the file never finishes loading. This is a STRONGER signal than NOT_CALLED: there is no framework-dispatch escape hatch (registration code below the abort never executes). Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable in this deployment.
+- "Verdict: LEXICAL_DEAD" — this function is defined inside an always-false guard (if False:, if (false) {…}, #[cfg(any())]). The guard's body never executes or compiles, so the function never binds. Like MODULE_ABORTS_ON_LOAD this trumps in-scope call edges (two dead-scope functions calling each other read as mutually called, but the whole scope is dead) and any decorator inside the dead scope never registers anything. Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable.
 - "Caller graph: N direct, M transitive" with N=0 but uncertain > 0 — the substrate found indirection it cannot resolve (string-dispatch / reflect / plugin registries). Treat as potentially reachable; note the indirection class in your reasoning.
 - "Caller graph: N direct, M transitive" with N > 0 — reachability is established; focus on exploit feasibility.
 
@@ -175,7 +177,25 @@ def _format_reachability_block(metadata: Dict[str, Any]) -> str:
 
     priority = metadata.get("priority")
     priority_reason = metadata.get("priority_reason") or ""
-    if priority == "low":
+    if priority_reason == "reachability:module_aborts":
+        # S4: whole-file module-load abort. Distinct verdict from
+        # NOT_CALLED — the function's def never executes, so there's
+        # no framework-dispatch escape hatch and in-file callers are
+        # equally dead. The system prompt explains how to treat it.
+        lines.append(
+            "Verdict: MODULE_ABORTS_ON_LOAD — file aborts at load "
+            "before this function binds; never importable/callable"
+        )
+    elif priority_reason == "reachability:lexical_dead":
+        # S3: function defined inside an always-false guard
+        # (if False: / if (false) / #[cfg(any())]). Body never
+        # runs / compiles, so the function never binds — trumps
+        # in-scope call edges. System prompt explains treatment.
+        lines.append(
+            "Verdict: LEXICAL_DEAD — defined inside an always-false "
+            "guard (if False / #[cfg(any())]); never binds"
+        )
+    elif priority == "low":
         lines.append(
             f"Verdict: NOT_CALLED ({priority_reason or 'no callers in project'})"
         )

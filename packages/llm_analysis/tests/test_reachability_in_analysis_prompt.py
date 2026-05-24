@@ -60,6 +60,27 @@ class TestVerdictLine:
         assert "registration call" in out
         assert "handler passed as argument" in out
 
+    def test_module_aborts_renders_distinct_verdict(self):
+        # S4: a whole-file load abort gets its own verdict line,
+        # distinct from NOT_CALLED — the function's def never runs.
+        out = _format_reachability_block({
+            "priority": "low",
+            "priority_reason": "reachability:module_aborts",
+        })
+        assert "Verdict: MODULE_ABORTS_ON_LOAD" in out
+        # Must NOT mislabel it as NOT_CALLED.
+        assert "NOT_CALLED" not in out
+
+    def test_lexical_dead_renders_distinct_verdict(self):
+        # S3: function inside an always-false guard gets its own
+        # verdict line, distinct from NOT_CALLED.
+        out = _format_reachability_block({
+            "priority": "low",
+            "priority_reason": "reachability:lexical_dead",
+        })
+        assert "Verdict: LEXICAL_DEAD" in out
+        assert "NOT_CALLED" not in out
+
     def test_no_priority_no_verdict_line(self):
         # Priority not set + no framework reason → no verdict line.
         # Caller counts may still render below.

@@ -39,6 +39,8 @@ from .call_graph import (
     extract_call_graph_rust,
 )
 from .diff import compare_inventories
+from .dead_scope import detect_dead_scopes
+from .module_load_abort import detect_module_load_abort
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +550,21 @@ def _process_single_file(
             '_stat': file_stat,
             'items': [item.to_dict() for item in items],
         }
+        # S3: per-function lexical-dead tagging. Functions whose
+        # definition lies inside an always-false guard (``if False:``,
+        # ``if (false) {…}``, ``#[cfg(any())]``) never bind — the
+        # guard's body never runs / compiles. The reachability prepass
+        # demotes such functions regardless of in-scope call edges
+        # (two dead-scope functions calling each other otherwise read
+        # as mutually CALLED). Tagged here (not in each extractor) so
+        # detection lives in one place per language; field is set only
+        # when dead so inventory size stays flat.
+        dead_ranges = detect_dead_scopes(language, content)
+        if dead_ranges:
+            for item_dict in record['items']:
+                ls = item_dict.get('line_start') or 0
+                if ls and any(lo <= ls <= hi for lo, hi in dead_ranges):
+                    item_dict['lexical_dead'] = True
         # Call-graph extraction. The resolver in
         # core.inventory.reachability is language-agnostic; per-file
         # extractors emit the same FileCallGraph dataclass for
@@ -604,6 +621,21 @@ def _process_single_file(
             record['call_graph'] = extract_call_graph_cpp(
                 content,
             ).to_dict()
+        # S4: file-level module-load-abort gate. When the file's
+        # top-level execution unconditionally aborts (raise
+        # ImportError / throw new Error / init() panic /
+        # compile_error!), no function it defines is reachable
+        # through import / link regardless of in-file call edges.
+        # The reachability resolver treats this as a whole-file
+        # NOT_REACHED gate. Stored only when detected so the field
+        # is absent (not False) on the overwhelming majority of
+        # files — keeps inventory size flat.
+        abort = detect_module_load_abort(language, content)
+        if abort is not None:
+            record['module_aborts_on_load'] = {
+                'line': abort.line,
+                'summary': abort.summary,
+            }
         return record
 
     except Exception as e:

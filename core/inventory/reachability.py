@@ -2133,6 +2133,91 @@ def is_registered_via_call(
     return target in idx.framework_registered
 
 
+def module_aborts_on_load(
+    inventory: Dict[str, Any],
+    file_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the module-load-abort record for ``file_path`` if the
+    inventory builder detected an unconditional top-of-module abort
+    (``raise ImportError`` / ``throw new Error`` / ``init() panic`` /
+    ``compile_error!``), else ``None``.
+
+    When non-None, no function defined in the file (at or below the
+    abort's line) is reachable through normal import / link: the
+    file's top-level execution aborts before those bindings complete.
+    Consumers treat this as a whole-file reachability gate that
+    supersedes in-file call edges — a function called only by peers
+    in the same aborting file is still dead, because the file never
+    finishes loading.
+
+    The returned dict carries ``line`` (1-indexed location of the
+    abort) and ``summary`` (short label, e.g. ``"raise ImportError"``)
+    — see :class:`core.inventory.module_load_abort.ModuleLoadAbort`.
+    Detected at inventory-build time and stored on the file record;
+    this accessor is a simple path-keyed lookup (no index build).
+    """
+    if not file_path:
+        return None
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") == normalised:
+            abort = file_record.get("module_aborts_on_load")
+            return abort if isinstance(abort, dict) else None
+    return None
+
+
+def is_lexically_dead(
+    inventory: Dict[str, Any],
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """True iff ``name`` (at ``line``, when given) is defined inside a
+    lexically dead scope — an always-false guard (``if False:`` /
+    ``if (false) {…}`` / ``#[cfg(any())]``) whose body never executes
+    or compiles, so the function never binds (S3).
+
+    Consumers treat this like a per-function reachability gate that
+    supersedes in-scope call edges: two dead-scope functions calling
+    each other read as mutually CALLED in the static graph, but the
+    whole scope is dead. Detected at inventory-build time and stored
+    as ``lexical_dead=True`` on the matching item; this accessor is a
+    path/name-keyed lookup (no index build).
+
+    Match is exact on ``(name, line)`` when ``line > 0`` — defensive
+    against shadowed names / overloads. With ``line == 0`` it matches
+    by name within the file (first hit wins). Returns ``False`` when
+    the file or function isn't found (false-negative-safe: never
+    claims dead when uncertain).
+    """
+    if not file_path or not name:
+        return False
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") != normalised:
+            continue
+        for item in file_record.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("name") != name:
+                continue
+            if line and item.get("line_start") != line:
+                continue
+            return bool(item.get("lexical_dead"))
+        return False
+    return False
+
+
 def callees_of(
     inventory: Dict[str, Any],
     source: InternalFunction,
@@ -2712,7 +2797,9 @@ __all__ = [
     "forward_closure",
     "function_called",
     "is_framework_callable",
+    "is_lexically_dead",
     "is_registered_via_call",
+    "module_aborts_on_load",
     "parse_evidence_entry",
     "reverse_closure",
     "shortest_path",
