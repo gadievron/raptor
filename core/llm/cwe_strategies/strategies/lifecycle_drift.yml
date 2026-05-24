@@ -1,0 +1,88 @@
+name: lifecycle_drift
+description: |
+  Context drift of an invariant. A state field or flag is set under
+  some precondition P (object owns an mm, credentials committed,
+  socket connected, file opened) and later consumed on a code path
+  where P no longer holds. The value's bit pattern is correct at
+  write-time; its security meaning is wrong at read-time. Distinct
+  from memory aliasing and cross-subsystem variants — the defect is
+  temporal, not spatial: the same field means different things in
+  different lifecycle phases of the same object.
+
+signals:
+  paths:
+    - kernel/ptrace.c
+    - kernel/cred.c
+    - kernel/exit.c
+    - kernel/sys.c
+    - fs/exec.c
+  includes:
+    - linux/ptrace.h
+    - linux/cred.h
+    - linux/sched/mm.h
+  function_keywords:
+    - dumpable
+    - ptrace
+  function_calls:
+    - get_dumpable
+    - __get_dumpable
+    - set_dumpable
+    - ptrace_may_access
+    - __ptrace_may_access
+    - commit_creds
+  cwes:
+    # Incorrect authorization is the *consequence* (a security check
+    # consumes a value that carries no meaning in the read context).
+    # The deeper class — "lifecycle-invariant misapplication" — has no
+    # clean CWE; keep this list narrow so the strategy doesn't become a
+    # magnet for every access-control finding.
+    - CWE-863   # incorrect authorization
+
+key_questions:
+  - "Does this code read a state field/flag it did NOT just compute — one set at a different lifecycle stage (construction, credential change, exec, exit, connect/open)?"
+  - "What precondition made that value meaningful when it was written (e.g. 'task owns an mm', 'creds already committed')? Is that precondition guaranteed on every path that reaches this read?"
+  - "If the precondition does NOT hold here (kernel thread, task mid-exit, swapped-out/reaped mm, pre-commit creds), what does the field carry — stale, default, or meaningless — and does the consumer still treat it as authoritative?"
+  - "Is the value used in a security decision (access control, privilege, authorization)? What is the wrong decision when the precondition is violated?"
+
+prompt_addendum: |
+  Context-drift bugs are invisible at the read site: the value is the
+  right type, usually the right bit pattern, and the code reads
+  correctly under local inspection. The defect is temporal — a value
+  established under precondition P is consumed on a path where P no
+  longer holds, so its semantics silently changed between write and
+  read. Identify every state field the function reads but did not just
+  compute. For each, find the write site(s) and the precondition that
+  made it meaningful, then ask whether that precondition is guaranteed
+  at this read. Pay special attention to objects with lifecycle phases
+  — tasks with vs without an mm, credentials before vs after commit,
+  sockets before vs after connect, files before vs after open: a flag
+  that is authoritative in one phase can be meaningless in another, and
+  a security check that consumes it across the phase boundary makes the
+  wrong decision.
+
+exemplars:
+  - cve: CVE-2026-46333
+    title: ptrace dumpability — __ptrace_may_access() trusts get_dumpable() for
+      tasks without an mm
+    pattern: |
+      __ptrace_may_access() reads get_dumpable(task) as one of its
+      access-control inputs. get_dumpable() reports the dumpability
+      flag of the task's mm. For tasks that have no mm — kernel
+      threads, processes mid-exit, processes whose mm was reaped or
+      swapped out — there is no mm to carry the invariant, yet the
+      call still returns a value (stale or default) that the check
+      consumes as authoritative.
+    why_buggy: |
+      The dumpability invariant ("this task's memory image is
+      non-dumpable") is only meaningful for a task that owns an mm.
+      The flag's bit pattern is correct at the time it was written
+      (when the mm existed); its semantics are wrong at read-time in
+      an mm-less context. __ptrace_may_access() trusted the returned
+      value as a valid security signal regardless of whether the task
+      had an mm, producing the wrong access decision for
+      kernel-thread / exiting / mm-less targets. Fixed by caching
+      last-known dumpability for tasks that had an mm, returning zero
+      for kernel threads, and gating mm-less access on CAP_SYS_PTRACE.
+      The lesson: a state field is only as trustworthy as the
+      precondition under which it was set — read it on a path where
+      that precondition fails and it lies.
