@@ -210,3 +210,21 @@ class TestStrategyBlockDirect:
             finding=finding,
         )
         assert "## Strategy: concurrency" in block
+
+
+# ---------------------------------------------------------------------------
+# lifecycle_drift reaches the validator context (no CWE pin — callee only)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleDriftReaches:
+    def test_get_dumpable_callee_pins_lifecycle_drift(self):
+        # No CWE; the get_dumpable() callee + kernel/ptrace.c path pin
+        # lifecycle_drift into the validator's trusted context.
+        block = _build_strategy_block(
+            cwe="", file_path="kernel/ptrace.c",
+            function="__ptrace_may_access",
+            finding={"metadata": {"calls": ["get_dumpable"]}},
+        )
+        assert "## Strategy: lifecycle_drift" in block
+        assert "CVE-2026-46333" in block  # lifecycle_drift exemplar

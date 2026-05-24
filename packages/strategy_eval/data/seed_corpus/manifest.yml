@@ -1,0 +1,22 @@
+# Synthetic seed corpus for the efficacy eval.
+#
+# These are hand-written MINIMAL REPROS of each bug-class shape, NOT
+# extracted real-world source. They measure whether a lens helps the
+# model spot the bug-class pattern in isolation; they are not a
+# substitute for a real corpus and may show a ceiling effect (the bug is
+# obvious enough that the model finds it with or without the lens). Drop
+# real vulnerable/patched samples in the same format (id / strategy /
+# file / variant) for a higher-fidelity run.
+#
+# Partial coverage by design: four bug classes with a vulnerable +
+# patched pair each. Extend with more classes / real source as needed.
+
+samples:
+  - {id: lifecycle_drift_vuln,    strategy: lifecycle_drift,    file: samples/lifecycle_drift_vuln.c,    variant: vulnerable, synthetic: true}
+  - {id: lifecycle_drift_patched, strategy: lifecycle_drift,    file: samples/lifecycle_drift_patched.c, variant: patched,    synthetic: true}
+  - {id: input_handling_vuln,     strategy: input_handling,     file: samples/input_handling_vuln.c,     variant: vulnerable, synthetic: true}
+  - {id: input_handling_patched,  strategy: input_handling,     file: samples/input_handling_patched.c,  variant: patched,    synthetic: true}
+  - {id: memory_management_vuln,    strategy: memory_management, file: samples/memory_management_vuln.c,    variant: vulnerable, synthetic: true}
+  - {id: memory_management_patched, strategy: memory_management, file: samples/memory_management_patched.c, variant: patched,    synthetic: true}
+  - {id: concurrency_vuln,        strategy: concurrency,        file: samples/concurrency_vuln.c,        variant: vulnerable, synthetic: true}
+  - {id: concurrency_patched,     strategy: concurrency,        file: samples/concurrency_patched.c,     variant: patched,    synthetic: true}

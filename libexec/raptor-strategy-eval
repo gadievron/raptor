@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Evaluate the cwe_strategies bug-class lenses.
+
+Two modes:
+
+  raptor-strategy-eval [--selection] [--cases PATH]
+      Deterministic routing eval (no LLM): does the picker select the
+      right strategy for a labeled set of signal cases, and refrain from
+      firing where it shouldn't? Exit 1 on any routing regression, so it
+      doubles as a gate.
+
+  raptor-strategy-eval --efficacy --corpus DIR [--runs N]
+      Offline A/B efficacy eval (LIVE LLM, makes paid calls): for each
+      labeled sample, run an otherwise-identical review prompt with vs
+      without the target lens and report detection lift / false-positive
+      delta. Point --corpus at a labeled corpus (manifest.yml + source);
+      a synthetic seed ships at packages/strategy_eval/data/seed_corpus.
+
+Exit codes:
+  0  — eval ran (selection: all cases passed)
+  1  — selection routing regression, or invalid arguments
+  2  — substrate not installed
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import argparse
+
+
+def _run_selection(args) -> int:
+    from packages.strategy_eval.selection import (
+        format_report,
+        load_cases,
+        run_selection_eval,
+    )
+
+    cases = load_cases(Path(args.cases)) if args.cases else None
+    outcomes = run_selection_eval(cases)
+    print(format_report(outcomes))
+    return 0 if all(o.passed for o in outcomes) else 1
+
+
+def _run_efficacy(args) -> int:
+    if not args.corpus:
+        sys.stderr.write("raptor-strategy-eval: --efficacy requires --corpus DIR\n")
+        return 1
+    from packages.strategy_eval.efficacy import (
+        default_completer,
+        format_report,
+        load_corpus,
+        run_efficacy_eval,
+    )
+
+    samples = load_corpus(Path(args.corpus))
+    if not samples:
+        sys.stderr.write(f"raptor-strategy-eval: no samples in {args.corpus}\n")
+        return 1
+    sys.stderr.write(
+        f"raptor-strategy-eval: efficacy mode makes LIVE LLM calls "
+        f"({len(samples)} samples x 2 arms x {args.runs} runs). Ctrl-C to abort.\n"
+    )
+    results = run_efficacy_eval(samples, default_completer(), runs=args.runs)
+    print(format_report(results))
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-strategy-eval",
+        description="Evaluate the cwe_strategies bug-class lenses.",
+    )
+    p.add_argument(
+        "--efficacy", action="store_true",
+        help="run the offline A/B efficacy eval (LIVE LLM) instead of "
+             "the default deterministic selection eval",
+    )
+    p.add_argument("--cases", default="",
+                   help="selection mode: path to a cases YAML "
+                        "(default: bundled selection_cases.yml)")
+    p.add_argument("--corpus", default="",
+                   help="efficacy mode: path to a labeled corpus dir")
+    p.add_argument("--runs", type=int, default=3,
+                   help="efficacy mode: A/B repetitions per sample "
+                        "(default 3)")
+    args = p.parse_args()
+
+    try:
+        if args.efficacy:
+            return _run_efficacy(args)
+        return _run_selection(args)
+    except ImportError as e:
+        sys.stderr.write(f"raptor-strategy-eval: substrate unavailable: {e}\n")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
