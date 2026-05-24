@@ -1,64 +1,67 @@
 name: lifecycle_drift
 description: |
-  Context drift of an invariant. A state field or flag is set under
-  some precondition P (object owns an mm, credentials committed,
-  socket connected, file opened) and later consumed on a code path
-  where P no longer holds. The value's bit pattern is correct at
+  Context drift of an invariant in a kernel task's lifecycle. A state
+  field is set under some precondition P (the task owns an mm,
+  credentials have been committed) and later consumed on a path where
+  P no longer holds — a kernel thread, a task mid-exit, a task whose
+  mm was swapped out. The value's bit pattern is correct at
   write-time; its security meaning is wrong at read-time. Distinct
-  from memory aliasing and cross-subsystem variants — the defect is
-  temporal, not spatial: the same field means different things in
-  different lifecycle phases of the same object.
+  from auth_privilege's TOCTOU angle (a value that *changes* between
+  check and use): here the value need not change at all — the
+  precondition that made it meaningful is simply absent in this
+  lifecycle phase. The signals below are deliberately narrow, targeting
+  the kernel task-state / mm-ownership surface where this class is
+  known to occur; the reasoning in the addendum generalises, but the
+  triggers stay tight so the strategy does not fire on unrelated code.
 
 signals:
+  # Intentionally narrow — the precise signal is "this function calls
+  # an mm-conditional accessor like get_dumpable()". Broad paths
+  # (kernel/cred.c, fs/exec.c) and tokens (ptrace, commit_creds) were
+  # dropped: they made the strategy a magnet for every function in the
+  # cred/exec/ptrace neighbourhood and collided with auth_privilege.
   paths:
     - kernel/ptrace.c
-    - kernel/cred.c
-    - kernel/exit.c
-    - kernel/sys.c
-    - fs/exec.c
   includes:
     - linux/ptrace.h
-    - linux/cred.h
     - linux/sched/mm.h
   function_keywords:
     - dumpable
-    - ptrace
   function_calls:
     - get_dumpable
     - __get_dumpable
     - set_dumpable
     - ptrace_may_access
     - __ptrace_may_access
-    - commit_creds
-  cwes:
-    # Incorrect authorization is the *consequence* (a security check
-    # consumes a value that carries no meaning in the read context).
-    # The deeper class — "lifecycle-invariant misapplication" — has no
-    # clean CWE; keep this list narrow so the strategy doesn't become a
-    # magnet for every access-control finding.
-    - CWE-863   # incorrect authorization
+  # No `cwes:` on purpose. CWE-863 (incorrect authorization) is the
+  # consequence, but auth_privilege already claims it; sharing the tag
+  # makes both strategies tie on the dominant signal and split the
+  # prompt budget. The bespoke function_calls above are the precise,
+  # low-false-positive trigger.
 
 key_questions:
-  - "Does this code read a state field/flag it did NOT just compute — one set at a different lifecycle stage (construction, credential change, exec, exit, connect/open)?"
-  - "What precondition made that value meaningful when it was written (e.g. 'task owns an mm', 'creds already committed')? Is that precondition guaranteed on every path that reaches this read?"
-  - "If the precondition does NOT hold here (kernel thread, task mid-exit, swapped-out/reaped mm, pre-commit creds), what does the field carry — stale, default, or meaningless — and does the consumer still treat it as authoritative?"
-  - "Is the value used in a security decision (access control, privilege, authorization)? What is the wrong decision when the precondition is violated?"
+  - "Does this code read a state field/flag it did NOT just compute — one set at a different lifecycle stage (mm acquired at exec, credentials committed)?"
+  - "What precondition made that value meaningful when written (e.g. 'the task owns an mm')? Is that precondition guaranteed on every path that reaches this read?"
+  - "If the precondition does NOT hold here (kernel thread, task mid-exit, swapped-out mm), what does the field carry — stale, default, or meaningless — and does the consumer still treat it as authoritative?"
+  - "This is not a check/use race: the value need not change. Does a security decision here consume a field whose invariant simply doesn't apply in the task's current lifecycle phase?"
 
 prompt_addendum: |
   Context-drift bugs are invisible at the read site: the value is the
   right type, usually the right bit pattern, and the code reads
   correctly under local inspection. The defect is temporal — a value
   established under precondition P is consumed on a path where P no
-  longer holds, so its semantics silently changed between write and
+  longer holds, so its meaning silently changed between write and
   read. Identify every state field the function reads but did not just
   compute. For each, find the write site(s) and the precondition that
   made it meaningful, then ask whether that precondition is guaranteed
-  at this read. Pay special attention to objects with lifecycle phases
-  — tasks with vs without an mm, credentials before vs after commit,
-  sockets before vs after connect, files before vs after open: a flag
-  that is authoritative in one phase can be meaningless in another, and
-  a security check that consumes it across the phase boundary makes the
-  wrong decision.
+  at this read. The canonical shape: an access-control helper
+  (``*_may_access``, ``*_check_*``) that derives a verdict from an
+  mm-conditional field — e.g. ``get_dumpable()`` — without first
+  guarding on ``task->mm != NULL``, so kernel threads and exiting
+  tasks reach the consumer with a field that carries no meaning. This
+  is NOT a check/use race: the field need not change; the precondition
+  under which it was authoritative is simply absent in this lifecycle
+  phase.
 
 exemplars:
   - cve: CVE-2026-46333
@@ -68,10 +71,10 @@ exemplars:
       __ptrace_may_access() reads get_dumpable(task) as one of its
       access-control inputs. get_dumpable() reports the dumpability
       flag of the task's mm. For tasks that have no mm — kernel
-      threads, processes mid-exit, processes whose mm was reaped or
-      swapped out — there is no mm to carry the invariant, yet the
-      call still returns a value (stale or default) that the check
-      consumes as authoritative.
+      threads, processes mid-exit, processes whose mm was swapped
+      out — there is no mm to carry the invariant, yet the call still
+      returns a value (stale or default) that the check consumes as
+      authoritative.
     why_buggy: |
       The dumpability invariant ("this task's memory image is
       non-dumpable") is only meaningful for a task that owns an mm.
