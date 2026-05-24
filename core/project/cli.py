@@ -821,18 +821,37 @@ def _print_coverage(project, detailed=False, fail_under=None):
 
 
 def _print_findings(project, detailed=False):
-    """Print merged findings across all runs, grouped by vuln."""
+    """Print merged findings across all runs.
+
+    Code findings (each run's ``findings.json``) render first; SCA /
+    dependency findings (each run's ``sca/findings.json``) render in
+    their own section below, so dependency-CVE volume doesn't swamp the
+    code-finding table.
+    """
     from .merge import merge_findings
-    from .findings_utils import count_vulns, group_findings
-    from core.reporting.findings import build_findings_summary, findings_summary_line
-    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
+    from .findings_utils import merge_sca_findings
 
     run_dirs = project.get_run_dirs(sweep=False)
     merged = merge_findings(run_dirs)
+    sca_findings = merge_sca_findings(run_dirs)
 
-    if not merged:
+    if not merged and not sca_findings:
         print("No findings.")
         return
+
+    if merged:
+        _print_code_findings(merged, detailed)
+    if sca_findings:
+        if merged:
+            print()
+        _print_sca_findings_section(sca_findings, detailed)
+
+
+def _print_code_findings(merged, detailed=False):
+    """Render code findings as a grouped table (the original view)."""
+    from .findings_utils import count_vulns, group_findings
+    from core.reporting.findings import build_findings_summary, findings_summary_line
+    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
 
     vuln_count = count_vulns(merged)
     counts = build_findings_summary(merged)
@@ -917,6 +936,82 @@ def _print_findings(project, detailed=False):
                 parts.append(f"sink: {proof_sink}")
             print(f"{indent}Proof: {', '.join(parts)}")
 
+        print()
+
+
+_SCA_SEVERITY_RANK = {
+    "critical": 0, "high": 1, "medium": 2, "low": 3,
+    "none": 4, "info": 5, "": 6,
+}
+
+
+def _sca_finding_kind(finding):
+    """Human label for an SCA finding's class/kind, from its
+    ``vuln_type`` tag (``sca:<class>:<kind>``)."""
+    vt = finding.get("vuln_type", "")
+    tag = vt[4:] if vt.startswith("sca:") else vt
+    return tag.replace("_", " ").replace(":", " · ").title() or "—"
+
+
+def _sca_finding_package(finding):
+    """``ecosystem:name`` for an SCA finding (falls back to the
+    ``function`` field, which carries the package name)."""
+    sca = finding.get("sca") or {}
+    name = sca.get("name") or finding.get("function", "") or "—"
+    eco = sca.get("ecosystem", "")
+    return f"{eco}:{name}" if eco else name
+
+
+def _print_sca_findings_section(sca_findings, detailed=False):
+    """Render SCA / dependency findings in their own section.
+
+    Discovered from each run's ``sca/findings.json`` (see
+    ``findings_utils.merge_sca_findings``). Sorted by severity so the
+    high-signal supply-chain hits (slopsquat / typosquat) surface above
+    dependency-CVE volume. Kept separate from the code-finding table
+    because these are dep-level (no source file:line).
+    """
+    def _sev_rank(finding):
+        return _SCA_SEVERITY_RANK.get((finding.get("severity") or "").lower(), 6)
+
+    ordered = sorted(sca_findings, key=lambda f: (_sev_rank(f), _sca_finding_package(f)))
+
+    print(f"Supply chain / dependencies (SCA) — {len(ordered)} findings")
+    print()
+
+    rows = []
+    for f in ordered:
+        sev = (f.get("severity") or "").strip()
+        rows.append((
+            _sca_finding_package(f),
+            _sca_finding_kind(f),
+            sev.title() if sev else "—",
+        ))
+
+    headers = ("Package", "Kind", "Severity")
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, cell in enumerate(r):
+            widths[i] = max(widths[i], len(cell))
+    fmt = f"  {{:<{widths[0]}s}}  {{:<{widths[1]}s}}  {{:<{widths[2]}s}}"
+    print(fmt.format(*headers))
+    print(f"  {'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}")
+    for r in rows:
+        print(fmt.format(*r))
+
+    if not detailed:
+        return
+
+    print()
+    pad = len(str(len(ordered)))
+    indent = " " * (pad + 5)
+    for i, f in enumerate(ordered, 1):
+        title = f.get("title") or _sca_finding_package(f)
+        print(f"  [{i:0{pad}d}] {title}")
+        desc = f.get("description")
+        if desc and isinstance(desc, str):
+            for ln in desc.strip().split("\n")[:2]:
+                print(f"{indent}{ln.strip()}")
         print()
 
 

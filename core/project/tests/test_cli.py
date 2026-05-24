@@ -1,12 +1,138 @@
 """Basic smoke tests for the project CLI."""
 
+import contextlib
+import io
+import json
 import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.project.cli import _get_active_project, main
+from core.project.cli import (
+    _get_active_project,
+    _print_findings,
+    _sca_finding_kind,
+    _sca_finding_package,
+    main,
+)
+
+
+class _FakeProject:
+    """Minimal stand-in: _print_findings only calls get_run_dirs()."""
+
+    def __init__(self, run_dirs):
+        self._run_dirs = run_dirs
+
+    def get_run_dirs(self, sweep=False):
+        return self._run_dirs
+
+
+def _sca_finding(name, *, severity="high"):
+    return {
+        "id": f"SCA-{name}", "finding_id": f"SCA-{name}",
+        "vuln_type": "sca:supply_chain:slopsquat_suspect", "tool": "sca",
+        "file": "package.json", "function": name, "line": 0,
+        "severity": severity, "title": f"Slopsquat suspect: {name}",
+        "description": "looks like an LLM-hallucinated package name",
+        "sca": {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name},
+    }
+
+
+def _write_sca(run_dir: Path, rows):
+    (run_dir / "sca").mkdir(parents=True, exist_ok=True)
+    (run_dir / "sca" / "findings.json").write_text(json.dumps(rows), encoding="utf-8")
+
+
+class TestPrintFindingsSca(unittest.TestCase):
+
+    def test_sca_helpers(self):
+        f = _sca_finding("lodahs")
+        self.assertEqual(_sca_finding_package(f), "npm:lodahs")
+        self.assertEqual(_sca_finding_kind(f), "Supply Chain · Slopsquat Suspect")
+
+    def test_sca_section_renders(self):
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            _write_sca(run_dir, [_sca_finding("lodahs")])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _print_findings(_FakeProject([run_dir]))
+            out = buf.getvalue()
+            self.assertIn("Supply chain / dependencies (SCA)", out)
+            self.assertIn("npm:lodahs", out)
+
+    def test_sca_only_run_not_reported_as_no_findings(self):
+        """Regression: a run with ONLY sca/findings.json (no top-level
+        findings.json) must still surface the SCA section, not print
+        'No findings.' and bail."""
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            _write_sca(run_dir, [_sca_finding("expresss")])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _print_findings(_FakeProject([run_dir]))
+            out = buf.getvalue()
+            self.assertNotIn("No findings.", out)
+            self.assertIn("npm:expresss", out)
+
+    def test_truly_empty_reports_no_findings(self):
+        with TemporaryDirectory() as d:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _print_findings(_FakeProject([Path(d)]))
+            self.assertIn("No findings.", buf.getvalue())
+
+
+class TestProjectFindingsScaE2E(unittest.TestCase):
+    """End-to-end across the package boundary: a slopsquat detected by
+    the REAL SCA detector + serialised by the REAL write_findings_json
+    must surface in /project findings.
+
+    Guards the contract — SCA's on-disk findings.json shape vs the
+    project view's loader/renderer. A future SCA serializer change that
+    drifts the row shape breaks this test rather than silently dropping
+    dependency findings from the project view. Skipped if the optional
+    SCA package isn't importable.
+    """
+
+    def test_real_slopsquat_surfaces_in_project_findings(self):
+        try:
+            from packages.sca.parsers.package_json import parse as parse_pkg
+            from packages.sca.supply_chain import _slopsquat_to_finding
+            from packages.sca.supply_chain.slopsquat import check_dep
+            from packages.sca.findings import write_findings_json
+        except ImportError:
+            self.skipTest("optional SCA package not importable")
+
+        with TemporaryDirectory() as d:
+            target = Path(d) / "target"
+            target.mkdir()
+            # 'lodash-pro' = popular prefix 'lodash' + generic suffix
+            # 'pro' → the detector's popular_prefix_generic_suffix rule.
+            (target / "package.json").write_text(json.dumps({
+                "name": "victim-app",
+                "dependencies": {"lodash-pro": "^1.0.0", "express": "^4.0.0"},
+            }), encoding="utf-8")
+
+            deps = parse_pkg(target / "package.json")
+            ss = [f for f in (check_dep(dep) for dep in deps) if f]
+            self.assertTrue(ss, "real detector found no slopsquat in 'lodash-pro'")
+            sc_findings = [_slopsquat_to_finding(f) for f in ss]
+
+            run_dir = Path(d) / "run"
+            write_findings_json(
+                run_dir / "sca" / "findings.json",
+                supply_chain_findings=sc_findings,
+            )
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _print_findings(_FakeProject([run_dir]))
+            out = buf.getvalue()
+            self.assertIn("Supply chain / dependencies (SCA)", out)
+            self.assertIn("lodash-pro", out)
+            self.assertIn("Slopsquat", out)
 
 
 class TestCLI(unittest.TestCase):
