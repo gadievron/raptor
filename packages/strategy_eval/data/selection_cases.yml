@@ -1,0 +1,69 @@
+# Labeled routing cases for the selection eval.
+#
+# Positives reuse triggers already proven in core/llm/cwe_strategies's own
+# tests, so the eval is grounded in known-good signals. Negatives
+# (expect_not_selected) pin that a strategy does NOT fire where it
+# shouldn't — the over-trigger / collision guard.
+#
+# signals: forwarded verbatim to pick_strategies (file_path required).
+
+cases:
+  - name: input_handling via netfilter path
+    signals: {file_path: net/netfilter/nf_tables_api.c, function_name: nft_payload_eval}
+    expect_selected: [input_handling]
+    expect_not_selected: [lifecycle_drift]
+
+  - name: concurrency via locking path
+    signals: {file_path: kernel/locking/rwsem.c, function_name: rwsem_down_read}
+    expect_selected: [concurrency]
+
+  - name: concurrency via mutex include
+    signals: {file_path: src/dev.c, function_name: dev_ioctl, file_includes: [linux/mutex.h]}
+    expect_selected: [concurrency]
+
+  - name: memory_management via refcount keyword
+    signals: {file_path: src/obj.c, function_name: kref_put_obj}
+    expect_selected: [memory_management]
+
+  - name: auth_privilege via commoncap path
+    signals: {file_path: security/commoncap.c, function_name: cap_capable}
+    expect_selected: [auth_privilege]
+
+  - name: cryptography via crypto path
+    signals: {file_path: crypto/aes_generic.c, function_name: aes_encrypt}
+    expect_selected: [cryptography]
+
+  - name: memory_aliasing via splice path
+    signals: {file_path: fs/splice.c, function_name: splice_to_pipe}
+    expect_selected: [memory_aliasing]
+
+  - name: lifecycle_drift via get_dumpable callee
+    signals:
+      file_path: kernel/ptrace.c
+      function_name: __ptrace_may_access
+      function_calls_made: [get_dumpable]
+    expect_selected: [lifecycle_drift]
+    # De-collision: it routes via the bespoke callee, not a shared CWE tag.
+    expect_not_selected: [auth_privilege]
+
+  - name: lifecycle_drift via dumpable keyword
+    signals: {file_path: src/foo.c, function_name: check_dumpable}
+    expect_selected: [lifecycle_drift]
+
+  # --- over-trigger / collision negatives ---
+
+  - name: command-injection routes input_handling, not lifecycle_drift
+    signals: {file_path: src/runner.py, function_name: run_cmd, candidate_cwes: [CWE-78]}
+    expect_selected: [input_handling]
+    expect_not_selected: [lifecycle_drift]
+
+  - name: CWE-863 routes auth_privilege, not lifecycle_drift
+    signals: {file_path: src/authz.c, function_name: do_check, candidate_cwes: [CWE-863]}
+    expect_selected: [auth_privilege]
+    expect_not_selected: [lifecycle_drift]
+
+  # --- always-on fallback ---
+
+  - name: general always present on a signal-less target
+    signals: {file_path: data/blob.bin, function_name: opaque}
+    expect_selected: [general]
