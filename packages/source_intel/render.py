@@ -44,6 +44,7 @@ from packages.source_intel.analyze import (
     AllocationEvidence,
     AttributeEvidence,
     CapabilityEvidence,
+    CLevelSourceEvidence,
     DoubleFreeEvidence,
     HazardEvidence,
     LsmEvidence,
@@ -295,6 +296,17 @@ def derive_evidence_strings(
         ]
     for hook in lsm_hooks:
         lines.append(_render_lsm_line(hook, style))
+
+    # L1 source table evidence — C/C++ process, stream, fd, and socket
+    # input origins. Filter to the finding function when supplied.
+    c_sources = list(result.c_level_sources)
+    if finding_function:
+        c_sources = [
+            src for src in c_sources
+            if src.enclosing_function in (finding_function, None)
+        ]
+    for src in c_sources:
+        lines.append(_render_c_level_source_line(src, style))
 
     # Axis-4 multi-hop privilege back-walk evidence (Phase D follow-
     # up). Surfaces the back-walk's prose findings — the verdict-side
@@ -1362,6 +1374,31 @@ _RELEVANT_SANITIZERS = frozenset({
     "kcov",          # CONFIG_KCOV (not a sanitizer per se but the
                      # fuzzer-coverage runtime that often pairs with KASAN)
 })
+
+
+def _render_c_level_source_line(src: CLevelSourceEvidence, style: str) -> str:
+    """Render a C/C++ L1 source observation."""
+    fn_text = (
+        f"function `{src.enclosing_function}`"
+        if src.enclosing_function else "unknown function"
+    )
+    file_path, line_no = src.location
+    if style == "exploit_plan":
+        return (
+            f"C/C++ L1 source: `{src.source_name}` ({src.source_kind}) in "
+            f"{fn_text} at {file_path}:{line_no}. Treat data from this "
+            f"origin as attacker-controlled when planning exploitability."
+        )
+    if style == "agentic_variant":
+        return (
+            f"Variant-hunt seed: `{src.source_name}` ({src.source_kind}) "
+            f"feeds input in {fn_text} at {file_path}:{line_no}."
+        )
+    return (
+        f"C/C++ L1 source: `{src.source_name}` ({src.source_kind}) "
+        f"observed in {fn_text} at {file_path}:{line_no}; downstream "
+        f"buffers/values may be attacker-controlled."
+    )
 
 
 def _render_sanitizers_line(
