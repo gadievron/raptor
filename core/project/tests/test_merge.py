@@ -221,25 +221,46 @@ class TestMergeRuns(unittest.TestCase):
 
 class TestSarifMerge(unittest.TestCase):
 
-    def _make_run(self, tmpdir, name, findings, sarif=None):
+    _MINIMAL_SARIF = {
+        "version": "2.1.0",
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+        "runs": [{"tool": {"driver": {"name": "test"}}, "results": []}],
+    }
+
+    def _make_run(self, tmpdir, name, findings, sarif=None, sca_sarif=None):
         run_dir = Path(tmpdir) / name
         run_dir.mkdir()
         (run_dir / "findings.json").write_text(json.dumps(findings))
         if sarif is not None:
             (run_dir / "results.sarif").write_text(json.dumps(sarif))
+        if sca_sarif is not None:
+            (run_dir / "sca").mkdir()
+            (run_dir / "sca" / "findings.sarif").write_text(json.dumps(sca_sarif))
         return run_dir
 
     def test_sarif_files_merged(self):
-        minimal_sarif = {
-            "version": "2.1.0",
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
-            "runs": [{"tool": {"driver": {"name": "test"}}, "results": []}],
-        }
         with TemporaryDirectory() as d:
-            a = self._make_run(d, "a", [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}], sarif=minimal_sarif)
-            b = self._make_run(d, "b", [{"id": "F-002", "file": "b.c", "function": "foo", "line": 20}], sarif=minimal_sarif)
+            a = self._make_run(d, "a", [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}], sarif=self._MINIMAL_SARIF)
+            b = self._make_run(d, "b", [{"id": "F-002", "file": "b.c", "function": "foo", "line": 20}], sarif=self._MINIMAL_SARIF)
             out = Path(d) / "merged"
             merge_runs([a, b], out)
+            self.assertTrue((out / "merged.sarif").exists())
+
+    def test_sca_subdir_sarif_included(self):
+        """merged.sarif must include SCA SARIF written to <run>/sca/, not
+        just the top-level *.sarif (regression for the subdir-discovery
+        gap)."""
+        with TemporaryDirectory() as d:
+            # One run with a top-level SARIF + a sca/ SARIF.
+            a = self._make_run(
+                d, "a",
+                [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}],
+                sarif=self._MINIMAL_SARIF, sca_sarif=self._MINIMAL_SARIF,
+            )
+            out = Path(d) / "merged"
+            stats = merge_runs([a], out)
+            # Both the top-level and the sca/ SARIF discovered.
+            self.assertEqual(stats["sarif_files_merged"], 2)
             self.assertTrue((out / "merged.sarif").exists())
 
 
