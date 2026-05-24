@@ -592,6 +592,41 @@ def test_non_closeable_language_is_uncertain():
     assert _er(inv, "m.py", "_helper", 1) == "uncertain"
 
 
+def _jfn(name, line, attrs=None, vis="public"):
+    return {"name": name, "kind": "function", "line_start": line,
+            "metadata": {"visibility": vis, "attributes": attrs or []}}
+
+
+def test_java_servlet_method_is_entry():
+    # A servlet handler is framework-dispatched (no in-project caller); it
+    # and its callees must read reachable, not surface-demoted as not_called.
+    inv = _entry_inv(
+        "S.java", "java",
+        [_jfn("doPost", 1), _jfn("helper", 5, vis="private")],
+        [{"caller": "doPost", "chain": ["helper"], "line": 2}],
+    )
+    assert _er(inv, "S.java", "doPost", 1) == "reachable"
+    assert _er(inv, "S.java", "helper", 5) == "reachable"
+
+
+def test_java_jaxrs_and_spring_annotations_are_entries():
+    inv = _entry_inv(
+        "R.java", "java",
+        [_jfn("jaxrs", 1, attrs=["GET"]),
+         _jfn("spring", 5, attrs=['GetMapping("/y")'])],
+        [],
+    )
+    assert _er(inv, "R.java", "jaxrs", 1) == "reachable"
+    assert _er(inv, "R.java", "spring", 5) == "reachable"
+
+
+def test_java_plain_method_stays_uncertain():
+    # A non-servlet, non-annotated Java method isn't a confident entry
+    # (Java non-closeable) → uncertain → caller's 1-hop logic, unchanged.
+    inv = _entry_inv("P.java", "java", [_jfn("compute", 1)], [])
+    assert _er(inv, "P.java", "compute", 1) == "uncertain"
+
+
 def test_go_init_is_entry():
     # Adversarial FN: Go runs every `func init()` at package load, so init
     # and its callees are reachable even with no explicit caller.

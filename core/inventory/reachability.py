@@ -2282,6 +2282,31 @@ def is_lexically_dead(
 # is trustworthy). Others degrade to UNCERTAIN.
 _CLOSEABLE_ENTRY_LANGS = frozenset({"c", "cpp", "go", "rust"})
 
+# Java servlet / filter lifecycle methods — invoked by the container, no
+# in-project caller. (init/destroy are generic names too; treating them as
+# entries is the conservative, false-negative-safe direction.)
+_JAVA_SERVLET_METHODS = frozenset({
+    "doGet", "doPost", "doPut", "doDelete", "doHead", "doOptions",
+    "doTrace", "service", "doFilter", "init", "destroy",
+})
+# JAX-RS / Spring routing annotation tail-names → the method is a route
+# handler dispatched by the web framework.
+_JAVA_ROUTE_ANNOTATIONS = frozenset({
+    "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "Path",
+    "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
+    "DeleteMapping", "PatchMapping",
+})
+
+
+def _java_web_entry(name: str, item: Dict[str, Any]) -> bool:
+    if name in _JAVA_SERVLET_METHODS:
+        return True
+    for a in (item.get("metadata") or {}).get("attributes") or []:
+        tail = str(a).split("(")[0].strip().split(".")[-1]
+        if tail in _JAVA_ROUTE_ANNOTATIONS:
+            return True
+    return False
+
 
 def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     """Is this inventory item an externally-invocable entry point under its
@@ -2303,6 +2328,12 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # Go runs every ``func init()`` automatically at package load — init
     # and its call tree are reachable even with no explicit caller.
     if language == "go" and name == "init":
+        return True
+    # Java web handlers are framework-dispatched entries with no in-project
+    # caller: servlet lifecycle methods by name and JAX-RS / Spring routing
+    # annotations. Without this, live servlet handlers (doPost/doGet) read
+    # not_called and get surface-demoted.
+    if language == "java" and _java_web_entry(name, item):
         return True
     if language not in _CLOSEABLE_ENTRY_LANGS:
         return False
