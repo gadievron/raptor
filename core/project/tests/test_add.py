@@ -3,6 +3,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from core.project.project import ProjectManager
 from core.run import RUN_METADATA_FILE
@@ -114,6 +115,15 @@ class TestRemoveRun(unittest.TestCase):
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
         self.projects_dir = Path(self.tmpdir.name) / "projects"
+        # Isolate the output base: two tests here call create("myapp")
+        # without an explicit output_dir, which defaults to the shared
+        # repo-relative DEFAULT_OUTPUT_BASE (``out/projects/myapp``). Patch
+        # it to a per-test tmpdir so they don't write to / race on the
+        # shared path under xdist. (See test_project.py for the full race.)
+        out_base = Path(self.tmpdir.name) / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
         # Per-test scratch target; lives under the same tmpdir, so no
         # hardcoded host path leaks into Project(target=...) values.
         self.target_code = str(Path(self.tmpdir.name) / "code")

@@ -168,6 +168,18 @@ class TestProjectManager(unittest.TestCase):
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
         self.projects_dir = Path(self.tmpdir.name) / "projects"
+        # Isolate the output base. ProjectManager.create() defaults
+        # output_dir to the shared repo-relative DEFAULT_OUTPUT_BASE
+        # (``out/projects/<name>``) regardless of projects_dir, so under
+        # xdist two workers using the same project name race on
+        # ``out/projects/myapp`` — one test's purge wipes another's output
+        # (surfaced as a flaky test_delete_keeps_output_by_default). Patch
+        # the module global to a per-test tmpdir so create() and delete()'s
+        # base check both stay isolated.
+        out_base = Path(self.tmpdir.name) / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
         self.mgr = ProjectManager(projects_dir=self.projects_dir)
         # Per-test scratch targets; the names are stable so listing /
         # rename / find-project-for-target assertions can match
