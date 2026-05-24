@@ -218,7 +218,15 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
 
+      - name: Restore venv from cache
+        id: venv-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+
       - name: Create venv and install deps
+        if: steps.venv-cache.outputs.cache-hit != 'true'
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -227,13 +235,12 @@ jobs:
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
 
-      - name: Upload venv for this run
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7
+      - name: Save venv to cache
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
-          include-hidden-files: true
-          retention-days: 1
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
@@ -270,11 +277,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+      - name: Restore venv from cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -364,11 +372,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+      - name: Restore venv from cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -405,11 +414,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+      - name: Restore venv from cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -445,11 +455,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+      - name: Restore venv from cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -599,11 +610,12 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+      - name: Restore venv from cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
-          name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
       - name: Run cve_diff tests
