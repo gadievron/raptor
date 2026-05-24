@@ -633,34 +633,44 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m pytest packages/fuzzing/tests -n auto
 
+  # CANARY for the prebuilt-image migration (phase 2 of the fan-out
+  # fix). sage is the proving ground: zero subprocess usage in
+  # core/sage/tests, so if this goes green the container approach is
+  # sound and the remaining pure-Python tiers can follow. It runs
+  # INSIDE ghcr.io/<owner>/raptor-ci-deps (deps baked in) instead of
+  # `needs: deps` + downloading the venv artifact — removing one
+  # venv-download from the fan-out that queues under a runner cap.
+  # sandbox (namespaces) + exploit_feasibility (radare2/gcc) will NOT
+  # migrate; the slim image can't host them.
   python-unit-tests-sage:
-    needs: [pre_check, changes, deps]
+    needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.sage == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read              # pull the private GHCR deps image
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
         with:
           persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Download venv artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
-        with:
-          name: venv-${{ github.run_id }}
-          path: ${{ env.VENV_PATH }}
-      - name: Restore venv permissions
-        run: chmod +x $VENV_PATH/bin/*
+      - name: Reconcile deps
+        # No-op when this PR didn't touch requirements*.txt (everything
+        # already satisfied in the image); installs only the delta when
+        # a PR changes deps before the image has rebuilt on main.
+        run: pip install --no-cache-dir -r requirements-dev.txt
       - name: Run sage tests
-        run: |
-          source $VENV_PATH/bin/activate
-          python -m pytest core/sage/tests -n auto
+        # Deps are on the image's system Python — no venv to activate.
+        run: python -m pytest core/sage/tests -n auto
 
   python-unit-tests-orchestration:
     needs: [pre_check, changes, deps]
