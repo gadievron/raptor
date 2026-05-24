@@ -237,7 +237,7 @@ class LanguageDetector:
         Use only when ``detect_languages`` has already returned empty
         with min_files=1 — i.e. the target has source code present but
         no build manifests or structural indicators that would let
-        confidence clear the gate. honeyslop-shaped trees (multi-
+        confidence clear the gate. Fixture / vendored trees (multi-
         language, no build files by design) and minimal repros land
         here. Caller is responsible for ordering: floor detection is
         a fallback, not a default.

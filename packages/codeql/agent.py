@@ -281,7 +281,7 @@ class CodeQLAgent:
                 # (e.g. a `pom.xml` in a docs example dir) but is also
                 # tripped by trees with real source code and zero build
                 # files — multi-language minimal repros, fixture trees,
-                # honeyslop-shaped adversarial canaries. The two retry
+                # vendored reference snapshots. The two retry
                 # tiers above both gate on confidence; if both returned
                 # empty, fall back to a file-count-only floor and log
                 # loud per-language WARNINGs so the operator knows the

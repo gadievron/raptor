@@ -182,14 +182,14 @@ class TestSkipLogging:
 class TestFloorFallback:
     """detect_languages_floor() is the last-resort tier for repos with
     real source code but no build manifests — multi-language minimal
-    repros, fixture trees, honeyslop-shaped adversarial canaries. It
+    repros, fixture trees, vendored reference snapshots. It
     bypasses the confidence gate and admits any language above the
     file-count floor. Caller (agent.py) only invokes it when the two
     confidence-gated tiers have already returned empty.
     """
 
     def test_multilang_no_manifests_all_admitted(self, tmp_path: Path):
-        # honeyslop shape: 4 py + 2 js + 6 go + 4 cpp + non-source
+        # mixed-language shape: 4 py + 2 js + 6 go + 4 cpp + non-source
         # files (README, LICENSE, docs, images) that dilute the per-
         # language ratio below the confidence threshold. Zero build
         # files. Every language clears file_count >= 2 under floor.
@@ -201,11 +201,11 @@ class TestFloorFallback:
             _write(tmp_path, f"go/a{i}.go", "")
         for i in range(4):
             _write(tmp_path, f"c/a{i}.c", "")
-        # Decoy non-source files — match honeyslop's README/LICENSE/
-        # docs/images bulk. Need enough to push every language's
+        # Filler non-source files — README/LICENSE/docs/images bulk.
+        # Need enough to push every language's
         # ratio below its min_confidence gate (cap +0.3 on ratio
         # means ratio < 0.2 keeps cpp/python/js below 0.5; go is
-        # gated at 0.6 so needs ratio < 0.3). 26 decoys + 16 sources
+        # gated at 0.6 so needs ratio < 0.3). 26 fillers + 16 sources
         # = 42 total; go gets 6/42 = 0.14, well under the gate.
         for i in range(26):
             _write(tmp_path, f"docs/note{i}.md", "")
