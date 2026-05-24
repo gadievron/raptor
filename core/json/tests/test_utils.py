@@ -154,9 +154,10 @@ class TestSaveJson(unittest.TestCase):
     def test_serializes_path(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "out.json"
-            save_json(p, {"path": Path("/tmp/test")})
+            target = Path(d) / "target"
+            save_json(p, {"path": target})
             data = json.loads(p.read_text())
-            self.assertEqual(data["path"], "/tmp/test")
+            self.assertEqual(data["path"], str(target))
 
     def test_serializes_datetime(self):
         with TemporaryDirectory() as d:

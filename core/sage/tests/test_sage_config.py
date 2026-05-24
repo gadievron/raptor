@@ -47,12 +47,12 @@ class TestSageConfig(unittest.TestCase):
         config = SageConfig()
         self.assertEqual(config.timeout, 30.0)
 
-    @patch.dict(os.environ, {"SAGE_IDENTITY_PATH": "/tmp/agent.key"})
+    @patch.dict(os.environ, {"SAGE_IDENTITY_PATH": "./agent.key"})
     def test_identity_path_from_env(self):
         from core.sage.config import SageConfig
 
         config = SageConfig()
-        self.assertEqual(config.identity_path, "/tmp/agent.key")
+        self.assertEqual(config.identity_path, "./agent.key")
 
     def test_from_env_factory(self):
         from core.sage.config import SageConfig

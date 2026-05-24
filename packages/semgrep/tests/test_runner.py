@@ -104,15 +104,16 @@ class TestBuildCmd:
         idx = cmd.index("--timeout")
         assert cmd[idx + 1] == "120"
 
-    def test_json_output_path(self):
+    def test_json_output_path(self, tmp_path):
+        out_path = tmp_path / "out.json"
         cmd = build_cmd(
             Path("/src"), "p/x",
-            json_output_path=Path("/tmp/out.json"),
+            json_output_path=out_path,
             semgrep_bin="semgrep",
         )
         assert "--json-output" in cmd
         idx = cmd.index("--json-output")
-        assert cmd[idx + 1] == "/tmp/out.json"
+        assert cmd[idx + 1] == str(out_path)
 
     def test_no_json_output_path_omits_flag(self):
         cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")

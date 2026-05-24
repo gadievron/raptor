@@ -112,7 +112,7 @@ class TestRedactUrlSecretsOnly:
     def test_bearer_substring_preserved(self):
         # `redact_secrets` would have replaced this; the path-specific
         # variant leaves it untouched (it's a filename, not a header).
-        value = "/tmp/Bearer abcdefghij1234567890abcdef.dat"
+        value = "./Bearer abcdefghij1234567890abcdef.dat"
         out = redact_url_secrets_only(value)
         assert "abcdefghij1234567890abcdef" in out, (
             f"Bearer-shaped substring wrongly redacted in path: {out!r}"

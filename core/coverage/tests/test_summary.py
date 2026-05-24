@@ -245,7 +245,7 @@ class TestProjectSummary(unittest.TestCase):
                 "functions_analysed": [{"file": "src/a.c", "function": "foo"}],
             }, tool_name="llm")
 
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=str(Path(d) / "code"), output_dir=d)
             summary = compute_project_summary(p)
 
             self.assertEqual(summary["tools"]["semgrep"]["files_examined"], 2)
@@ -255,7 +255,7 @@ class TestProjectSummary(unittest.TestCase):
     def test_no_checklist(self):
         from core.project.project import Project
         with TemporaryDirectory() as d:
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=str(Path(d) / "code"), output_dir=d)
             self.assertIsNone(compute_project_summary(p))
 
     def test_no_records(self):
@@ -265,7 +265,7 @@ class TestProjectSummary(unittest.TestCase):
             (Path(d) / "checklist.json").write_text(json.dumps({
                 "files": [{"path": "a.c", "sloc": 10, "items": [{"name": "main"}]}]
             }))
-            p = Project(name="test", target="/tmp", output_dir=d)
+            p = Project(name="test", target=str(Path(d) / "code"), output_dir=d)
             summary = compute_project_summary(p)
             self.assertEqual(summary["inventory"]["files"], 1)
             self.assertEqual(summary["tools"], {})

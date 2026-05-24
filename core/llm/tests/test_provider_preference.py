@@ -360,7 +360,7 @@ def test_llmclient_primary_provider_raises_without_primary_model() -> None:
     cfg.retry_delay_remote = 5.0
     cfg.enable_caching = False
     from pathlib import Path
-    cfg.cache_dir = Path("/tmp")
+    cfg.cache_dir = Path(".")
     cfg.enable_cost_tracking = False
     cfg.max_cost_per_scan = 10.0
     cfg.scorecard_enabled = False  # avoid latent class-default pollution if a future code path consults scorecard

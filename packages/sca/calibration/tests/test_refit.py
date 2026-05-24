@@ -72,7 +72,7 @@ def _make_finding(
         "advisory": {"osv_id": cve, "aliases": [cve]},
         "dependency": {
             "ecosystem": ecosystem, "name": name, "version": version,
-            "declared_in": "/tmp/x", "scope": "main",
+            "declared_in": "./x", "scope": "main",
             "is_lockfile": False, "pin_style": "exact",
             "direct": True, "purl": f"pkg:{ecosystem}/{name}@{version}",
             "parser_confidence": {

@@ -76,7 +76,7 @@ def _dep(name: str, version: str | None = "1.0.0", ecosystem: str = "npm") -> De
         ecosystem=ecosystem,
         name=name,
         version=version,
-        declared_in=Path("/tmp/x"),
+        declared_in=Path("./x"),
         scope="main",
         is_lockfile=False,
         pin_style=PinStyle.EXACT,

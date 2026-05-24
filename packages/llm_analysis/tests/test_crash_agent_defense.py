@@ -18,7 +18,7 @@ from typing import Dict, Optional
 @dataclass
 class FakeCrashContext:
     crash_id: str = "crash-001"
-    binary_path: Path = Path("/tmp/test_binary")
+    binary_path: Path = Path("./test_binary")
     input_file: Path = Path("/dev/null")
     signal: str = "11"
     stack_trace: str = "#0 vuln_func at vuln.c:42\n#1 main at main.c:10"

@@ -84,7 +84,7 @@ class TestSetupChecklistSymlink(unittest.TestCase):
 
             save_json(projects_dir / "_test_shared.json", {
                 "name": "_test_shared",
-                "target": "/tmp",
+                "target": "./target",
                 "output_dir": str(project_dir),
             })
             if active_link.is_symlink() or active_link.exists():

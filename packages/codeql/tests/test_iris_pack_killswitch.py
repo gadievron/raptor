@@ -22,8 +22,8 @@ class TestAnalyzeIrisPacksKillSwitch:
         runner = QueryRunner.__new__(QueryRunner)  # bypass __init__
 
         result = runner.analyze_iris_packs(
-            databases={"python": Path("/tmp/db")},
-            out_dir=Path("/tmp/out"),
+            databases={"python": Path("./db")},
+            out_dir=Path("./out"),
         )
         assert result == {}
 

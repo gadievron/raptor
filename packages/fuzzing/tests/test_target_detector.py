@@ -129,13 +129,13 @@ class TestDetect(unittest.TestCase):
 
     def test_target_info_summary(self):
         info = TargetInfo(
-            path=Path("/tmp/test"), kind="elf-linux", arch="x86_64",
+            path=Path("./test"), kind="elf-linux", arch="x86_64",
             description="Linux ELF binary", can_fuzz_here=True,
             recommended_fuzzer="afl",
             hints=["use --understand for context"],
         )
         text = info.summary()
-        self.assertIn("Target: /tmp/test", text)
+        self.assertIn("Target: test", text)
         self.assertIn("Kind: elf-linux", text)
         self.assertIn("Recommended fuzzer: afl", text)
         self.assertIn("use --understand", text)

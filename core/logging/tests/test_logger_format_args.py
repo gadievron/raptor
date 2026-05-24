@@ -106,10 +106,10 @@ class FormatStyleTest(unittest.TestCase):
         # `%s` calls str() on the arg — Path / Exception / custom objects
         # serialise without the caller pre-stringifying.
         from pathlib import Path
-        self.raptor_logger.error("read failed for %s: %s", Path("/tmp/x"), ValueError("nope"))
+        self.raptor_logger.error("read failed for %s: %s", Path("./x"), ValueError("nope"))
         self.assertEqual(
             self.handler.records[-1].getMessage(),
-            "read failed for /tmp/x: nope",
+            "read failed for x: nope",
         )
 
 

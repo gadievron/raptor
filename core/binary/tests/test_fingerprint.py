@@ -191,7 +191,7 @@ class TestFingerprintSerialisation:
             binary_path="/usr/bin/foo", **kwargs,
         )
         fp_b = CapabilityFingerprint(
-            binary_path="/tmp/dl-xyz/foo", **kwargs,
+            binary_path="dl-xyz/foo", **kwargs,
         )
         assert fp_a.canonical_json() == fp_b.canonical_json()
         # to_dict() does include binary_path (operator-facing
@@ -199,7 +199,7 @@ class TestFingerprintSerialisation:
         # they differ there
         assert fp_a.to_dict() != fp_b.to_dict()
         assert fp_a.to_dict()["binary_path"] == "/usr/bin/foo"
-        assert fp_b.to_dict()["binary_path"] == "/tmp/dl-xyz/foo"
+        assert fp_b.to_dict()["binary_path"] == "dl-xyz/foo"
 
     def test_from_dict_roundtrip(self):
         fp = CapabilityFingerprint(

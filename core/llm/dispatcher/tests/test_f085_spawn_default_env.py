@@ -33,7 +33,7 @@ import pytest
 @pytest.fixture
 def fake_dispatcher():
     d = MagicMock()
-    d.allocate_worker.return_value = ("/tmp/fake.sock", 99)
+    d.allocate_worker.return_value = ("./fake.sock", 99)
     return d
 
 
@@ -70,5 +70,5 @@ def test_spawn_worker_env_none_defaults_to_safe_env(fake_dispatcher):
         f"{sorted(captured_env.keys())}"
     )
     # And the dispatcher vars must still be set.
-    assert captured_env.get("RAPTOR_LLM_SOCKET") == "/tmp/fake.sock"
+    assert captured_env.get("RAPTOR_LLM_SOCKET") == "./fake.sock"
     assert captured_env.get("RAPTOR_LLM_TOKEN_FD") == "99"

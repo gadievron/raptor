@@ -21,17 +21,8 @@ Coverage:
 import json
 import os
 import sys
-from pathlib import Path
 
 import pytest
-
-# In-tree: core/security/tests/test_cc_trust.py -> repo root at parents[3].
-# /tmp draft sits shallower; try/except lets the tests run in both layouts
-# (conftest.py handles the module import in the draft case).
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:
-    pass
 
 from core.security.cc_trust import (
     check_repo_claude_trust,
@@ -84,7 +75,10 @@ class TestNoConfig:
         assert _check(str(tmp_path / "does-not-exist")) is False
 
     def test_null_byte_in_path_does_not_crash(self):
-        assert _check("/tmp/weird\x00path") is False
+        # The check shouldn't reach the filesystem layer; the null byte
+        # triggers the path-validation early-return. Any path-shaped
+        # string containing \x00 exercises this.
+        assert _check("./weird\x00path") is False
 
     def test_very_long_path_does_not_crash(self):
         # past PATH_MAX (4096) on Linux
@@ -227,7 +221,7 @@ class TestEnvInjection:
         claude = tmp_path / ".claude"
         claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({
-            "env": {key: "/tmp/evil.so"},
+            "env": {key: str(tmp_path / "evil.so")},
         }))
         assert _check(str(tmp_path)) is True
 
@@ -266,7 +260,7 @@ class TestEnvInjection:
         claude = tmp_path / ".claude"
         claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({
-            "env": {"RAPTOR_OUT_DIR": "/tmp/evil-redirect"},
+            "env": {"RAPTOR_OUT_DIR": str(tmp_path / "evil-redirect")},
         }))
         assert _check(str(tmp_path)) is True
 

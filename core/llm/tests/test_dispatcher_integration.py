@@ -858,7 +858,7 @@ class TestDetectLLMAvailabilityRecognizesDispatcher:
             "GEMINI_API_KEY", "MISTRAL_API_KEY",
         ):
             monkeypatch.delenv(k, raising=False)
-        monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/whatever-not-used.sock")
+        monkeypatch.setenv("RAPTOR_LLM_SOCKET", "./whatever-not-used.sock")
 
         result = detection.detect_llm_availability()
         assert result.external_llm is True

@@ -71,7 +71,7 @@ class TestFuzzingTelemetry(unittest.TestCase):
             tel = FuzzingTelemetry(out_dir=out_dir, fuzzer="afl++", target="/bin/test")
             tel.start()
             tel.update_stats(total_executions=100, paths_found=5, executions_per_second=200)
-            tel.record_crash("/tmp/crash-001", signal="SIGSEGV")
+            tel.record_crash("./crash-001", signal="SIGSEGV")
             tel.stop()
 
             self.assertTrue((out_dir / "fuzz-events.jsonl").exists())
@@ -161,7 +161,7 @@ class TestFuzzingTelemetry(unittest.TestCase):
                 on_event=lambda ev: captured.append(ev.kind),
             )
             tel.start()
-            tel.record_crash("/tmp/x")
+            tel.record_crash("./x")
             tel.stop()
 
         self.assertIn("campaign_start", captured)

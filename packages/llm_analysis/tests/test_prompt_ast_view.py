@@ -106,18 +106,19 @@ class TestRenderer:
         text = _render_ast_view_block(_av(signature=""))
         assert "host function: handle_query" in text
 
-    def test_file_path_override_displaces_ast_view_file(self):
+    def test_file_path_override_displaces_ast_view_file(self, tmp_path):
         """``file_path_override`` kwarg substitutes the display path
         for ``ast_view["file"]``. Used by the prompt builder so the
         rendered block body matches the block's ``origin`` (the
         finding's repo-relative path) rather than the absolute path
         ``core.ast.view`` resolved internally."""
-        av = _av(file="/tmp/scan-tmpdir/src/routes.py")
+        scan_tmp = tmp_path / "scan-tmpdir"
+        av = _av(file=str(scan_tmp / "src" / "routes.py"))
         text = _render_ast_view_block(
             av, file_path_override="src/routes.py",
         )
         assert "src/routes.py:" in text
-        assert "/tmp/scan-tmpdir" not in text
+        assert str(scan_tmp) not in text
 
     def test_file_path_override_default_is_ast_view_file(self):
         """No override → use ``ast_view["file"]`` (backwards-compat

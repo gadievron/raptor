@@ -118,7 +118,7 @@ def test_llm_auth_status_reflects_central_env_var_list(monkeypatch) -> None:
     assert n_configured == 2
     assert via_dispatcher is False
 
-    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/fake.sock")
+    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "./fake.sock")
     _, _, via_dispatcher = api_status.llm_auth_status()
     assert via_dispatcher is True
 

@@ -1352,7 +1352,7 @@ class TestIrisTier1KillSwitch:
         ) as mock_disc:
             verdict = tier1_check_finding(
                 {"file_path": "x.py", "language": "python", "cwe_id": "CWE-78"},
-                {"python": Path("/tmp/db")},
+                {"python": Path("./db")},
             )
         assert verdict == "no_check"
         mock_disc.assert_not_called()
@@ -1364,8 +1364,8 @@ class TestIrisTier1KillSwitch:
         metrics = validate_dataflow_claims(
             findings=[{"finding_id": "f1"}],
             results_by_id={"f1": {"is_exploitable": True}},
-            codeql_db=Path("/tmp/db"),
-            repo_path=Path("/tmp/repo"),
+            codeql_db=Path("./db"),
+            repo_path=Path("./repo"),
             llm_client=MagicMock(),
         )
         assert metrics["skipped_reason"] == "tier1_disabled"
@@ -1383,7 +1383,7 @@ class TestCompileErrorDetection:
         assert _is_compile_error("ERROR: could not resolve type Foo")
 
     def test_detects_failed_marker(self):
-        assert _is_compile_error("Failed [1/1] /tmp/x.ql.")
+        assert _is_compile_error("Failed [1/1] ./x.ql.")
 
     def test_does_not_detect_runtime_error(self):
         assert not _is_compile_error("Query took 600s, killed")

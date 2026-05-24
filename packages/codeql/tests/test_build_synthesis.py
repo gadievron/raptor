@@ -23,7 +23,7 @@ class TestValidateFlags:
     """Test _validate_flags — the security boundary for compiler flags."""
 
     def _bd(self):
-        return BuildDetector(Path("/tmp"))
+        return BuildDetector(Path("."))
 
     def test_simple_include(self):
         assert self._bd()._validate_flags(["-Isrc"]) == ["-Isrc"]
@@ -51,13 +51,14 @@ class TestValidateFlags:
         assert self._bd()._validate_flags(["-DFOO;rm -rf /"]) == []
 
     def test_rejects_pipe(self):
-        assert self._bd()._validate_flags(["-I/tmp|evil"]) == []
+        # Any flag value containing a pipe metacharacter must be rejected.
+        assert self._bd()._validate_flags(["-Iinclude|evil"]) == []
 
     def test_rejects_ampersand(self):
         assert self._bd()._validate_flags(["-DFOO&evil"]) == []
 
     def test_rejects_quotes(self):
-        assert self._bd()._validate_flags(["-I'/tmp'"]) == []
+        assert self._bd()._validate_flags(["-I'.'"]) == []
 
     def test_rejects_parentheses(self):
         assert self._bd()._validate_flags(["-I$(shell rm -rf /)"]) == []

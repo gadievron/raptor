@@ -173,7 +173,7 @@ class TestBuildSanitizerEvidenceBlock:
 
     def test_no_collector_returns_none(self):
         result = _build_sanitizer_evidence_block(
-            None, _dp(), _Path("/tmp"), MagicMock()
+            None, _dp(), _Path("."), MagicMock()
         )
         assert result is None
 
@@ -182,7 +182,7 @@ class TestBuildSanitizerEvidenceBlock:
             return None
 
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), MagicMock()
+            _collector, _dp(), _Path("."), MagicMock()
         )
         assert result is None
 
@@ -191,7 +191,7 @@ class TestBuildSanitizerEvidenceBlock:
             return _evidence_with_one_candidate()
 
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), MagicMock()
+            _collector, _dp(), _Path("."), MagicMock()
         )
         assert isinstance(result, UntrustedBlock)
         assert result.kind == "sanitizer-evidence"
@@ -205,7 +205,7 @@ class TestBuildSanitizerEvidenceBlock:
 
         log = MagicMock()
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), log
+            _collector, _dp(), _Path("."), log
         )
         assert result is None
         assert log.warning.called

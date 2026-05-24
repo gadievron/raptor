@@ -57,8 +57,8 @@ class TestPrepOnlyFlag:
         ap.add_argument("--max-findings", type=int, default=10)
         ap.add_argument("--prep-only", action="store_true")
 
-        args = ap.parse_args(["--repo", "/tmp/test", "--sarif", "test.sarif", "--prep-only"])
+        args = ap.parse_args(["--repo", "./target", "--sarif", "test.sarif", "--prep-only"])
         assert args.prep_only is True
 
-        args_no_flag = ap.parse_args(["--repo", "/tmp/test", "--sarif", "test.sarif"])
+        args_no_flag = ap.parse_args(["--repo", "./target", "--sarif", "test.sarif"])
         assert args_no_flag.prep_only is False

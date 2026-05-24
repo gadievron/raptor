@@ -4,6 +4,7 @@ import os
 import subprocess
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 # parents[0] = packages/sca/tests/
@@ -43,6 +44,17 @@ def _run(*args, env_extra=None, trusted=True, **kwargs):
 
 class RaptorScaRunWrapperTests(unittest.TestCase):
 
+    def setUp(self):
+        # Per-test scratch dir so target/file path tests get hermetic
+        # values — avoids cwd-relative paths that leaked test-order
+        # pollution into the suite, and host-absolute paths like
+        # /etc/hostname that depend on the runner's filesystem.
+        self._tmp = TemporaryDirectory()
+        self.scratch = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def test_wrapper_exists_and_is_executable(self):
         self.assertTrue(WRAPPER.exists(), msg=f"missing: {WRAPPER}")
         self.assertTrue(os.access(WRAPPER, os.X_OK),
@@ -73,12 +85,19 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
         self.assertIn("unknown subcommand", result.stderr)
 
     def test_nonexistent_target_returns_2(self):
-        result = _run("/tmp/definitely-does-not-exist-xyz-12345")
+        # Path under the per-test scratch tmpdir that we never create —
+        # guaranteed nonexistent regardless of cwd / test ordering.
+        nonexistent = str(self.scratch / "does-not-exist-xyz-12345")
+        result = _run(nonexistent)
         self.assertEqual(result.returncode, 2)
         self.assertIn("does not exist", result.stderr)
 
     def test_target_is_file_not_dir_returns_2(self):
-        result = _run("/etc/hostname")
+        # Plant a real file under the scratch tmpdir so the test
+        # doesn't depend on a host-specific path like /etc/hostname.
+        f = self.scratch / "target-file"
+        f.write_text("not a directory")
+        result = _run(str(f))
         self.assertEqual(result.returncode, 2)
         self.assertIn("not a directory", result.stderr)
 

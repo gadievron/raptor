@@ -31,7 +31,7 @@ SAMPLE_FINDINGS = [
     },
     {
         "finding_id": "FIND-0003",
-        "file_path": "/tmp/test/cmd.c",
+        "file_path": "./target/cmd.c",
         "start_line": 7,
         "vuln_type": "command_injection",
         "is_true_positive": True,
@@ -258,7 +258,7 @@ class TestBuildFindingsSpec(unittest.TestCase):
         spec = build_findings_spec(
             SAMPLE_FINDINGS,
             title="Test Report",
-            metadata={"Target": "/tmp/test"},
+            metadata={"Target": "./target"},
         )
         self.assertEqual(spec.title, "Test Report")
         self.assertEqual(len(spec.table_rows), 3)
