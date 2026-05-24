@@ -367,9 +367,12 @@ jobs:
           # count. Refresh via:
           #   python -m pytest packages/sca --store-durations \
           #     --durations-path packages/sca/test-durations.json
-          # TEMP: --durations=20 to surface the slow test on shard 1; strip after diagnosis.
+          # TEMP: -v names each test as it starts; --faulthandler-timeout
+          # dumps the worker's stack after 90s on any test still running,
+          # which surfaces the hung test on shard 1. Strip after diagnosis.
           python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
-            --durations-path packages/sca/test-durations.json --durations=20 packages/sca
+            --durations-path packages/sca/test-durations.json \
+            -v --durations=20 --faulthandler-timeout=90 packages/sca
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
