@@ -283,8 +283,11 @@ class AutonomousCodeQLAnalyzer:
                     from core.inventory.builder import build_inventory
                     import tempfile
                     with tempfile.TemporaryDirectory() as td:
+                        # Union/raw view in isolation mode so the prefilter's
+                        # reachability graph matches the operator's intent.
                         self._reachability_inventory = build_inventory(
                             str(repo_path), td,
+                            allow_unreachable=self._allow_unreachable,
                         )
                 except Exception as e:              # noqa: BLE001
                     self.logger.debug(

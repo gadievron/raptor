@@ -84,7 +84,13 @@ def mark_unreachable_low_priority(
             from core.inventory.builder import build_inventory
             import tempfile
             with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target_path), td)
+                # Union/raw view in isolation mode so the reachability
+                # query graph matches the operator's declared intent
+                # (review everything, incl. #if 0 code).
+                inventory = build_inventory(
+                    str(target_path), td,
+                    allow_unreachable=allow_unreachable,
+                )
         except Exception as e:                      # noqa: BLE001
             logger.debug(
                 "reachability_enrichment: inventory build failed (%s); "

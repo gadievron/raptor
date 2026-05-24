@@ -773,3 +773,41 @@ class TestDefaultCacheDir:
         inv = build_inventory(str(src), str(explicit))
         assert inv["total_files"] == 1
         assert (explicit / "checklist.json").is_file()
+
+
+class TestAllowUnreachableView:
+    """U5: allow_unreachable threads through build_inventory to the
+    TranslationView, so isolation mode keeps disabled C/C++ code for
+    review instead of blanking #if 0."""
+
+    def _c_names(self, tmp_path, allow_unreachable):
+        from core.inventory.builder import build_inventory
+        src = tmp_path / "src"
+        src.mkdir(exist_ok=True)
+        (src / "m.c").write_text(
+            "#if 0\n"
+            "void disabled_fn(void){ dangerous(); }\n"
+            "#endif\n"
+            "void live_fn(void){ ok(); }\n"
+        )
+        out = tmp_path / ("au" if allow_unreachable else "def")
+        inv = build_inventory(
+            str(src), str(out), allow_unreachable=allow_unreachable,
+        )
+        return {i["name"] for f in inv["files"] for i in f["items"]
+                if i.get("kind", "function") == "function"}
+
+    def test_default_blanks_if0(self, tmp_path):
+        assert self._c_names(tmp_path, False) == {"live_fn"}
+
+    def test_isolation_keeps_disabled_code(self, tmp_path):
+        assert self._c_names(tmp_path, True) == {"disabled_fn", "live_fn"}
+
+    def test_cache_dirs_isolated_by_mode(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        d_def = default_cache_dir(str(tmp_path))
+        d_iso = default_cache_dir(str(tmp_path), allow_unreachable=True)
+        assert d_def != d_iso
+        # Default mode must hash identically to the no-arg call so existing
+        # persistent caches are not invalidated when this lands.
+        assert default_cache_dir(str(tmp_path), allow_unreachable=False) == d_def

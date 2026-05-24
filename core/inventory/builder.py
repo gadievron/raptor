@@ -84,7 +84,9 @@ _DEFAULT_INVENTORY_CACHE_ROOT = (
 )
 
 
-def default_cache_dir(target_path: str) -> Path:
+def default_cache_dir(
+    target_path: str, *, allow_unreachable: bool = False,
+) -> Path:
     """Return the persistent cache directory for ``target_path``'s
     inventory checklist.
 
@@ -99,9 +101,12 @@ def default_cache_dir(target_path: str) -> Path:
     without picking a project-specific path themselves.
     """
     target_abs = str(Path(target_path).resolve())
-    target_hash = hashlib.sha256(
-        target_abs.encode("utf-8"),
-    ).hexdigest()[:16]
+    # Fold the parse mode into the key: allow_unreachable changes the
+    # C/C++ view (#if 0 kept vs blanked), so the two modes must not share
+    # a cached checklist. Default mode keeps the original hash input, so
+    # existing cache dirs are unchanged.
+    key = target_abs if not allow_unreachable else target_abs + "\0allow_unreachable"
+    target_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
     return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
 
 
@@ -112,6 +117,7 @@ def build_inventory(
     extensions: Optional[Set[str]] = None,
     skip_generated: bool = True,
     parallel: bool = True,
+    allow_unreachable: bool = False,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -143,7 +149,9 @@ def build_inventory(
         Inventory dict (also saved to ``<output_dir>/checklist.json``).
     """
     if output_dir is None:
-        output_dir = str(default_cache_dir(target_path))
+        output_dir = str(default_cache_dir(
+            target_path, allow_unreachable=allow_unreachable,
+        ))
     if exclude_patterns is None:
         exclude_patterns = DEFAULT_EXCLUDES
 
@@ -203,7 +211,7 @@ def build_inventory(
             futures = {
                 executor.submit(
                     _process_single_file, fp, target, exclude_patterns,
-                    skip_generated, old_files_by_path
+                    skip_generated, old_files_by_path, allow_unreachable
                 ): fp
                 for fp in file_list
             }
@@ -232,7 +240,8 @@ def build_inventory(
         for filepath in file_list:
             _collect_result(
                 _process_single_file(filepath, target, exclude_patterns,
-                                     skip_generated, old_files_by_path)
+                                     skip_generated, old_files_by_path,
+                                     allow_unreachable)
             )
 
     # Sort for consistent output
@@ -447,6 +456,7 @@ def _process_single_file(
     exclude_patterns: List[str],
     skip_generated: bool = True,
     old_files: Dict[str, Any] = None,
+    allow_unreachable: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
 
@@ -545,7 +555,10 @@ def _process_single_file(
         # Metrics (sloc, line_count, sha256) and text scanners
         # (detect_dead_scopes / detect_module_load_abort) keep using the
         # real `content`; only the tree-sitter / AST parse uses parse_text.
-        view = preprocess_view(str(filepath), language, content)
+        view = preprocess_view(
+            str(filepath), language, content,
+            allow_unreachable=allow_unreachable,
+        )
         parse_text = view.parse_text
         tree_cache = {}
         items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)
