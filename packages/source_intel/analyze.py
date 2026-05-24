@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from core.build.build_flags import BuildFlagsContext, extract_flags
+from core.input_taxonomy import C_L1_SOURCE_CALLS
 from packages.source_intel.aliases import (
     ALL_WUR_ALIASES,
 )
@@ -1934,32 +1935,6 @@ def _scan_alias_observations(target: Path) -> List[AttributeEvidence]:
     return observations
 
 
-_C_LEVEL_SOURCE_CALLS: Dict[str, str] = {
-    # fd-level reads: ubiquitous in binaries, but important as source-code
-    # L1 taint origins when a call site is visible.
-    "read": "fd",
-    "readv": "fd",
-    "pread": "fd",
-    "preadv": "fd",
-    # socket/network ingress
-    "recv": "socket",
-    "recvfrom": "socket",
-    "recvmsg": "socket",
-    "recvmmsg": "socket",
-    "SSL_read": "socket",
-    "BIO_read": "socket",
-    # stream / line-oriented ingress
-    "fgets": "stream",
-    "fgetws": "stream",
-    "getline": "stream",
-    "getdelim": "stream",
-    "scanf": "stream",
-    "fscanf": "stream",
-    # process environment
-    "getenv": "env",
-}
-
-
 def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
     """Best-effort C/C++ L1 source table scanner.
 
@@ -1995,7 +1970,7 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
             )
             if not stripped.strip():
                 continue
-            for name, kind in _C_LEVEL_SOURCE_CALLS.items():
+            for name, kind in C_L1_SOURCE_CALLS.items():
                 if not _line_has_c_source_call(stripped, name):
                     continue
                 key = (str(path), line_no, kind, name)

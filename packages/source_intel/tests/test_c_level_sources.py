@@ -6,12 +6,23 @@ and socket input context without changing the source_intel verdict policy.
 
 from __future__ import annotations
 
+from core.input_taxonomy import C_L1_SOURCE_CALLS, TRUST_L1_ATTACKER_CONTROLLED
 from packages.source_intel.analyze import (
     CLevelSourceEvidence,
     SourceIntelResult,
     _scan_c_level_source_inputs,
 )
 from packages.source_intel.render import derive_evidence_strings
+
+
+def test_input_taxonomy_covers_issue_comment_l1_sources():
+    assert TRUST_L1_ATTACKER_CONTROLLED == "L1"
+    assert C_L1_SOURCE_CALLS["read"] == "fd"
+    assert C_L1_SOURCE_CALLS["recv"] == "socket"
+    assert C_L1_SOURCE_CALLS["fgets"] == "stream"
+    assert C_L1_SOURCE_CALLS["getenv"] == "env"
+    assert C_L1_SOURCE_CALLS["ioctl"] == "device_control"
+    assert C_L1_SOURCE_CALLS["copy_from_user"] == "kernel_user"
 
 
 def test_c_level_source_scan_captures_read_recv_fgets_argv_env(tmp_path):
@@ -27,6 +38,8 @@ def test_c_level_source_scan_captures_read_recv_fgets_argv_env(tmp_path):
         "    recv(3, buf, sizeof(buf), 0);\n"
         "    fgets(buf, sizeof(buf), 0);\n"
         "    getenv(\"HOME\");\n"
+        "    ioctl(3, 0x1234, buf);\n"
+        "    copy_from_user(buf, (void *)argv[1], sizeof(buf));\n"
         "    return argv[1][0] + envp[0][0] + argc;\n"
         "}\n"
     )
@@ -38,6 +51,8 @@ def test_c_level_source_scan_captures_read_recv_fgets_argv_env(tmp_path):
     assert ("socket", "recv") in seen
     assert ("stream", "fgets") in seen
     assert ("env", "getenv") in seen
+    assert ("device_control", "ioctl") in seen
+    assert ("kernel_user", "copy_from_user") in seen
     assert ("argv", "argv") in seen
     assert ("env", "envp") in seen
 
