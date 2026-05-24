@@ -570,18 +570,20 @@ def test_get_resolver_picks_maven_for_pom_only(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _capture_sandbox_call(monkeypatch):
-    """Replace ``core.sandbox`` ``run`` with a recorder that captures
+    """Replace ``core.sandbox.context.run`` with a recorder that captures
     every kwarg the resolver passes through ``_run`` and returns a
     canned successful CompletedProcess.
 
-    Returns the list of (cmd, kwargs) tuples the recorder collected.
+    Also stubs the proxy-hosts auto-calibration short-circuit to
+    None so resolver tests don't trip into ``calibrate.load_or_calibrate``
+    → ``_spawn_probe`` (which expects a real ``CompletedProcess``
+    carrying ``sandbox_info`` and otherwise blocks indefinitely on
+    landlock-audited readers). Static-layer proxy_hosts still flow
+    through, so the assertions that hostname X appears in
+    ``kwargs["proxy_hosts"]`` keep working — they were never reading
+    calibration output to begin with.
 
-    Patches both ``core.sandbox.context.run`` (resolvers' call path)
-    and ``core.sandbox.run`` (calibrate's import path, used by the
-    auto-calibration substrate that the proxy_hosts resolver flows
-    invoke). Missing the second binding lets calibration spawn a
-    real landlock-audited probe that hangs the test indefinitely
-    on slow runners.
+    Returns the list of (cmd, kwargs) tuples the recorder collected.
     """
     captured: list = []
 
@@ -590,9 +592,9 @@ def _capture_sandbox_call(monkeypatch):
         return _FakeProc(returncode=0, stdout="", stderr="")
 
     from core.sandbox import context as _ctx
-    import core.sandbox as _sandbox_pkg
+    from packages.sca.resolvers import _proxy_hosts as _ph
     monkeypatch.setattr(_ctx, "run", fake_sandbox_run)
-    monkeypatch.setattr(_sandbox_pkg, "run", fake_sandbox_run)
+    monkeypatch.setattr(_ph, "_calibrated_profile", lambda *a, **k: None)
     return captured
 
 
