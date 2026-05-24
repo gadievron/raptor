@@ -209,10 +209,16 @@ class TestEvidenceFingerprintShape:
         assert tgt_buckets == sorted(tgt_buckets)
 
 
+@pytest.mark.slow
 def test_real_radare2_against_ls():
     """Diff /bin/ls against itself via the full
     capability_diff → binary_capability_delta_finding wire-
     through. Skipped unless r2pipe is installed.
+
+    Slow-gated: two real radare2 ``aaa`` passes (``_T_AAA=600s``
+    budget each in radare2_understand.py) against ``/bin/ls`` —
+    fast locally but minutes-long on a 2-core CI runner where it
+    was the lone outlier in shard 1.
     """
     from packages.binary_analysis.radare2_understand import (
         probe_capability,
