@@ -258,3 +258,22 @@ class TestStrategyBlockDirect:
             {"trace_id": "T1", "entry": "parse_input", "sink": "exec"},
         ])
         assert "## Strategy: input_handling" in block
+
+
+# ---------------------------------------------------------------------------
+# lifecycle_drift reaches the trace prompt (no CWE pin — step callee only)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleDriftReaches:
+    def test_get_dumpable_step_pins_lifecycle_drift(self):
+        # A trace step calling get_dumpable() surfaces the ``dumpable``
+        # token in the serialised trace, pinning lifecycle_drift.
+        traces = [{
+            "trace_id": "T1",
+            "entry": "__ptrace_may_access",
+            "steps": [{"function": "get_dumpable"}],
+        }]
+        block = _build_strategy_block(traces)
+        assert "## Strategy: lifecycle_drift" in block
+        assert "CVE-2026-46333" in block  # lifecycle_drift exemplar
