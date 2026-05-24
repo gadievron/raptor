@@ -15,7 +15,10 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
+# parents[3] = core/ast/tests → core/ast → core → repo root. Anchor to
+# this file, not $RAPTOR_DIR, so the wrapper resolves within this
+# worktree (RAPTOR_DIR may point at a different checkout).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-enrich-flow-trace-ast-view"
 
 

@@ -16,12 +16,14 @@ gate on at least one of the trusted-caller env vars.
 
 from __future__ import annotations
 
-import os
 import unittest
 from pathlib import Path
 
 
-REPO = Path(os.environ["RAPTOR_DIR"])
+# parents[2] = .github/tests → .github → repo root. Anchor to this
+# file, not $RAPTOR_DIR, so the test inspects libexec/ in its own
+# worktree (RAPTOR_DIR may point at a different checkout).
+REPO = Path(__file__).resolve().parents[2]
 LIBEXEC = REPO / "libexec"
 
 _SENTINEL = "# ─── trust-marker check"
