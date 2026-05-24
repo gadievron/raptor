@@ -510,6 +510,29 @@ class TestLoadUnderstandContextAttackSurface:
         assert len(surface["sinks"]) == 1
         assert len(surface["trust_boundaries"]) == 1
 
+    def test_source_trust_level_survives_into_attack_surface(self, tmp_path):
+        """A source's trust_level (provenance, assigned by /understand
+        --map) must ride through the bridge into attack-surface.json so
+        /validate Stage B's prompt sees it — the bridge copies whole
+        source dicts, so the field is preserved without special-casing."""
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+
+        ctx = dict(MINIMAL_CONTEXT_MAP)
+        ctx["sources"] = [{
+            "type": "http_route",
+            "entry": "POST /api/query @ src/routes/query.py:34",
+            "trust_level": "attacker_controlled",
+        }]
+        _write_json(understand_dir / "context-map.json", ctx)
+
+        load_understand_context(understand_dir, validate_dir)
+
+        surface = json.loads((validate_dir / "attack-surface.json").read_text())
+        assert surface["sources"][0]["trust_level"] == "attacker_controlled"
+
     def test_does_not_raise_on_non_string_file_during_stale_filter(self, tmp_path):
         # _references_file does `f in stale_files` — list-typed file would
         # raise TypeError. Pre-existing weakness, but newly exposed once
