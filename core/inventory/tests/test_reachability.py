@@ -331,6 +331,13 @@ def test_result_is_immutable():
 
 class TestSameFileBareNameResolution:
     def _c_inv(self, path: str, source: str) -> dict:
+        # tree-sitter-c isn't declared in requirements.txt (only in a
+        # comment) so CI venvs may not have it. Skip the C-flavoured
+        # tests when the grammar isn't importable rather than failing
+        # — the same mechanism the inventory builder uses to degrade
+        # gracefully when the dep is absent.
+        import pytest
+        pytest.importorskip("tree_sitter_c")
         from core.inventory.call_graph import extract_call_graph_c
         from core.inventory.extractors import extract_items
         items = extract_items(path, "c", source)
@@ -342,10 +349,11 @@ class TestSameFileBareNameResolution:
         }]}
 
     def test_c_bare_name_same_file_resolves(self):
-        # Mirror honeyslop's heartbeat.c shape: helper function
-        # called by another function in the same file. Pre-fix this
-        # returned NOT_CALLED because C has no symbol-level imports
-        # so the import-map path couldn't see the call.
+        # Helper function called by another function in the same C
+        # file — the dominant shape for static helpers in driver /
+        # kernel / library code. Pre-fix this returned NOT_CALLED
+        # because C has no symbol-level imports so the import-map
+        # path couldn't see the call.
         inv = self._c_inv("c/heartbeat.c",
             "uint16_t read_u16_be(const uint8_t *p) {\n"
             "    return (p[0] << 8) | p[1];\n"
