@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import platform
-from pathlib import Path
 
 import pytest
 
@@ -1019,11 +1018,18 @@ class TestPathInAllowlist:
         assert tracer_mod._path_in_allowlist(
             "/etc", ["", "/usr"]) is False
 
-    def test_multiple_prefixes(self):
-        allow = ["/usr", "/lib", "/tmp"]
-        assert tracer_mod._path_in_allowlist("/tmp/x", allow) is True
-        assert tracer_mod._path_in_allowlist("/lib/y", allow) is True
-        assert tracer_mod._path_in_allowlist("/home/z", allow) is False
+    def test_multiple_prefixes(self, tmp_path):
+        # Three distinct allowlist prefixes; assertions exercise hit
+        # in last entry, hit in middle entry, and miss (path outside
+        # any prefix). Per-test tmp_path so the prefixes stay hermetic.
+        a = str(tmp_path / "a")
+        b = str(tmp_path / "b")
+        c = str(tmp_path / "c")
+        allow = [a, b, c]
+        assert tracer_mod._path_in_allowlist(c + "/x", allow) is True
+        assert tracer_mod._path_in_allowlist(b + "/y", allow) is True
+        outside = str(tmp_path.parent / "elsewhere")
+        assert tracer_mod._path_in_allowlist(outside, allow) is False
 
 
 class TestIsWriteIntent:
@@ -1221,13 +1227,16 @@ class TestFilterDispatchSeccomp:
             "_recorded": recorded,
         }
 
-    def test_filtered_drops_path_in_allowlist(self):
+    def test_filtered_drops_path_in_allowlist(self, tmp_path):
         # /etc is in the read allowlist → openat /etc/hostname filtered.
+        # writable_paths/read_allowlist values are operational config
+        # (real sandbox uses these as conventional defaults); target=
+        # is opaque to the dispatch logic so use tmp_path.
         helpers = self._common_helpers(path_returned="/etc/hostname")
         audit_filter = {
             "verbose": False,
-            "writable_paths": ["/tmp"],
-            "read_allowlist": ["/etc", "/usr", "/tmp"],
+            "writable_paths": [str(tmp_path)],
+            "read_allowlist": ["/etc", "/usr", str(tmp_path)],
             "allowed_tcp_ports": [],
         }
         traced = {1000}
@@ -1235,7 +1244,7 @@ class TestFilterDispatchSeccomp:
         tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), budget,
+            tmp_path, budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
@@ -1245,13 +1254,13 @@ class TestFilterDispatchSeccomp:
         assert helpers["_recorded"] == []
         assert budget.total_records == 0
 
-    def test_filtered_keeps_path_outside_allowlist(self):
+    def test_filtered_keeps_path_outside_allowlist(self, tmp_path):
         # /home/user/.ssh/id_rsa is NOT in the allowlist → recorded.
         helpers = self._common_helpers(path_returned="/home/user/.ssh/id_rsa")
         audit_filter = {
             "verbose": False,
-            "writable_paths": ["/tmp"],
-            "read_allowlist": ["/etc", "/usr", "/tmp"],
+            "writable_paths": [str(tmp_path)],
+            "read_allowlist": ["/etc", "/usr", str(tmp_path)],
             "allowed_tcp_ports": [],
         }
         traced = {1000}
@@ -1259,7 +1268,7 @@ class TestFilterDispatchSeccomp:
         tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), budget,
+            tmp_path, budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
@@ -1267,14 +1276,14 @@ class TestFilterDispatchSeccomp:
         assert helpers["_recorded"][0]["path"] == "/home/user/.ssh/id_rsa"
         assert budget.total_records == 1
 
-    def test_verbose_keeps_everything(self):
+    def test_verbose_keeps_everything(self, tmp_path):
         # Same allowlisted path as test_filtered_drops_path_in_allowlist,
         # but verbose=True → record kept (verbose disables filter).
         helpers = self._common_helpers(path_returned="/etc/hostname")
         audit_filter = {
             "verbose": True,
-            "writable_paths": ["/tmp"],
-            "read_allowlist": ["/etc", "/usr", "/tmp"],
+            "writable_paths": [str(tmp_path)],
+            "read_allowlist": ["/etc", "/usr", str(tmp_path)],
             "allowed_tcp_ports": [],
         }
         traced = {1000}
@@ -1282,7 +1291,7 @@ class TestFilterDispatchSeccomp:
         tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), budget,
+            tmp_path, budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
@@ -1294,7 +1303,7 @@ class TestFilterDispatchSeccomp:
         )
         assert budget.total_records == 1
 
-    def test_no_filter_keeps_everything(self):
+    def test_no_filter_keeps_everything(self, tmp_path):
         # audit_filter=None → no filtering (legacy/default behaviour).
         helpers = self._common_helpers(path_returned="/etc/hostname")
         traced = {1000}
@@ -1302,7 +1311,7 @@ class TestFilterDispatchSeccomp:
         tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), budget,
+            tmp_path, budget,
             audit_filter=None,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
