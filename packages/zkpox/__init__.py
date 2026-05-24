@@ -78,6 +78,11 @@ from packages.zkpox.eligibility import (
     render_eligibility_summary,
     summarize_eligibility,
 )
+from packages.zkpox.proving_deps import (
+    ProvingStackUnavailable,
+    proving_stack_available,
+    require_proving_stack,
+)
 from packages.zkpox.reproduce import (
     ReproductionResult,
     attach_reproduction,
@@ -99,4 +104,7 @@ __all__ = [
     "ReproductionResult",
     "reproduce_witness",
     "attach_reproduction",
+    "ProvingStackUnavailable",
+    "proving_stack_available",
+    "require_proving_stack",
 ]
