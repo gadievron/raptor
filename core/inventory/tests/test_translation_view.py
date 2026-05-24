@@ -11,6 +11,7 @@ from core.inventory.translation_view import (
     IDENTITY_LINE_MAP,
     LineMap,
     TranslationView,
+    detect_macro_call_targets,
     detect_preprocessor_dead_ranges,
     preprocess_view,
 )
@@ -143,3 +144,55 @@ def test_detect_ranges_only_fire_on_literal_zero():
     for cond in ("#ifdef X", "#if defined(X)", "#if VERSION > 3", "#if A && B"):
         src = cond + "\nvoid f(void){}\n#endif\n"
         assert detect_preprocessor_dead_ranges(src) == [], cond
+
+
+# ---------------------------------------------------------------------------
+# U4 — function-like-macro call targets
+# ---------------------------------------------------------------------------
+
+
+def test_macro_body_call_target_detected():
+    src = "#define CALL_F(x) f(x)\nstatic int f(int x){ return x; }\n"
+    assert "f" in detect_macro_call_targets(src)
+
+
+def test_macro_with_line_continuation():
+    src = "#define WRAP(a) \\\n    do_thing(a)\nvoid u(void){}\n"
+    assert "do_thing" in detect_macro_call_targets(src)
+
+
+def test_object_like_macro_not_a_target():
+    # Object-like macro (no parens) — not a function-like macro; no targets.
+    src = "#define MAX 100\nint f(void){ return MAX; }\n"
+    assert detect_macro_call_targets(src) == set()
+
+
+def test_control_keywords_excluded():
+    src = "#define GUARD(x) if (x) return\n"
+    got = detect_macro_call_targets(src)
+    assert "if" not in got and "return" not in got
+
+
+def test_macro_not_counted_as_calling_itself():
+    src = "#define F(x) F(x)\n"          # pathological self-reference
+    assert "F" not in detect_macro_call_targets(src)
+
+
+def test_no_macros_empty():
+    assert detect_macro_call_targets("int f(void){ return g(); }\n") == set()
+
+
+def test_call_shaped_text_in_string_literal_not_a_target():
+    # Adversarial FP: a format string with call-shaped text must not count.
+    got = detect_macro_call_targets('#define LOG(x) fprintf(stderr, "evil(): %d", x)')
+    assert got == {"fprintf"}, got
+
+
+def test_call_shaped_text_in_comment_not_a_target():
+    got = detect_macro_call_targets("#define X() /* go to handler() */ real_fn()")
+    assert got == {"real_fn"}, got
+
+
+def test_char_literal_paren_not_a_target():
+    got = detect_macro_call_targets("#define C(x) g(x, ')')")
+    assert got == {"g"}, got

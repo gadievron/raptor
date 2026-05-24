@@ -179,6 +179,13 @@ class _FunctionCalledIndex:
     # Files with a wildcard import — visited so the wildcard branch
     # can yield UNCERTAIN via ``_wildcard_could_provide``.
     files_with_wildcard_import: Tuple[int, ...]
+    # U4: function name → file paths whose function-like macro bodies
+    # invoke it (C/C++). A function reachable only via such a macro reads
+    # NOT_CALLED in the static graph (tree-sitter doesn't expand macros);
+    # the resolver maps a hit here to UNCERTAIN. Global membership —
+    # consulted independent of the per-token candidate buckets, because
+    # the macro-defining file may not otherwise mention the target.
+    macro_targets: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 # Keyed on ``id(inventory)``; identity-checked on read so a fresh
@@ -196,6 +203,7 @@ def _build_function_called_index(
     files_by_token: Dict[str, Set[int]] = {}
     non_wildcard: Set[int] = set()
     wildcard: Set[int] = set()
+    macro_targets: Dict[str, Set[str]] = {}
 
     def _add(token: str, i: int) -> None:
         if not token:
@@ -240,6 +248,10 @@ def _build_function_called_index(
             non_wildcard.add(i)
         if INDIRECTION_WILDCARD_IMPORT in flags:
             wildcard.add(i)
+        # U4: function-like-macro call targets (C/C++).
+        mpath = fr.get("path") or ""
+        for name in (cg.get("macro_call_targets") or []):
+            macro_targets.setdefault(name, set()).add(mpath)
 
     return _FunctionCalledIndex(
         files_by_token={
@@ -247,6 +259,9 @@ def _build_function_called_index(
         },
         files_with_non_wildcard_masking=tuple(sorted(non_wildcard)),
         files_with_wildcard_import=tuple(sorted(wildcard)),
+        macro_targets={
+            k: tuple(sorted(v)) for k, v in macro_targets.items()
+        },
     )
 
 
@@ -503,6 +518,19 @@ def function_called(
             _wildcard_could_provide(imports, target_module, target_func)
         ):
             uncertain_reasons.append((path, INDIRECTION_WILDCARD_IMPORT))
+
+    # U4: function-like-macro masking (C/C++). A function whose only
+    # invocation is inside a macro body reads NOT_CALLED — tree-sitter
+    # sees the macro name, not the expanded call. Map such targets to
+    # UNCERTAIN (never suppress). Global membership: the macro-defining
+    # file need not appear in the per-token candidate buckets, so this is
+    # checked off the index directly. Skipped when direct evidence exists
+    # (CALLED wins anyway) — but harmless either way since CALLED takes
+    # precedence over uncertain_reasons below.
+    for mpath in index.macro_targets.get(target_func, ()):
+        if exclude_test_files and _is_test_file(mpath):
+            continue
+        uncertain_reasons.append((mpath, "func_like_macro"))
 
     if evidence:
         return ReachabilityResult(

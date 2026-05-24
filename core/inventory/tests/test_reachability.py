@@ -463,3 +463,47 @@ class TestSameFileBareNameResolution:
             assert r.verdict in (Verdict.CALLED, Verdict.NOT_CALLED, Verdict.UNCERTAIN)
         except ValueError:
             pass  # extensionless query rejected — also acceptable
+
+
+# ---------------------------------------------------------------------------
+# U4 — function-like-macro masking (C/C++)
+# ---------------------------------------------------------------------------
+# Synthetic inventories (no tree-sitter dependency): a C function whose only
+# invocation is inside a macro body reads NOT_CALLED in the static graph;
+# the macro_call_targets index maps it to UNCERTAIN (FN-safe), never to a
+# suppressible NOT_CALLED.
+
+
+def _c_inv(path: str, calls=None, macro_targets=None) -> Dict[str, Any]:
+    return {"files": [{
+        "path": path, "language": "c",
+        "call_graph": {
+            "imports": {}, "calls": calls or [],
+            "macro_call_targets": macro_targets or [],
+        },
+    }]}
+
+
+def test_macro_masked_function_is_uncertain_not_not_called():
+    inv = _c_inv("src/m.c", macro_targets=["f"])
+    r = function_called(inv, "src.m.f")
+    assert r.verdict == Verdict.UNCERTAIN
+    assert any(reason == "func_like_macro" for _, reason in r.uncertain_reasons)
+
+
+def test_unrelated_macro_leaves_not_called():
+    # Macro references `g`, not `f` — targeted, so `f` stays NOT_CALLED.
+    inv = _c_inv("src/m.c", macro_targets=["g"])
+    assert function_called(inv, "src.m.f").verdict == Verdict.NOT_CALLED
+
+
+def test_directly_called_beats_macro_masking():
+    # Direct call edge to `f` → CALLED wins even if a macro also references it.
+    inv = _c_inv(
+        "src/m.c",
+        calls=[{"chain": ["f"], "line": 9}],
+        macro_targets=["f"],
+    )
+    # Same-file bare-name resolution requires the call's module to match;
+    # the macro check must not downgrade a genuine CALLED to UNCERTAIN.
+    assert function_called(inv, "src.m.f").verdict == Verdict.CALLED
