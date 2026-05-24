@@ -570,11 +570,18 @@ def test_get_resolver_picks_maven_for_pom_only(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _capture_sandbox_call(monkeypatch):
-    """Replace ``core.sandbox.context.run`` with a recorder that captures
+    """Replace ``core.sandbox`` ``run`` with a recorder that captures
     every kwarg the resolver passes through ``_run`` and returns a
     canned successful CompletedProcess.
 
     Returns the list of (cmd, kwargs) tuples the recorder collected.
+
+    Patches both ``core.sandbox.context.run`` (resolvers' call path)
+    and ``core.sandbox.run`` (calibrate's import path, used by the
+    auto-calibration substrate that the proxy_hosts resolver flows
+    invoke). Missing the second binding lets calibration spawn a
+    real landlock-audited probe that hangs the test indefinitely
+    on slow runners.
     """
     captured: list = []
 
@@ -583,7 +590,9 @@ def _capture_sandbox_call(monkeypatch):
         return _FakeProc(returncode=0, stdout="", stderr="")
 
     from core.sandbox import context as _ctx
+    import core.sandbox as _sandbox_pkg
     monkeypatch.setattr(_ctx, "run", fake_sandbox_run)
+    monkeypatch.setattr(_sandbox_pkg, "run", fake_sandbox_run)
     return captured
 
 
