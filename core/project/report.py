@@ -181,14 +181,30 @@ def _severity_key(finding: Dict[str, Any]) -> tuple[int, str]:
     return (_SEVERITY_ORDER.get(severity, _SEVERITY_ORDER["unknown"]), severity)
 
 
-def render_grouped_findings_markdown(findings: Iterable[Dict[str, Any]], project_name: str) -> str:
-    """Render all findings into one project-level Markdown report."""
+def render_grouped_findings_markdown(
+    findings: Iterable[Dict[str, Any]],
+    project_name: str,
+    *,
+    sca_findings: Iterable[Dict[str, Any]] = (),
+) -> str:
+    """Render all findings into one project-level Markdown report.
+
+    Code findings are grouped by severity. SCA / dependency findings
+    (``sca_findings``) render in their own "Supply chain (SCA)" section
+    below — they're dep-level (no source file:line), so bucketing them
+    separately keeps the severity-grouped code view clean. Mirrors the
+    interactive ``/project findings`` view.
+    """
     findings = sorted(
         list(findings),
         key=lambda item: (*_severity_key(item), _finding_title(item).lower()),
     )
+    sca_findings = sorted(
+        list(sca_findings),
+        key=lambda item: (*_severity_key(item), _finding_title(item).lower()),
+    )
     lines = [f"# {project_name} findings", ""]
-    if not findings:
+    if not findings and not sca_findings:
         lines.append("No findings.")
         return "\n".join(lines) + "\n"
 
@@ -217,6 +233,26 @@ def render_grouped_findings_markdown(findings: Iterable[Dict[str, Any]], project
             )
         lines.append("")
 
+    if sca_findings:
+        lines.append("## Supply chain / dependencies (SCA)")
+        lines.append("")
+        for finding in sca_findings:
+            finding_id = (
+                finding.get("id")
+                or finding.get("finding_id")
+                or _finding_fingerprint(finding)
+            )
+            sca = finding.get("sca") or {}
+            name = sca.get("name") or finding.get("function") or "unknown package"
+            eco = sca.get("ecosystem", "")
+            package = f"{eco}:{name}" if eco else name
+            severity = str(finding.get("severity") or "unknown").strip().lower() or "unknown"
+            lines.append(
+                f"- **{_finding_title(finding)}** (`{finding_id}`) — "
+                f"{package} — {severity}"
+            )
+        lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -232,15 +268,22 @@ def _clear_generated_findings_dir(findings_dir: Path) -> None:
 
 
 def export_findings_directory(
-    findings: Iterable[Dict[str, Any]], output_dir: Path, *, project_name: str = "project"
+    findings: Iterable[Dict[str, Any]], output_dir: Path, *,
+    project_name: str = "project",
+    sca_findings: Iterable[Dict[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Write grouped Markdown/JSON findings under ``output_dir/findings``.
 
     The directory is intended for handoff to issue trackers, disclosure notes,
     and audits. It is regenerated from merged findings each time project report
     runs, so stale findings are not retained after they disappear from inputs.
+
+    ``sca_findings`` (dependency findings from each run's ``sca/`` subdir)
+    appear in their own section of the aggregate Markdown. The per-finding
+    file/JSONL artefacts below remain code-finding-only for now.
     """
     findings = list(findings)
+    sca_findings = list(sca_findings)
     output_dir = Path(output_dir)
     findings_dir = output_dir / "findings"
     _clear_generated_findings_dir(findings_dir)
@@ -251,7 +294,9 @@ def export_findings_directory(
     jsonl_records = []
     aggregate_path = findings_dir / f"{_slug(project_name, fallback='project')}.md"
     aggregate_path.write_text(
-        render_grouped_findings_markdown(findings, project_name),
+        render_grouped_findings_markdown(
+            findings, project_name, sca_findings=sca_findings,
+        ),
         encoding="utf-8",
     )
 
@@ -399,6 +444,7 @@ def generate_project_report(project) -> Dict[str, Any]:
     Non-destructive — runs preserved.
     """
     from core.project.merge import merge_findings
+    from core.project.findings_utils import merge_sca_findings
     from core.json import save_json
 
     report_dir = project.output_path / "_report"
@@ -408,13 +454,20 @@ def generate_project_report(project) -> Dict[str, Any]:
     if not run_dirs:
         return {"findings": 0, "runs": 0, "annotations": 0}
 
-    # Merge findings
+    # Merge findings — code findings + SCA dependency findings (the
+    # latter discovered from each run's sca/ subdir; surfaced in their
+    # own section of the report, see render_grouped_findings_markdown).
     merged = merge_findings(run_dirs)
-    save_json(report_dir / "findings.json", {"findings": merged})
+    sca_findings = merge_sca_findings(run_dirs)
+    save_json(
+        report_dir / "findings.json",
+        {"findings": merged, "sca_findings": sca_findings},
+    )
     findings_export = export_findings_directory(
         merged,
         project.output_path,
         project_name=project.name,
+        sca_findings=sca_findings,
     )
 
     # Aggregate annotations across runs + project-level overrides.
@@ -426,6 +479,7 @@ def generate_project_report(project) -> Dict[str, Any]:
 
     return {
         "findings": len(merged),
+        "sca_findings": len(sca_findings),
         "runs": len(run_dirs),
         "annotations": len(annotations),
         "report_dir": str(report_dir),

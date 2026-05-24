@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from core.project.cli import (
     _get_active_project,
+    _get_output_summary,
     _print_findings,
     _sca_finding_kind,
     _sca_finding_package,
@@ -42,6 +43,49 @@ def _sca_finding(name, *, severity="high"):
 def _write_sca(run_dir: Path, rows):
     (run_dir / "sca").mkdir(parents=True, exist_ok=True)
     (run_dir / "sca" / "findings.json").write_text(json.dumps(rows), encoding="utf-8")
+
+
+class TestRunSummarySca(unittest.TestCase):
+    """The per-run summary count (run list) includes SCA findings, so it
+    matches what /project findings shows."""
+
+    def test_sca_only_run_counted(self):
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            _write_sca(run_dir, [_sca_finding("lodash-pro")])
+            # meta with no status → computed, not cached/written back.
+            self.assertEqual(_get_output_summary(run_dir, {}), "1 findings")
+
+    def test_code_plus_sca_combined(self):
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            (run_dir / "findings.json").write_text(json.dumps([
+                {"id": "F-1", "file": "a.c", "function": "main", "line": 5,
+                 "vuln_type": "buffer_overflow"},
+            ]), encoding="utf-8")
+            _write_sca(run_dir, [_sca_finding("expresss")])
+            self.assertEqual(_get_output_summary(run_dir, {}), "2 findings")
+
+    def test_stale_v1_cache_recomputed(self):
+        """A pre-SCA cached summary (no version, or version != current)
+        must NOT short-circuit — else SCA-containing runs completed before
+        this change under-count forever."""
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            _write_sca(run_dir, [_sca_finding("lodash-pro")])
+            # Stale v1 cache: count present, no version stamp.
+            stale_meta = {"output_summary": "0 findings"}
+            self.assertEqual(
+                _get_output_summary(run_dir, stale_meta), "1 findings")
+
+    def test_current_version_cache_used(self):
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            _write_sca(run_dir, [_sca_finding("lodash-pro")])
+            # Current-version cache short-circuits (returns cached, no recompute).
+            fresh_meta = {"output_summary": "99 findings", "output_summary_v": 2}
+            self.assertEqual(
+                _get_output_summary(run_dir, fresh_meta), "99 findings")
 
 
 class TestPrintFindingsSca(unittest.TestCase):

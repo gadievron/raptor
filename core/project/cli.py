@@ -706,20 +706,32 @@ def _get_output_summary(run_dir, meta):
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
 
-    # Use cached summary if present
+    # Cache schema version — bump whenever the counting logic changes so
+    # stale cached strings are recomputed rather than silently served.
+    # v2: counts SCA findings (sca/ subdir) in addition to code findings;
+    # a v1 string (code-only) must NOT short-circuit or SCA-containing
+    # runs completed before this change would under-count forever.
+    summary_version = 2
+
+    # Use cached summary only if it was computed by the current logic.
     cached = (meta or {}).get("output_summary")
-    if cached:
+    if cached and (meta or {}).get("output_summary_v") == summary_version:
         return cached
 
-    # Compute from findings or SARIF
-    from .findings_utils import load_findings_from_dir, count_vulns
-    findings = load_findings_from_dir(run_dir)
+    # Compute from findings or SARIF. Code findings (top-level
+    # findings.json) + SCA dependency findings (sca/ subdir) both count,
+    # so the run-list total matches what `/project findings` shows.
+    from .findings_utils import (
+        count_vulns,
+        load_findings_from_dir,
+        load_sca_findings_from_dir,
+    )
+    findings = load_findings_from_dir(run_dir) + load_sca_findings_from_dir(run_dir)
     if findings:
-        vuln_count = count_vulns(findings)
-        if vuln_count != len(findings):
-            result = f"{vuln_count} findings"
-        else:
-            result = f"{len(findings)} findings"
+        # count_vulns groups by (file, function, vuln_type); the prior
+        # branch always displayed this value, so this is behaviour-
+        # preserving for code-only runs and additive for SCA.
+        result = f"{count_vulns(findings)} findings"
     else:
         sarif_count = _count_sarif_results(run_dir)
         result = f"{sarif_count} results" if sarif_count else ""
@@ -730,6 +742,7 @@ def _get_output_summary(run_dir, meta):
         meta_path = run_dir / RUN_METADATA_FILE
         if meta_path.exists() and meta:
             meta["output_summary"] = result
+            meta["output_summary_v"] = summary_version
             save_json(meta_path, meta)
 
     return result
