@@ -196,3 +196,192 @@ def test_call_shaped_text_in_comment_not_a_target():
 def test_char_literal_paren_not_a_target():
     got = detect_macro_call_targets("#define C(x) g(x, ')')")
     assert got == {"g"}, got
+
+
+# ---------------------------------------------------------------------------
+# U12 — config-aware #ifdef / #if resolution (fidelity 2)
+# ---------------------------------------------------------------------------
+
+def _mc(defined=None, undefined=()):
+    from core.build.macro_config import MacroConfig
+    return MacroConfig(defined=dict(defined or {}),
+                       undefined=frozenset(undefined))
+
+
+def test_ifdef_known_undefined_is_dead():
+    src = "#ifdef HAVE_FOO\nvoid gone(void){}\n#endif\n"
+    mc = _mc(undefined={"HAVE_FOO"})
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2)]
+
+
+def test_ifdef_known_defined_is_live():
+    src = "#ifdef HAVE_FOO\nvoid kept(void){}\n#endif\n"
+    mc = _mc(defined={"HAVE_FOO": "1"})
+    assert detect_preprocessor_dead_ranges(src, mc) == []
+
+
+def test_ifdef_absent_symbol_stays_unknown_even_with_config():
+    # The load-bearing soundness property: a symbol NOT in the config might
+    # still be #define'd in a header — never treat absence as undefined.
+    src = "#ifdef MAYBE_IN_HEADER\nvoid x(void){}\n#endif\n"
+    mc = _mc(defined={"SOMETHING_ELSE": "1"}, undefined={"AND_ANOTHER"})
+    assert detect_preprocessor_dead_ranges(src, mc) == []
+
+
+def test_ifndef_known_defined_is_dead():
+    src = "#ifndef HAVE_FOO\nvoid fallback(void){}\n#endif\n"
+    mc = _mc(defined={"HAVE_FOO": "1"})
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2)]
+
+
+def test_ifndef_known_undefined_is_live():
+    src = "#ifndef HAVE_FOO\nvoid fallback(void){}\n#endif\n"
+    mc = _mc(undefined={"HAVE_FOO"})
+    assert detect_preprocessor_dead_ranges(src, mc) == []
+
+
+def test_if_defined_and_negation():
+    on = "#if defined(X)\nvoid a(void){}\n#endif\n"
+    off = "#if !defined(X)\nvoid b(void){}\n#endif\n"
+    mc = _mc(defined={"X": "1"})
+    assert detect_preprocessor_dead_ranges(on, mc) == []
+    assert detect_preprocessor_dead_ranges(off, mc) == [(2, 2)]
+
+
+def test_if_macro_value_zero_is_dead_but_ifdef_still_live():
+    # -DFLAG=0 : the macro IS defined (so #ifdef is live) but its value is 0
+    # (so #if is dead). The two forms must not be conflated.
+    mc = _mc(defined={"FLAG": "0"})
+    ifdef_src = "#ifdef FLAG\nvoid a(void){}\n#endif\n"
+    if_src = "#if FLAG\nvoid b(void){}\n#endif\n"
+    assert detect_preprocessor_dead_ranges(ifdef_src, mc) == []
+    assert detect_preprocessor_dead_ranges(if_src, mc) == [(2, 2)]
+
+
+def test_if_macro_value_nonzero_is_live():
+    mc = _mc(defined={"LEVEL": "2"})
+    src = "#if LEVEL\nvoid a(void){}\n#endif\n"
+    assert detect_preprocessor_dead_ranges(src, mc) == []
+
+
+def test_if_known_undefined_identifier_evaluates_to_zero():
+    # In #if, an undefined identifier is 0 → arm dead. Only when KNOWN-undef.
+    mc = _mc(undefined={"NOPE"})
+    src = "#if NOPE\nvoid a(void){}\n#endif\n"
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2)]
+
+
+def test_compound_expression_stays_unknown_with_config():
+    # We do not partially evaluate &&/|| — stays untouched (safe).
+    mc = _mc(defined={"A": "1"}, undefined={"B"})
+    for cond in ("#if defined(A) && defined(B)",
+                 "#if A || B",
+                 "#if VERSION > 3"):
+        src = cond + "\nvoid f(void){}\n#endif\n"
+        assert detect_preprocessor_dead_ranges(src, mc) == [], cond
+
+
+def test_nested_dead_arm_with_config():
+    src = (
+        "#ifdef OFF\n"
+        "void outer(void){}\n"
+        "#ifdef ALSO\n"
+        "void inner(void){}\n"
+        "#endif\n"
+        "#endif\n"
+    )
+    mc = _mc(undefined={"OFF"}, defined={"ALSO": "1"})
+    # Whole outer arm dead (OFF undefined) — inner body dead regardless of
+    # ALSO; the inner #ifdef/#endif directive lines are left in place.
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2), (4, 4)]
+
+
+def test_elif_resolved_against_config():
+    src = (
+        "#if defined(A)\n"
+        "void a(void){}\n"
+        "#elif defined(B)\n"
+        "void b(void){}\n"
+        "#else\n"
+        "void c(void){}\n"
+        "#endif\n"
+    )
+    # A undefined, B defined → a dead, b live, c dead (only body lines).
+    mc = _mc(defined={"B": "1"}, undefined={"A"})
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2), (6, 6)]
+
+
+def test_preprocess_view_fidelity_2_with_config():
+    src = "#ifdef OFF\nvoid gone(void){}\n#endif\nvoid kept(void){}\n"
+    mc = _mc(undefined={"OFF"})
+    v = preprocess_view("t.c", "c", src, config=mc)
+    assert v.fidelity == 2
+    assert _names(v) == {"kept"}
+    assert v.line_map is IDENTITY_LINE_MAP        # blanking preserves lines
+
+
+def test_preprocess_view_empty_config_is_fidelity_1():
+    from core.build.macro_config import MacroConfig
+    src = "#if 0\nvoid d(void){}\n#endif\nvoid k(void){}\n"
+    v = preprocess_view("t.c", "c", src, config=MacroConfig())
+    assert v.fidelity == 1                          # empty config → literal-only
+    assert _names(v) == {"k"}
+
+
+def test_config_aware_blanking_still_blanks_literal_zero():
+    mc = _mc(defined={"X": "1"})
+    src = "#if 0\nvoid d(void){}\n#endif\nvoid k(void){}\n"
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2)]
+
+
+def test_allow_unreachable_ignores_config():
+    # Isolation mode returns the raw view even when a config is supplied.
+    src = "#ifdef OFF\nvoid gone(void){}\n#endif\n"
+    mc = _mc(undefined={"OFF"})
+    v = preprocess_view("t.c", "c", src, allow_unreachable=True, config=mc)
+    assert v.fidelity == 0
+    assert "gone" in v.parse_text
+
+
+# --- over-fire (false-negative) guards: unknown leading arms in chains ------
+
+def test_elif_unknown_leading_arm_does_not_blank_live_arms():
+    # #if defined(A) with A UNKNOWN (may be #define'd in a header). Even though
+    # B is known-defined, neither arm1 (live when A defined) nor arm2 (live when
+    # A undefined) may be blanked — only the #else, dead under every build
+    # consistent with the config.
+    src = (
+        "#if defined(A)\n" "void a(void){}\n"
+        "#elif defined(B)\n" "void b(void){}\n"
+        "#else\n" "void c(void){}\n" "#endif\n"
+    )
+    mc = _mc(defined={"B": "1"})            # A unknown, B defined
+    dead = detect_preprocessor_dead_ranges(src, mc)
+    flat = {ln for lo, hi in dead for ln in range(lo, hi + 1)}
+    assert 2 not in flat and 4 not in flat, "must not blank a possibly-live arm"
+
+
+def test_elif_unknown_arm_after_known_false_blanks_nothing_more():
+    # A known-undef → arm1 dead. B UNKNOWN → arm2 / arm3 could each be live, so
+    # only arm1 may be blanked.
+    src = (
+        "#if defined(A)\n" "void a(void){}\n"
+        "#elif defined(B)\n" "void b(void){}\n"
+        "#else\n" "void c(void){}\n" "#endif\n"
+    )
+    mc = _mc(undefined={"A"})               # A undef, B unknown
+    assert detect_preprocessor_dead_ranges(src, mc) == [(2, 2)]
+
+
+def test_unknown_parent_does_not_blank_its_body():
+    # OUTER unknown → its body survives; INNER explicitly-undef child is dead.
+    src = (
+        "#ifdef OUTER\n" "void o(void){}\n"
+        "#ifdef INNER\n" "void i(void){}\n"
+        "#endif\n" "#endif\n"
+    )
+    mc = _mc(undefined={"INNER"})           # OUTER unknown, INNER undef
+    flat = {ln for lo, hi in detect_preprocessor_dead_ranges(src, mc)
+            for ln in range(lo, hi + 1)}
+    assert 2 not in flat, "must not blank body under an unknown #ifdef"
+    assert 4 in flat, "explicitly-undef INNER arm should be dead"

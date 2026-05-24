@@ -811,3 +811,59 @@ class TestAllowUnreachableView:
         # Default mode must hash identically to the no-arg call so existing
         # persistent caches are not invalidated when this lands.
         assert default_cache_dir(str(tmp_path), allow_unreachable=False) == d_def
+
+
+class TestConfigAwareView:
+    """U12: a build macro config (compile_commands.json / .config) threads
+    through build_inventory so config-aware #ifdef arms are blanked, and a
+    config change invalidates the cache even when file contents are equal."""
+
+    _SRC = (
+        "#ifdef CONFIG_FEATURE\n"
+        "void feature_sink(char *q){ system(q); }\n"
+        "#endif\n"
+        "void always_live(void){ return; }\n"
+    )
+
+    def _names(self, inv):
+        return {i["name"] for f in inv["files"] for i in f["items"]
+                if i.get("kind", "function") == "function"}
+
+    def test_feature_off_blanks_guarded_sink(self, tmp_path):
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("# CONFIG_FEATURE is not set\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live"}
+
+    def test_feature_on_keeps_guarded_sink(self, tmp_path):
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("CONFIG_FEATURE=y\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live", "feature_sink"}
+
+    def test_no_config_is_conservative(self, tmp_path):
+        # No build artifacts → #ifdef untouched → sink kept (live in some
+        # build; blanking it would be a false negative).
+        (tmp_path / "m.c").write_text(self._SRC)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live", "feature_sink"}
+
+    def test_config_change_invalidates_persistent_cache(self, tmp_path):
+        # The critical correctness check: same file content, default
+        # (persistent, config-keyed) cache. Flipping the config must NOT
+        # serve a stale blanked entry for the now-live arm.
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("# CONFIG_FEATURE is not set\n")
+        assert self._names(build_inventory(str(tmp_path))) == {"always_live"}
+        (tmp_path / ".config").write_text("CONFIG_FEATURE=y\n")
+        assert self._names(build_inventory(str(tmp_path))) == {
+            "always_live", "feature_sink"}
+
+    def test_cache_key_folds_config_fingerprint(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        d_plain = default_cache_dir(str(tmp_path))
+        d_cfg = default_cache_dir(str(tmp_path), config_fingerprint="abc123")
+        assert d_plain != d_cfg
+        # Empty fingerprint must hash identically to the no-arg call so
+        # non-C projects' existing caches are untouched.
+        assert default_cache_dir(str(tmp_path), config_fingerprint="") == d_plain

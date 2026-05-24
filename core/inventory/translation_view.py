@@ -10,11 +10,22 @@ consumer.
 
 Fidelity ladder (the view's ``fidelity`` field):
 
-  * 0 — raw text (today's behavior; what non-C/C++ always gets).
-  * 1 — ``#if 0`` / literal-false arms blanked in-memory (layer 1).
-  * 2 — plus function-like-macro masking flags recorded (layer 2).
-  * 3 — real ``cpp`` with a build config; one variant; macros expanded;
-        a non-identity ``line_map`` from ``#line`` markers (layer 3, later).
+  * 0 — raw text (what non-C/C++ and isolation mode always get).
+  * 1 — literal-only dead arms blanked: ``#if 0`` / ``#elif 0`` and the
+        ``#else`` of ``#if 1`` (config-INDEPENDENT, dead under every build).
+  * 2 — config-aware dead arms: also ``#ifdef X`` / ``#ifndef X`` /
+        ``#if defined(X)`` / ``#if X`` resolved against a build
+        :class:`~core.build.macro_config.MacroConfig` (explicit
+        ``-D``/``-U`` / ``.config``). Config-DEPENDENT → heuristic, not sound.
+  * 3 — real ``cpp`` with full macro expansion + ``#line``-derived
+        non-identity ``line_map`` (deferred; line-preserving config-aware
+        blanking at layer 2 captures the dominant extraction win soundly,
+        without a subprocess or ``#include`` inlining).
+
+Function-like-macro call targets (``#define CALL_F() f()``) are handled
+orthogonally by ``detect_macro_call_targets`` — consumed by the resolver to
+keep a macro-only-reachable function UNCERTAIN rather than NOT_CALLED — not
+via a fidelity level.
 
 Two fields are first-class from the start specifically so layer 3 is a
 provider swap rather than a rewrite:
@@ -47,30 +58,110 @@ _C_FAMILY = frozenset({"c", "cpp"})
 
 _PP_DIRECTIVE = re.compile(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
 
+# `#if`/`#elif` operand forms we resolve against a config. Single-term only —
+# compound expressions (``&&`` / ``||`` / comparisons / arithmetic) stay
+# 'unknown' rather than risk a wrong partial evaluation (a false negative).
+_DEFINED_RE = re.compile(r"^(!\s*)?defined\s*\(\s*(\w+)\s*\)$")
+_DEFINED_BARE_RE = re.compile(r"^(!\s*)?defined\s+(\w+)$")
+_IDENT_RE = re.compile(r"^(\w+)$")
 
-def _pp_cond(kind: str, rest: str) -> str:
-    """Classify an #if/#elif controlling expression as
-    'false' | 'true' | 'unknown'. Only literal 0/1 are decidable without a
-    build config — `#ifdef X` / `#if SYMBOL` / `#if EXPR` are config- or
-    value-dependent and MUST stay 'unknown' (firing on them would wrongly
-    delete code that is live in some build → a false negative)."""
-    if kind in ("ifdef", "ifndef"):
-        return "unknown"
+
+def _strip_pp_comments(rest: str) -> str:
     r = re.sub(r"/\*.*?\*/", "", rest)
-    r = re.sub(r"//.*$", "", r).strip()
+    return re.sub(r"//.*$", "", r).strip()
+
+
+def _eval_int_literal(s: str) -> Optional[int]:
+    """Parse a bare integer literal (decimal / 0x-hex, optional surrounding
+    parens / L/U suffix). Returns ``None`` for anything non-trivial — we only
+    evaluate values we can be certain about."""
+    t = s.strip()
+    while t.startswith("(") and t.endswith(")"):
+        t = t[1:-1].strip()
+    t = re.sub(r"[uUlL]+$", "", t)
+    try:
+        return int(t, 0) if t else None
+    except ValueError:
+        return None
+
+
+def _pp_cond(kind: str, rest: str, macros: Optional["object"] = None) -> str:
+    """Classify an #if/#ifdef/#ifndef/#elif controlling expression as
+    'false' | 'true' | 'unknown'.
+
+    Without a config only literal ``0``/``1`` are decidable; ``#ifdef X`` and
+    value-dependent ``#if`` stay 'unknown'. With a :class:`MacroConfig`
+    (``macros``) we additionally resolve forms whose every symbol is KNOWN
+    (explicitly ``-D``/``-U`` or named in ``.config``):
+
+      * ``#ifdef X`` / ``#ifndef X``
+      * ``#if defined(X)`` / ``#if !defined(X)`` (and ``defined X``)
+      * ``#if X`` where X is known-defined to an integer literal, or
+        known-undefined (→ 0 in ``#if`` per C semantics).
+
+    A symbol absent from the config stays UNKNOWN — it may be ``#define``d in
+    an included header, so we must not treat absence as undefined (that would
+    delete live code → false negative). Compound expressions stay 'unknown'.
+    """
+    if kind in ("ifdef", "ifndef"):
+        m = _IDENT_RE.match(_strip_pp_comments(rest))
+        if not (m and macros):
+            return "unknown"
+        d = macros.is_defined(m.group(1))
+        if d is None:
+            return "unknown"
+        defined_true = d if kind == "ifdef" else (not d)
+        return "true" if defined_true else "false"
+
+    r = _strip_pp_comments(rest)
     if r in ("0", "(0)", "00"):
         return "false"
     if r in ("1", "(1)"):
         return "true"
+    if not macros:
+        return "unknown"
+
+    # defined(X) / !defined(X) / defined X
+    dm = _DEFINED_RE.match(r) or _DEFINED_BARE_RE.match(r)
+    if dm:
+        d = macros.is_defined(dm.group(2))
+        if d is None:
+            return "unknown"
+        res = (not d) if dm.group(1) else d
+        return "true" if res else "false"
+
+    # bare single identifier: #if MACRO
+    im = _IDENT_RE.match(r)
+    if im:
+        name = im.group(1)
+        val = macros.value_of(name)
+        if val is not None:
+            iv = _eval_int_literal(val)
+            return "unknown" if iv is None else ("true" if iv != 0 else "false")
+        # known-undefined identifier evaluates to 0 in #if → false. Absent
+        # (unknown) stays unknown — header might define it.
+        if macros.is_defined(name) is False:
+            return "false"
     return "unknown"
 
 
-def detect_preprocessor_dead_ranges(content: str) -> List[Tuple[int, int]]:
-    """Inclusive 1-indexed line ranges of statically-dead preprocessor arms
-    (`#if 0` / `#elif 0`, and the `#else` of a `#if 1`). Config-INDEPENDENT
-    only — dead under every build configuration. Nesting-aware: anything
-    inside a dead arm is dead. Validated 0 over-fires across OpenSSL's ~17k
-    `#ifdef` directives."""
+def detect_preprocessor_dead_ranges(
+    content: str, macros: Optional["object"] = None,
+) -> List[Tuple[int, int]]:
+    """Inclusive 1-indexed line ranges of statically-dead preprocessor arms.
+
+    Without ``macros``: literal-only — ``#if 0`` / ``#elif 0`` and the
+    ``#else`` of a ``#if 1``. Config-INDEPENDENT (dead under every build),
+    validated 0 over-fires across OpenSSL's ~17k ``#ifdef`` directives.
+
+    With a :class:`~core.build.macro_config.MacroConfig` (``macros``): also
+    resolves ``#ifdef`` / ``#ifndef`` / ``#if defined(X)`` / ``#if X`` arms
+    whose symbols are explicitly KNOWN in the build config. Still cannot
+    over-fire: symbols absent from the config stay 'unknown' (untouched).
+    Config-DEPENDENT, so the resulting view is heuristic, not sound.
+
+    Nesting-aware: anything inside a dead arm is dead.
+    """
     lines = content.split("\n")
     stack: list[dict] = []
     dead: set[int] = set()
@@ -83,14 +174,14 @@ def detect_preprocessor_dead_ranges(content: str) -> List[Tuple[int, int]]:
         kind, rest = m.group(1), m.group(2)
         parent_dead = stack[-1]["effective_dead"] if stack else False
         if kind in ("if", "ifdef", "ifndef"):
-            lit = _pp_cond(kind, rest)
+            lit = _pp_cond(kind, rest, macros)
             f = {"parent_dead": parent_dead, "taken": lit == "true",
                  "arm_dead": lit == "false"}
             f["effective_dead"] = parent_dead or f["arm_dead"]
             stack.append(f)
         elif kind == "elif" and stack:
             f = stack[-1]
-            lit = _pp_cond("elif", rest)
+            lit = _pp_cond("elif", rest, macros)
             if f["taken"] or lit == "false":
                 f["arm_dead"] = True
             elif lit == "true":
@@ -256,10 +347,14 @@ def preprocess_view(
 ) -> TranslationView:
     """Return the parser's view of ``content``.
 
-    Non-C/C++ → identity view (fidelity 0): byte-identical to today, so the
-    seam is free for every other language. C/C++ handling (``#if 0``
-    blanking + macro flags) is layered on in subsequent units; for now this
-    is the identity provider so introducing the seam changes no behavior.
+    Non-C/C++ → identity view (fidelity 0): byte-identical, so the seam is
+    free for every other language. C/C++ → dead preprocessor arms blanked
+    in-memory: literal-only (fidelity 1) by default, or config-aware
+    (fidelity 2) when ``config`` is a non-empty
+    :class:`~core.build.macro_config.MacroConfig`. Isolation mode
+    (``allow_unreachable``) returns the raw view so disabled code stays
+    visible for review. No on-disk mutation; ``line_map`` is identity at
+    every fidelity < 3 (blanking preserves line numbers).
     """
     # Non-C/C++ → identity (byte-identical to today).
     if language not in _C_FAMILY:
@@ -276,16 +371,20 @@ def preprocess_view(
                                fidelity=0, masking_flags=frozenset(),
                                config=config)
 
-    # Default C/C++ view (fidelity 1): blank statically-dead `#if 0` arms
-    # in-memory before the parser sees them. tree-sitter doesn't run the
-    # preprocessor, so without this, functions (and parser garbage) inside
-    # `#if 0` enter the inventory + call graph as if live. Config-dependent
-    # `#ifdef` arms are NOT touched — that needs real preprocessing (layer
-    # 3). line_map stays identity (blanking preserves line numbers).
-    dead = detect_preprocessor_dead_ranges(content)
+    # Blank statically-dead arms in-memory before the parser sees them.
+    # tree-sitter doesn't run the preprocessor, so without this, functions
+    # (and parser garbage) inside dead arms enter the inventory + call graph
+    # as if live. With a build macro config (``config``), resolve `#ifdef` /
+    # `#if defined(X)` / `#if X` arms whose symbols are explicitly known
+    # (fidelity 2); without one, literal-only `#if 0` (fidelity 1). Either
+    # way line_map stays identity — blanking replaces dead-arm characters
+    # with spaces and never moves a line.
+    macros = config if config else None
+    dead = detect_preprocessor_dead_ranges(content, macros)
     parse_text = _blank_ranges(content, dead)
     return TranslationView(parse_text=parse_text, line_map=IDENTITY_LINE_MAP,
-                           fidelity=1, masking_flags=frozenset(), config=config)
+                           fidelity=2 if macros else 1,
+                           masking_flags=frozenset(), config=config)
 
 
 __all__ = [

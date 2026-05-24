@@ -39,6 +39,7 @@ from .call_graph import (
     extract_call_graph_rust,
 )
 from .diff import compare_inventories
+from core.build.macro_config import extract_macro_config
 from .dead_scope import detect_dead_scopes
 from .module_load_abort import detect_module_load_abort
 from .translation_view import detect_macro_call_targets, preprocess_view
@@ -86,6 +87,7 @@ _DEFAULT_INVENTORY_CACHE_ROOT = (
 
 def default_cache_dir(
     target_path: str, *, allow_unreachable: bool = False,
+    config_fingerprint: str = "",
 ) -> Path:
     """Return the persistent cache directory for ``target_path``'s
     inventory checklist.
@@ -106,6 +108,13 @@ def default_cache_dir(
     # a cached checklist. Default mode keeps the original hash input, so
     # existing cache dirs are unchanged.
     key = target_abs if not allow_unreachable else target_abs + "\0allow_unreachable"
+    # Fold the macro config too: config-aware blanking (#ifdef resolved via
+    # -D/-U/.config) changes which arms are dead, so a config change must
+    # invalidate the cache even when file contents are identical (else a
+    # newly-live arm would stay blanked from cache → a false negative). Empty
+    # fingerprint (no config / non-C target) leaves the key unchanged.
+    if config_fingerprint:
+        key += "\0cfg=" + config_fingerprint
     target_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
     return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
 
@@ -148,9 +157,18 @@ def build_inventory(
     Returns:
         Inventory dict (also saved to ``<output_dir>/checklist.json``).
     """
+    # Build macro config once (compile_commands.json / .config). Drives
+    # config-aware #ifdef resolution in each file's TranslationView. Empty
+    # (and inert) when no build artifacts are present or in isolation mode.
+    macro_config = extract_macro_config(target_path)
+    if allow_unreachable:
+        macro_config = None
+    cfg_fp = macro_config.fingerprint() if macro_config else ""
+
     if output_dir is None:
         output_dir = str(default_cache_dir(
             target_path, allow_unreachable=allow_unreachable,
+            config_fingerprint=cfg_fp,
         ))
     if exclude_patterns is None:
         exclude_patterns = DEFAULT_EXCLUDES
@@ -211,7 +229,8 @@ def build_inventory(
             futures = {
                 executor.submit(
                     _process_single_file, fp, target, exclude_patterns,
-                    skip_generated, old_files_by_path, allow_unreachable
+                    skip_generated, old_files_by_path, allow_unreachable,
+                    macro_config,
                 ): fp
                 for fp in file_list
             }
@@ -241,7 +260,7 @@ def build_inventory(
             _collect_result(
                 _process_single_file(filepath, target, exclude_patterns,
                                      skip_generated, old_files_by_path,
-                                     allow_unreachable)
+                                     allow_unreachable, macro_config)
             )
 
     # Sort for consistent output
@@ -457,6 +476,7 @@ def _process_single_file(
     skip_generated: bool = True,
     old_files: Dict[str, Any] = None,
     allow_unreachable: bool = False,
+    macro_config: Optional[object] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
 
@@ -558,6 +578,7 @@ def _process_single_file(
         view = preprocess_view(
             str(filepath), language, content,
             allow_unreachable=allow_unreachable,
+            config=macro_config,
         )
         parse_text = view.parse_text
         tree_cache = {}
