@@ -35,3 +35,36 @@ class SelectionOutcome:
     @property
     def passed(self) -> bool:
         return not self.missing and not self.overfired
+
+
+@dataclass(frozen=True)
+class EfficacySample:
+    """One labeled code sample for the A/B efficacy eval.
+
+    ``variant`` is ``"vulnerable"`` or ``"patched"``. ``strategy`` is the
+    lens whose marginal contribution this sample tests. ``synthetic``
+    flags hand-written minimal repros vs. real extracted source.
+    """
+
+    id: str
+    strategy: str
+    code: str
+    variant: str
+    synthetic: bool = False
+
+
+@dataclass(frozen=True)
+class ABResult:
+    """A/B outcome for one sample over ``runs`` repetitions.
+
+    ``*_flagged`` count how many runs the model returned a VULNERABLE
+    verdict under each arm (control = baseline lens only; treatment =
+    baseline + the target lens).
+    """
+
+    sample_id: str
+    strategy: str
+    variant: str
+    runs: int
+    control_flagged: int
+    treatment_flagged: int
