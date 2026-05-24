@@ -114,10 +114,10 @@ class TestParsePaths:
 
     def test_write_open_classified_as_written(self, tmp_path):
         _write_jsonl(tmp_path / OBSERVE_FILENAME, [
-            _open_record("/tmp/scratch", write_intent=True),
+            _open_record("./scratch", write_intent=True),
         ])
         profile = parse_observe_log(tmp_path)
-        assert profile.paths_written == ["/tmp/scratch"]
+        assert profile.paths_written == ["./scratch"]
         assert profile.paths_read == []
 
     def test_stat_recorded_separately_from_open(self, tmp_path):
@@ -236,24 +236,24 @@ class TestMacOSKextActionClassification:
 
     def test_file_write_create_classified_as_write(self, tmp_path):
         _write_jsonl(tmp_path / OBSERVE_FILENAME, [
-            self._kext_rec("file-write-create", "/tmp/scratch"),
+            self._kext_rec("file-write-create", "./scratch"),
         ])
         p = parse_observe_log(tmp_path)
-        assert p.paths_written == ["/tmp/scratch"]
+        assert p.paths_written == ["./scratch"]
 
     def test_file_write_data_classified_as_write(self, tmp_path):
         _write_jsonl(tmp_path / OBSERVE_FILENAME, [
-            self._kext_rec("file-write-data", "/tmp/log.txt"),
+            self._kext_rec("file-write-data", "./log.txt"),
         ])
         p = parse_observe_log(tmp_path)
-        assert p.paths_written == ["/tmp/log.txt"]
+        assert p.paths_written == ["./log.txt"]
 
     def test_file_mknod_classified_as_write(self, tmp_path):
         _write_jsonl(tmp_path / OBSERVE_FILENAME, [
-            self._kext_rec("file-mknod", "/tmp/fifo"),
+            self._kext_rec("file-mknod", "./fifo"),
         ])
         p = parse_observe_log(tmp_path)
-        assert p.paths_written == ["/tmp/fifo"]
+        assert p.paths_written == ["./fifo"]
 
     def test_unknown_kext_action_dropped(self, tmp_path):
         # SBPL emits many other actions (process-info-pidinfo,
@@ -497,7 +497,7 @@ class TestPublicObserveKwarg:
         __import__("sys").platform == "darwin",
         reason="Linux mount-ns spawn path; macOS variant is signature-parity only",
     )
-    def test_observe_implies_audit(self):
+    def test_observe_implies_audit(self, tmp_path):
         # The audit_mode/audit_verbose_active resolution lives at
         # the top of sandbox(); we check the variables by entering
         # the context manager and asserting the spawn path receives
@@ -529,8 +529,8 @@ class TestPublicObserveKwarg:
                    return_value=True), \
              patch("core.sandbox.context.check_mount_available",
                    return_value=True):
-            with ctx_mod.sandbox(target=str(Path("/tmp")),
-                                 output=str(Path("/tmp")),
+            with ctx_mod.sandbox(target=str(tmp_path),
+                                 output=str(tmp_path),
                                  observe=True) as run:
                 run(["true"])
         assert spy.called
@@ -548,7 +548,7 @@ class TestPublicObserveKwarg:
         __import__("sys").platform == "darwin",
         reason="Linux mount-ns spawn path; macOS variant is signature-parity only",
     )
-    def test_observe_off_by_default(self):
+    def test_observe_off_by_default(self, tmp_path):
         from unittest.mock import patch
         from core.sandbox import context as ctx_mod
 
@@ -566,8 +566,8 @@ class TestPublicObserveKwarg:
                    return_value=True), \
              patch("core.sandbox.context.check_mount_available",
                    return_value=True):
-            with ctx_mod.sandbox(target=str(Path("/tmp")),
-                                 output=str(Path("/tmp"))) as run:
+            with ctx_mod.sandbox(target=str(tmp_path),
+                                 output=str(tmp_path)) as run:
                 run(["true"])
         # observe_mode kwarg should default to False so non-observe
         # callers don't accidentally engage the trace-set extension.

@@ -246,7 +246,7 @@ class TestRedactionInTracerRecord:
         bearer = "Bearer " + "a" * 30  # >20 char threshold
         tracer_mod._write_record(
             tmp_path, "openat", 257, [0]*6, target_pid=1,
-            path=f"/tmp/{bearer}",
+            path=f"{tmp_path}/{bearer}",
         )
         records = [
             json.loads(line) for line in
@@ -287,7 +287,7 @@ class TestTracerSecurityProperties:
         evil = "\x1b[2J\x1b[H\x1b[31mPWNED\x1b[0m"
         tracer_mod._write_record(
             tmp_path, "openat", 257, [0]*6, target_pid=1,
-            path=f"/tmp/{evil}",
+            path=f"{tmp_path}/{evil}",
         )
         raw_bytes = (tmp_path / tracer_mod._DENIALS_FILENAME).read_bytes()
         # No raw ESC bytes in on-disk JSON — encoded as 
@@ -317,7 +317,7 @@ class TestTracerSecurityProperties:
         # to their terminal — escape injection. Defense: tracer
         # applies escape_nonprintable BEFORE JSON encoding so the
         # post-decode string is still escape-safe text.
-        evil = "/tmp/\x1b[31mPWNED\x1b[0m"
+        evil = f"{tmp_path}/\x1b[31mPWNED\x1b[0m"
         tracer_mod._write_record(
             tmp_path, "openat", 257, [0]*6, target_pid=1, path=evil,
         )
@@ -344,7 +344,7 @@ class TestTracerSecurityProperties:
         # Linux paths can't contain NUL (kernel rejects). But if a
         # malicious target somehow gets one through, our JSONL must
         # not break.
-        weird = "/tmp/before\x00after"
+        weird = f"{tmp_path}/before\x00after"
         tracer_mod._write_record(
             tmp_path, "openat", 257, [0]*6, target_pid=1, path=weird,
         )
