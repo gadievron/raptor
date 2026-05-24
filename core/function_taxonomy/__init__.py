@@ -249,6 +249,17 @@ KERNEL_USERSPACE_FUNCS: FrozenSet[str] = frozenset({
 })
 
 
+# === Device-control entry points (driver command interfaces) ===
+# ioctl-style entry points often carry attacker-supplied command values
+# or request structs. They are function-name shaped, unlike argv/envp,
+# so they belong in the shared catalog. Source-side scanners may treat
+# them as L1 context; import/fuzz-priority consumers can opt in only when
+# this signal is meaningful for their target class.
+DEVICE_CONTROL_FUNCS: FrozenSet[str] = frozenset({
+    "ioctl", "unlocked_ioctl", "compat_ioctl",
+})
+
+
 # === Process boundary markers (suid-context signal) ===
 # NOT a source set — separate to avoid contaminating consumers that
 # expect "attacker-controlled input lands here". These are *signals*
@@ -427,6 +438,7 @@ __all__ = [
     "PROCESS_BOUNDARY_MARKERS",
     "IPC_FUNCS",
     "KERNEL_USERSPACE_FUNCS",
+    "DEVICE_CONTROL_FUNCS",
     "PARSER_FUNCS",
     "INTEGER_PARSE_FUNCS",
     "TOCTOU_FUNCS",

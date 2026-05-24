@@ -6,8 +6,8 @@ and socket input context without changing the source_intel verdict policy.
 
 from __future__ import annotations
 
-from core.input_taxonomy import C_L1_SOURCE_CALLS, TRUST_L1_ATTACKER_CONTROLLED
 from packages.source_intel.analyze import (
+    _C_L1_SOURCE_CALLS,
     CLevelSourceEvidence,
     SourceIntelResult,
     _scan_c_level_source_inputs,
@@ -15,14 +15,17 @@ from packages.source_intel.analyze import (
 from packages.source_intel.render import derive_evidence_strings
 
 
-def test_input_taxonomy_covers_issue_comment_l1_sources():
-    assert TRUST_L1_ATTACKER_CONTROLLED == "L1"
-    assert C_L1_SOURCE_CALLS["read"] == "fd"
-    assert C_L1_SOURCE_CALLS["recv"] == "socket"
-    assert C_L1_SOURCE_CALLS["fgets"] == "stream"
-    assert C_L1_SOURCE_CALLS["getenv"] == "env"
-    assert C_L1_SOURCE_CALLS["ioctl"] == "device_control"
-    assert C_L1_SOURCE_CALLS["copy_from_user"] == "kernel_user"
+def test_source_scanner_composes_shared_catalog_with_source_local_reads():
+    assert _C_L1_SOURCE_CALLS["read"] == "fd"
+    assert _C_L1_SOURCE_CALLS["fread"] == "fd"
+    assert _C_L1_SOURCE_CALLS["recv"] == "socket"
+    assert _C_L1_SOURCE_CALLS["fgets"] == "stream"
+    assert _C_L1_SOURCE_CALLS["scanf"] == "stream"
+    assert _C_L1_SOURCE_CALLS["getenv"] == "env"
+    assert _C_L1_SOURCE_CALLS["ioctl"] == "device_control"
+    assert _C_L1_SOURCE_CALLS["copy_from_user"] == "kernel_user"
+    assert _C_L1_SOURCE_CALLS["import_iovec"] == "kernel_user"
+    assert _C_L1_SOURCE_CALLS["mq_receive"] == "ipc"
 
 
 def test_c_level_source_scan_captures_read_recv_fgets_argv_env(tmp_path):

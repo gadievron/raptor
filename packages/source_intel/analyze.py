@@ -29,7 +29,15 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from core.build.build_flags import BuildFlagsContext, extract_flags
-from core.input_taxonomy import C_L1_SOURCE_CALLS
+from core.function_taxonomy import (
+    DEVICE_CONTROL_FUNCS,
+    IPC_FUNCS,
+    KERNEL_USERSPACE_FUNCS,
+    NETWORK_INGEST_FUNCS,
+    PROCESS_BOUNDARY_FUNCS,
+    SCAN_FAMILY_FUNCS,
+    STREAM_INPUT_FUNCS,
+)
 from packages.source_intel.aliases import (
     ALL_WUR_ALIASES,
 )
@@ -79,6 +87,27 @@ ALL_GRADES: Tuple[str, ...] = (
     GRADE_SAME_PATH,
     GRADE_DOMINATES,
 )
+
+
+# Source-side L1 calls are composed locally from the shared function catalog.
+# The shared catalog deliberately omits ubiquitous import-table signals such
+# as read/fread, so this scanner adds those back only for source-code call-site
+# evidence. argv/envp/environ stay scanner-local because they are identifiers,
+# not function names.
+_SOURCE_SIDE_FD_READ_FUNCS: FrozenSet[str] = frozenset({
+    "read",
+    "fread",
+})
+
+_C_L1_SOURCE_CALLS: Dict[str, str] = {
+    **{name: "fd" for name in sorted(_SOURCE_SIDE_FD_READ_FUNCS)},
+    **{name: "socket" for name in sorted(NETWORK_INGEST_FUNCS)},
+    **{name: "stream" for name in sorted(STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS)},
+    **{name: "env" for name in sorted(PROCESS_BOUNDARY_FUNCS)},
+    **{name: "kernel_user" for name in sorted(KERNEL_USERSPACE_FUNCS)},
+    **{name: "ipc" for name in sorted(IPC_FUNCS)},
+    **{name: "device_control" for name in sorted(DEVICE_CONTROL_FUNCS)},
+}
 
 
 @dataclass(frozen=True)
@@ -1970,7 +1999,7 @@ def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
             )
             if not stripped.strip():
                 continue
-            for name, kind in C_L1_SOURCE_CALLS.items():
+            for name, kind in _C_L1_SOURCE_CALLS.items():
                 if not _line_has_c_source_call(stripped, name):
                     continue
                 key = (str(path), line_no, kind, name)

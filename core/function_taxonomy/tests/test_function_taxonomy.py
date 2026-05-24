@@ -13,6 +13,7 @@ import unittest
 
 from core.function_taxonomy import (
     ALLOC_FUNCS,
+    DEVICE_CONTROL_FUNCS,
     ENTRY_POINT_HINTS,
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
@@ -39,7 +40,7 @@ ALL_DANGEROUS_CATEGORIES = [
     NETWORK_INGEST_FUNCS, PARSER_FUNCS, INTEGER_PARSE_FUNCS,
     TOCTOU_FUNCS,
     STREAM_INPUT_FUNCS, PROCESS_BOUNDARY_FUNCS, IPC_FUNCS,
-    KERNEL_USERSPACE_FUNCS,
+    KERNEL_USERSPACE_FUNCS, DEVICE_CONTROL_FUNCS,
 ]
 
 
@@ -304,6 +305,20 @@ class TestKernelUserspaceFuncs(unittest.TestCase):
         self.assertNotIn("put_user", KERNEL_USERSPACE_FUNCS)
 
 
+class TestDeviceControlFuncs(unittest.TestCase):
+    """DEVICE_CONTROL_FUNCS = ioctl-style driver command entry points.
+
+    These are function-name shaped and therefore live in the shared
+    function taxonomy; source-intel can classify them as L1 context
+    without needing a parallel catalog.
+    """
+
+    def test_ioctl_family_present(self):
+        self.assertIn("ioctl", DEVICE_CONTROL_FUNCS)
+        self.assertIn("unlocked_ioctl", DEVICE_CONTROL_FUNCS)
+        self.assertIn("compat_ioctl", DEVICE_CONTROL_FUNCS)
+
+
 # === Cross-category invariants ===
 
 class TestCrossCategory(unittest.TestCase):
@@ -438,6 +453,11 @@ class TestSizeBounds(unittest.TestCase):
         n = len(KERNEL_USERSPACE_FUNCS)
         self.assertGreater(n, 10, f"only {n} entries — pruned too far?")
         self.assertLess(n, 40, f"{n} entries — likely bloat")
+
+    def test_device_control_size_reasonable(self):
+        n = len(DEVICE_CONTROL_FUNCS)
+        self.assertGreaterEqual(n, 3)
+        self.assertLess(n, 10)
 
 
 if __name__ == "__main__":
