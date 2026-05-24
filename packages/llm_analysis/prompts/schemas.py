@@ -151,7 +151,18 @@ FINDING_RESULT_SCHEMA = {
         },
         "confidence": {"type": ["string", "null"], "enum": [*CONFIDENCE_LEVELS, None]},
         "severity_assessment": {"type": "string"},
-        "ruling": {"type": ["string", "null"]},
+        # Constrain ruling to the documented enum. The prompt's
+        # description text (line 17 above) already advertises the
+        # allowed values, but the JSON Schema previously accepted
+        # any string — Haiku organically emitted ``not_called`` on
+        # a 2026-05-24 honeyslop multi-model run because the C1
+        # prompt surfaces ``Verdict: NOT_CALLED`` and Haiku echoed
+        # it back. Structured-output providers (Gemini / Anthropic
+        # tool-use) honour the enum, so this forces the LLM to map
+        # its thinking to the canonical vocabulary instead of
+        # inventing near-synonyms. ``None`` preserved for the case
+        # where the LLM declines to rule (matches confidence pattern).
+        "ruling": {"type": ["string", "null"], "enum": [*AGENTIC_RULING_VALUES, None]},
         "reasoning": {"type": "string"},
         "attack_scenario": {"type": ["string", "null"]},
         "exploit_code": {"type": ["string", "null"]},

@@ -555,6 +555,27 @@ class TestBuildSchema:
         assert "exploit_code" in FINDING_RESULT_SCHEMA["properties"]
         assert "patch_code" in FINDING_RESULT_SCHEMA["properties"]
 
+    def test_ruling_field_is_enum_constrained(self):
+        """Regression: ``ruling`` field carries an ``enum`` constraint
+        matching the documented AGENTIC_RULING_VALUES (plus None).
+        Pre-fix the field accepted any string — Haiku organically
+        emitted ``not_called`` on a multi-model honeyslop run because
+        the C1 prompt surfaces ``Verdict: NOT_CALLED``. Structured-
+        output providers (Gemini / Anthropic tool-use) honour the
+        enum, so this forces the LLM to map to canonical vocabulary
+        rather than invent near-synonyms."""
+        from core.schema_constants import AGENTIC_RULING_VALUES
+        ruling = FINDING_RESULT_SCHEMA["properties"]["ruling"]
+        assert "enum" in ruling, (
+            "ruling field must carry an enum constraint — pre-fix "
+            "this was missing, allowing arbitrary strings"
+        )
+        # The 6 documented values + None for "LLM declined to rule".
+        assert set(ruling["enum"]) == set(AGENTIC_RULING_VALUES) | {None}, (
+            f"ruling enum must match AGENTIC_RULING_VALUES; "
+            f"got {ruling['enum']!r}"
+        )
+
 
 # ── Structural Grouping ─────────────────────────────────────────────
 
