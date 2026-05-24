@@ -362,7 +362,13 @@ jobs:
       - name: Run SCA tests (group ${{ matrix.group }} of 4)
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -n auto --splits 4 --group ${{ matrix.group }} packages/sca
+          # --durations-path: pytest-split reads the committed
+          # timings to balance shards by wall-clock instead of test
+          # count. Refresh via:
+          #   python -m pytest packages/sca --store-durations \
+          #     --durations-path packages/sca/test-durations.json
+          python -m pytest -n auto --splits 4 --group ${{ matrix.group }} \
+            --durations-path packages/sca/test-durations.json packages/sca
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
