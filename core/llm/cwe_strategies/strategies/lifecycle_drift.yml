@@ -9,10 +9,14 @@ description: |
   from auth_privilege's TOCTOU angle (a value that *changes* between
   check and use): here the value need not change at all — the
   precondition that made it meaningful is simply absent in this
-  lifecycle phase. The signals below are deliberately narrow, targeting
-  the kernel task-state / mm-ownership surface where this class is
-  known to occur; the reasoning in the addendum generalises, but the
-  triggers stay tight so the strategy does not fire on unrelated code.
+  lifecycle phase. Scope, stated honestly: the signals below fire
+  ONLY on the kernel ptrace / mm-dumpability surface (get_dumpable,
+  __ptrace_may_access) — this is a precise, low-false-positive lens for
+  that one shape today, NOT a general context-drift detector. The
+  addendum describes the general method, but the picker is mechanical:
+  broadening to sibling bugs (other mm-conditional accessors,
+  credential / namespace lifecycle) means adding signals plus a worked
+  exemplar as those bugs surface in other subsystems.
 
 signals:
   # Intentionally narrow — the precise signal is "this function calls
