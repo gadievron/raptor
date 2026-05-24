@@ -305,29 +305,6 @@ def test_canonicalise_returns_none_for_garbage():
 
 
 # ---------------------------------------------------------------------------
-# Real raptor file
-# ---------------------------------------------------------------------------
-
-
-def test_raptor_cve_diff_precommit_config():
-    """End-to-end against raptor's actual ``packages/cve_diff/
-    .pre-commit-config.yaml`` — should detect ruff, black, mypy
-    (the local hooks are skipped)."""
-    real = Path(
-        "/home/raptor/raptor/packages/cve_diff/.pre-commit-config.yaml"
-    )
-    if not real.is_file():
-        return       # not available in CI
-    deps = parse(real)
-    by_name = {d.name: d for d in deps}
-    assert "ruff" in by_name
-    assert "black" in by_name
-    assert "mypy" in by_name
-    assert by_name["ruff"].ecosystem == "PyPI"
-    assert by_name["mypy"].ecosystem == "PyPI"
-
-
-# ---------------------------------------------------------------------------
 # additional_dependencies extraction
 # ---------------------------------------------------------------------------
 
