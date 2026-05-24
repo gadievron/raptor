@@ -5,7 +5,6 @@ The tools are JSON-string in/out; tests parse the JSON to inspect.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
