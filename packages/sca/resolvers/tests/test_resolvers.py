@@ -26,8 +26,22 @@ from packages.sca.resolvers.pip import PipResolver
 
 
 @pytest.fixture(autouse=True)
-def _reset_sandbox_probe_caches():
-    """Reset ``core.sandbox.state`` probe caches before each test.
+def _reset_sandbox_probe_caches(monkeypatch):
+    """Reset ``core.sandbox.state`` probe caches before each test, and
+    short-circuit the proxy-hosts auto-calibration so no resolver test
+    can trigger a real landlock probe.
+
+    The calibration short-circuit is the load-bearing half for CI cost.
+    ``_proxy_hosts._calibrated_profile`` → ``load_or_calibrate`` →
+    ``_spawn_probe`` runs a REAL sandbox probe (landlock/seccomp/
+    namespace). Tests that only patch ``subprocess.run`` (via
+    ``_patch_run``) leave that path live, so on the 2-core CI runner it
+    costs 30-80s per test (it was 84s for test_pip_resolver_failure_*,
+    20s for test_npm_always_passes_ignore_scripts) — and it once hung
+    test_composer_proxy_hosts outright. Stubbing it to None here (the
+    function's documented "calibration unavailable" path → static-layer
+    proxy_hosts) makes EVERY resolver test immune, present and future,
+    rather than relying on each remembering to call _capture_sandbox_call.
 
     Several module-level caches in ``core.sandbox.state`` record
     whether unprivileged user-namespaces work on this host
@@ -51,8 +65,11 @@ def _reset_sandbox_probe_caches():
     Idempotent + cheap; safe to run unconditionally.
     """
     from core.sandbox import state
+    from packages.sca.resolvers import _proxy_hosts as _ph
     state._net_available_cache = None
     state._mount_available_cache = None
+    # Never let a resolver test reach real proxy-hosts calibration.
+    monkeypatch.setattr(_ph, "_calibrated_profile", lambda *a, **k: None)
     # ``_resolve_sandbox_binary`` also caches per-binary paths in
     # ``state._<name>_path_cache`` attributes — they're keyed on
     # the binary name (``unshare`` / ``prlimit``) and the path

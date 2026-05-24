@@ -83,3 +83,26 @@ def _bypass_git_sandbox(monkeypatch):
     monkeypatch.setattr(layers_mod, "fetch_commit", _test_fetch_commit)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_retry_backoff(monkeypatch):
+    """No-op ``time.sleep`` for unit tests.
+
+    ResilientLLMClient (``llm/client.py``) retries with
+    ``time.sleep(backoff_factor ** attempt)`` and AgentLoop adds an
+    in-loop 0/5/15s backoff. Tests that drive the retry path with a
+    mocked-failing provider otherwise sit through the REAL backoff —
+    measured at 14s for ``test_provider_error_raises_llm_call_failed``
+    and ~9-11s each for the pipeline retry tests on the 2-core CI
+    runner (they were the entire cve_diff tier's wall-clock). The retry
+    COUNT and error-propagation behaviour is independent of how long
+    the backoff sleeps, so no-op the sleep.
+
+    Safe across the unit tree: the only timing-sensitive tests
+    (``infra/test_rate_limit.py``) drive an INJECTED fake clock
+    (``clk.sleep``), not the global ``time.sleep``, so their assertions
+    are unaffected.
+    """
+    import time
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+
+
