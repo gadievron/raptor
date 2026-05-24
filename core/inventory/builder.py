@@ -41,6 +41,7 @@ from .call_graph import (
 from .diff import compare_inventories
 from .dead_scope import detect_dead_scopes
 from .module_load_abort import detect_module_load_abort
+from .translation_view import preprocess_view
 
 logger = logging.getLogger(__name__)
 
@@ -537,8 +538,17 @@ def _process_single_file(
                 old_entry['_stat'] = file_stat
                 return old_entry
 
+        # The parser reads a TranslationView (its parse_text), not raw
+        # content, so future preprocessing fidelity (e.g. C/C++ #if 0
+        # blanking, real cpp) slots in behind this seam without rewiring
+        # consumers. Identity view today ⇒ byte-identical behavior.
+        # Metrics (sloc, line_count, sha256) and text scanners
+        # (detect_dead_scopes / detect_module_load_abort) keep using the
+        # real `content`; only the tree-sitter / AST parse uses parse_text.
+        view = preprocess_view(str(filepath), language, content)
+        parse_text = view.parse_text
         tree_cache = {}
-        items = extract_items(str(filepath), language, content, _tree_cache=tree_cache)
+        items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)
         sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
         record: Dict[str, Any] = {
@@ -570,36 +580,36 @@ def _process_single_file(
         # extractors emit the same FileCallGraph dataclass for
         # whichever languages have a walker.
         if language == 'python':
-            record['call_graph'] = extract_call_graph_python(content).to_dict()
+            record['call_graph'] = extract_call_graph_python(parse_text).to_dict()
         elif language in ('javascript', 'typescript'):
             # Tree-sitter-driven; gracefully empty when the grammar
             # isn't installed.
             record['call_graph'] = extract_call_graph_javascript(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'go':
             record['call_graph'] = extract_call_graph_go(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'java':
             record['call_graph'] = extract_call_graph_java(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'rust':
             record['call_graph'] = extract_call_graph_rust(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'ruby':
             record['call_graph'] = extract_call_graph_ruby(
-                content,
+                parse_text,
             ).to_dict()
         elif language in ('csharp', 'c_sharp'):
             record['call_graph'] = extract_call_graph_csharp(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'php':
             record['call_graph'] = extract_call_graph_php(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'c':
             # S5: wire the existing extract_call_graph_c into the
@@ -611,7 +621,7 @@ def _process_single_file(
             # was absent for every C scan. Closes RAPTOR's largest
             # whole-language reachability blind spot.
             record['call_graph'] = extract_call_graph_c(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'cpp':
             # S5: same wiring story for C++. _CppCallGraph inherits
@@ -619,7 +629,7 @@ def _process_single_file(
             # handling. Covers .cpp / .cc / .cxx / .hpp (per the
             # languages.py extension map).
             record['call_graph'] = extract_call_graph_cpp(
-                content,
+                parse_text,
             ).to_dict()
         # S4: file-level module-load-abort gate. When the file's
         # top-level execution unconditionally aborts (raise
