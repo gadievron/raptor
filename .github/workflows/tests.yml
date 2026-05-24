@@ -7,11 +7,16 @@ on:
     branches: [ main ]
   merge_group:
   schedule:
-    # Daily full-suite run catches indirect breakage a path filter
-    # would miss (e.g. a refactor breaks an API contract without
-    # touching the tests that exercise it). Daily rather than weekly
-    # given the codebase's churn rate.
-    - cron: '0 6 * * *'
+    # Twice-weekly full-suite (force_full) run catches cross-tier
+    # breakage a path filter would miss — e.g. a refactor changes an
+    # API that another package's tests exercise, but the PR only
+    # touched the first package's paths so the second tier was
+    # skipped. PR + push-to-main are path-filtered; merge_group is the
+    # only other full-unfiltered run, and only fires when something is
+    # going through the merge queue. Mon+Thu keeps blind-spot latency
+    # under ~3-4 days on a quiet (no-merge) stretch while halving the
+    # redundant compute the old daily cron paid on active days.
+    - cron: '0 6 * * 1,4'
   workflow_dispatch:
 
 concurrency:

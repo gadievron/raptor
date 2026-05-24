@@ -1,0 +1,71 @@
+name: CI deps image
+
+# Builds + pushes the CI dependency image (.github/docker/ci-deps.Dockerfile)
+# to GHCR. The Python unit-test tiers in tests.yml will run inside this
+# image instead of each rebuilding + downloading the venv artifact — the
+# fan-out that queues under a concurrent-runner cap.
+#
+# Tags pushed:
+#   :main        — moving tag the test tiers pull. Updated on every build.
+#   :req-<hash>  — content tag (first 12 hex of sha256 over requirements*.txt)
+#                  for traceability + rollback.
+#
+# Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
+# docker/* marketplace actions, to keep the third-party action surface to
+# just actions/checkout (pinned to the same SHA the rest of the repo uses).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - '.github/docker/ci-deps.Dockerfile'
+      - '.github/workflows/ci-deps-image.yml'
+  workflow_dispatch:
+  schedule:
+    # Weekly rebuild (Wed 03:00 UTC) so the base image picks up Debian
+    # security patches even when requirements don't change. Off-peak vs
+    # the Mon/Thu test crons and the nightly tier.
+    - cron: '0 3 * * 3'
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ github.token }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push
+        run: |
+          set -euo pipefail
+          # Lowercase the owner — GHCR repository paths must be lowercase
+          # and ${{ github.repository_owner }} can carry mixed case.
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/raptor-ci-deps"
+          # Content tag over the manifests that define the image.
+          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          docker build \
+            -f .github/docker/ci-deps.Dockerfile \
+            -t "${image}:main" \
+            -t "${image}:req-${reqhash}" \
+            .
+          docker push "${image}:main"
+          docker push "${image}:req-${reqhash}"
+          echo "Pushed ${image}:main and ${image}:req-${reqhash}"

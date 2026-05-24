@@ -18,8 +18,6 @@ name: SCA stress sweep
 #     when investigating
 #   - weekly cron (Monday 04:00 UTC) — catches drift from
 #     external service shifts (registry data, OSV updates)
-#   - push to feat/sca — catches regressions during active dev
-#     before a PR opens
 #
 # Network: hits OSV / KEV / EPSS / multiple package registries
 # / OCI registries. Per-host circuit breaker bounds 429 cascades
@@ -30,14 +28,6 @@ on:
   workflow_dispatch: {}
   schedule:
     - cron: '0 4 * * 1'
-  push:
-    branches:
-      - feat/sca
-    paths:
-      - 'packages/sca/**'
-      - 'core/inventory/**'
-      - 'core/http/**'
-      - '.github/workflows/sca-stress-sweep.yml'
 
 permissions:
   contents: read

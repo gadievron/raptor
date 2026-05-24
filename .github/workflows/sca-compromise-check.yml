@@ -21,8 +21,6 @@ name: SCA compromise-detection check
 #   - manual dispatch (workflow_dispatch) — operator-triggered
 #   - weekly cron (Monday 05:00 UTC, one hour after the stress
 #     sweep so they don't queue against each other)
-#   - push to feat/sca — catches regressions during active dev
-#     before a PR opens
 #   - PR touching the corpus / harness / supply-chain detector —
 #     prevents an incoming change from quietly breaking detection
 #
@@ -34,14 +32,6 @@ on:
   workflow_dispatch: {}
   schedule:
     - cron: '0 5 * * 1'
-  push:
-    branches:
-      - feat/sca
-    paths:
-      - 'packages/sca/**'
-      - 'packages/sca/scripts/raptor-sca-compromise-check'
-      - 'test/data/sca-e2e/compromise-corpus/**'
-      - '.github/workflows/sca-compromise-check.yml'
   pull_request:
     paths:
       - 'packages/sca/scripts/raptor-sca-compromise-check'
