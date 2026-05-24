@@ -28,7 +28,10 @@ from core.json import load_json, save_json
 
 def main():
     if len(sys.argv) < 4:
-        print(f"Usage: {sys.argv[0]} <binary_path> <findings.json> <output_dir> [--vuln-type <type>]")
+        print(
+            f"Usage: {sys.argv[0]} <binary_path> <findings.json> "
+            f"<output_dir> [--vuln-type <type>] [--target <path>]"
+        )
         sys.exit(1)
 
     binary_path = sys.argv[1]
@@ -40,6 +43,20 @@ def main():
         idx = sys.argv.index("--vuln-type")
         if idx + 1 < len(sys.argv):
             vuln_type = sys.argv[idx + 1]
+
+    # ``--target <path>`` enables the per-finding empirical
+    # mitigation analysis: with a source root we can resolve
+    # ``finding.file`` to an on-disk source file and feed it +
+    # a matching witness to
+    # ``analyze_binary_under_mitigations`` (PR #609). Without
+    # ``--target`` (legacy callers), the empirical step is
+    # silently skipped — the static analyze_binary path runs
+    # unchanged.
+    target_path = None
+    if "--target" in sys.argv:
+        idx = sys.argv.index("--target")
+        if idx + 1 < len(sys.argv):
+            target_path = Path(sys.argv[idx + 1]).resolve()
 
     if not Path(binary_path).exists():
         print(f"ERROR: binary not found: {binary_path}")
@@ -114,7 +131,7 @@ def main():
     constraints = load_exploit_context(context_file)
     result = constraints
     print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}")
-    print(f"  Mapping per-finding verdicts (vuln-type-aware)...")
+    print("  Mapping per-finding verdicts (vuln-type-aware)...")
     mapped = map_findings_to_constraints(
         [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
         constraints,
@@ -147,6 +164,20 @@ def main():
             }
             print(f"  {finding['id']}: {assessment.verdict}")
 
+    # --- Empirical mitigation map (PR #609 consumer) ---
+    # Only attempt when ``--target`` was supplied — without a
+    # source root we can't resolve ``finding.file`` to an on-disk
+    # file. Silent skip per-finding when source or witness is
+    # missing; the static feasibility verdict above is the
+    # baseline either way.
+    if target_path is not None:
+        _enrich_with_empirical_mitigation_map(
+            group=group,
+            findings_data=findings_data,
+            output_dir=Path(output_dir),
+            target_path=target_path,
+        )
+
     save_json(findings_path, findings_data)
     # Release the advisory flock by closing the lock handle.
     try:
@@ -155,6 +186,140 @@ def main():
         pass
     findings_lock_fh.close()
     print(f"Updated {len(mapped)} finding(s)")
+
+
+def _enrich_with_empirical_mitigation_map(
+    *,
+    group: list,
+    findings_data: dict,
+    output_dir: Path,
+    target_path: Path,
+) -> None:
+    """Per-finding: resolve source, find best-matching witness
+    (run-local + project-wide), run ``analyze_binary_under_
+    mitigations``, attach summary to ``feasibility.empirical_
+    mitigation_map`` and persist the full FeasibilityMap JSON
+    to ``<output_dir>/mitigation_feasibility/<finding_id>.json``.
+
+    Each finding is independent — one bad source or one missing
+    witness doesn't sink the others. All failures are logged
+    + skipped.
+    """
+    try:
+        from core.run.output import _resolve_active_project
+        from core.witness import (
+            discover_witness_stores,
+            iter_visible_witnesses,
+            best_match_for_finding,
+        )
+        from packages.exploit_feasibility.under_mitigations import (
+            analyze_binary_under_mitigations,
+            to_json,
+        )
+    except ImportError as e:
+        print(
+            f"  WARN: empirical mitigation map skipped — "
+            f"import failed: {type(e).__name__}: {e}"
+        )
+        return
+
+    # Resolve project root if a project is active.
+    project_root = None
+    try:
+        active = _resolve_active_project()
+        if active:
+            project_root = Path(active[0])
+    except Exception as e:  # noqa: BLE001
+        print(
+            f"  WARN: active project resolution failed "
+            f"({type(e).__name__}: {e}); using run-local stores only"
+        )
+
+    stores = discover_witness_stores(output_dir, project_root=project_root)
+    if not stores:
+        return  # nothing to match against; silent skip
+
+    # Materialise the visible witnesses once — N findings shouldn't
+    # iterate every store N times.
+    visible = list(iter_visible_witnesses(stores))
+    if not visible:
+        return
+
+    feasibility_dir = output_dir / "mitigation_feasibility"
+    feasibility_dir.mkdir(parents=True, exist_ok=True)
+
+    enriched = 0
+    for finding in group:
+        finding_file = finding.get("file") or finding.get("file_path")
+        if not finding_file:
+            continue
+        source = (target_path / finding_file).resolve()
+        if not source.is_file():
+            continue
+
+        best = best_match_for_finding(visible, finding)
+        if best is None or not best.is_real:
+            continue
+
+        # Resolve the witness bytes from the matched store. We need
+        # the raw file path because the bytes aren't on the Witness
+        # itself.
+        from core.witness import WitnessStore
+        try:
+            store = WitnessStore(best.store_root)
+            witness_bytes = store.get_bytes(best.witness.bytes_hash)
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"  WARN: {finding['id']}: couldn't load witness "
+                f"bytes ({type(e).__name__}: {e})"
+            )
+            continue
+
+        try:
+            fmap = analyze_binary_under_mitigations(
+                source,
+                witness_bytes,
+                sandbox_timeout=5,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"  WARN: {finding['id']}: empirical analysis raised "
+                f"({type(e).__name__}: {e}); skipping"
+            )
+            continue
+
+        safe_id = "".join(
+            c if c.isalnum() or c in "-_" else "_"
+            for c in finding["id"]
+        ) or "unnamed"
+        fmap_file = feasibility_dir / f"{safe_id}.json"
+        fmap_file.write_text(to_json(fmap), encoding="utf-8")
+
+        finding.setdefault("feasibility", {})[
+            "empirical_mitigation_map"
+        ] = {
+            "feasibility_map_file": str(fmap_file),
+            "summary": fmap.summary(),
+            "witness_hash": fmap.witness_hash,
+            "witness_len": fmap.witness_len,
+            "target_source_hash": fmap.target_source_hash,
+            "target_source_path": fmap.target_source_path,
+            "match_score": best.score,
+            "match_reason": best.reason,
+        }
+        summary = fmap.summary()
+        print(
+            f"  {finding['id']}: empirical: "
+            f"fired={summary['bug_fired_under']} "
+            f"blocked={summary['blocked_under']}"
+        )
+        enriched += 1
+
+    if enriched:
+        print(
+            f"  Empirical mitigation map: enriched {enriched}/"
+            f"{len(group)} finding(s)"
+        )
 
 
 if __name__ == "__main__":
