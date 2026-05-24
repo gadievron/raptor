@@ -48,11 +48,11 @@ jobs:
 
       - name: Install minimal deps
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip==26.1.1
           # The build script needs urllib3 (core.http dependency)
           # plus pytest for the validation step. No other
           # requirements-dev — keep this fast.
-          pip install 'urllib3>=2.0,<3.0'
+          pip install 'urllib3==2.7.0,<3.0'
 
       - name: Refresh corpus
         # ``-v`` emits per-source ``updated/unchanged`` lines so the

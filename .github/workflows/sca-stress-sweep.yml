@@ -65,7 +65,7 @@ jobs:
         # ``raptor-sca`` needs the full runtime requirements; the
         # sweep then drives the actual scanner against each sample.
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip==26.1.1
           pip install -r requirements.txt
 
       - name: Run stress sweep

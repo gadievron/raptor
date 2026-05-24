@@ -473,7 +473,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest==9.0.3
 
       - name: Run prompt-envelope audit
         run: |
@@ -504,7 +504,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        run: pip install pytest
+        run: pip install pytest==9.0.3
 
       - name: Run CI filter-coverage tests
         run: pytest .github/tests

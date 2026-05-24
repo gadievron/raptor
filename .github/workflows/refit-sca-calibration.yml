@@ -57,8 +57,8 @@ jobs:
         # Pure-Python refit — no numpy / sklearn. Just whatever
         # the SCA package itself needs to import (urllib3 etc.).
         run: |
-          python -m pip install --upgrade pip
-          pip install 'urllib3>=2.0,<3.0'
+          python -m pip install --upgrade pip==26.1.1
+          pip install 'urllib3==2.7.0,<3.0'
 
       - name: Validate corpus
         # Re-run validation to get the latest verdict. If it's
