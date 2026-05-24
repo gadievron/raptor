@@ -837,3 +837,58 @@ class TestLexicalDeadGate:
         mark_unreachable_low_priority(checklist, target)
         func = checklist["files"][0]["items"][0]
         assert func.get("priority_reason") != "reachability:lexical_dead"
+
+
+class TestEntryReachabilityGate:
+    """U7: entry-point forward reachability. Catches the dead-island (a
+    function that reads CALLED but no path from any entry reaches it) and
+    keeps exported/non-static entries that 1-hop NOT_CALLED would wrongly
+    demote. CI-safe: a synthetic inventory (visibility + call edges) is
+    passed in, so no tree-sitter grammar is needed."""
+
+    def _synthetic_c(self):
+        items = [
+            {"name": "api", "kind": "function", "line_start": 1,
+             "metadata": {"visibility": None}},           # non-static entry
+            {"name": "isl_a", "kind": "function", "line_start": 5,
+             "metadata": {"visibility": "static"}},
+            {"name": "isl_b", "kind": "function", "line_start": 9,
+             "metadata": {"visibility": "static"}},
+        ]
+        calls = [
+            {"caller": "isl_a", "chain": ["isl_b"], "line": 6},
+            {"caller": "isl_b", "chain": ["isl_a"], "line": 10},
+        ]
+        inv = {"files": [{"path": "app.c", "language": "c",
+                          "items": items,
+                          "call_graph": {"imports": {}, "calls": calls}}]}
+        checklist = {"files": [{"path": "app.c", "items": items}]}
+        return inv, checklist
+
+    def test_dead_island_demoted(self, tmp_path):
+        inv, checklist = self._synthetic_c()
+        mark_unreachable_low_priority(checklist, tmp_path, inventory=inv)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for n in ("isl_a", "isl_b"):
+            assert funcs[n]["priority"] == "low"
+            assert funcs[n]["priority_reason"] == (
+                "reachability:no_path_from_entry"
+            )
+
+    def test_non_static_entry_not_demoted(self, tmp_path):
+        # The library-API fix: an exported (non-static) function with no
+        # in-project caller is an entry → must NOT be demoted (1-hop
+        # NOT_CALLED would have wrongly demoted it).
+        inv, checklist = self._synthetic_c()
+        mark_unreachable_low_priority(checklist, tmp_path, inventory=inv)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["api"].get("priority") != "low"
+
+    def test_allow_unreachable_suppresses_no_path_demotion(self, tmp_path):
+        inv, checklist = self._synthetic_c()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv, allow_unreachable=True,
+        )
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["isl_a"].get("priority") != "low"
+        assert marked == 0

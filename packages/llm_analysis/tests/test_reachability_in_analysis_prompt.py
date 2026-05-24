@@ -81,6 +81,17 @@ class TestVerdictLine:
         assert "Verdict: LEXICAL_DEAD" in out
         assert "NOT_CALLED" not in out
 
+    def test_no_path_from_entry_renders_distinct_verdict(self):
+        # U7: dead-island gets its own verdict line, distinct from
+        # NOT_CALLED — the function HAS callers, just none reachable from
+        # an entry.
+        out = _format_reachability_block({
+            "priority": "low",
+            "priority_reason": "reachability:no_path_from_entry",
+        })
+        assert "Verdict: NO_PATH_FROM_ENTRY" in out
+        assert "NOT_CALLED" not in out
+
     def test_no_priority_no_verdict_line(self):
         # Priority not set + no framework reason → no verdict line.
         # Caller counts may still render below.

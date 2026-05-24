@@ -2246,6 +2246,229 @@ def is_lexically_dead(
     return False
 
 
+# ---------------------------------------------------------------------------
+# Entry-point forward reachability (U7) — "is this reachable from a real
+# entry, or only from an orphaned/dead chain?"
+# ---------------------------------------------------------------------------
+#
+# ``function_called`` answers the 1-hop "does anything call this name?" — it
+# reads CALLED for a function whose only caller is itself dead (a cluster of
+# mutually-calling functions with no external entry: the dead-island). This
+# adds the transitive answer: a function is reachable-from-entry iff it OR
+# some function in its reverse-closure is an entry point. If none is, and
+# the entry model is closeable for the language and no indirection could
+# hide an entry edge, it's NO_PATH_FROM_ENTRY.
+#
+# Entry model per language (what can be invoked from outside the project's
+# own call graph):
+#   * any language: framework_callable / framework_registered (runtime
+#     dispatch), and a function named ``main``.
+#   * C/C++: non-``static`` functions (external linkage — another TU may
+#     call them). SOUND + closeable: the static/extern split is total.
+#   * Go: exported (Capitalized) functions.
+#   * Rust: ``pub`` functions.
+#   * JS/TS: exported functions.
+#   * Java: ``public`` methods.
+#   * Python: module-level public (non-``_``) functions.
+#   * unknown language: treat every function as an entry → never flags
+#     (false-negative-safe).
+#
+# Completeness: where the entry model isn't a closed signal, or an ancestor
+# file uses call-masking indirection (getattr / reflection / func-like
+# macros) that could hide an entry edge, return UNCERTAIN rather than claim
+# NO_PATH_FROM_ENTRY. Surface-only consumers treat UNCERTAIN as "analyze".
+
+# Languages whose entry model is a closed, sound signal (a NO_PATH verdict
+# is trustworthy). Others degrade to UNCERTAIN.
+_CLOSEABLE_ENTRY_LANGS = frozenset({"c", "cpp", "go", "rust"})
+
+
+def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
+    """Is this inventory item an externally-invocable entry point under its
+    language's linkage/visibility model? (Framework dispatch is handled
+    separately off the adjacency index.)
+
+    Visibility/linkage is only treated as an entry signal for the
+    *closeable-entry* languages (C/C++ static-vs-extern, Go exported, Rust
+    pub) — there it's total and sound. For fuzzy languages (Python / JS /
+    Java) a public symbol is NOT reliably an entry (a public app function
+    may be plain dead code, not a library API), so we don't treat it as
+    one; those functions fall through to UNCERTAIN and the caller's
+    existing 1-hop NOT_CALLED logic, leaving their behavior unchanged.
+    ``main`` and framework dispatch are entries in every language.
+    """
+    name = item.get("name") or ""
+    if name == "main":
+        return True
+    # Go runs every ``func init()`` automatically at package load — init
+    # and its call tree are reachable even with no explicit caller.
+    if language == "go" and name == "init":
+        return True
+    if language not in _CLOSEABLE_ENTRY_LANGS:
+        return False
+    md = item.get("metadata") or {}
+    vis = md.get("visibility")
+    if language in ("c", "cpp"):
+        # External linkage = potential entry from another TU. NOTE: a
+        # ``static`` function whose ADDRESS is stored in a non-static /
+        # exported object (an ops/vtable dispatch table) is externally
+        # reachable too, but the call graph doesn't track address-taking —
+        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps
+        # this from silencing them (the LLM still analyses); tracking
+        # address-of is a substrate follow-up.
+        return vis != "static"
+    if language == "go":
+        return vis == "exported" or name[:1].isupper()
+    if language == "rust":
+        return vis in ("public", "pub")
+    return False
+
+
+_ENTRY_SET_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset"]] = {}
+_ENTRY_SET_CACHE_MAX = 8
+
+
+def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
+    """Set of InternalFunction entry points (visibility/linkage model +
+    framework dispatch). Cached per-inventory by identity."""
+    inv_id = id(inventory)
+    cached = _ENTRY_SET_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    entries: Set[InternalFunction] = set()
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict):
+            continue
+        lang = fr.get("language") or ""
+        path = fr.get("path") or ""
+        for item in fr.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind", "function") != "function":
+                continue
+            if _item_is_entry(item, lang):
+                entries.add(InternalFunction(
+                    file_path=path, name=item.get("name") or "",
+                    line=int(item.get("line_start") or 0),
+                ))
+    idx = _get_or_build_index(inventory, exclude_test_files=True)
+    entries |= idx.framework_callable
+    entries |= idx.framework_registered
+    frozen = frozenset(entries)
+    _ENTRY_SET_CACHE[inv_id] = (inventory, frozen)
+    if len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
+        _ENTRY_SET_CACHE.pop(next(iter(_ENTRY_SET_CACHE)), None)
+    return frozen
+
+
+# (reachable_set, closure_truncated) per inventory.
+_ENTRY_REACHABLE_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset", bool]] = {}
+# Closure depth for the entry set. Far above any realistic call-chain
+# depth so reachability isn't lost to truncation (a truncated closure
+# would falsely read deep-reachable functions as NO_PATH). It's a single
+# cached BFS bounded by the graph size, so a high cap costs nothing extra.
+_ENTRY_CLOSURE_MAX_DEPTH = 100_000
+
+
+def _entry_reachable_set(
+    inventory: Dict[str, Any],
+) -> Tuple["frozenset", bool]:
+    """``(reachable_set, truncated)``. ``reachable_set`` is every
+    InternalFunction reachable from any entry (entries + their forward
+    closure). ``truncated`` is True if the closure hit the depth cap — in
+    which case the set may be incomplete and callers must not claim
+    NO_PATH from a miss.
+
+    One cached forward_closure (not a reverse walk per query), so
+    membership is O(1) and the prepass can query every function cheaply.
+    """
+    inv_id = id(inventory)
+    cached = _ENTRY_REACHABLE_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1], cached[2]
+    entries = _entry_functions(inventory)
+    fc = forward_closure(
+        inventory, entries, max_depth=_ENTRY_CLOSURE_MAX_DEPTH,
+    )
+    reachable = set(entries)
+    reachable.update(
+        n for n in fc.nodes if isinstance(n, InternalFunction)
+    )
+    frozen = frozenset(reachable)
+    _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
+    if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_SET_CACHE_MAX:
+        _ENTRY_REACHABLE_CACHE.pop(next(iter(_ENTRY_REACHABLE_CACHE)), None)
+    return frozen, fc.truncated
+
+
+def _file_language(inventory: Dict[str, Any], file_path: str) -> Optional[str]:
+    norm = file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if isinstance(fr, dict) and (fr.get("path") or "").replace("\\", "/") == norm:
+            return fr.get("language")
+    return None
+
+
+def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
+    norm = file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
+            continue
+        cg = fr.get("call_graph") or {}
+        if set(cg.get("indirection") or []) & _MASKING_FLAGS:
+            return True
+        if cg.get("macro_call_targets"):
+            return True
+        return False
+    return False
+
+
+def entry_reachability(
+    inventory: Dict[str, Any],
+    target: InternalFunction,
+    *,
+    max_depth: int = 50,
+) -> str:
+    """``"reachable"`` | ``"no_path_from_entry"`` | ``"uncertain"``.
+
+    Reachable iff ``target`` is in the entry-reachable set (entries + their
+    forward closure). NO_PATH_FROM_ENTRY only when the language's entry
+    model is closeable AND no file on a path that could reach the target
+    carries call-masking indirection that might hide an entry edge;
+    otherwise UNCERTAIN (the false-negative-safe default). Surface-only:
+    consumers surface the verdict, they do not suppress on it.
+
+    Perf: the reachable set is one cached forward-closure, so the common
+    "reachable" answer is an O(1) membership test. The reverse-closure walk
+    (for the masking check) runs ONLY for the non-reachable minority.
+    """
+    reachable, truncated = _entry_reachable_set(inventory)
+    if target in reachable:
+        return "reachable"
+    if truncated:
+        # The closure was depth-capped, so the reachable set may be
+        # incomplete — a deep-reachable function could be missing. Don't
+        # claim NO_PATH off an incomplete set.
+        return "uncertain"
+    # Not reachable from any entry. Decide confident-dead vs uncertain.
+    lang = _file_language(inventory, target.file_path)
+    if lang not in _CLOSEABLE_ENTRY_LANGS:
+        return "uncertain"          # fuzzy entry model (py/js/...) → don't claim
+    # Call-masking indirection (reflection / func-like macros) in the
+    # target's file, or in any function that transitively calls it, could
+    # hide an entry edge the static graph didn't capture → don't claim
+    # dead. This reverse walk only runs for the not-reachable minority.
+    if _file_has_masking(inventory, target.file_path):
+        return "uncertain"
+    rc = reverse_closure(inventory, target, max_depth=max_depth)
+    for fn in rc.nodes:
+        if isinstance(fn, InternalFunction) and _file_has_masking(
+            inventory, fn.file_path,
+        ):
+            return "uncertain"
+    return "no_path_from_entry"
+
+
 def callees_of(
     inventory: Dict[str, Any],
     source: InternalFunction,
@@ -2825,6 +3048,7 @@ __all__ = [
     "forward_closure",
     "function_called",
     "is_framework_callable",
+    "entry_reachability",
     "is_lexically_dead",
     "is_registered_via_call",
     "module_aborts_on_load",

@@ -14,7 +14,9 @@ from core.inventory.call_graph import (
     extract_call_graph_python,
 )
 from core.inventory.reachability import (
+    InternalFunction,
     Verdict,
+    entry_reachability,
     function_called,
 )
 
@@ -507,3 +509,110 @@ def test_directly_called_beats_macro_masking():
     # Same-file bare-name resolution requires the call's module to match;
     # the macro check must not downgrade a genuine CALLED to UNCERTAIN.
     assert function_called(inv, "src.m.f").verdict == Verdict.CALLED
+
+
+# ---------------------------------------------------------------------------
+# U7 — entry-point forward reachability
+# ---------------------------------------------------------------------------
+# Synthetic inventories (no tree-sitter): inject visibility + call edges
+# directly so the dead-island / entry logic is exercised on any CI.
+
+
+def _entry_inv(path, language, items, calls, indirection=None):
+    cg = {"imports": {}, "calls": calls}
+    if indirection:
+        cg["indirection"] = indirection
+    return {"files": [{
+        "path": path, "language": language,
+        "items": items, "call_graph": cg,
+    }]}
+
+
+def _fn(name, line, vis=None):
+    return {"name": name, "kind": "function", "line_start": line,
+            "metadata": {"visibility": vis}}
+
+
+def _er(inv, path, name, line):
+    return entry_reachability(inv, InternalFunction(
+        file_path=path, name=name, line=line))
+
+
+def test_entry_reachable_via_main():
+    inv = _entry_inv("app.c", "c",
+                     [_fn("main", 1), _fn("helper", 5, "static")],
+                     [{"caller": "main", "chain": ["helper"], "line": 2}])
+    assert _er(inv, "app.c", "helper", 5) == "reachable"
+
+
+def test_entry_non_static_is_entry():
+    inv = _entry_inv("app.c", "c", [_fn("api", 1)], [])
+    assert _er(inv, "app.c", "api", 1) == "reachable"
+
+
+def test_dead_island_no_path_from_entry():
+    # island_a <-> island_b mutually call; both static; no entry reaches.
+    inv = _entry_inv(
+        "app.c", "c",
+        [_fn("island_a", 1, "static"), _fn("island_b", 5, "static")],
+        [{"caller": "island_a", "chain": ["island_b"], "line": 2},
+         {"caller": "island_b", "chain": ["island_a"], "line": 6}],
+    )
+    assert _er(inv, "app.c", "island_a", 1) == "no_path_from_entry"
+    assert _er(inv, "app.c", "island_b", 5) == "no_path_from_entry"
+
+
+def test_go_exported_is_entry_unexported_orphan_dead():
+    inv = _entry_inv(
+        "svc.go", "go",
+        [_fn("Handler", 1, "exported"), _fn("helper", 5),
+         _fn("orphan", 9)],
+        [{"caller": "Handler", "chain": ["helper"], "line": 2}],
+    )
+    assert _er(inv, "svc.go", "Handler", 1) == "reachable"
+    assert _er(inv, "svc.go", "helper", 5) == "reachable"
+    assert _er(inv, "svc.go", "orphan", 9) == "no_path_from_entry"
+
+
+def test_masking_indirection_forces_uncertain():
+    # A file with call-masking indirection could hide an entry edge →
+    # never claim no_path_from_entry.
+    inv = _entry_inv(
+        "app.c", "c", [_fn("maybe", 1, "static")], [],
+        indirection=["reflect"],
+    )
+    assert _er(inv, "app.c", "maybe", 1) == "uncertain"
+
+
+def test_non_closeable_language_is_uncertain():
+    # Python's entry model isn't a closed signal (a public fn may be dead
+    # app code, not a library API) → uncertain (caller falls back to its
+    # 1-hop NOT_CALLED logic), never a confident no_path verdict.
+    inv = _entry_inv("m.py", "python", [_fn("_helper", 1)], [])
+    assert _er(inv, "m.py", "_helper", 1) == "uncertain"
+
+
+def test_go_init_is_entry():
+    # Adversarial FN: Go runs every `func init()` at package load, so init
+    # and its callees are reachable even with no explicit caller.
+    inv = _entry_inv(
+        "p.go", "go", [_fn("init", 1), _fn("setup", 5)],
+        [{"caller": "init", "chain": ["setup"], "line": 2}],
+    )
+    assert _er(inv, "p.go", "init", 1) == "reachable"
+    assert _er(inv, "p.go", "setup", 5) == "reachable"
+
+
+def test_deep_chain_not_truncated_to_no_path():
+    # Adversarial FN: a function reachable from an entry via a chain deeper
+    # than forward_closure's default depth must NOT read no_path. The entry
+    # closure uses a high depth cap; on the off chance it still truncates,
+    # the verdict degrades to uncertain (never a false no_path).
+    items = [_fn("entry", 1)]
+    calls = []
+    for k in range(60):
+        items.append(_fn(f"f{k}", 10 + k, "static"))
+        calls.append({"caller": "entry" if k == 0 else f"f{k - 1}",
+                      "chain": [f"f{k}"], "line": 10 + k})
+    inv = _entry_inv("d.c", "c", items, calls)
+    assert _er(inv, "d.c", "f55", 65) == "reachable"

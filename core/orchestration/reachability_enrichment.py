@@ -102,6 +102,7 @@ def mark_unreachable_low_priority(
         from core.inventory.reachability import (
             InternalFunction,
             Verdict,
+            entry_reachability,
             function_called,
             is_framework_callable,
             is_lexically_dead,
@@ -191,6 +192,49 @@ def mark_unreachable_low_priority(
                 marked += 1
                 continue
 
+            line = int(func.get("line_start") or 0)
+            target = InternalFunction(
+                file_path=rel_path, name=name, line=line,
+            )
+
+            # U7: entry-point forward reachability. Transitive, entry-aware
+            # answer that 1-hop NOT_CALLED can't give:
+            #   * "reachable" — target OR a reverse-closure ancestor is an
+            #     entry (framework dispatch, main, or an exported/public/
+            #     non-static symbol). Keep it — this also AVOIDS demoting an
+            #     exported public-API function that has no in-project caller
+            #     (the library-API false negative 1-hop NOT_CALLED caused).
+            #   * "no_path_from_entry" — nothing reachable from any entry
+            #     leads here (the dead-island: reads CALLED only because a
+            #     peer that is itself unreachable calls it). Demote.
+            #   * "uncertain" — fuzzy entry model or masking indirection;
+            #     fall through to the existing framework / NOT_CALLED logic
+            #     unchanged. Surface-only: no hard gate, soft-demote only.
+            er = entry_reachability(inventory, target)
+            if er == "reachable":
+                # Keep it (path from a real entry exists). Preserve the
+                # diagnostic annotation downstream consumers expect when
+                # the entry is framework dispatch, so the
+                # framework_callable / registered_via_call reasons still
+                # surface as before.
+                if is_framework_callable(inventory, target):
+                    func["priority_reason"] = (
+                        "reachability:framework_callable"
+                    )
+                elif is_registered_via_call(inventory, target):
+                    func["priority_reason"] = (
+                        "reachability:registered_via_call"
+                    )
+                continue
+            if er == "no_path_from_entry":
+                if allow_unreachable:
+                    continue
+                func["priority"] = "low"
+                func["priority_reason"] = "reachability:no_path_from_entry"
+                marked += 1
+                continue
+            # er == "uncertain" → existing 1-hop logic below.
+
             qualified = f"{module}.{name}"
             try:
                 result = function_called(inventory, qualified)
@@ -209,10 +253,8 @@ def mark_unreachable_low_priority(
             # analysis prompt's reachability engagement, attack-
             # path demoter) treat them as dead code — false
             # negatives on any web/task/signal-heavy codebase.
-            line = int(func.get("line_start") or 0)
-            target = InternalFunction(
-                file_path=rel_path, name=name, line=line,
-            )
+            # (``target`` was computed above for the entry-reachability
+            # gate; reuse it.)
             if is_framework_callable(inventory, target):
                 # Optionally annotate so operators / downstream
                 # consumers can see this function was static-
