@@ -1733,6 +1733,18 @@ Examples:
                         # Strip one level of leading indent so it sits
                         # consistently under the analysis-complete bullets.
                         print(f"  {line}")
+
+                # ZKPoX eligibility — FREE surfacing (design trigger
+                # model): classification only, no bundle assembly,
+                # no execution. Shows how many witnesses are ZK-proof
+                # candidates.
+                from packages.zkpox import render_run_eligibility
+                elig_block = render_run_eligibility(
+                    autonomous_out / "witnesses",
+                )
+                if elig_block:
+                    for line in elig_block.splitlines():
+                        print(f"  {line}")
         else:
             print("⚠️  Analysis failed or produced no output")
             if stderr:
