@@ -128,10 +128,14 @@ def test_if0_else_arm_is_live():
 
 
 def test_cpp_also_blanked():
+    # Assert on the view's contract (parse_text blanking), not on extracted
+    # names — qualified C++ method extraction needs tree-sitter-cpp, which
+    # CI's stdlib-fallback path lacks (same divergence as the #620 fix).
     src = "#if 0\nvoid Dead::m() {}\n#endif\nvoid Live::m() {}\n"
     v = preprocess_view("t.cpp", "cpp", src)
     assert v.fidelity == 1
-    assert "m" in _names(v, "cpp")  # live one present; dead arm gone
+    assert "Dead::m" not in v.parse_text            # dead arm blanked
+    assert "void Live::m() {}" in v.parse_text       # live arm intact
 
 
 def test_detect_ranges_only_fire_on_literal_zero():
