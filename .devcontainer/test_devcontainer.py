@@ -846,11 +846,11 @@ Examples:
 
     args = parser.parse_args()
 
-    # Change to repo root if needed
-    if os.path.exists("packages") or os.path.exists(".claude"):
-        pass  # Already in repo root
-    elif os.path.exists("../packages"):
-        os.chdir("..")
+    # The checks below run relative to the repo root. Anchor to this
+    # script's own location (parents[1] = .devcontainer → repo root)
+    # rather than guessing from the caller's cwd, so the script works
+    # no matter where it's invoked from.
+    os.chdir(Path(__file__).resolve().parents[1])
 
     results = run_all_tests(verbose=args.verbose, skip_optional=args.skip_optional)
 
