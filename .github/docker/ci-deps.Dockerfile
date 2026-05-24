@@ -13,6 +13,16 @@
 # env.PYTHON_VERSION (3.12).
 FROM python:3.12-slim-bookworm
 
+# git is required by actions/checkout when this image is used as a
+# container-job base — the slim base ships none, and checkout fails
+# without it. ca-certificates is already present in the slim image.
+# Kept to the single tool checkout needs; tiers that require heavier
+# system tooling (sandbox namespaces, radare2/gcc) stay on the runner
+# rather than bloating this image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /opt/raptor-ci
 
 # Copy only the manifests first so the dependency layer cache survives
