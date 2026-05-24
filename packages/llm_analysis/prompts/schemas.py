@@ -155,7 +155,7 @@ FINDING_RESULT_SCHEMA = {
         # description text (line 17 above) already advertises the
         # allowed values, but the JSON Schema previously accepted
         # any string — Haiku organically emitted ``not_called`` on
-        # a 2026-05-24 honeyslop multi-model run because the C1
+        # a 2026-05-24 multi-model run because the C1
         # prompt surfaces ``Verdict: NOT_CALLED`` and Haiku echoed
         # it back. Structured-output providers (Gemini / Anthropic
         # tool-use) honour the enum, so this forces the LLM to map

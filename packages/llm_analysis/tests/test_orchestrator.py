@@ -559,7 +559,7 @@ class TestBuildSchema:
         """Regression: ``ruling`` field carries an ``enum`` constraint
         matching the documented AGENTIC_RULING_VALUES (plus None).
         Pre-fix the field accepted any string — Haiku organically
-        emitted ``not_called`` on a multi-model honeyslop run because
+        emitted ``not_called`` on a multi-model run because
         the C1 prompt surfaces ``Verdict: NOT_CALLED``. Structured-
         output providers (Gemini / Anthropic tool-use) honour the
         enum, so this forces the LLM to map to canonical vocabulary
