@@ -739,6 +739,27 @@ def _render_one_kinded_group(group: Sequence) -> str:
     bullets = [
         f"- Detail: {sanitise_string(primary.detail, max_chars=_DETAIL_MAX_CHARS)}"
     ]
+
+    # Cross-detector escalation rationale, set by
+    # supply_chain._escalate_cross_detector when a slopsquat-shaped name
+    # co-occurs with recent_publish / low_bus_factor / maintainer change.
+    # Surface it so the (possibly bumped) header severity is explained
+    # rather than mysterious. Union across the group — escalation is keyed
+    # on the same dep+kind, so members normally share reasons.
+    escalation_reasons: List[str] = []
+    for f in group:
+        ev = getattr(f, "evidence", None)
+        if isinstance(ev, dict):
+            for r in ev.get("escalation_reasons") or ():
+                if r not in escalation_reasons:
+                    escalation_reasons.append(str(r))
+    if len(escalation_reasons) == 1:
+        bullets.append(f"- Escalated: {escape_nonprintable(escalation_reasons[0])}")
+    elif escalation_reasons:
+        bullets.append("- Escalated:")
+        for r in escalation_reasons:
+            bullets.append(f"  - {escape_nonprintable(r)}")
+
     # Switch to a list when there are MULTIPLE distinct source
     # paths. A group of N findings that all share one declared_in
     # path (duplicate findings the emitter happened to produce

@@ -251,6 +251,11 @@ def render_grouped_findings_markdown(
                 f"- **{_finding_title(finding)}** (`{finding_id}`) — "
                 f"{package} — {severity}"
             )
+            evidence = sca.get("evidence") or {}
+            reasons = evidence.get("escalation_reasons") or []
+            if isinstance(reasons, list):
+                for reason in reasons:
+                    lines.append(f"  - escalated: {reason}")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

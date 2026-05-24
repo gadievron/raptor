@@ -13,6 +13,8 @@ from core.project.cli import (
     _get_active_project,
     _get_output_summary,
     _print_findings,
+    _print_sca_findings_section,
+    _sca_finding_escalations,
     _sca_finding_kind,
     _sca_finding_package,
     main,
@@ -29,14 +31,17 @@ class _FakeProject:
         return self._run_dirs
 
 
-def _sca_finding(name, *, severity="high"):
+def _sca_finding(name, *, severity="high", escalation_reasons=None):
+    sca = {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name}
+    if escalation_reasons is not None:
+        sca["evidence"] = {"escalation_reasons": escalation_reasons}
     return {
         "id": f"SCA-{name}", "finding_id": f"SCA-{name}",
         "vuln_type": "sca:supply_chain:slopsquat_suspect", "tool": "sca",
         "file": "package.json", "function": name, "line": 0,
         "severity": severity, "title": f"Slopsquat suspect: {name}",
         "description": "looks like an LLM-hallucinated package name",
-        "sca": {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name},
+        "sca": sca,
     }
 
 
@@ -94,6 +99,31 @@ class TestPrintFindingsSca(unittest.TestCase):
         f = _sca_finding("lodahs")
         self.assertEqual(_sca_finding_package(f), "npm:lodahs")
         self.assertEqual(_sca_finding_kind(f), "Supply Chain · Slopsquat Suspect")
+
+    def test_escalation_helper_extracts_reasons(self):
+        f = _sca_finding("react-helper", escalation_reasons=["co-occurs with X"])
+        self.assertEqual(_sca_finding_escalations(f), ["co-occurs with X"])
+        # Absent / malformed evidence yields an empty list, never raises.
+        self.assertEqual(_sca_finding_escalations(_sca_finding("lodahs")), [])
+        self.assertEqual(_sca_finding_escalations({}), [])
+
+    def test_escalation_reasons_printed_in_detailed_mode(self):
+        rows = [_sca_finding("react-helper", severity="critical",
+                             escalation_reasons=["co-occurs with recent_publish"])]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _print_sca_findings_section(rows, detailed=True)
+        self.assertIn("escalated: co-occurs with recent_publish", buf.getvalue())
+
+    def test_escalation_reasons_absent_from_summary_mode(self):
+        rows = [_sca_finding("react-helper", severity="critical",
+                             escalation_reasons=["co-occurs with recent_publish"])]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _print_sca_findings_section(rows, detailed=False)
+        # Summary table shows the (bumped) severity but not the prose reasons.
+        self.assertNotIn("escalated:", buf.getvalue())
+        self.assertIn("Critical", buf.getvalue())
 
     def test_sca_section_renders(self):
         with TemporaryDirectory() as d:

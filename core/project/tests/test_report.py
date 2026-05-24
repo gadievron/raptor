@@ -13,14 +13,17 @@ from core.project.report import (
 from core.run import start_run, complete_run
 
 
-def _sca_row(name, *, severity="high"):
+def _sca_row(name, *, severity="high", escalation_reasons=None):
+    sca = {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name}
+    if escalation_reasons is not None:
+        sca["evidence"] = {"escalation_reasons": escalation_reasons}
     return {
         "id": f"sca:supply_chain:slopsquat_suspect:npm:{name}",
         "finding_id": f"sca:supply_chain:slopsquat_suspect:npm:{name}",
         "vuln_type": "sca:supply_chain:slopsquat_suspect",
         "tool": "sca", "file": "package.json", "function": name, "line": 0,
         "severity": severity, "title": f"Slopsquat suspect: {name}",
-        "sca": {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name},
+        "sca": sca,
     }
 
 
@@ -245,6 +248,18 @@ class TestRenderGroupedFindingsMarkdownSca(unittest.TestCase):
             [], "proj", sca_findings=[_sca_row("expresss")])
         self.assertNotIn("No findings.", md)
         self.assertIn("## Supply chain / dependencies (SCA)", md)
+
+    def test_escalation_reasons_rendered_as_sub_bullet(self):
+        sca = [_sca_row("react-helper", severity="critical",
+                        escalation_reasons=[
+                            "co-occurs with recent_publish + low_bus_factor"])]
+        md = render_grouped_findings_markdown([], "proj", sca_findings=sca)
+        self.assertIn("escalated: co-occurs with recent_publish", md)
+
+    def test_no_escalation_reasons_no_sub_bullet(self):
+        md = render_grouped_findings_markdown(
+            [], "proj", sca_findings=[_sca_row("react-helper")])
+        self.assertNotIn("escalated:", md)
 
 
 if __name__ == "__main__":

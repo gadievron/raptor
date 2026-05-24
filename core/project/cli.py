@@ -975,6 +975,20 @@ def _sca_finding_package(finding):
     return f"{eco}:{name}" if eco else name
 
 
+def _sca_finding_escalations(finding):
+    """Cross-detector escalation rationale for an SCA finding, if any.
+
+    Set by SCA's ``supply_chain`` layer when a slopsquat-shaped name
+    co-occurs with recent_publish / low_bus_factor / maintainer change;
+    explains a bumped severity. Lands at
+    ``finding['sca']['evidence']['escalation_reasons']``.
+    """
+    sca = finding.get("sca") or {}
+    evidence = sca.get("evidence") or {}
+    reasons = evidence.get("escalation_reasons") or []
+    return [str(r) for r in reasons] if isinstance(reasons, list) else []
+
+
 def _print_sca_findings_section(sca_findings, detailed=False):
     """Render SCA / dependency findings in their own section.
 
@@ -1025,6 +1039,8 @@ def _print_sca_findings_section(sca_findings, detailed=False):
         if desc and isinstance(desc, str):
             for ln in desc.strip().split("\n")[:2]:
                 print(f"{indent}{ln.strip()}")
+        for reason in _sca_finding_escalations(f):
+            print(f"{indent}escalated: {reason}")
         print()
 
 

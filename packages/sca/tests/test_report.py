@@ -438,7 +438,8 @@ def test_write_markdown_report_atomic(tmp_path: Path) -> None:
 def _supply_chain(kind: str = "version_publish",
                   declared_in: str = "/repo/package.json",
                   detail: str = "publish frequency outlier",
-                  severity: str = "info"):
+                  severity: str = "info",
+                  evidence=None):
     """Build a SupplyChainFinding for dedup tests. Each fixture lets
     callers override ``declared_in`` to simulate the same dep being
     flagged in multiple manifests."""
@@ -454,7 +455,8 @@ def _supply_chain(kind: str = "version_publish",
     return SupplyChainFinding(
         finding_id=f"sca:supply_chain:{kind}:PyPI:requests:{declared_in}",
         kind=kind,                                         # type: ignore[arg-type]
-        dependency=dep, detail=detail, evidence={},
+        dependency=dep, detail=detail,
+        evidence=evidence if evidence is not None else {},
         severity=severity,                                 # type: ignore[arg-type]
         confidence=Confidence("high", reason="t"),
     )
@@ -711,3 +713,39 @@ def test_advisory_text_with_ansi_or_bidi_is_sanitised() -> None:
     assert "\x07" not in md
     # The visible text survives.
     assert "danger" in md and "red" in md and "malicious" in md
+
+
+# ---------------------------------------------------------------------------
+# Cross-detector escalation rationale
+# ---------------------------------------------------------------------------
+
+def test_supply_chain_escalation_reasons_rendered() -> None:
+    """When supply_chain._escalate_cross_detector bumps severity it
+    records why in evidence['escalation_reasons']; the report must
+    surface that so the bumped severity isn't mysterious."""
+    sc = _supply_chain(kind="slopsquat_suspect", severity="critical",
+                       evidence={"escalation_reasons": [
+                           "co-occurs with recent_publish + low_bus_factor "
+                           "(LLM-hallucination-bait archetype)"
+                       ]})
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=1,
+        vuln_findings=[],
+        hygiene_findings=[],
+        supply_chain_findings=[sc],
+    )
+    assert "Escalated:" in md
+    assert "LLM-hallucination-bait archetype" in md
+
+
+def test_supply_chain_without_escalation_has_no_escalated_bullet() -> None:
+    sc = _supply_chain(kind="slopsquat_suspect", evidence={})
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=1,
+        vuln_findings=[],
+        hygiene_findings=[],
+        supply_chain_findings=[sc],
+    )
+    assert "Escalated:" not in md
