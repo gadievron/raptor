@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""ZKPoX operator CLI — assemble bundles and reproduce witnesses.
+
+Two subcommands covering the dependency-free tiers:
+
+    raptor-zkpox bundle <witness_store> <witness_hash> --out <dir>
+        Tier 0/1: assemble a prover-ready bundle for one eligible
+        witness, persisted under <out>/zkpox/<witness_hash>/.
+
+    raptor-zkpox reproduce <bundle_dir> [--binary <path>] [--n 3]
+        Tier 1.5: re-run the bundle's witness N times in the
+        sandbox, confirm the recorded outcome reproduces, and fold
+        the result back into the bundle manifest (bumps tier to 1.5
+        when it reproduces).
+
+Eligibility is FREE and surfaced automatically in run summaries;
+these subcommands are the ON-REQUEST steps. The tier model lives in
+the package docstring (packages/zkpox/__init__.py).
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+import argparse
+import json
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _cmd_bundle(args) -> int:
+    from core.witness import WitnessStore, WitnessStoreError
+    from packages.zkpox import (
+        ZKPoXBundleError,
+        assemble_bundle,
+        render_bundle,
+        write_bundle,
+    )
+
+    store_root = Path(args.witness_store)
+    if not (store_root / "manifests").is_dir():
+        sys.stderr.write(
+            f"not a witness store (no manifests/): {store_root}\n"
+        )
+        return 2
+
+    store = WitnessStore(store_root)
+    try:
+        witness = store.get_witness(args.witness_hash)
+    except WitnessStoreError as e:
+        sys.stderr.write(f"witness lookup failed: {e}\n")
+        return 2
+
+    try:
+        bundle = assemble_bundle(witness, store)
+    except ZKPoXBundleError as e:
+        sys.stderr.write(f"bundle assembly refused: {e}\n")
+        return 1
+
+    bundle_dir = write_bundle(bundle, store, Path(args.out))
+    print(render_bundle(bundle))
+    print(f"  bundle dir: {bundle_dir}")
+    return 0
+
+
+def _cmd_reproduce(args) -> int:
+    from packages.zkpox import (
+        ZKPoXBundle,
+        attach_reproduction,
+        render_bundle,
+        reproduce_witness,
+    )
+
+    bundle_dir = Path(args.bundle_dir)
+    manifest_path = bundle_dir / "manifest.json"
+    witness_path = bundle_dir / "witness.bin"
+    if not manifest_path.is_file():
+        sys.stderr.write(f"no manifest.json in {bundle_dir}\n")
+        return 2
+    if not witness_path.is_file():
+        sys.stderr.write(f"no witness.bin in {bundle_dir}\n")
+        return 2
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        sys.stderr.write(f"manifest.json is not valid JSON: {e}\n")
+        return 2
+    if not isinstance(manifest, dict):
+        sys.stderr.write("manifest.json is not a JSON object\n")
+        return 2
+
+    # The four fields reproduce_witness reads are load-bearing; a
+    # manifest missing any of them is corrupt, not reproducible.
+    required = ("witness_hash", "witness_len", "source", "observed_outcome")
+    missing = [k for k in required if k not in manifest]
+    if missing:
+        sys.stderr.write(
+            f"manifest.json missing required field(s): "
+            f"{', '.join(missing)}\n"
+        )
+        return 2
+
+    # Reconstruct the bundle dataclass from the manifest. The rest
+    # round-trip for re-persistence.
+    bundle = ZKPoXBundle(
+        witness_hash=manifest["witness_hash"],
+        witness_len=manifest["witness_len"],
+        source=manifest["source"],
+        observed_outcome=manifest["observed_outcome"],
+        outcome_detail=manifest.get("outcome_detail", {}),
+        target_binary_hash=manifest.get("target_binary_hash"),
+        target_source_hash=manifest.get("target_source_hash"),
+        produced_by=manifest.get("produced_by"),
+        timestamp=manifest.get("timestamp"),
+        attestation=manifest.get("attestation", {}),
+        tier=manifest.get("tier", "0/1"),
+        reproduction=manifest.get("reproduction"),
+    )
+
+    witness_bytes = witness_path.read_bytes()
+    binary_path = Path(args.binary) if args.binary else None
+
+    result = reproduce_witness(
+        bundle, witness_bytes,
+        binary_path=binary_path, n=args.n,
+    )
+    attach_reproduction(bundle, result)
+
+    # Re-persist the manifest with the reproduction block + tier bump.
+    manifest_path.write_text(
+        json.dumps(bundle.as_dict(), indent=2), encoding="utf-8",
+    )
+
+    print(render_bundle(bundle))
+    print(f"  reproduced: {result.reproduced} "
+          f"(attempted={result.attempted}, {result.reason})")
+    # Exit 0 when it reproduced; 1 when attempted-but-not; 2 when
+    # not attempted (couldn't run) — so scripts can branch.
+    if result.reproduced:
+        return 0
+    return 1 if result.attempted else 2
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-zkpox",
+        description="ZKPoX bundle assembly + witness reproduction.",
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("bundle", help="Tier 0/1: assemble a bundle")
+    b.add_argument("witness_store", help="WitnessStore root dir")
+    b.add_argument("witness_hash", help="sha256 of the witness bytes")
+    b.add_argument("--out", required=True, help="output dir")
+
+    r = sub.add_parser("reproduce", help="Tier 1.5: reproduce a bundle")
+    r.add_argument("bundle_dir", help="bundle dir (with manifest.json)")
+    r.add_argument("--binary", help="target binary (FUZZ/replay sources)")
+    r.add_argument("--n", type=int, default=3,
+                   help="consecutive runs (default 3)")
+
+    args = ap.parse_args()
+    if args.cmd == "bundle":
+        return _cmd_bundle(args)
+    if args.cmd == "reproduce":
+        return _cmd_reproduce(args)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

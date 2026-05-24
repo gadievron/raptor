@@ -22,7 +22,7 @@ runs when only its own (and lower tiers') dependencies are present.
   Tier 1.5 — reproduction  Re-execute W against H N times in the
                            sandbox; confirm O reproduces. Sandbox
                            dep only; reproducibility, not ZK.
-                           (next increment)
+                           IMPLEMENTED HERE (on request).
   Tier 2 — RISC-V          Execute the target in a RISC-V emulator
                            for a deterministic trace. Needs a RISC-V
                            toolchain. (not yet implemented)
@@ -45,13 +45,16 @@ default-on because cheap; running code is opt-in):
 ## This package today
 
 Everything achievable *without* the heavyweight proving stack —
-Tier 0/1, the dependency-free attestation tier:
+Tiers 0/1 and 1.5:
 
   * :mod:`packages.zkpox.eligibility` — candidacy classification
     (free) + the free end-of-run summary.
   * :mod:`packages.zkpox.bundle` — prover-ready bundle assembly
     (on request); the stable hand-off shape every higher tier
     consumes.
+  * :mod:`packages.zkpox.reproduce` — Tier 1.5 native reproduction
+    (on request): re-run the witness N times, confirm the outcome
+    reproduces, fold the result into the bundle.
 
 The point: the real ZK tiers (2 RISC-V, 3 SP1) pull a large
 dependency chain. An operator who wants them installs those deps
@@ -75,6 +78,11 @@ from packages.zkpox.eligibility import (
     render_eligibility_summary,
     summarize_eligibility,
 )
+from packages.zkpox.reproduce import (
+    ReproductionResult,
+    attach_reproduction,
+    reproduce_witness,
+)
 from packages.zkpox.surfacing import render_run_eligibility
 
 __all__ = [
@@ -88,4 +96,7 @@ __all__ = [
     "assemble_bundle",
     "write_bundle",
     "render_bundle",
+    "ReproductionResult",
+    "reproduce_witness",
+    "attach_reproduction",
 ]
