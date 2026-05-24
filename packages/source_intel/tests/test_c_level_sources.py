@@ -21,6 +21,13 @@ def test_source_scanner_composes_shared_catalog_with_source_local_reads():
     assert _C_L1_SOURCE_CALLS["recv"] == "socket"
     assert _C_L1_SOURCE_CALLS["fgets"] == "stream"
     assert _C_L1_SOURCE_CALLS["scanf"] == "stream"
+    assert _C_L1_SOURCE_CALLS["wscanf"] == "stream"
+    assert "accept" not in _C_L1_SOURCE_CALLS
+    assert "bind" not in _C_L1_SOURCE_CALLS
+    assert "listen" not in _C_L1_SOURCE_CALLS
+    assert "sscanf" not in _C_L1_SOURCE_CALLS
+    assert "vsscanf" not in _C_L1_SOURCE_CALLS
+    assert "swscanf" not in _C_L1_SOURCE_CALLS
     assert _C_L1_SOURCE_CALLS["getenv"] == "env"
     assert _C_L1_SOURCE_CALLS["ioctl"] == "device_control"
     assert _C_L1_SOURCE_CALLS["copy_from_user"] == "kernel_user"
@@ -84,6 +91,42 @@ def test_c_level_source_scan_ignores_comments_strings_and_prototypes(tmp_path):
     assert ("socket", "recv") not in seen
     assert ("stream", "fgets") not in seen
     assert ("env", "getenv") not in seen
+
+
+def test_c_level_source_scan_excludes_setup_and_in_memory_parse_calls(tmp_path):
+    src = tmp_path / "setup_only.c"
+    src.write_text(
+        "extern int accept(int, void *, void *);\n"
+        "extern int bind(int, const void *, unsigned int);\n"
+        "extern int listen(int, int);\n"
+        "extern int recv(int, void *, unsigned long, int);\n"
+        "extern int sscanf(const char *, const char *, ...);\n"
+        "extern int swscanf(const wchar_t *, const wchar_t *, ...);\n"
+        "extern int wscanf(const wchar_t *, ...);\n"
+        "int main(void) {\n"
+        "    char buf[128];\n"
+        "    wchar_t wbuf[128];\n"
+        "    accept(3, 0, 0);\n"
+        "    bind(3, 0, 0);\n"
+        "    listen(3, 16);\n"
+        "    sscanf(buf, \"%d\", 0);\n"
+        "    swscanf(wbuf, L\"%d\", 0);\n"
+        "    recv(3, buf, sizeof(buf), 0);\n"
+        "    wscanf(L\"%d\", 0);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    observations = _scan_c_level_source_inputs(tmp_path)
+
+    seen = {(ev.source_kind, ev.source_name) for ev in observations}
+    assert ("socket", "recv") in seen
+    assert ("stream", "wscanf") in seen
+    assert ("socket", "accept") not in seen
+    assert ("socket", "bind") not in seen
+    assert ("socket", "listen") not in seen
+    assert ("stream", "sscanf") not in seen
+    assert ("stream", "swscanf") not in seen
 
 
 def test_c_level_sources_render_into_prompt_lines():

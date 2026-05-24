@@ -99,10 +99,25 @@ _SOURCE_SIDE_FD_READ_FUNCS: FrozenSet[str] = frozenset({
     "fread",
 })
 
+# The shared taxonomy sets are intentionally broader for binary fingerprinting.
+# Keep only call sites that directly ingest bytes for L1 source evidence.
+_SOURCE_SIDE_SOCKET_INPUT_FUNCS: FrozenSet[str] = NETWORK_INGEST_FUNCS - frozenset({
+    "accept",
+    "bind",
+    "listen",
+})
+_SOURCE_SIDE_STREAM_INPUT_FUNCS: FrozenSet[str] = (
+    STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS
+) - frozenset({
+    "sscanf",
+    "vsscanf",
+    "swscanf",
+})
+
 _C_L1_SOURCE_CALLS: Dict[str, str] = {
     **{name: "fd" for name in sorted(_SOURCE_SIDE_FD_READ_FUNCS)},
-    **{name: "socket" for name in sorted(NETWORK_INGEST_FUNCS)},
-    **{name: "stream" for name in sorted(STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS)},
+    **{name: "socket" for name in sorted(_SOURCE_SIDE_SOCKET_INPUT_FUNCS)},
+    **{name: "stream" for name in sorted(_SOURCE_SIDE_STREAM_INPUT_FUNCS)},
     **{name: "env" for name in sorted(PROCESS_BOUNDARY_FUNCS)},
     **{name: "kernel_user" for name in sorted(KERNEL_USERSPACE_FUNCS)},
     **{name: "ipc" for name in sorted(IPC_FUNCS)},
