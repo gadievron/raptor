@@ -26,6 +26,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-r2-sandboxed"
 
+# A real, small ELF to use as the r2 target / symlink destination.
+# Resolve `ls` wherever it lives (/bin vs /usr/bin differ across distros
+# and the /usr-merge); fall back to the interpreter (always present) so
+# these tests never assume a hardcoded /bin/ls path exists.
+_REAL_BINARY = shutil.which("ls") or sys.executable
+
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -172,12 +178,12 @@ class TestSymlinkResolution:
     while r2 actually reads the symlink's target."""
 
     def test_symlink_resolved_before_validation(self, tmp_path):
-        """Create a symlink at /tmp/X/target → /bin/ls, invoke wrapper
-        with the symlink path. The wrapper should accept (resolved
-        path /bin/ls is a real file) and the sandbox-side path passed
-        to r2 reflects the realpath."""
+        """Create a symlink at /tmp/X/target → a real binary, invoke
+        the wrapper with the symlink path. The wrapper should accept
+        (the resolved path is a real file) and the sandbox-side path
+        passed to r2 reflects the realpath."""
         link = tmp_path / "target-symlink"
-        link.symlink_to("/bin/ls")
+        link.symlink_to(_REAL_BINARY)
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         # We don't actually wait for r2 to fully run — just confirm
         # the wrapper got past validation. Short timeout, ignore rc.
@@ -210,7 +216,7 @@ class TestR2Invocation:
         # dir doesn't fight the per-ns mount of /usr/bin.
         self.tmp = tempfile.mkdtemp(prefix="r2-wrapper-test-")
         self.binary = Path(self.tmp) / "target"
-        shutil.copy("/bin/ls", self.binary)
+        shutil.copy(_REAL_BINARY, self.binary)
         self.binary.chmod(0o755)
         self.output_dir = Path(self.tmp) / "output"
         self.output_dir.mkdir()
@@ -283,7 +289,7 @@ class TestAdversarialIsolation:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp(prefix="r2-adv-test-")
         self.binary = Path(self.tmp) / "target"
-        shutil.copy("/bin/ls", self.binary)
+        shutil.copy(_REAL_BINARY, self.binary)
         self.binary.chmod(0o755)
         self.output_dir = Path(self.tmp) / "output"
         self.output_dir.mkdir()

@@ -175,12 +175,15 @@ def test_write_bundle_rejects_traversal_hash(tmp_path):
     non-sha256-hex value before any path is touched."""
     store, w = _store_with_witness(tmp_path)
     bundle = assemble_bundle(w, store)
-    bundle.witness_hash = "../../../../tmp/zkpox_traversal_probe"
+    # Escape the output tree (`out`) into its parent — the threat is a
+    # mkdir *outside* `out`. Keep the probe under tmp_path so the test
+    # never touches a shared real-FS path like /tmp/zkpox_traversal_probe.
+    bundle.witness_hash = "../zkpox_traversal_probe"
     out = tmp_path / "out"
     with pytest.raises(ZKPoXBundleError) as e:
         write_bundle(bundle, store, out)
     assert "not a sha256 hex digest" in str(e.value)
-    assert not Path("/tmp/zkpox_traversal_probe").exists()
+    assert not (tmp_path / "zkpox_traversal_probe").exists()
 
 
 def test_assemble_rejects_non_hex_hash(tmp_path):

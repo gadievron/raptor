@@ -304,8 +304,8 @@ def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
     reason="no Claude Code credentials",
 )
 @pytest.mark.skipif(
-    not Path("/home/raptor/.local/bin/claude").exists(),
-    reason="claude binary not at expected path",
+    shutil.which("claude") is None,
+    reason="claude binary not on PATH",
 )
 def test_live_cc_dispatch_sentinel_home_file_not_leaked(tmp_path):
     """Sentinel: write a secret to ~/.test-cc-sentinel.txt (mode 0600);
