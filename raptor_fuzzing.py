@@ -778,6 +778,20 @@ Examples:
             print(f" LLM-exploit witnesses ({out_dir / 'analysis' / 'witnesses'}):")
             print(llm_summary)
 
+    # ZKPoX eligibility — FREE surfacing (trigger model): pure
+    # classification of the witnesses we just recorded, no bundle
+    # assembly and no execution. Tells the operator how many
+    # witnesses could become zero-knowledge proof candidates — a
+    # pre-flight signal for whether installing the heavyweight
+    # proving stack would have anything to chew on. Discovery scans
+    # both run-local stores (<out>/witnesses + <out>/analysis/
+    # witnesses) in one pass.
+    from packages.zkpox import render_run_eligibility
+    elig = render_run_eligibility(out_dir)
+    if elig:
+        print("")
+        print(elig)
+
     # Save summary report
     report = {
         "binary": str(binary_path),
