@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from packages.sca.calibration.refit import (
     DEFAULT_MAX_DELTA,
     JointRefitReport,
@@ -22,6 +24,12 @@ from packages.sca.calibration.tests.test_refit import (
     _write_sample,
     _write_signals,
 )
+
+# Multi-pass coordinate descent with random restarts: ~22s for the
+# 9 tests in this module. Each restart pass converges on a held-out
+# corpus, so the runtime is intrinsic, not setup overhead. Gate as
+# slow — default CI skips, nightly runs full grid.
+pytestmark = pytest.mark.slow
 
 
 # ---------------------------------------------------------------------------

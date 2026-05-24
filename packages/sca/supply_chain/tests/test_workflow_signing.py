@@ -453,6 +453,7 @@ def test_dependabot_yml_is_audited(tmp_path: Path) -> None:
 # Anomaly-branch finding cap.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not (_HAS_GIT and _HAS_GPG), reason="gpg not available",
 )
