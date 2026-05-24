@@ -154,6 +154,20 @@ class PythonExtractor:
                 functions.append(self._extract_function(child, class_name))
                 # Walk into nested functions/classes
                 self._walk(child, functions, class_name=class_name)
+            else:
+                # Descend into compound statements (if / try / with /
+                # for / while / match) so functions nested inside them
+                # are still captured. tree-sitter extraction already
+                # does this; the stdlib fallback previously stopped at
+                # the first non-class/def node, so functions inside
+                # e.g. ``if False:`` guards, ``try/except`` import
+                # fallbacks, or context managers were invisible to
+                # inventory + reachability on tree-sitter-less
+                # environments. class_name is preserved — these nodes
+                # don't open a class scope. Only FunctionDef nodes are
+                # collected, so recursing through expression children
+                # is harmless (lambdas are ast.Lambda, not FunctionDef).
+                self._walk(child, functions, class_name=class_name)
 
     def _extract_function(self, node: ast.AST, class_name: Optional[str]) -> FunctionInfo:
         """Extract a single function with full metadata."""

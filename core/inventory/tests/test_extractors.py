@@ -112,6 +112,31 @@ class TestPythonExtractor:
         funcs = PythonExtractor().extract("t.py", code)
         assert funcs[0].line_end == 3
 
+    def test_function_inside_compound_statement_extracted(self):
+        # The stdlib walker must descend into compound statements (if /
+        # try / with / for / while) so nested functions are captured —
+        # matching tree-sitter. Pre-fix it stopped at the first non-
+        # class/def node, so functions inside ``if False:`` guards or
+        # ``try/except`` import fallbacks were invisible to inventory +
+        # reachability on tree-sitter-less environments. Required for
+        # the dead-scope reachability gate to have anything to tag.
+        code = (
+            "if False:\n"
+            "    def dead_fn(x):\n"
+            "        return x\n"
+            "\n"
+            "try:\n"
+            "    import fast\n"
+            "except ImportError:\n"
+            "    def fallback(y):\n"
+            "        return y\n"
+            "\n"
+            "def live(z):\n"
+            "    return z\n"
+        )
+        names = {f.name for f in PythonExtractor().extract("t.py", code)}
+        assert names == {"dead_fn", "fallback", "live"}
+
 
 # ---------------------------------------------------------------------------
 # Regex extractors — basic metadata
