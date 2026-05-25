@@ -511,6 +511,7 @@ def orchestrate(
                     result=result, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
                     duration=response.duration, quality=quality,
+                    resolved_model=response.resolved_model,
                 )
             else:
                 response = client.generate(
@@ -522,6 +523,7 @@ def orchestrate(
                     result={"content": response.content}, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
                     duration=response.duration,
+                    resolved_model=response.resolved_model,
                 )
 
         dispatch_mode = "external_llm"
@@ -1239,6 +1241,14 @@ def orchestrate(
         # on CC-prep / CC-fallback paths (no prefilter wiring).
         "fast_tier_short_circuits": (
             getattr(client, "short_circuits", 0) if client is not None else 0
+        ),
+        # Models that actually fired in-process during analysis, each with the
+        # provider-served snapshot when the SDK exposed one (alias-only
+        # otherwise). Feeds the run provenance manifest. Empty on CC-prep /
+        # subprocess-dispatch paths (no in-process client calls) — alias-level
+        # attribution still lives in `analysis_models` above.
+        "fired_models": (
+            client.get_fired_models() if client is not None else []
         ),
     }
 

@@ -664,6 +664,9 @@ class JudgeTask(DispatchTask):
                 primary["is_exploitable"] = final
                 primary["judge_analyses"] = [
                     {"model": ja.get("analysed_by", "?"),
+                     # Carry the resolved snapshot through so judge scorecard
+                     # outcomes record model_version (else it's always None).
+                     "resolved_model": ja.get("resolved_model"),
                      "is_exploitable": ja.get("is_exploitable"),
                      "reasoning": ja.get("reasoning", "")}
                     for ja in judge_analyses

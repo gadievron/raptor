@@ -103,6 +103,11 @@ class LLMResponse:
     output_tokens: int = 0
     thinking_tokens: int = 0
     duration: float = 0.0
+    # The concrete model snapshot the provider actually served, lifted from
+    # the SDK response when it exposes one (e.g. alias "gemini-2.5-pro" →
+    # "gemini-2.5-pro-002"). None when the provider doesn't surface it — the
+    # provenance manifest then records the alias only, never a guess.
+    resolved_model: Optional[str] = None
 
 
 @dataclass
@@ -119,10 +124,36 @@ class StructuredResponse:
     provider: str = ""
     duration: float = 0.0
     cached: bool = False
+    # Concrete model snapshot the provider served (see LLMResponse.resolved_model).
+    resolved_model: Optional[str] = None
 
     def __iter__(self):
         """Allow unpacking as 2-tuple for backwards compatibility."""
         return iter((self.result, self.raw))
+
+
+def extract_resolved_model(raw: Any) -> Optional[str]:
+    """Best-effort: the concrete model id from a provider SDK response object.
+
+    Providers are configured with floating aliases ("gemini-2.5-pro"); the SDK
+    response usually echoes the snapshot the provider actually served
+    ("gemini-2.5-pro-002"). That snapshot is the only honest record of *which*
+    model ran, so we lift it when present. Returns None when the SDK doesn't
+    surface it — callers then fall back to the alias and never fabricate a
+    snapshot. Never raises; provenance must not break a generation.
+    """
+    if raw is None:
+        return None
+    # OpenAI / litellm / Anthropic SDK response objects expose `.model`;
+    # Google genai exposes `.model_version`.
+    for attr in ("model", "model_version"):
+        try:
+            value = getattr(raw, attr, None)
+        except Exception:
+            value = None
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 class LLMProvider(ABC):
@@ -148,8 +179,12 @@ class LLMProvider(ABC):
     @abstractmethod
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
                            system_prompt: Optional[str] = None,
-                           **kwargs) -> Tuple[Dict[str, Any], str]:
+                           **kwargs) -> "StructuredResponse":
         """Generate structured output matching the provided schema.
+
+        Returns a ``StructuredResponse`` (which unpacks as a ``(result, raw)``
+        2-tuple via ``__iter__`` for backwards compatibility, and carries the
+        resolved model snapshot).
 
         ``**kwargs`` accepts per-call generation overrides — most
         notably ``temperature``. Pre-fix the abstract signature did
@@ -362,7 +397,13 @@ class LLMProvider(ABC):
             parsed = _coerce_to_schema(parsed, schema)
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
-            return result_dict, json.dumps(result_dict, indent=2)
+            # Carry the resolved model from the underlying generate() call so
+            # the JSON-fallback path attributes correctly too.
+            return StructuredResponse(
+                result=result_dict,
+                raw=json.dumps(result_dict, indent=2),
+                resolved_model=response.resolved_model,
+            )
         except Exception as e:
             # Pre-fix the logger interpolated `e` directly into the
             # log line. For `pydantic.ValidationError` (the typical
@@ -943,6 +984,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 output_tokens=output_tokens,
                 thinking_tokens=thinking_tokens,
                 duration=duration,
+                resolved_model=extract_resolved_model(response),
             )
 
         except Exception as e:
@@ -1004,7 +1046,11 @@ class OpenAICompatibleProvider(LLMProvider):
                 cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
                 self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
-                return result_dict, full_response
+                return StructuredResponse(
+                    result=result_dict,
+                    raw=full_response,
+                    resolved_model=extract_resolved_model(completion),
+                )
 
             except Exception as e:
                 if not self._instructor_warned:
@@ -1522,6 +1568,7 @@ class AnthropicProvider(LLMProvider):
                 output_tokens=output_tokens,
                 thinking_tokens=thinking_tokens,
                 duration=duration,
+                resolved_model=extract_resolved_model(response),
             )
 
         except Exception as e:
@@ -1578,7 +1625,11 @@ class AnthropicProvider(LLMProvider):
                 cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
                 self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
-                return result_dict, full_response
+                return StructuredResponse(
+                    result=result_dict,
+                    raw=full_response,
+                    resolved_model=extract_resolved_model(completion),
+                )
 
             except Exception as e:
                 if not self._instructor_warned:
@@ -2086,6 +2137,7 @@ class GeminiProvider(LLMProvider):
                 tokens_used=tokens_used,
                 cost=cost,
                 finish_reason=finish_reason,
+                resolved_model=extract_resolved_model(response),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 thinking_tokens=thinking_tokens,
@@ -2161,7 +2213,11 @@ class GeminiProvider(LLMProvider):
             logger.debug(f"[Gemini] structured model={self.config.model_name}, tokens={tokens_used}, "
                          f"cost=${cost:.4f}, duration={duration:.2f}s, thinking={thinking_tokens}")
 
-            return result_dict, full_response
+            return StructuredResponse(
+                result=result_dict,
+                raw=full_response,
+                resolved_model=extract_resolved_model(response),
+            )
 
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             # Schema/parsing error — native mode incompatible, fall back to JSON-in-prompt
@@ -2415,6 +2471,14 @@ class ClaudeCodeLLMProvider(LLMProvider):
             duration=duration,
         )
 
+        # The claude-code harness reports the model it used in `analysed_by`;
+        # treat that as the resolved snapshot. But cc_adapter may set it to a
+        # comma-joined list (main + tool-routing helper) — that's not a single
+        # snapshot, so leave resolved_model None rather than emit a bogus
+        # multi-value "version" into the manifest/scorecard.
+        analysed_by = parsed.get("analysed_by")
+        resolved = analysed_by if (analysed_by and "," not in analysed_by) else None
+
         return LLMResponse(
             content=content,
             model=parsed.get("analysed_by", self.config.model_name),
@@ -2422,6 +2486,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             tokens_used=tokens,
             cost=cost,
             finish_reason="stop",
+            resolved_model=resolved,
             input_tokens=0,
             output_tokens=tokens,
             duration=duration,

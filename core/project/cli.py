@@ -83,6 +83,25 @@ def main():
         help="Exit non-zero unless LLM item coverage is at least this percentage",
     )
 
+    # provenance
+    p_prov = sub.add_parser(
+        "provenance",
+        help="Show provenance rollup across all runs (SHAs, engines, models, reproducibility)",
+        usage="raptor project provenance [<name>]",
+        **_F,
+    )
+    p_prov.add_argument("name", nargs="?", help="Project name")
+
+    # show
+    p_show = sub.add_parser(
+        "show",
+        help="Show one run's provenance detail",
+        usage="raptor project show <run> [<name>]",
+        **_F,
+    )
+    p_show.add_argument("run", help="Run directory name (or unique substring)")
+    p_show.add_argument("name", nargs="?", help="Project name")
+
     # findings
     p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
                                 usage="raptor project findings [<name>] [--detailed]", **_F)
@@ -303,6 +322,28 @@ def main():
             result = _print_coverage(p, detailed=args.detailed, fail_under=args.fail_under)
             if result is False:
                 sys.exit(1)
+
+        elif args.subcommand == "provenance":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_provenance(p)
+
+        elif args.subcommand == "show":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_run_provenance(p, args.run)
 
         elif args.subcommand == "findings":
             name = args.name or _get_active_project()
@@ -617,6 +658,8 @@ def main():
             print(f"  Merged findings: {stats['findings']}")
             if stats.get("annotations") is not None:
                 print(f"  Annotations: {stats['annotations']}")
+            if stats.get("provenance_markdown"):
+                print(f"  Provenance: {stats['provenance_markdown']}")
 
         elif args.subcommand == "export":
             from .export import export_project
@@ -778,7 +821,17 @@ def _print_status(project):
                 status_str = _yellow(status)
             else:
                 status_str = status
-            print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}")
+            # Compact provenance tag: "<sha7>[*] repro|llm" (* = modified tree;
+            # repro = deterministic/mechanical, llm = LLM-mediated). Empty for
+            # legacy/unavailable runs. Appended last so colour codes in
+            # status_str don't disturb column padding.
+            from core.run.provenance import format_repro_short, format_sha_short
+            _manifest = (meta or {}).get("manifest")
+            tag = " ".join(
+                t for t in (format_sha_short(_manifest), format_repro_short(_manifest)) if t
+            )
+            line = f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}"
+            print(f"{line}  {tag}" if tag else line)
         # Disk usage — use os.walk(followlinks=False) so we stay inside
         # the run dir even if a stray symlink points outside (or back into
         # the run, creating a loop). Path.rglob follows symlinked dirs on
@@ -807,6 +860,47 @@ def _print_status(project):
 
     else:
         print("\nNo runs.")
+
+
+def _print_provenance(project):
+    """Print the project-level provenance rollup across all runs."""
+    from core.run import load_run_metadata
+    from core.run.provenance import aggregate_provenance, format_provenance_rollup
+
+    runs = project.get_run_dirs(sweep=False)
+    metadatas = [load_run_metadata(d) for d in runs]
+    print(f"Project: {project.name}")
+    print(format_provenance_rollup(aggregate_provenance(metadatas)))
+
+
+def _print_run_provenance(project, run_query):
+    """Print one run's provenance detail. ``run_query`` matches a run dir by
+    exact name, else by unique substring."""
+    from core.run import load_run_metadata
+    from core.run.provenance import format_manifest_block
+
+    runs = project.get_run_dirs(sweep=False)
+    exact = [d for d in runs if d.name == run_query]
+    matches = exact or [d for d in runs if run_query in d.name]
+    if not matches:
+        print(f"No run matching '{run_query}' in project '{project.name}'.")
+        return
+    if len(matches) > 1:
+        print(f"Ambiguous '{run_query}' — matches {len(matches)} runs:")
+        for d in matches:
+            print(f"  {d.name}")
+        return
+
+    d = matches[0]
+    meta = load_run_metadata(d) or {}
+    print(f"Run: {d.name}")
+    print(f"  Command: {meta.get('command', '?')}")
+    ts = (meta.get("timestamp") or "")[:19]
+    if ts:
+        print(f"  When: {ts}")
+    print(f"  Status: {meta.get('status', '?')}")
+    block = format_manifest_block(meta.get("manifest"))
+    print(block or "  (no provenance manifest)")
 
 
 def _print_coverage(project, detailed=False, fail_under=None):

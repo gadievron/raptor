@@ -202,11 +202,19 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
     if session_pid is not None:
         _cleanup_abandoned(output_dir.parent, command, session_pid)
 
+    # Seal the provenance manifest NOW, before any analysis runs. The
+    # source-control snapshot in particular must be taken here — the tree
+    # can change mid-run or after, and the only honest record of what
+    # produced this run is the state at its start. complete_run merges in
+    # end-of-run facts (models that fired, engine versions).
+    from core.run.provenance import build_start_manifest
+
     metadata = {
-        "version": 1,
+        "version": 2,
         "command": command,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": STATUS_RUNNING,
+        "manifest": build_start_manifest(target=target),
         "extra": extra or {},
     }
     if session_pid is not None:
@@ -525,10 +533,17 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
 #    file. Misleading.
 # Finalizing first preserves the data; status update is just the signal.
 
-def complete_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
-    """Update .raptor-run.json to status=completed."""
+def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
+                 manifest: Dict[str, Any] = None) -> None:
+    """Update .raptor-run.json to status=completed.
+
+    ``manifest`` merges end-of-run provenance — the models that fired, engine
+    versions, ``deterministically_reproducible`` — into the manifest sealed at
+    start_run. Top-level keys overwrite; the start-sealed source_control /
+    environment snapshots are preserved unless explicitly overwritten.
+    """
     _finalize_sandbox_summary(output_dir)
-    _update_status(output_dir, STATUS_COMPLETED, extra)
+    _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
 
 
 def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,
@@ -661,11 +676,19 @@ def generate_run_metadata(run_dir: Path) -> None:
         mtime = run_dir.stat().st_mtime
         timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
+    # Adopted/legacy dirs never had provenance sealed at run time, and it
+    # cannot be reconstructed (today's git/model/tool state is unrelated to
+    # the run that produced these artifacts). Stamp the manifest as
+    # explicitly unavailable so cite/reporting degrade honestly rather than
+    # backfilling current values.
+    from core.run.provenance import UNAVAILABLE_MANIFEST
+
     metadata = {
-        "version": 1,
+        "version": 2,
         "command": command,
         "timestamp": timestamp,
         "status": STATUS_COMPLETED,  # Assume completed if it exists
+        "manifest": dict(UNAVAILABLE_MANIFEST),
         "extra": {"adopted": True},
     }
 
@@ -676,7 +699,8 @@ _TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLE
 
 
 def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
-                   record_timing: bool = True) -> None:
+                   record_timing: bool = True,
+                   manifest: Dict[str, Any] = None) -> None:
     """Update the status field in .raptor-run.json.
 
     When record_timing is True (default), also records end_timestamp and
@@ -727,6 +751,15 @@ def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
         existing_extra = metadata.get("extra", {})
         existing_extra.update(extra)
         metadata["extra"] = existing_extra
+
+    if manifest:
+        # Merge end-of-run provenance into the start-sealed manifest. Shallow
+        # top-level merge: source_control / environment (sealed at start) stay
+        # put; models / engines / deterministically_reproducible land here.
+        existing_manifest = metadata.get("manifest", {})
+        existing_manifest.update(manifest)
+        metadata["manifest"] = existing_manifest
+
     save_json(path, metadata)
 
 

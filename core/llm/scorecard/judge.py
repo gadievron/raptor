@@ -96,6 +96,7 @@ def record_judge_outcomes(
             scorecard,
             decision_class=decision_class,
             model=primary_model,
+            model_version=result.get("resolved_model"),
             outcome="correct" if primary_correct else "incorrect",
             sample_reasoning=(
                 None if primary_correct
@@ -117,6 +118,7 @@ def record_judge_outcomes(
                 scorecard,
                 decision_class=decision_class,
                 model=judge_model,
+                model_version=ja.get("resolved_model"),
                 outcome="correct" if judge_correct else "incorrect",
                 sample_reasoning=(
                     None if judge_correct
@@ -139,6 +141,7 @@ def _record_one(
     outcome: str,
     sample_reasoning: Optional[str],
     other_summary: str,
+    model_version: Optional[str] = None,
 ) -> None:
     sample = None
     if outcome == "incorrect" and sample_reasoning is not None:
@@ -152,6 +155,7 @@ def _record_one(
             model=model,
             event_type=EventType.JUDGE_REVIEW,
             outcome=outcome,
+            model_version=model_version,
             sample=sample,
         )
     except Exception as e:                              # noqa: BLE001

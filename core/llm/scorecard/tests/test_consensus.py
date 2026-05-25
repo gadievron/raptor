@@ -99,6 +99,37 @@ class TestDisputedFindings:
         assert _stat(scorecard, dc, "opus",  EventType.MULTI_MODEL_CONSENSUS) == (1, 0)
         assert _stat(scorecard, dc, "flash", EventType.MULTI_MODEL_CONSENSUS) == (0, 1)
 
+    def test_resolved_model_recorded_as_model_version(self, scorecard):
+        """The per-model result's resolved snapshot lands in the cell's
+        model_version; a model with no resolved snapshot stays alias-only
+        (empty), never guessed."""
+        matrix = {
+            "f1": {
+                "pro":   {"is_exploitable": True},
+                "opus":  {"is_exploitable": True},
+                "flash": {"is_exploitable": False},
+            },
+        }
+        confidence = {"f1": "disputed"}
+        results = {"f1": {"rule_id": "py/sqli", "reasoning": "..."}}
+        per_finding_results = {"f1": [
+            {"analysed_by": "pro", "resolved_model": "gemini-2.5-pro-002", "reasoning": "x"},
+            {"analysed_by": "flash", "resolved_model": "gemini-2.5-flash-001", "reasoning": "y"},
+            # 'opus' intentionally has no resolved_model.
+            {"analysed_by": "opus", "reasoning": "z"},
+        ]}
+        record_consensus_outcomes(
+            scorecard,
+            correlation=_correlation(matrix=matrix, confidence=confidence),
+            results_by_id=results,
+            per_finding_results=per_finding_results,
+        )
+        dc = "agentic:py/sqli"
+        assert scorecard.get_stat(dc, "pro").model_version == "gemini-2.5-pro-002"
+        assert scorecard.get_stat(dc, "flash").model_version == "gemini-2.5-flash-001"
+        # No snapshot supplied → alias-only, not fabricated.
+        assert scorecard.get_stat(dc, "opus").model_version == ""
+
     def test_1v2_minority_incorrect_majority_correct(self, scorecard):
         """Symmetric case: 2 say not-exploitable, 1 dissents (says exploitable)."""
         matrix = {

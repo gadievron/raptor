@@ -301,6 +301,11 @@ class LLMClient:
         self.total_cost = 0.0
         self.request_count = 0
         self.task_type_costs: Dict[str, float] = {}  # task_type → cumulative cost
+        # Distinct models actually invoked during this client's lifetime,
+        # keyed by (provider, alias, resolved, role) → call count. Feeds the
+        # run provenance manifest. Cache hits are NOT recorded — a cache hit
+        # fired no provider call. Guarded by _stats_lock.
+        self._fired_models: Dict[tuple, int] = {}
         # Number of full ANALYSE calls avoided because the scorecard
         # trusted the cheap-tier verdict and the consumer short-
         # circuited. Bumped by consumers via ``record_short_circuit``;
@@ -552,6 +557,48 @@ class LLMClient:
             # Schemas should always serialise; fall back to a stable
             # repr if a caller passes something weird.
             return repr(sorted(kwargs.items()))
+
+    def _record_fired_model(self, provider: str, alias: str,
+                            resolved: Optional[str], role: str) -> None:
+        """Record that a provider call fired for (provider, alias, role).
+
+        ``resolved`` is the provider-served snapshot when the SDK exposed one,
+        else None (alias-only — never guessed). Deduped by the full key so the
+        manifest stays compact; repeated calls bump the count.
+
+        Never raises. This runs inside the generation try-block, and provenance
+        bookkeeping must not be able to fail a real LLM call — including on a
+        client built via ``__new__`` that skipped ``__init__`` (some test and
+        dispatcher paths do this), where ``_fired_models`` / ``_stats_lock`` may
+        be absent. Lazily initialises the map and swallows any error.
+        """
+        try:
+            key = (provider, alias, resolved, role)
+            with self._stats_lock:
+                fired = getattr(self, "_fired_models", None)
+                if fired is None:
+                    fired = self._fired_models = {}
+                fired[key] = fired.get(key, 0) + 1
+        except Exception:
+            pass
+
+    def get_fired_models(self) -> list:
+        """Distinct models invoked during this run (cache hits excluded).
+
+        Each entry: ``{provider, alias, resolved, role, calls}``. ``resolved``
+        is the served snapshot or None. Powers the provenance manifest's model
+        attribution. Empty when no provider call fired (a fully cached re-run,
+        or a non-LLM command) — which is the honest record, not a gap.
+        """
+        fired = getattr(self, "_fired_models", None)
+        if not fired:
+            return []
+        with self._stats_lock:
+            items = list(fired.items())
+        return [
+            {"provider": p, "alias": a, "resolved": r, "role": role, "calls": n}
+            for (p, a, r, role), n in items
+        ]
 
     def _get_cache_key(
         self, prompt: str, system_prompt: Optional[str], model: str,
@@ -954,6 +1001,14 @@ class LLMClient:
                         # Cache response
                         self._save_to_cache(cache_key, response)
 
+                        # Record provenance: this provider call fired. role is
+                        # primary for the first model tried, fallback otherwise.
+                        self._record_fired_model(
+                            model.provider, model.model_name,
+                            response.resolved_model,
+                            "primary" if model_idx == 0 else "fallback",
+                        )
+
                         logger.debug(f"Generation successful: {model.provider}/{model.model_name} "
                                     f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
                                     f"duration: {duration:.1f}s)")
@@ -1182,6 +1237,10 @@ class LLMClient:
                                     f"duration: {duration:.1f}s)")
 
                         result_dict, raw = result_tuple
+                        # Lift the resolved snapshot the provider attached
+                        # (StructuredResponse carries it; a bare-tuple return
+                        # yields None — alias-only, never guessed).
+                        resolved = getattr(result_tuple, "resolved_model", None)
                         structured_response = StructuredResponse(
                             result=result_dict,
                             raw=raw,
@@ -1190,6 +1249,11 @@ class LLMClient:
                             model=model.model_name,
                             provider=model.provider,
                             duration=duration,
+                            resolved_model=resolved,
+                        )
+                        self._record_fired_model(
+                            model.provider, model.model_name, resolved,
+                            "primary" if model_idx == 0 else "fallback",
                         )
                         # Cache before returning so repeated identical calls
                         # short-circuit the provider entirely. Cache key is

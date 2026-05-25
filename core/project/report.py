@@ -482,6 +482,23 @@ def generate_project_report(project) -> Dict[str, Any]:
     annotations_md_path = report_dir / "annotations.md"
     annotations_md_path.write_text(annotations_md, encoding="utf-8")
 
+    # Per-run provenance — what produced each run (framework SHA + dirty flag,
+    # environment, engines, models that fired, reproducibility). Honest about
+    # runs with no/unavailable manifest rather than inventing current state.
+    from core.run.metadata import load_run_metadata
+    from core.run.provenance import format_manifest_block
+    prov_lines = [f"# Provenance — {project.name}", ""]
+    for d in run_dirs:
+        meta = load_run_metadata(d) or {}
+        ts = (meta.get("timestamp") or "")[:19]
+        prov_lines.append(f"## {d.name}")
+        prov_lines.append(f"{meta.get('command', '?')} · {ts}")
+        block = format_manifest_block(meta.get("manifest"), indent="- ")
+        prov_lines.append(block or "- (no provenance manifest)")
+        prov_lines.append("")
+    provenance_md_path = report_dir / "provenance.md"
+    provenance_md_path.write_text("\n".join(prov_lines), encoding="utf-8")
+
     return {
         "findings": len(merged),
         "sca_findings": len(sca_findings),
@@ -492,4 +509,5 @@ def generate_project_report(project) -> Dict[str, Any]:
         "aggregate_markdown": findings_export["aggregate_markdown"],
         "finding_buckets": findings_export["counts"],
         "annotations_markdown": str(annotations_md_path),
+        "provenance_markdown": str(provenance_md_path),
     }

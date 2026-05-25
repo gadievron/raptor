@@ -80,6 +80,26 @@ def _extract_target(args: list) -> str | None:
     return None
 
 
+def _scan_engine_manifest(out_dir: Path, command: str) -> dict | None:
+    """End-of-run provenance for mechanical scan commands.
+
+    Only ``scan`` and ``codeql`` are purely mechanical — static rules/queries
+    with no LLM in the verdict path — so only they record engine versions and
+    ``deterministically_reproducible=True`` here. Other commands routed through
+    ``_run_with_lifecycle`` (agentic, fuzz, web) either manage their own
+    provenance (agentic seals ``deterministically_reproducible=False``) or are
+    not yet covered; returning None leaves their manifest untouched so we never
+    clobber it. Engines are detected from their canonical output files.
+    """
+    if command not in ("scan", "codeql"):
+        return None
+    from core.run.provenance import detect_engines
+    return {
+        "engines": detect_engines(out_dir),
+        "deterministically_reproducible": True,
+    }
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -225,7 +245,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             pass
 
     if rc == 0:
-        complete_run(out_dir)
+        complete_run(out_dir, manifest=_scan_engine_manifest(out_dir, command))
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc
