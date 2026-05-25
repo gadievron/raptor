@@ -10,9 +10,12 @@ import pytest
 
 from core.dataflow.barrier_synth import (
     BarrierProposal,
+    CorpusSynthItem,
     assemble_barrier_query,
     make_llm_proposer,
+    render_corpus_report,
     run_synthesis_loop,
+    synthesize_over_corpus,
 )
 
 _GUARD = (
@@ -195,3 +198,30 @@ def test_main_cli_synthesizes_and_emits_sound_query(tmp_path: Path, monkeypatch,
     ])
     assert rc == 0  # sound
     assert "proposedGuard" in capsys.readouterr().out  # synthesized query to stdout
+
+
+# --- corpus aggregate ---
+
+def test_synthesize_over_corpus_aggregates_outcomes(tmp_path: Path):
+    a1, b1 = tmp_path / "a1", tmp_path / "b1"   # sound: after 0 / before 1
+    a2, b2 = tmp_path / "a2", tmp_path / "b2"   # not_sound: after 0 / before 0 (killed TP)
+    a3, b3 = tmp_path / "a3", tmp_path / "b3"   # no_barrier: proposer emits garbage
+    runner = _stub_runner({str(a1): 0, str(b1): 1, str(a2): 0, str(b2): 0})
+
+    def proposer(proposal, _prior):
+        return "no predicate here" if proposal.finding_id == "F-nobar" else _GUARD
+
+    items = [
+        CorpusSynthItem(BarrierProposal("cmdi", "F-sound", "s", "c"), a1, b1),
+        CorpusSynthItem(BarrierProposal("cmdi", "F-killtp", "s", "c"), a2, b2),
+        CorpusSynthItem(BarrierProposal("cmdi", "F-nobar", "s", "c"), a3, b3),
+    ]
+    rep = synthesize_over_corpus(items, proposer=proposer, work_dir=tmp_path / "w",
+                                 runner=runner, max_attempts=1)
+    assert rep.total == 3
+    assert (rep.sound, rep.not_sound, rep.no_barrier) == (1, 1, 1)
+    assert rep.suppression_rate == 1 / 3
+    assert dict(rep.per_finding) == {
+        "F-sound": "sound", "F-killtp": "not_sound", "F-nobar": "no_barrier",
+    }
+    assert "sound barrier:   1" in render_corpus_report(rep)

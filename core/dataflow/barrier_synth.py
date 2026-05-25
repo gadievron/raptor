@@ -195,6 +195,78 @@ def run_synthesis_loop(
 
 
 # ---------------------------------------------------------------------------
+# Corpus-level aggregate — run synthesis over many FPs, report suppression rate
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CorpusSynthItem:
+    """One flagged FP to synthesize a barrier for, with its before/after DBs."""
+
+    proposal: BarrierProposal
+    after_db: Path
+    before_db: Path
+
+
+@dataclass(frozen=True)
+class CorpusSynthReport:
+    total: int
+    sound: int          # sound barrier synthesized (FP suppressed, TP preserved)
+    not_sound: int      # compiled but failed the soundness check (no suppress / killed TP)
+    no_barrier: int     # no compilable barrier after retries
+    per_finding: tuple  # ((finding_id, status), ...); status in sound/not_sound/no_barrier
+
+    @property
+    def suppression_rate(self) -> Optional[float]:
+        """Fraction of FPs for which a sound barrier was synthesized — the
+        headline scale metric ("how much addressable FP can we suppress")."""
+        return None if self.total == 0 else self.sound / self.total
+
+
+def synthesize_over_corpus(
+    items,
+    *,
+    proposer: BarrierProposer,
+    work_dir: Path,
+    search_path: Optional[str] = None,
+    codeql_bin: str = DEFAULT_CODEQL_BIN,
+    runner: Optional[RunnerFn] = None,
+    max_attempts: int = 1,
+) -> CorpusSynthReport:
+    """Run the synthesis loop over a corpus of flagged FPs and aggregate."""
+    sound = not_sound = no_barrier = 0
+    per: list = []
+    for item in items:
+        res = run_synthesis_loop(
+            item.proposal, item.after_db, item.before_db,
+            proposer=proposer, work_dir=work_dir / item.proposal.finding_id,
+            search_path=search_path, codeql_bin=codeql_bin, runner=runner,
+            max_attempts=max_attempts,
+        )
+        if res is None:
+            status, no_barrier = "no_barrier", no_barrier + 1
+        elif res.is_sound:
+            status, sound = "sound", sound + 1
+        else:
+            status, not_sound = "not_sound", not_sound + 1
+        per.append((item.proposal.finding_id, status))
+    return CorpusSynthReport(
+        total=len(per), sound=sound, not_sound=not_sound,
+        no_barrier=no_barrier, per_finding=tuple(per),
+    )
+
+
+def render_corpus_report(r: CorpusSynthReport) -> str:
+    rate = "n/a" if r.suppression_rate is None else f"{r.suppression_rate * 100:.0f}%"
+    return (
+        f"Trust barrier synthesis over {r.total} FP(s)\n"
+        f"  sound barrier:   {r.sound}  ({rate} of FPs suppressed, zero TP loss)\n"
+        f"  not sound:       {r.not_sound}  (compiled but failed the soundness check)\n"
+        f"  no barrier:      {r.no_barrier}  (no compilable barrier after retries)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # LLM proposer — the production "propose" step
 # ---------------------------------------------------------------------------
 
