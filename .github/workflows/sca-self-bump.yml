@@ -203,12 +203,25 @@ jobs:
           if [[ -n "$pr_num" ]]; then
             gh pr edit "$pr_num" --body-file pr-body.md
             echo "Updated existing PR #$pr_num"
+            pr_ref="$pr_num"
           else
-            gh pr create \
+            # Create WITHOUT --label: gh treats a label that isn't defined
+            # in the repo as a hard error and aborts PR creation entirely
+            # (this is what failed on the missing ``sca-self-bump`` label).
+            # Labels are applied best-effort below so they can never block
+            # the PR.
+            pr_ref=$(gh pr create \
               --base main \
               --head sca-self-bump \
               --title "chore: SCA-gated self-bump" \
-              --body-file pr-body.md \
-              --label dependencies \
-              --label sca-self-bump
+              --body-file pr-body.md)
+            echo "Opened PR $pr_ref"
           fi
+          # Best-effort labels — a missing label must never fail the run.
+          # The token has pull-requests:write, which applies EXISTING
+          # labels but can't create new ones, so create any you want
+          # auto-applied once under Settings → Labels.
+          for lbl in dependencies sca-self-bump; do
+            gh pr edit "$pr_ref" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done
