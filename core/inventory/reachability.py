@@ -2314,9 +2314,59 @@ def is_lexically_dead(
 # macros) that could hide an entry edge, return UNCERTAIN rather than claim
 # NO_PATH_FROM_ENTRY. Surface-only consumers treat UNCERTAIN as "analyze".
 
-# Languages whose entry model is a closed, sound signal (a NO_PATH verdict
-# is trustworthy). Others degrade to UNCERTAIN.
-_CLOSEABLE_ENTRY_LANGS = frozenset({"c", "cpp", "go", "rust"})
+# Per-language reachability profile — the declarative entry model. Adding a
+# language's entry behaviour is one PROFILES entry; the entry accessors below
+# derive from it instead of inline ``if language ==`` chains.
+#
+#   entry_model:
+#     "sound"     — closed linkage/visibility signal; a NO_PATH_FROM_ENTRY
+#                   verdict is trustworthy (C/C++ static-vs-extern, Go
+#                   exported, Rust pub). entry_reachability may return NO_PATH.
+#     "heuristic" — entries identifiable but the model isn't closed (dynamic
+#                   dispatch / reflection); NO_PATH would be surface-only.
+#                   (No language uses this yet — the Python/Java dead-island
+#                   coverage units flip it on; today nothing is "heuristic".)
+#     "none"      — no visibility-based entry signal; functions fall through
+#                   to UNCERTAIN + the 1-hop NOT_CALLED logic (py/js/java/…).
+#   visibility_entry: how a function's visibility marks it an external entry —
+#     "non_static" (C/C++) | "go_exported" | "rust_pub" | "" (none).
+#   has_go_init / has_java_web: language-specific framework-dispatch entries.
+@dataclass(frozen=True)
+class ReachabilityProfile:
+    language: str
+    entry_model: str = "none"
+    visibility_entry: str = ""
+    has_go_init: bool = False
+    has_java_web: bool = False
+
+
+PROFILES: Dict[str, ReachabilityProfile] = {
+    "c":    ReachabilityProfile("c", "sound", "non_static"),
+    "cpp":  ReachabilityProfile("cpp", "sound", "non_static"),
+    "go":   ReachabilityProfile("go", "sound", "go_exported", has_go_init=True),
+    "rust": ReachabilityProfile("rust", "sound", "rust_pub"),
+    "java": ReachabilityProfile("java", "none", has_java_web=True),
+    "python":     ReachabilityProfile("python", "none"),
+    "javascript": ReachabilityProfile("javascript", "none"),
+    "typescript": ReachabilityProfile("typescript", "none"),
+    "ruby":       ReachabilityProfile("ruby", "none"),
+    "csharp":     ReachabilityProfile("csharp", "none"),
+    "php":        ReachabilityProfile("php", "none"),
+}
+
+_DEFAULT_PROFILE = ReachabilityProfile("")
+
+
+def _profile(language: str) -> ReachabilityProfile:
+    return PROFILES.get(language or "", _DEFAULT_PROFILE)
+
+
+# Languages whose entry model is a closed, sound signal — DERIVED from the
+# profiles (a NO_PATH verdict is trustworthy only for these). Kept as a
+# frozenset for the entry_reachability soundness gate.
+_CLOSEABLE_ENTRY_LANGS = frozenset(
+    lang for lang, p in PROFILES.items() if p.entry_model == "sound"
+)
 
 # Java servlet / filter lifecycle methods — invoked by the container, no
 # in-project caller. (init/destroy are generic names too; treating them as
@@ -2361,32 +2411,34 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     name = item.get("name") or ""
     if name == "main":
         return True
+    p = _profile(language)
     # Go runs every ``func init()`` automatically at package load — init
     # and its call tree are reachable even with no explicit caller.
-    if language == "go" and name == "init":
+    if p.has_go_init and name == "init":
         return True
     # Java web handlers are framework-dispatched entries with no in-project
     # caller: servlet lifecycle methods by name and JAX-RS / Spring routing
     # annotations. Without this, live servlet handlers (doPost/doGet) read
     # not_called and get surface-demoted.
-    if language == "java" and _java_web_entry(name, item):
+    if p.has_java_web and _java_web_entry(name, item):
         return True
-    if language not in _CLOSEABLE_ENTRY_LANGS:
+    # Visibility/linkage entry signal (only for languages whose model is a
+    # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
+    # fall through to UNCERTAIN + 1-hop NOT_CALLED, behaviour unchanged).
+    if not p.visibility_entry:
         return False
-    md = item.get("metadata") or {}
-    vis = md.get("visibility")
-    if language in ("c", "cpp"):
+    vis = (item.get("metadata") or {}).get("visibility")
+    if p.visibility_entry == "non_static":
         # External linkage = potential entry from another TU. NOTE: a
         # ``static`` function whose ADDRESS is stored in a non-static /
         # exported object (an ops/vtable dispatch table) is externally
         # reachable too, but the call graph doesn't track address-taking —
-        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps
-        # this from silencing them (the LLM still analyses); tracking
-        # address-of is a substrate follow-up.
+        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps this
+        # from silencing them; tracking address-of is a substrate follow-up.
         return vis != "static"
-    if language == "go":
+    if p.visibility_entry == "go_exported":
         return vis == "exported" or name[:1].isupper()
-    if language == "rust":
+    if p.visibility_entry == "rust_pub":
         return vis in ("public", "pub")
     return False
 

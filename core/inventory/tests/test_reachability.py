@@ -651,3 +651,27 @@ def test_deep_chain_not_truncated_to_no_path():
                       "chain": [f"f{k}"], "line": 10 + k})
     inv = _entry_inv("d.c", "c", items, calls)
     assert _er(inv, "d.c", "f55", 65) == "reachable"
+
+
+def test_closeable_langs_derived_from_profiles():
+    # _CLOSEABLE_ENTRY_LANGS is derived from PROFILES (entry_model=="sound"),
+    # not hand-maintained — pin the membership + the per-language entry rules.
+    from core.inventory.reachability import _CLOSEABLE_ENTRY_LANGS, PROFILES
+    assert _CLOSEABLE_ENTRY_LANGS == frozenset({"c", "cpp", "go", "rust"})
+    for lang in ("c", "cpp", "go", "rust"):
+        assert PROFILES[lang].entry_model == "sound", lang
+    assert PROFILES["c"].visibility_entry == "non_static"
+    assert PROFILES["go"].has_go_init and PROFILES["go"].visibility_entry == "go_exported"
+    assert PROFILES["rust"].visibility_entry == "rust_pub"
+    assert PROFILES["java"].entry_model == "none" and PROFILES["java"].has_java_web
+    assert PROFILES["python"].entry_model == "none"
+
+
+def test_unknown_language_profile_has_no_entry_signal():
+    # A language with no profile (e.g. kotlin) falls back to the default:
+    # no visibility entry, entry_model "none" → UNCERTAIN, FN-safe.
+    from core.inventory.reachability import _profile
+    p = _profile("kotlin")
+    assert p.entry_model == "none"
+    assert p.visibility_entry == ""
+    assert not p.has_go_init and not p.has_java_web
