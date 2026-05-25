@@ -141,4 +141,36 @@ def tu_membership_excluded(
     return BuildExcluded(line=0, summary="not in compile_commands.json")
 
 
-__all__ = ["BuildExcluded", "detect_build_excluded", "tu_membership_excluded"]
+def crate_module_excluded(
+    abs_path: str, crate_modules: Optional[frozenset],
+) -> Optional[BuildExcluded]:
+    """Rust crate-module-membership witness: a ``.rs`` file not reachable via
+    the ``mod`` tree from any crate root is not part of the crate — never
+    compiled, so every function in it is dead. Heuristic / surface-only (the
+    mod scan is best-effort), so it only demotes / surfaces.
+
+    Returns ``None`` (no exclusion) when:
+      * ``crate_modules`` is ``None`` — membership unknown (no Cargo.toml / no
+        crate root), so never fire on absence-of-evidence;
+      * ``abs_path`` is not a ``.rs`` file;
+      * ``abs_path`` IS in the crate.
+
+    ``abs_path`` must be resolved to match the resolved
+    :func:`core.build.rust_modules.extract_rust_crate_modules` set.
+    """
+    if crate_modules is None:
+        return None
+    if not abs_path.endswith(".rs"):
+        return None
+    if abs_path in crate_modules:
+        return None
+    return BuildExcluded(
+        line=0, summary="not reachable from any crate root (no mod path)")
+
+
+__all__ = [
+    "BuildExcluded",
+    "detect_build_excluded",
+    "tu_membership_excluded",
+    "crate_module_excluded",
+]

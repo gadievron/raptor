@@ -98,3 +98,31 @@ def test_tu_membership_cpp_source_extensions_covered():
     for ext in (".cc", ".cpp", ".cxx", ".c++", ".m", ".mm"):
         assert tu_membership_excluded(
             f"/p/x{ext}", frozenset({"/p/y.c"})) is not None, ext
+
+
+# --- Rust crate-module membership ------------------------------------------
+
+def test_crate_module_none_when_unknown():
+    from core.inventory.build_membership import crate_module_excluded
+    assert crate_module_excluded("/p/x.rs", None) is None
+
+
+def test_crate_module_orphan_excluded():
+    from core.inventory.build_membership import (
+        crate_module_excluded, BuildExcluded,
+    )
+    r = crate_module_excluded("/p/orphan.rs", frozenset({"/p/lib.rs"}))
+    assert isinstance(r, BuildExcluded)
+    assert "mod path" in r.summary
+
+
+def test_crate_module_in_tree_not_excluded():
+    from core.inventory.build_membership import crate_module_excluded
+    assert crate_module_excluded(
+        "/p/lib.rs", frozenset({"/p/lib.rs"})) is None
+
+
+def test_crate_module_non_rs_exempt():
+    from core.inventory.build_membership import crate_module_excluded
+    for other in ("/p/a.c", "/p/a.go", "/p/a.py"):
+        assert crate_module_excluded(other, frozenset({"/p/lib.rs"})) is None

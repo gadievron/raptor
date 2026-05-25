@@ -40,8 +40,13 @@ from .call_graph import (
 )
 from .diff import compare_inventories
 from core.build.macro_config import extract_build_tus, extract_macro_config
+from core.build.rust_modules import extract_rust_crate_modules
 from .dead_scope import detect_dead_scopes
-from .build_membership import detect_build_excluded, tu_membership_excluded
+from .build_membership import (
+    crate_module_excluded,
+    detect_build_excluded,
+    tu_membership_excluded,
+)
 from .module_load_abort import detect_module_load_abort
 from .translation_view import detect_macro_call_targets, preprocess_view
 
@@ -169,13 +174,18 @@ def build_inventory(
     # so — like the Go //go:build detector — it is NOT disabled under
     # allow_unreachable; the surface-only consumers ignore it in that mode.
     build_tus = extract_build_tus(target_path)
+    # Rust crate-module set (mod-tree membership), same role for .rs sources.
+    crate_modules = extract_rust_crate_modules(target_path)
     cfg_fp = macro_config.fingerprint() if macro_config else ""
-    # Fold the TU set into the cache key: a compile_commands change (a file
-    # added to / removed from the build) must invalidate cached build_excluded
-    # marks even when file contents are unchanged.
+    # Fold the membership sets into the cache key: a compile_commands / mod-tree
+    # change (a file added to / removed from the build) must invalidate cached
+    # build_excluded marks even when file contents are unchanged.
     if build_tus:
         cfg_fp += "|tu=" + hashlib.sha256(
             "\0".join(sorted(build_tus)).encode("utf-8")).hexdigest()[:16]
+    if crate_modules:
+        cfg_fp += "|rs=" + hashlib.sha256(
+            "\0".join(sorted(crate_modules)).encode("utf-8")).hexdigest()[:16]
 
     if output_dir is None:
         output_dir = str(default_cache_dir(
@@ -242,7 +252,7 @@ def build_inventory(
                 executor.submit(
                     _process_single_file, fp, target, exclude_patterns,
                     skip_generated, old_files_by_path, allow_unreachable,
-                    macro_config, build_tus,
+                    macro_config, build_tus, crate_modules,
                 ): fp
                 for fp in file_list
             }
@@ -272,7 +282,8 @@ def build_inventory(
             _collect_result(
                 _process_single_file(filepath, target, exclude_patterns,
                                      skip_generated, old_files_by_path,
-                                     allow_unreachable, macro_config, build_tus)
+                                     allow_unreachable, macro_config, build_tus,
+                                     crate_modules)
             )
 
     # Sort for consistent output
@@ -490,6 +501,7 @@ def _process_single_file(
     allow_unreachable: bool = False,
     macro_config: Optional[object] = None,
     build_tus: Optional[frozenset] = None,
+    crate_modules: Optional[frozenset] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
 
@@ -727,6 +739,17 @@ def _process_single_file(
                 record['build_excluded'] = {
                     'line': tu_excluded.line,
                     'summary': tu_excluded.summary,
+                }
+        # Rust crate-module membership: a .rs not reachable via the mod tree
+        # from any crate root is not compiled → dead. Whole-file, heuristic.
+        if 'build_excluded' not in record and crate_modules is not None:
+            rs_excluded = crate_module_excluded(
+                str(filepath.resolve()), crate_modules,
+            )
+            if rs_excluded is not None:
+                record['build_excluded'] = {
+                    'line': rs_excluded.line,
+                    'summary': rs_excluded.summary,
                 }
         return record
 

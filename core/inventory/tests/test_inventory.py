@@ -918,3 +918,48 @@ class TestCppTuMembership:
         inv2 = build_inventory(str(tmp_path))
         assert {f["path"]: ("build_excluded" in f)
                 for f in inv2["files"]}.get("unbuilt.c") is False
+
+
+class TestRustCrateMembership:
+    """Rust crate-module membership: a .rs not reachable via the mod tree from
+    any crate root is marked build_excluded; no Cargo.toml → never fires.
+    Record-level (set pre-extraction) so it holds on both extractor paths."""
+
+    def _be_map(self, tmp_path, with_cargo):
+        (tmp_path / "src").mkdir()
+        if with_cargo:
+            (tmp_path / "Cargo.toml").write_text(
+                '[package]\nname = "x"\nversion = "0.1.0"\n')
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\npub fn api(){}\n")
+        (tmp_path / "src" / "util.rs").write_text("pub fn helper(){}\n")
+        (tmp_path / "src" / "orphan.rs").write_text("pub fn dead(){}\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        return {f["path"]: ("build_excluded" in f)
+                for f in inv["files"] if f["path"].endswith(".rs")}
+
+    def test_orphan_excluded_intree_not(self, tmp_path):
+        be = self._be_map(tmp_path, with_cargo=True)
+        assert be.get("src/orphan.rs") is True   # no mod path → excluded
+        assert be.get("src/lib.rs") is False      # crate root
+        assert be.get("src/util.rs") is False     # reached via `mod util;`
+
+    def test_no_cargo_never_excludes(self, tmp_path):
+        be = self._be_map(tmp_path, with_cargo=False)
+        assert not any(be.values())               # not a crate → unknown
+
+    def test_mod_tree_change_invalidates_persistent_cache(self, tmp_path):
+        # Same orphan.rs content, default persistent (mod-fingerprint-keyed)
+        # cache: adding `mod orphan;` to lib.rs must drop its build_excluded.
+        (tmp_path / "src").mkdir()
+        (tmp_path / "Cargo.toml").write_text(
+            '[package]\nname = "x"\nversion = "0.1.0"\n')
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\n")
+        (tmp_path / "src" / "util.rs").write_text("")
+        (tmp_path / "src" / "orphan.rs").write_text("pub fn d(){}\n")
+        inv1 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv1["files"]}.get("src/orphan.rs") is True
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\nmod orphan;\n")
+        inv2 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv2["files"]}.get("src/orphan.rs") is False
