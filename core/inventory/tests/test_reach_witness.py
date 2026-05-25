@@ -21,9 +21,10 @@ def test_may_suppress_is_safe_by_default_for_everything():
     # corpus-earned set — a static "sound" label is necessary, not
     # sufficient (the detectors are heuristic; a detector bug must not be
     # able to license a false negative).
-    for v in ("module_aborts", "lexical_dead", "no_path_from_entry",
-              "not_called", "called", "framework_callable",
-              "registered_via_call", "reachable", "uncertain"):
+    for v in ("module_aborts", "lexical_dead", "build_excluded",
+              "no_path_from_entry", "not_called", "called",
+              "framework_callable", "registered_via_call", "reachable",
+              "uncertain"):
         assert verdict_from_classification(v).may_suppress() is False, v
 
 
@@ -41,7 +42,7 @@ def test_heuristic_dead_witnesses_never_suppress_even_when_earned():
     # assumptions can miss reflection, cross-file, or address-of edges.
     # Even if an over-eager consumer puts them in the earned set, soundness
     # gates them out.
-    for v in ("no_path_from_entry", "not_called"):
+    for v in ("no_path_from_entry", "not_called", "build_excluded"):
         rv = verdict_from_classification(v)
         assert rv.status is Reachability.UNREACHABLE
         assert rv.witness.soundness is Soundness.HEURISTIC

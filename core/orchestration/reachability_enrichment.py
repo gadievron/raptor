@@ -102,6 +102,7 @@ def mark_unreachable_low_priority(
         from core.inventory.reachability import (
             InternalFunction,
             Verdict,
+            build_excluded,
             entry_reachability,
             function_called,
             is_framework_callable,
@@ -139,6 +140,10 @@ def mark_unreachable_low_priority(
         abort_line = (
             int(file_abort.get("line") or 0) if file_abort else 0
         )
+        # Whole-file build exclusion (e.g. Go ``//go:build ignore``): the file
+        # is never compiled, so every function in it is dead. Whole-file, no
+        # line threshold. Heuristic (config-dependent) → soft-demote only.
+        file_build_excluded = build_excluded(inventory, rel_path) is not None
 
         for func in funcs:
             if not isinstance(func, dict):
@@ -189,6 +194,16 @@ def mark_unreachable_low_priority(
             ):
                 func["priority"] = "low"
                 func["priority_reason"] = "reachability:lexical_dead"
+                marked += 1
+                continue
+
+            # Whole-file build exclusion. Trumps the framework / call-graph
+            # checks below (a file the build never compiles registers and
+            # calls nothing). Heuristic → soft-demote, respects
+            # allow_unreachable like the other surface-only gates.
+            if not allow_unreachable and file_build_excluded:
+                func["priority"] = "low"
+                func["priority_reason"] = "reachability:build_excluded"
                 marked += 1
                 continue
 

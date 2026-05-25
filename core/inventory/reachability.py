@@ -2199,6 +2199,42 @@ def module_aborts_on_load(
     return None
 
 
+def build_excluded(
+    inventory: Dict[str, Any],
+    file_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the build-exclusion record for ``file_path`` if the inventory
+    builder detected that the file is never compiled (e.g. Go
+    ``//go:build ignore``), else ``None``.
+
+    When non-None, NO function in the file is reachable: the translation unit
+    is excluded from the build, so nothing in it is compiled or linked —
+    regardless of in-file call edges or external linkage. Unlike
+    :func:`module_aborts_on_load` this is whole-file with no line threshold
+    (a compile-time, not runtime, property). HEURISTIC, not sound: a build
+    constraint is config-dependent (a forced build / alternate tag set could
+    include the file), so consumers surface-only — demote / annotate, never
+    hard-suppress.
+
+    The returned dict carries ``line`` (constraint location, display-only)
+    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup, no
+    index build — mirrors :func:`module_aborts_on_load`.
+    """
+    if not file_path:
+        return None
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") == normalised:
+            rec = file_record.get("build_excluded")
+            return rec if isinstance(rec, dict) else None
+    return None
+
+
 def is_lexically_dead(
     inventory: Dict[str, Any],
     file_path: str,

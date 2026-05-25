@@ -39,6 +39,7 @@ class WitnessKind(str, Enum):
     # unreachable
     MODULE_ABORTS = "module_aborts"
     LEXICAL_DEAD = "lexical_dead"
+    BUILD_EXCLUDED = "build_excluded"
     NO_PATH_FROM_ENTRY = "no_path_from_entry"
     NOT_CALLED = "not_called"
     # reachable
@@ -121,6 +122,10 @@ _VERDICT_MAP: Dict[str, Tuple[Reachability, WitnessKind, Soundness, str]] = {
     "lexical_dead": (
         Reachability.UNREACHABLE, WitnessKind.LEXICAL_DEAD, Soundness.SOUND,
         "defined inside an always-false guard",
+    ),
+    "build_excluded": (
+        Reachability.UNREACHABLE, WitnessKind.BUILD_EXCLUDED, Soundness.HEURISTIC,
+        "translation unit excluded from the build (never compiled)",
     ),
     "no_path_from_entry": (
         Reachability.UNREACHABLE, WitnessKind.NO_PATH_FROM_ENTRY,

@@ -41,6 +41,7 @@ from .call_graph import (
 from .diff import compare_inventories
 from core.build.macro_config import extract_macro_config
 from .dead_scope import detect_dead_scopes
+from .build_membership import detect_build_excluded
 from .module_load_abort import detect_module_load_abort
 from .translation_view import detect_macro_call_targets, preprocess_view
 
@@ -690,6 +691,16 @@ def _process_single_file(
             record['module_aborts_on_load'] = {
                 'line': abort.line,
                 'summary': abort.summary,
+            }
+        # Whole-file build exclusion (e.g. Go `//go:build ignore`): the file
+        # is never compiled, so every function in it is dead regardless of
+        # call edges or external linkage. Heuristic (config-dependent) — a
+        # surface-only gate, never hard-suppress.
+        excluded = detect_build_excluded(language, content)
+        if excluded is not None:
+            record['build_excluded'] = {
+                'line': excluded.line,
+                'summary': excluded.summary,
             }
         return record
 

@@ -144,3 +144,33 @@ def test_classify_precedence_module_abort_wins(tmp_path):
     with tempfile.TemporaryDirectory() as td:
         inv = build_inventory(str(tmp_path), td)
     assert classify_reachability(inv, "d.py", "a", 2, "d") == "module_aborts"
+
+
+def test_classify_build_excluded_whole_file():
+    # A build-excluded file (e.g. Go //go:build ignore): every function is
+    # dead, even `main` / `init` which are normally Go entries. Synthetic
+    # inventory keeps this tree-sitter-independent.
+    inv = {"files": [{
+        "path": "go/gen.go", "language": "go",
+        "build_excluded": {"line": 1, "summary": "//go:build ignore"},
+        "items": [{"name": "main", "kind": "function",
+                   "line_start": 3, "line_end": 5}],
+    }]}
+    assert classify_reachability(
+        inv, "go/gen.go", "main", 3, "go.gen") == "build_excluded"
+
+
+def test_classify_sound_witness_beats_build_excluded():
+    # When a function sits below a (sound) module-abort in a file that is ALSO
+    # build-excluded, the sound verdict wins — it can hard-suppress, whereas
+    # build_excluded is heuristic. (A Go file with both a `func init(){panic}`
+    # and a build constraint: functions below the init-panic read
+    # module_aborts; init itself / functions above read build_excluded.)
+    inv = {"files": [{
+        "path": "go/m.go", "language": "go",
+        "module_aborts_on_load": {"line": 2, "summary": "func init(){panic}"},
+        "build_excluded": {"line": 1, "summary": "//go:build ignore"},
+        "items": [{"name": "sink", "kind": "function", "line_start": 4}],
+    }]}
+    assert classify_reachability(
+        inv, "go/m.go", "sink", 4, "go.m") == "module_aborts"

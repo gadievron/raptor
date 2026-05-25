@@ -62,6 +62,7 @@ If the metadata block contains a "Reachability:" section, use it as evidence:
 - "Verdict: MODULE_ABORTS_ON_LOAD" — the file's top-level execution unconditionally aborts (raise ImportError, throw new Error, init() panic, compile_error!) before this function's definition runs. The function is never importable/callable in this deployment, regardless of in-file call edges — peers that appear to call it are equally dead, since the file never finishes loading. This is a STRONGER signal than NOT_CALLED: there is no framework-dispatch escape hatch (registration code below the abort never executes). Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable in this deployment.
 - "Verdict: LEXICAL_DEAD" — this function is defined inside an always-false guard (if False:, if (false) {…}, #[cfg(any())]). The guard's body never executes or compiles, so the function never binds. Like MODULE_ABORTS_ON_LOAD this trumps in-scope call edges (two dead-scope functions calling each other read as mutually called, but the whole scope is dead) and any decorator inside the dead scope never registers anything. Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable.
 - "Verdict: NO_PATH_FROM_ENTRY" — this function has in-project callers, but no path from any entry point (main, framework dispatch, or an exported/public symbol) reaches it: the entire calling chain is an orphaned dead-island (e.g. a static helper called only by another unreachable static function, or a function referenced only from an unread function-pointer table). Stronger than a raw caller count — having a caller doesn't mean the caller itself ever runs. Before marking exploitable, identify a real invocation path from a deployment entry point; if none exists, mark is_exploitable=False with ruling="dead_code" or "unreachable". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable in this deployment.
+- "Verdict: BUILD_EXCLUDED" — this function's file is excluded from the build (e.g. Go //go:build ignore, a standalone `go run gen.go` codegen script), so it is never compiled or linked in the normal build. This is a CONFIG-DEPENDENT (heuristic) signal, weaker than the structural verdicts above: a non-default build (e.g. `go build -tags ignore`) or an alternate build system could include the file. Treat it as strong evidence of unreachability in the shipped configuration — confirm the deployment doesn't compile the file, then mark is_exploitable=False with ruling="dead_code" or "unreachable"; if you have reason to believe the build does include it, say so and analyse normally. The vulnerability shape may still be a true positive (is_true_positive=True).
 - "Caller graph: N direct, M transitive" with N=0 but uncertain > 0 — the substrate found indirection it cannot resolve (string-dispatch / reflect / plugin registries). Treat as potentially reachable; note the indirection class in your reasoning.
 - "Caller graph: N direct, M transitive" with N > 0 — reachability is established; focus on exploit feasibility.
 
@@ -195,6 +196,15 @@ def _format_reachability_block(metadata: Dict[str, Any]) -> str:
         lines.append(
             "Verdict: LEXICAL_DEAD — defined inside an always-false "
             "guard (if False / #[cfg(any())]); never binds"
+        )
+    elif priority_reason == "reachability:build_excluded":
+        # Whole-file build exclusion (e.g. Go //go:build ignore): the file
+        # is never compiled, so nothing in it is reachable. Heuristic
+        # (config-dependent — a forced build could include it), so it's a
+        # surface signal, not a hard verdict; the system prompt explains it.
+        lines.append(
+            "Verdict: BUILD_EXCLUDED — file is excluded from the build "
+            "(e.g. //go:build ignore); never compiled in this configuration"
         )
     elif priority_reason == "reachability:no_path_from_entry":
         # U7: transitive entry-reachability. The function may have an

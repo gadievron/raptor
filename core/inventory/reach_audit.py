@@ -28,7 +28,8 @@ from typing import Dict, Optional, Tuple
 
 # Verdicts that mean "not reachable in this deployment" (dead).
 _DEAD_VERDICTS = frozenset({
-    "module_aborts", "lexical_dead", "no_path_from_entry", "not_called",
+    "module_aborts", "lexical_dead", "build_excluded",
+    "no_path_from_entry", "not_called",
 })
 # Verdicts that mean "reachable / has a live path".
 _LIVE_VERDICTS = frozenset({
@@ -47,13 +48,20 @@ def classify_reachability(
     """Strongest applicable reachability verdict for one function, in the
     same precedence the enrichment prepass uses:
 
-    module_aborts → lexical_dead → entry-reachability (reachable /
-    no_path_from_entry / uncertain) → framework/registration → 1-hop
-    function_called (called / not_called / uncertain).
+    module_aborts → lexical_dead → build_excluded → framework/registration
+    → entry-reachability (reachable / no_path_from_entry / uncertain) →
+    1-hop function_called (called / not_called / uncertain).
+
+    Sound witnesses (module_aborts / lexical_dead) come first so they win
+    where they apply (they can hard-suppress); build_excluded (heuristic,
+    whole-file) then catches anything in a never-compiled file — including
+    functions above a module-abort line and framework-decorated functions,
+    since a file the build never compiles registers nothing.
     """
     from core.inventory.reachability import (
         InternalFunction,
         Verdict,
+        build_excluded,
         entry_reachability,
         function_called,
         is_framework_callable,
@@ -67,6 +75,8 @@ def classify_reachability(
         return "module_aborts"
     if is_lexically_dead(inventory, file_path, name, line):
         return "lexical_dead"
+    if build_excluded(inventory, file_path):
+        return "build_excluded"
 
     target = InternalFunction(file_path=file_path, name=name, line=line)
     # Specific reachable reasons first — framework decorator dispatch and

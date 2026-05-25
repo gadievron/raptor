@@ -378,14 +378,25 @@ class CExtractor:
         try:
             prefix = line.split(name)[0].strip() if name in line else ""
             words = prefix.split()
-            visibility = None
+            storage = set()
             type_words = []
             for w in words:
                 w = w.strip("*")
                 if w in self.STORAGE_CLASSES:
-                    visibility = w
+                    storage.add(w)
                 elif w in self.C_TYPE_HINTS or w not in self.KEYWORDS:
                     type_words.append(w)
+            # Linkage is the entry signal. `static` (internal linkage) is
+            # load-bearing and must not be masked by `inline` (not a linkage
+            # class) — `static inline` is still internal. `extern` wins: it is
+            # external linkage, and the invalid `extern static` combo is
+            # treated as external (never under-claim reachability).
+            if "extern" in storage:
+                visibility = "extern"
+            elif "static" in storage:
+                visibility = "static"
+            else:
+                visibility = None
             return_type = " ".join(type_words) if type_words else None
             return FunctionMetadata(visibility=visibility, return_type=return_type)
         except Exception:
@@ -946,10 +957,19 @@ class TreeSitterExtractor:
                             visibility = (visibility or "") + " static"
                             visibility = visibility.strip()
 
-        # C/C++: storage class specifier
-        for child in node.children:
-            if child.type == "storage_class_specifier":
-                visibility = child.text.decode()
+        # C/C++: storage class specifier. Linkage is the entry signal:
+        # `static` = internal linkage (not externally callable). It is
+        # load-bearing and must NOT be masked by a following `inline` (not a
+        # linkage class) — `static inline` is still internal. `extern` takes
+        # priority: it means external linkage, and the invalid `extern static`
+        # combo is treated as external (the reachability-conservative choice —
+        # never under-claim reachability on malformed input).
+        specs = [c.text.decode() for c in node.children
+                 if c.type == "storage_class_specifier"]
+        if "extern" in specs:
+            visibility = "extern"
+        elif "static" in specs:
+            visibility = "static"
 
         # Go: exported from capitalisation, receiver as class_name
         if self.language == "go":

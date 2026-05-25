@@ -892,3 +892,49 @@ class TestEntryReachabilityGate:
         funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
         assert funcs["isl_a"].get("priority") != "low"
         assert marked == 0
+
+
+class TestBuildExcludedGate:
+    """Gap 1: a build-excluded file (Go ``//go:build ignore``) is never
+    compiled, so every function in it demotes — even ``main``/``init``, which
+    are normally Go entries. Heuristic → soft-demote, respects
+    allow_unreachable. Synthetic inventory keeps this tree-sitter-independent."""
+
+    def _synthetic_go(self):
+        items = [
+            {"name": "main", "kind": "function", "line_start": 4},
+            {"name": "run", "kind": "function", "line_start": 5},
+        ]
+        inv = {"files": [{
+            "path": "gen.go", "language": "go", "items": items,
+            "build_excluded": {"line": 1, "summary": "//go:build ignore"},
+            "call_graph": {"imports": {}, "calls": []},
+        }]}
+        checklist = {"files": [{"path": "gen.go", "items": items}]}
+        return inv, checklist
+
+    def test_build_excluded_demotes_every_function(self, tmp_path):
+        inv, checklist = self._synthetic_go()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv,
+        )
+        assert marked == 2
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for name in ("main", "run"):
+            assert funcs[name]["priority"] == "low"
+            assert funcs[name]["priority_reason"] == (
+                "reachability:build_excluded"
+            )
+
+    def test_allow_unreachable_suppresses_build_excluded_demotion(
+        self, tmp_path,
+    ):
+        inv, checklist = self._synthetic_go()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv, allow_unreachable=True,
+        )
+        assert marked == 0
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["main"].get("priority_reason") != (
+            "reachability:build_excluded"
+        )
