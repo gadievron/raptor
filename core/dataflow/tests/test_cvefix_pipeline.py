@@ -88,3 +88,32 @@ def test_pipeline_localizes_to_fix_touched_files(tmp_path: Path):
     )
     assert len(pairs) == 1
     assert pairs[0][0].sink.file_path == "Foo.java"
+
+
+def test_main_cli_parses_and_dispatches(tmp_path: Path, monkeypatch):
+    """main() arg-parsing + dispatch, with analyze stubbed to write canned
+    SARIF — exercises the scripts/trust-corpus entry point without CodeQL."""
+    from core.dataflow import cvefix_pipeline
+
+    before_db = tmp_path / "bdb"
+    after_db = tmp_path / "adb"
+    sarif_by_db = {
+        str(before_db): _sarif("stmt.execute(sql)", 20),
+        str(after_db): _sarif("stmt.execute(Sanitizer.clean(sql))", 22),
+    }
+
+    def _stub_analyze(db_path, queries, output_path, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(sarif_by_db[str(db_path)]))
+        return SimpleNamespace(sarif_path=output_path)
+
+    monkeypatch.setattr(cvefix_pipeline, "analyze", _stub_analyze)
+
+    rc = cvefix_pipeline.main([
+        str(before_db), str(after_db), "--query", "java/sql-injection",
+        "--cve", "CVE-2021-9999", "--cwe", "CWE-89",
+        "--out", str(tmp_path / "out"), "--fix-touched-file", "Foo.java",
+        "--labeled-at", "2026-05-25",
+    ])
+    assert rc == 0
+    assert len(list((tmp_path / "out" / "corpus").glob("*.label.json"))) == 2

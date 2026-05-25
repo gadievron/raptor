@@ -17,7 +17,10 @@ no database build, no dataset download.
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -68,3 +71,35 @@ def generate_corpus_for_pair(
     if write:
         write_corpus(pairs, out_dir / "corpus")
     return pairs
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("before_db", type=Path, help="CodeQL DB of the pre-fix source")
+    p.add_argument("after_db", type=Path, help="CodeQL DB of the post-fix source")
+    p.add_argument("--query", action="append", dest="queries", required=True,
+                   metavar="SPEC", help="CodeQL query spec (repeatable)")
+    p.add_argument("--cve", required=True, help="CVE id, e.g. CVE-2021-1234")
+    p.add_argument("--cwe", required=True, help="CWE id, e.g. CWE-89")
+    p.add_argument("--out", type=Path, required=True, help="Output dir (sarif/ + corpus/)")
+    p.add_argument("--fix-touched-file", action="append", dest="fix_touched_files",
+                   metavar="PATH", help="A file the fix changed (repeatable). "
+                   "Strongly recommended — localizes labels to the CVE.")
+    p.add_argument("--labeled-at", default=datetime.date.today().isoformat(),
+                   help="ISO date for the labels (default: today)")
+    args = p.parse_args(argv)
+
+    pairs = generate_corpus_for_pair(
+        args.before_db, args.after_db, args.queries,
+        cve_id=args.cve, cwe=args.cwe, labeled_at=args.labeled_at,
+        out_dir=args.out, fix_touched_files=args.fix_touched_files,
+    )
+    fp = sum(1 for _, gt in pairs if gt.verdict == "false_positive")
+    tp = len(pairs) - fp
+    print(f"{args.cve}: {len(pairs)} corpus entries ({tp} TP / {fp} FP candidate) "
+          f"-> {args.out / 'corpus'}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
