@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterator, List, Optional, Tuple
 
 from ...models import PinStyle
+from ..requirements import _spec_bounds
 
 
 # ---------------------------------------------------------------------------
@@ -112,20 +113,24 @@ def _parse_pip_args(
 
 def _classify_pip_token(
     tok: str,
-) -> Optional[Tuple[str, Optional[str], PinStyle]]:
-    """Map one ``pkg[<spec>...]`` token to ``(name, version, pin_style)``.
+) -> Optional[Tuple[str, Optional[str], PinStyle,
+                    Optional[str], Optional[str]]]:
+    """Map one ``pkg[<spec>...]`` token to
+    ``(name, version, pin_style, floor, ceiling)``.
 
     Splits on the first PEP 508 operator and runs the constraints
-    through ``packaging.specifiers.SpecifierSet``. Returns None when
-    the token doesn't look like a package spec (caller skips silently
-    rather than yielding garbage)."""
+    through ``packaging.specifiers.SpecifierSet``. ``floor`` / ``ceiling``
+    are the safe-corridor bounds harden records (see
+    ``requirements._spec_bounds``). Returns None when the token doesn't
+    look like a package spec (caller skips silently rather than yielding
+    garbage)."""
     m = re.match(rf"^({_NAME_RE})\s*(.*)$", tok)
     if m is None:
         return None
     name = m.group(1)
     rest = m.group(2).strip()
     if not rest:
-        return name, None, PinStyle.WILDCARD
+        return name, None, PinStyle.WILDCARD, None, None
     if not re.match(r"^[<>!~=]", rest):
         return None
     try:
@@ -138,22 +143,32 @@ def _classify_pip_token(
         return _legacy_single_spec(name, rest)
     items = list(spec)
     if not items:
-        return name, None, PinStyle.WILDCARD
+        return name, None, PinStyle.WILDCARD, None, None
+    floor, ceiling = _spec_bounds(spec)
+    # An ``==`` / ``===`` clause pins the version exactly even alongside
+    # range bounds: ``foo>=2.0,==2.7.0,<3.0`` resolves to exactly 2.7.0.
+    # The sibling bounds record the safe corridor (floor for downgrades,
+    # ceiling for upgrades) that harden preserves across runs — the
+    # effective version is the ``==`` operand. Mirrors the requirements
+    # parser's _classify_specifier so both surfaces agree.
+    exact = next(
+        (s for s in items if s.operator in ("==", "===")), None)
+    if exact is not None:
+        return name, exact.version, PinStyle.EXACT, floor, ceiling
     if len(items) == 1:
         only = items[0]
         op = only.operator
         ver = only.version
-        if op in ("==", "==="):
-            return name, ver, PinStyle.EXACT
         if op == "~=":
-            return name, ver, PinStyle.TILDE
-        return name, ver, PinStyle.RANGE
-    return name, None, PinStyle.RANGE
+            return name, ver, PinStyle.TILDE, floor, ceiling
+        return name, ver, PinStyle.RANGE, floor, ceiling
+    return name, None, PinStyle.RANGE, floor, ceiling
 
 
 def _legacy_single_spec(
     name: str, rest: str,
-) -> Optional[Tuple[str, Optional[str], PinStyle]]:
+) -> Optional[Tuple[str, Optional[str], PinStyle,
+                    Optional[str], Optional[str]]]:
     """Pre-``packaging`` fallback for single-specifier shapes only.
 
     Multi-spec rests get rejected (yield None) rather than mangled.
@@ -167,7 +182,9 @@ def _legacy_single_spec(
     pin = PinStyle.EXACT if op in ("==", "===") else (
         PinStyle.TILDE if op == "~=" else PinStyle.RANGE
     )
-    return name, version, pin
+    floor = version if op in (">=", ">") else None
+    ceiling = version if op in ("<", "<=") else None
+    return name, version, pin, floor, ceiling
 
 
 # --- apt ------------------------------------------------------------------

@@ -134,6 +134,16 @@ class Dependency:
                                             # use this as the cluster
                                             # key.
 
+    version_floor: Optional[str] = None     # tightest lower bound
+                                            # (``>=`` / ``>``) from the
+                                            # original specifier — the
+                                            # downgrade floor harden
+                                            # honours when remediating
+                                            # below the current pin.
+    version_ceiling: Optional[str] = None   # tightest upper bound
+                                            # (``<`` / ``<=``) — the
+                                            # upgrade ceiling.
+
     def key(self) -> str:
         """Stable identity for dedup / cross-reference."""
         return f"{self.ecosystem}:{self.name}@{self.version or '*'}"

@@ -203,9 +203,16 @@ def _scan_shell_lines(
                 # package names. Skip to avoid emitting bogus deps.
                 continue
             args = sub[m.end():]
-            for name, version, pin in mgr.parse_args(args):
+            for parsed in mgr.parse_args(args):
+                # Most managers yield (name, version, pin); the pip
+                # manager additionally yields (floor, ceiling) corridor
+                # bounds. Unpack defensively so both shapes work.
+                name, version, pin = parsed[0], parsed[1], parsed[2]
+                floor = parsed[3] if len(parsed) > 3 else None
+                ceiling = parsed[4] if len(parsed) > 4 else None
                 deps.append(_make_dep(
                     name=name, version=version, pin_style=pin,
+                    version_floor=floor, version_ceiling=ceiling,
                     ecosystem=mgr.ecosystem,
                     purl_type=mgr.purl_type,
                     purl_namespace=mgr.purl_namespace,
@@ -266,6 +273,8 @@ def _make_dep(
     source_kind: str,
     commented: bool,
     line_no: int,
+    version_floor: Optional[str] = None,
+    version_ceiling: Optional[str] = None,
 ) -> Dependency:
     canon = _canonicalise_name(name, ecosystem)
     purl_base = (
@@ -292,6 +301,8 @@ def _make_dep(
         ),
         commented_out=commented,
         source_kind=source_kind,
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 

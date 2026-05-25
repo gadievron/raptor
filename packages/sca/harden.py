@@ -85,6 +85,10 @@ class HardenCandidate:
       - ``degraded_safety``  — no fully-clean version exists; promoted
                                 the version with fewest residual
                                 advisories (gated behind ``--allow-degraded``)
+      - ``downgraded_safety`` — no clean version exists at/above the pin;
+                                bounded downgrade to the highest clean
+                                version >= the recorded corridor floor
+                                (gated behind ``--allow-degraded``)
       - ``up_to_date``       — already at latest safe in range
       - ``review_required``  — bump exists but crosses a major (gated)
       - ``skipped_loose_pin`` — ``--pin-only`` set + dep is loose
@@ -439,23 +443,36 @@ def _plan_one(
         residual_advs: List[str] = []
         target_status = "promoted"
     else:
-        # No version is fully clean. Best-effort: pick the *least worst*
-        # candidate by (any_in_kev, max_severity, max_epss, count, idx).
-        # KEV-listed advisories are actively exploited in the wild and
-        # outrank everything else; CVSS severity outranks EPSS; EPSS
-        # outranks raw count; idx breaks ties newest-first.
-        ranked_sorted = sorted(
-            enumerate(ranked),
-            key=lambda kv: (int(kv[1].any_in_kev),
-                            kv[1].max_severity,
-                            kv[1].max_epss,
-                            len(kv[1].advisory_ids),
-                            kv[0]),
-        )
-        best = ranked_sorted[0][1]
-        target_version = best.version
-        residual_advs = list(best.advisory_ids)
-        target_status = "degraded_safety"
+        # No clean version exists at/above the pin. Before settling for a
+        # still-vulnerable upgrade, try a BOUNDED DOWNGRADE: the highest
+        # CLEAN version in ``[floor, installed)``, where floor is the
+        # recorded corridor lower bound. This clears the advisory with no
+        # residual risk (the target is clean) at the cost of moving
+        # backwards, so it's surfaced as ``downgraded_safety`` and gated
+        # like degraded promotions (operator opt-in via --allow-degraded).
+        down = _bounded_downgrade(dep, versions, osv=osv, kev=kev, epss=epss)
+        if down is not None:
+            target_version = down
+            residual_advs = []
+            target_status = "downgraded_safety"
+        else:
+            # Nothing clean in either direction. Best-effort: pick the
+            # *least worst* candidate above by (any_in_kev, max_severity,
+            # max_epss, count, idx). KEV-listed advisories are actively
+            # exploited and outrank everything; CVSS severity outranks
+            # EPSS; EPSS outranks raw count; idx breaks ties newest-first.
+            ranked_sorted = sorted(
+                enumerate(ranked),
+                key=lambda kv: (int(kv[1].any_in_kev),
+                                kv[1].max_severity,
+                                kv[1].max_epss,
+                                len(kv[1].advisory_ids),
+                                kv[0]),
+            )
+            best = ranked_sorted[0][1]
+            target_version = best.version
+            residual_advs = list(best.advisory_ids)
+            target_status = "degraded_safety"
 
     cand.to_version = target_version
     cand.cve_remaining = list(residual_advs)
@@ -482,6 +499,12 @@ def _plan_one(
             f"{target_version} with {len(residual_advs)} residual "
             f"advisor{'y' if len(residual_advs) == 1 else 'ies'}: "
             f"{', '.join(residual_advs)}"
+        )
+    elif target_status == "downgraded_safety":
+        cand.detail = (
+            f"no fully-safe version at/above {dep.version}; bounded "
+            f"downgrade to clean {target_version} "
+            f"(>= recorded floor {dep.version_floor})"
         )
 
     # Full safety check — the "harden" promise. Beyond OSV/KEV/EPSS,
@@ -563,6 +586,48 @@ def _versions_above_installed(
         if cmp > 0:
             out.append(v)
     return out
+
+
+def _bounded_downgrade(
+    dep: Dependency,
+    versions: List[str],
+    *,
+    osv: Any, kev: Any, epss: Any,
+) -> Optional[str]:
+    """Highest CLEAN version in ``[floor, installed)``, or None.
+
+    Called when no clean version exists at/above the installed pin: the
+    only safe remediation is to move *down* to the highest version that
+    is (a) ``>=`` the recorded corridor floor, (b) ``<`` the installed
+    pin, and (c) carries no advisories. The floor caps how far down we go
+    — without it a downgrade could reintroduce other problems. PyPI only
+    (uses pep440 comparison); returns None for other ecosystems or when
+    the corridor floor / installed version is unknown.
+    """
+    floor = dep.version_floor
+    installed = dep.version
+    if floor is None or installed is None or dep.ecosystem != "PyPI":
+        return None
+    pool: List[str] = []
+    for v in versions:
+        try:
+            if (pep440.compare(v, floor) >= 0
+                    and pep440.compare(v, installed) < 0):
+                pool.append(v)
+        except Exception:                   # noqa: BLE001
+            continue
+    if not pool:
+        return None
+    ranked = _rank_candidates_by_safety(
+        ecosystem=dep.ecosystem, name=dep.name,
+        candidates=pool, osv=osv, kev=kev, epss=epss,
+    )
+    clean = [r.version for r in ranked if not r.advisory_ids]
+    if not clean:
+        return None
+    import functools
+    # Highest clean version (pep440 descending).
+    return max(clean, key=functools.cmp_to_key(pep440.compare))
 
 
 # Severity ordinal: lower is less bad. ``None`` (advisory has no scored
@@ -997,7 +1062,8 @@ def _count_actionable(
             total += 1
         elif c.status == "review_required" and allow_major_without_review:
             total += 1
-        elif c.status == "degraded_safety" and allow_degraded:
+        elif (c.status in ("degraded_safety", "downgraded_safety")
+              and allow_degraded):
             total += 1
     return total
 
@@ -1026,7 +1092,7 @@ def _apply(
         elif (cand.status == "review_required" and
               allow_major_without_review and cand.to_version):
             pass
-        elif (cand.status == "degraded_safety" and
+        elif (cand.status in ("degraded_safety", "downgraded_safety") and
               allow_degraded and cand.to_version):
             pass
         else:

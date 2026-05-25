@@ -27,13 +27,27 @@ def test_pypi_pinned_eq() -> None:
     assert new == "RUN pip install django==4.2.10\n"
 
 
-def test_pypi_pinned_gte_normalised_to_eq() -> None:
-    """Range pin gets pinned to exact (harden's whole point)."""
+def test_pypi_lower_bound_floor_preserved() -> None:
+    """A lone lower bound is the downgrade floor — keep it alongside the
+    new exact pin rather than collapsing it away."""
     text = "RUN pip install requests>=2.31.0\n"
     plan = _plan("PyPI", "requests", "2.33.0")
     new, hit, _ = _rewrite_inline_install(text, plan)
     assert hit is True
-    assert new == "RUN pip install requests==2.33.0\n"
+    assert new == "RUN pip install requests>=2.31.0,==2.33.0\n"
+
+
+def test_pypi_quoted_multi_constraint_range_keeps_corridor() -> None:
+    """``'urllib3>=2.0,<3.0'`` → ``'urllib3>=2.0,==2.7.0,<3.0'`` — floor
+    and ceiling are preserved as the safe corridor with the new exact pin
+    slotted between. Still round-trips to up_to_date because the parser
+    now treats an ``==``-bearing spec as EXACT. Regression for the
+    sca-self-bump CI urllib3 stragglers."""
+    text = "RUN pip install 'urllib3>=2.0,<3.0'\n"
+    plan = _plan("PyPI", "urllib3", "2.7.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert new == "RUN pip install 'urllib3>=2.0,==2.7.0,<3.0'\n"
 
 
 def test_pypi_unpinned_gets_pin_appended() -> None:
@@ -220,6 +234,63 @@ def test_multiline_only_updates_install_lines() -> None:
     assert "ENV LANG=en_US.UTF-8" in new  # untouched (the `LANG=...` could
                                           # look like a `pkg=ver` but the
                                           # line has no install cmd)
+
+
+def test_apt_multiline_continuation_block_pins_package() -> None:
+    """The sca-self-bump failure: a ``\\``-continued ``apt-get install``
+    block with one package per line (and interspersed ``#`` comments)
+    must pin packages on the *continuation* lines, not just the command
+    line. Mirrors the .devcontainer/Dockerfile block exactly."""
+    text = (
+        "RUN apt-get update \\\n"
+        "    && apt-get install -y --no-install-recommends \\\n"
+        "    #\n"
+        "    # --- Network Tools ---\n"
+        "    curl \\\n"
+        "    git \\\n"
+        "    jq \\\n"
+        "    && apt-get clean \\\n"
+        "    && rm -rf /var/lib/apt/lists/*\n"
+    )
+    plan = _plan("Debian", "curl", "8.20.0-2")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert "    curl=8.20.0-2 \\\n" in new        # continuation line pinned
+    assert "    git \\\n" in new                  # other packages untouched
+    assert "    jq \\\n" in new
+    assert "&& apt-get clean" in new              # post-separator cmd untouched
+    assert "rm -rf /var/lib/apt/lists/*" in new
+
+
+def test_apt_multiline_does_not_rewrite_name_inside_comment() -> None:
+    """A package name appearing inside a ``#`` comment within the
+    continuation block must not be pinned — only the real arg line is."""
+    text = (
+        "RUN apt-get install -y --no-install-recommends \\\n"
+        "    # install git for cloning repos\n"
+        "    git \\\n"
+        "    && apt-get clean\n"
+    )
+    plan = _plan("Debian", "git", "1:2.53.0")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert "    git=1:2.53.0 \\\n" in new                 # arg line pinned
+    assert "    # install git for cloning repos\n" in new  # comment verbatim
+
+
+def test_apt_separator_ends_args_no_false_pin_in_next_command() -> None:
+    """After ``&&`` the install's args are over; a package name that
+    appears in the following command must not be pinned."""
+    text = (
+        "RUN apt-get install -y --no-install-recommends \\\n"
+        "    curl \\\n"
+        "    && echo installing curl done\n"
+    )
+    plan = _plan("Debian", "curl", "8.20.0-2")
+    new, hit, _ = _rewrite_inline_install(text, plan)
+    assert hit is True
+    assert "    curl=8.20.0-2 \\\n" in new            # the arg
+    assert "&& echo installing curl done\n" in new   # echo's 'curl' untouched
 
 
 # ---------------------------------------------------------------------------

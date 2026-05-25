@@ -8,7 +8,7 @@ needs_network.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -659,3 +659,64 @@ def test_registry_stub_without_get_metadata_is_safe() -> None:
         offline=False, allow_major=False,
     )
     assert cand.status == "promoted"
+
+
+# ---------------------------------------------------------------------------
+# Bounded downgrade: no clean version at/above the pin → move DOWN to the
+# highest clean version within the recorded corridor floor.
+# ---------------------------------------------------------------------------
+
+def test_bounded_downgrade_to_highest_clean_within_floor() -> None:
+    """``pkg==2.7.0`` (corridor floor 2.0) where 2.7.0 and everything
+    above is CVE-bearing but 2.5 is clean → bounded downgrade to 2.5."""
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="2.0")
+    osv = _FakeOsv({
+        "2.0": [_adv("CVE-A")],     # clean-but-below not needed; CVE anyway
+        "2.7.0": [_adv("CVE-B")],
+        "2.8": [_adv("CVE-C")],
+        "2.9": [_adv("CVE-D")],
+        # 2.5 absent => clean
+    })
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(
+            ["2.0", "2.5", "2.7.0", "2.8", "2.9"])},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "downgraded_safety", cand.status
+    assert cand.to_version == "2.5"
+    assert "downgrade" in cand.detail.lower()
+
+
+def test_bounded_downgrade_respects_floor() -> None:
+    """A clean version BELOW the floor is not eligible. When nothing in
+    ``[floor, installed)`` is clean, fall back to a degraded upgrade —
+    never a sub-floor downgrade."""
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="2.6")
+    osv = _FakeOsv({
+        # only clean version (1.9) is below floor 2.6; the rest carry CVEs
+        "2.7.0": [_adv("CVE-B")],
+        "2.8": [_adv("CVE-C")],
+    })
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(["1.9", "2.7.0", "2.8"])},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "degraded_safety", cand.status
+
+
+def test_no_downgrade_when_clean_version_above_exists() -> None:
+    """A clean version at/above the pin always wins — never downgrade."""
+    dep = replace(_dep(pin_style=PinStyle.EXACT, version="2.7.0"),
+                  version_floor="2.0")
+    osv = _FakeOsv({"2.7.0": [_adv("CVE-B")]})   # 2.9 clean
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(["2.0", "2.5", "2.7.0", "2.9"])},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "promoted"
+    assert cand.to_version == "2.9"

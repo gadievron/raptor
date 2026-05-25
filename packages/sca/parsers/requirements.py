@@ -36,11 +36,13 @@ logger = logging.getLogger(__name__)
 try:
     from packaging.requirements import InvalidRequirement, Requirement
     from packaging.specifiers import SpecifierSet
+    from packaging.version import Version
     _AVAILABLE = True
 except ImportError:                       # pragma: no cover — env-dependent
     InvalidRequirement = Exception        # type: ignore[assignment,misc]
     Requirement = None                    # type: ignore[assignment]
     SpecifierSet = None                   # type: ignore[assignment]
+    Version = None                        # type: ignore[assignment]
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.requirements: 'packaging' not installed — requirements*.txt "
@@ -319,6 +321,7 @@ def _parse_requirement_line(
         return None
 
     pin_style, version = _classify_specifier(req.specifier, req.url)
+    version_floor, version_ceiling = _spec_bounds(req.specifier)
     name = req.name
     if req.url:
         if req.url.startswith(_VCS_PREFIXES):
@@ -342,6 +345,8 @@ def _parse_requirement_line(
         direct=True,
         purl=_build_purl(name, version),
         parser_confidence=_confidence(pin_style, version, editable),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
         commented_out=commented,
     )
 
@@ -408,20 +413,51 @@ def _classify_specifier(
     items = list(spec)
     if not items:
         return PinStyle.WILDCARD, None
+    # An ``==`` / ``===`` clause pins the version exactly even when it
+    # sits alongside range bounds: ``>=2.0,==2.7.0,<3.0`` resolves to
+    # exactly 2.7.0. The sibling bounds are a deliberate record of the
+    # safe corridor — floor for downgrades, ceiling for upgrades — that
+    # harden preserves across runs. The *effective* version is the
+    # ``==`` operand, so classify the whole spec as EXACT.
+    exact = next(
+        (s for s in items if s.operator in ("==", "===")), None)
+    if exact is not None:
+        return PinStyle.EXACT, exact.version
     if len(items) == 1:
         only = items[0]
         op = only.operator
         ver = only.version
-        if op in ("==", "==="):
-            return PinStyle.EXACT, ver
         if op == "~=":
             return PinStyle.TILDE, ver
-        if op in ("!=",):
-            # Pure exclusion is effectively an unbounded range.
-            return PinStyle.RANGE, ver
-        # >=, <=, >, < — a single bound is still a range.
+        # >=, <=, >, <, != — a single bound is still a range.
         return PinStyle.RANGE, ver
     return PinStyle.RANGE, None
+
+
+def _spec_bounds(spec) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(floor, ceiling)`` from a ``SpecifierSet``: the tightest
+    lower (``>=`` / ``>``) and upper (``<`` / ``<=``) version bounds, or
+    None when absent.
+
+    harden records these so a future bounded *downgrade* knows how far
+    down is acceptable (floor) and an upgrade knows its ceiling. ``==`` /
+    ``~=`` / ``!=`` clauses pin or exclude — they don't bound the
+    corridor — so they're ignored here.
+    """
+    if spec is None or Version is None:
+        return None, None
+
+    def _key(v: str):
+        try:
+            return Version(v)
+        except Exception:                   # noqa: BLE001
+            return Version("0")
+
+    lowers = [s.version for s in spec if s.operator in (">=", ">")]
+    uppers = [s.version for s in spec if s.operator in ("<", "<=")]
+    floor = max(lowers, key=_key) if lowers else None
+    ceiling = min(uppers, key=_key) if uppers else None
+    return floor, ceiling
 
 
 def _normalise_name(name: str) -> str:

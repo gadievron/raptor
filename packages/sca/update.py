@@ -1064,12 +1064,12 @@ def _rewrite_requirements_txt(
             # version. If somehow it doesn't, leave the line alone.
             out_lines.append(raw)
             continue
-        new_inner = re.sub(
-            r"^([A-Za-z0-9_\-.]+)\s*[<>=!~]=?[^\s;]+",
-            rf"\g<1>=={plan.target}",
-            line_value,
-            count=1,
-        )
+        # Preserve any range bounds (floor/ceiling) around the new exact
+        # pin instead of collapsing them — they record the safe corridor
+        # for future up/downgrades. Splicing on the match end keeps any
+        # trailing PEP 508 marker (``; python_version >= ...``) intact.
+        new_spec = _pypi_pin_preserving_bounds(m.group(2) or "", plan.target)
+        new_inner = m.group(1) + new_spec + line_value[m.end():]
         new_line = f"{comment_prefix}{new_inner}" if comment_prefix else new_inner
         out_lines.append(raw.replace(stripped, new_line))
         rewrote = True
@@ -1128,6 +1128,15 @@ _INLINE_INSTALL_CMD_RES = {
 }
 
 
+_INLINE_SHELL_SEP_RE = re.compile(r"&&|\|\||;|(?<!\|)\|(?!\|)")
+
+
+def _inline_line_continues(raw: str) -> bool:
+    """True if ``raw`` ends with a shell line-continuation ``\\``
+    (ignoring the trailing newline / whitespace)."""
+    return raw.rstrip().endswith("\\")
+
+
 def _rewrite_inline_install(
     text: str, plan: _PlanEntry,
 ) -> Tuple[str, bool, Optional[str]]:
@@ -1139,20 +1148,29 @@ def _rewrite_inline_install(
     ``npm install foo@X``, etc.) might live.
 
     Strategy:
-      1. Walk the file line by line.
-      2. Skip lines that don't contain a known install command for the
-         plan's ecosystem (avoid false-positive rewrites in comments,
-         echo statements, paths, etc.).
-      3. On candidate lines, run the per-ecosystem version substitution
-         within the args portion. Both pinned and unpinned forms are
-         handled; an unpinned ``pip install pkg`` is rewritten to
-         ``pip install pkg==<target>``.
+      1. Walk the file physical line by line, tracking whether we are
+         inside the *argument region* of a matching install command —
+         a region that spans ``\\``-continuation lines, so a multi-line
+         ``apt-get install -y \\`` … block with one package per line is
+         covered, not just same-line installs.
+      2. On a line carrying the install command, substitute within its
+         same-line args. While inside the continued arg region, each
+         package-on-its-own-line is substituted too.
+      3. ``#`` comment lines inside a continuation are transparent
+         (Docker strips them before the shell runs), so they neither
+         terminate the region nor get rewritten. A shell separator
+         (``&&`` / ``||`` / ``;`` / ``|``) ends the region — a new
+         command starts there.
+      4. Both pinned and unpinned forms are handled; an unpinned
+         ``pip install pkg`` / continuation-line ``pkg`` is rewritten to
+         the pinned form (``pkg==<target>`` / ``pkg=<target>`` /
+         ``pkg@<target>`` per ecosystem).
 
     GHA YAML and devcontainer.json have richer structure (block
     scalars, JSON string fields) but ``run:`` block bodies and JSONC
     string values still parse correctly under line-level processing —
     the substitutions only fire on lines that contain an actual install
-    command keyword.
+    command keyword or sit inside its continued args.
     """
     eco = plan.ecosystem
     cmd_re = _INLINE_INSTALL_CMD_RES.get(eco)
@@ -1169,20 +1187,42 @@ def _rewrite_inline_install(
 
     out_lines: List[str] = []
     rewrote = False
+    in_args = False   # inside a matching install command's continued args
     for raw in text.splitlines(keepends=True):
-        if not cmd_re.search(raw):
-            out_lines.append(raw)
-            continue
         m = cmd_re.search(raw)
-        assert m is not None
-        prefix = raw[: m.end()]
-        rest = raw[m.end():]
-        new_rest, hit = sub_fn(rest, plan.name, plan.target)
-        if hit:
-            rewrote = True
+        if m is not None:
+            # Install command on this physical line: rewrite same-line args.
+            prefix = raw[: m.end()]
+            new_rest, hit = sub_fn(raw[m.end():], plan.name, plan.target)
+            rewrote = rewrote or hit
             out_lines.append(prefix + new_rest)
-        else:
-            out_lines.append(raw)
+            in_args = _inline_line_continues(raw)
+            continue
+        if in_args:
+            if raw.lstrip().startswith("#"):
+                # Docker strips ``#`` comment lines inside a RUN
+                # continuation before the shell sees them, so they
+                # neither carry a package nor break the continuation.
+                out_lines.append(raw)
+                continue
+            sep = _INLINE_SHELL_SEP_RE.search(raw)
+            if sep is not None:
+                # A shell separator ends this install's args; a new
+                # command starts. Only the portion before the separator
+                # is still install args (usually just whitespace here).
+                new_before, hit = sub_fn(
+                    raw[: sep.start()], plan.name, plan.target)
+                rewrote = rewrote or hit
+                out_lines.append(new_before + raw[sep.start():])
+                in_args = False
+                continue
+            # A package token on its own continuation line.
+            new_line, hit = sub_fn(raw, plan.name, plan.target)
+            rewrote = rewrote or hit
+            out_lines.append(new_line)
+            in_args = _inline_line_continues(raw)
+            continue
+        out_lines.append(raw)
     if not rewrote:
         return text, False, (
             f"name {plan.name!r} not found in inline {eco} installs"
@@ -1190,18 +1230,65 @@ def _rewrite_inline_install(
     return "".join(out_lines), True, None
 
 
+_PYPI_CLAUSE_RE = re.compile(r"^\s*(===|==|>=|<=|~=|!=|>|<)\s*(.+?)\s*$")
+
+
+def _pypi_pin_preserving_bounds(spec: str, target: str) -> str:
+    """Return a PEP 440 specifier that pins to ``target`` while keeping
+    any range bounds from ``spec`` as a record of the safe corridor.
+
+    ``spec`` is the specifier text *after* the package name::
+
+        >=2.0,<3.0  ->  >=2.0,==<target>,<3.0   (floor + ceiling kept)
+        >=2.31.0    ->  >=2.31.0,==<target>      (downgrade floor kept)
+        ==2.30.0    ->  ==<target>               (old exact pin replaced)
+        ""/bare     ->  ==<target>
+
+    Bounds (``>=`` ``>`` ``<`` ``<=`` ``!=``) are preserved; existing pin
+    clauses (``==`` ``===`` ``~=``) are dropped and replaced by a single
+    ``==<target>``. The floor lets a future ``degraded_safety`` downgrade
+    know how far down is acceptable; the ceiling stops an auto-jump past
+    a declared major. Assumes ``target`` satisfies the kept bounds —
+    harden's selection honours the corridor (see ``_plan_one``).
+    """
+    lowers, uppers, excludes = [], [], []
+    for part in spec.split(","):
+        cm = _PYPI_CLAUSE_RE.match(part)
+        if cm is None:
+            continue
+        op, ver = cm.group(1), cm.group(2)
+        if op in (">=", ">"):
+            lowers.append(f"{op}{ver}")
+        elif op in ("<", "<="):
+            uppers.append(f"{op}{ver}")
+        elif op == "!=":
+            excludes.append(f"{op}{ver}")
+        # ==, ===, ~= are dropped — replaced by the ==target below.
+    return ",".join(lowers + [f"=={target}"] + uppers + excludes)
+
+
 def _inline_sub_pypi(
     text: str, name: str, new_version: str,
 ) -> Tuple[str, bool]:
-    """``pip install foo==1.0`` / ``pip install foo``."""
+    """``pip install foo==1.0`` / ``pip install 'foo>=2,<3'`` / ``foo``."""
     name_re = re.escape(name)
-    # 1. Pinned form: ``pkg(op)version`` → ``pkg==new``.
-    pinned = re.compile(
-        rf"(?<![A-Za-z0-9._-])({name_re})\s*"
-        rf"(==|>=|<=|~=|>|<|!=)\s*[^\s\\,;\"']+",
+    # 1. Specifier form: ``pkg<spec>`` where <spec> is one or more
+    #    comma-joined PEP 440 clauses. Capture the WHOLE spec so range
+    #    bounds survive the pin (see _pypi_pin_preserving_bounds). ``,``
+    #    is excluded from the version class so clauses split cleanly;
+    #    ``;`` stays excluded to leave PEP 508 markers untouched.
+    spec_re = re.compile(
+        rf"(?<![A-Za-z0-9._-])({name_re})"
+        # Horizontal whitespace only between clauses — ``\s`` would let
+        # the trailing ``\s*`` swallow the line's newline into the spec.
+        rf"((?:[ \t]*(?:===|==|>=|<=|~=|!=|>|<)[ \t]*[^\s\\;\"',]+[ \t]*,?)+)",
         re.IGNORECASE,
     )
-    new_text, n = pinned.subn(rf"\1=={new_version}", text)
+    new_text, n = spec_re.subn(
+        lambda m: m.group(1) + _pypi_pin_preserving_bounds(
+            m.group(2), new_version),
+        text, count=1,
+    )
     if n > 0:
         return new_text, True
     # 2. Bare name (not part of another identifier or version-separated).
