@@ -70,8 +70,12 @@ def mark_unreachable_low_priority(
 
     Returns the count of functions marked low-priority. Zero when
     ``allow_unreachable=True`` (nothing demoted) but still mutates
-    the checklist with the framework_callable / registered_via_call
-    annotations.
+    the checklist with framework_callable / registered_via_call
+    annotations for functions that are *affirmatively* reachable. A
+    framework handler shadowed by a whole-file dead witness (its file
+    aborts on load / is build-excluded, or it's in an always-false
+    guard) is NOT annotated framework-reachable — its registration
+    never runs, so the dead witness wins even in isolation mode.
     """
     if not isinstance(checklist, dict):
         return 0
@@ -99,16 +103,10 @@ def mark_unreachable_low_priority(
             return 0
 
     try:
-        from core.inventory.reachability import (
-            InternalFunction,
-            Verdict,
-            build_excluded,
-            entry_reachability,
-            function_called,
-            is_framework_callable,
-            is_lexically_dead,
-            is_registered_via_call,
-            module_aborts_on_load,
+        from core.inventory.reach_audit import classify_reachability
+        from core.inventory.reach_witness import (
+            Reachability,
+            verdict_from_classification,
         )
     except ImportError:
         return 0
@@ -130,21 +128,6 @@ def mark_unreachable_low_priority(
         if not isinstance(funcs, list):
             continue
 
-        # S4: whole-file module-load-abort gate. Looked up once per
-        # file. When set, the file's top-level execution
-        # unconditionally aborts (raise ImportError / throw new Error
-        # / init() panic / compile_error!), so any function whose
-        # ``def`` lies at or below the abort line never binds — dead
-        # regardless of in-file call edges or framework registration.
-        file_abort = module_aborts_on_load(inventory, rel_path)
-        abort_line = (
-            int(file_abort.get("line") or 0) if file_abort else 0
-        )
-        # Whole-file build exclusion (e.g. Go ``//go:build ignore``): the file
-        # is never compiled, so every function in it is dead. Whole-file, no
-        # line threshold. Heuristic (config-dependent) → soft-demote only.
-        file_build_excluded = build_excluded(inventory, rel_path) is not None
-
         for func in funcs:
             if not isinstance(func, dict):
                 continue
@@ -160,145 +143,33 @@ def mark_unreachable_low_priority(
             if not isinstance(name, str) or not name:
                 continue
 
-            # S4 gate. A function defined STRICTLY below the abort
-            # line never has its ``def`` / decorator executed, so it
-            # can't be registered or called — dead even when the
-            # static graph shows in-file callers (those callers are
-            # equally dead). Trumps the framework_callable /
-            # registered_via_call checks below for exactly this
-            # reason: registration code that never runs registers
-            # nothing. Functions ABOVE the abort line may have
-            # completed registration before the abort fired, so they
-            # fall through to normal call-graph logic. Respects
-            # ``allow_unreachable`` like the NOT_CALLED path.
-            if abort_line and not allow_unreachable:
-                func_line = int(func.get("line_start") or 0)
-                if func_line and func_line > abort_line:
-                    func["priority"] = "low"
-                    func["priority_reason"] = (
-                        "reachability:module_aborts"
-                    )
-                    marked += 1
-                    continue
-
-            # S3: lexical-dead gate. A function defined inside an
-            # always-false guard (``if False:`` / ``if (false) {…}``
-            # / ``#[cfg(any())]``) never binds — the guard body never
-            # runs / compiles. Trumps CALLED (two dead-scope functions
-            # calling each other read as mutually CALLED) and the
-            # framework checks below (a decorator inside dead scope
-            # never registers anything). Respects ``allow_unreachable``.
-            if not allow_unreachable and is_lexically_dead(
-                inventory, rel_path, name,
-                int(func.get("line_start") or 0),
-            ):
-                func["priority"] = "low"
-                func["priority_reason"] = "reachability:lexical_dead"
-                marked += 1
-                continue
-
-            # Whole-file build exclusion. Trumps the framework / call-graph
-            # checks below (a file the build never compiles registers and
-            # calls nothing). Heuristic → soft-demote, respects
-            # allow_unreachable like the other surface-only gates.
-            if not allow_unreachable and file_build_excluded:
-                func["priority"] = "low"
-                func["priority_reason"] = "reachability:build_excluded"
-                marked += 1
-                continue
-
             line = int(func.get("line_start") or 0)
-            target = InternalFunction(
-                file_path=rel_path, name=name, line=line,
-            )
 
-            # U7: entry-point forward reachability. Transitive, entry-aware
-            # answer that 1-hop NOT_CALLED can't give:
-            #   * "reachable" — target OR a reverse-closure ancestor is an
-            #     entry (framework dispatch, main, or an exported/public/
-            #     non-static symbol). Keep it — this also AVOIDS demoting an
-            #     exported public-API function that has no in-project caller
-            #     (the library-API false negative 1-hop NOT_CALLED caused).
-            #   * "no_path_from_entry" — nothing reachable from any entry
-            #     leads here (the dead-island: reads CALLED only because a
-            #     peer that is itself unreachable calls it). Demote.
-            #   * "uncertain" — fuzzy entry model or masking indirection;
-            #     fall through to the existing framework / NOT_CALLED logic
-            #     unchanged. Surface-only: no hard gate, soft-demote only.
-            er = entry_reachability(inventory, target)
-            if er == "reachable":
-                # Keep it (path from a real entry exists). Preserve the
-                # diagnostic annotation downstream consumers expect when
-                # the entry is framework dispatch, so the
-                # framework_callable / registered_via_call reasons still
-                # surface as before.
-                if is_framework_callable(inventory, target):
-                    func["priority_reason"] = (
-                        "reachability:framework_callable"
-                    )
-                elif is_registered_via_call(inventory, target):
-                    func["priority_reason"] = (
-                        "reachability:registered_via_call"
-                    )
-                continue
-            if er == "no_path_from_entry":
+            # ONE entry-aware classifier — the same precedence the CodeQL
+            # prefilter and /validate demoter use (module_aborts →
+            # lexical_dead → build_excluded → framework / registration →
+            # entry-reachability → 1-hop called/not_called). Single source of
+            # truth; no parallel precedence chain here to drift out of sync.
+            verdict = classify_reachability(
+                inventory, rel_path, name, line, module,
+            )
+            if verdict_from_classification(verdict).status is (
+                Reachability.UNREACHABLE
+            ):
+                # Surface-only soft-demote. allow_unreachable (the in-isolation
+                # opt-out) skips the demotion so the analysis prompt emits no
+                # dead-code verdict line. Covers module_aborts / lexical_dead /
+                # build_excluded / no_path_from_entry / not_called uniformly.
                 if allow_unreachable:
                     continue
                 func["priority"] = "low"
-                func["priority_reason"] = "reachability:no_path_from_entry"
+                func["priority_reason"] = f"reachability:{verdict}"
                 marked += 1
-                continue
-            # er == "uncertain" → existing 1-hop logic below.
-
-            qualified = f"{module}.{name}"
-            try:
-                result = function_called(inventory, qualified)
-            except ValueError:
-                continue
-            if result.verdict != Verdict.NOT_CALLED:
-                continue
-
-            # NOT_CALLED in the static graph — but the function may
-            # still be reachable via framework dispatch (Flask
-            # ``@app.route``, Celery ``@shared_task``, Django
-            # ``@receiver``, etc.). The substrate's
-            # ``is_framework_callable`` recognises these. Without
-            # this check, framework-registered handlers regress to
-            # ``priority="low"`` and downstream consumers (LLM
-            # analysis prompt's reachability engagement, attack-
-            # path demoter) treat them as dead code — false
-            # negatives on any web/task/signal-heavy codebase.
-            # (``target`` was computed above for the entry-reachability
-            # gate; reuse it.)
-            if is_framework_callable(inventory, target):
-                # Optionally annotate so operators / downstream
-                # consumers can see this function was static-
-                # uncalled but framework-reachable.
-                func["priority_reason"] = (
-                    "reachability:framework_callable"
-                )
-                continue
-            if is_registered_via_call(inventory, target):
-                # Same skip-the-demotion logic but for the JS / Go
-                # function-as-argument registration pattern
-                # (``http.HandleFunc("/x", target)``,
-                # ``app.get("/users", target)``). Annotate with a
-                # distinct reason so operators can see WHICH
-                # mechanism kept this function alive.
-                func["priority_reason"] = (
-                    "reachability:registered_via_call"
-                )
-                continue
-
-            if allow_unreachable:
-                # In-isolation mode: don't demote NOT_CALLED
-                # functions. The analysis prompt will see caller
-                # counts (informational) but no "Verdict:
-                # NOT_CALLED" line that would trigger deferral.
-                continue
-            func["priority"] = "low"
-            func["priority_reason"] = "reachability:not_called"
-            marked += 1
+            elif verdict in ("framework_callable", "registered_via_call"):
+                # Affirmative reachability evidence (framework dispatch /
+                # function-as-argument registration) — annotate, never demote,
+                # in both modes. (reachable / called / uncertain: leave as-is.)
+                func["priority_reason"] = f"reachability:{verdict}"
 
     if marked:
         logger.info(

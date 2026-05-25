@@ -721,6 +721,38 @@ class TestModuleLoadAbortGate:
         assert "priority" not in func
         assert func.get("priority_reason") != "reachability:module_aborts"
 
+    def test_allow_unreachable_framework_handler_in_aborting_file_not_live(
+        self, tmp_path,
+    ):
+        # A framework handler defined BELOW a top-level abort: its @route
+        # decorator never runs (the file aborts on import), so it is NOT
+        # affirmatively framework-reachable. Under allow_unreachable it is not
+        # demoted AND not annotated framework_callable — the whole-file abort
+        # witness shadows the framework signal (the unified classifier checks
+        # module_aborts before framework). [pr11 behaviour refinement]
+        target = _project(tmp_path, {
+            "src/disabled.py": (
+                "raise ImportError('disabled')\n"
+                "@app.route('/y')\n"
+                "def handler(q):\n"
+                "    cursor.execute(q)\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/disabled.py": [{
+                "name": "handler", "kind": "function",
+                "line_start": 3, "line_end": 4,
+            }],
+        })
+        mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low"          # isolation: not demoted
+        assert func.get("priority_reason") != (        # but NOT called live
+            "reachability:framework_callable"
+        )
+
     def test_clean_file_not_module_demoted(self, tmp_path):
         # No abort → S4 gate dormant; normal NOT_CALLED logic only.
         target = _project(tmp_path, {
