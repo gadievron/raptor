@@ -122,3 +122,34 @@ def _no_retry_backoff_sleep(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
 
 
+@pytest.fixture(autouse=True)
+def _offline_consensus(monkeypatch):
+    """Keep the default-on 2-method consensus offline in unit tests.
+
+    Pipeline.run() executes run_consensus() by default
+    (enable_consensus=True), which calls the live OSV and NVD APIs via
+    cve_diff.report.consensus._osv_client() / _nvd_client(). CI can't
+    reach those hosts, so each request blocks on NvdClient's 30s socket
+    timeout (DEFAULT_TIMEOUT_S) — the flat ~30s on the pipeline/CLI
+    tests. The _no_real_retry_backoff sleep no-op can't help: a socket
+    timeout is not a sleep.
+
+    Stub the two network entry points so run_consensus runs its real
+    aggregation logic but resolves to "no pointer" without any HTTP.
+    test_report_consensus re-patches these same names inside each test
+    body (after this autouse fixture), so those tests are unaffected.
+    """
+    from cve_diff.report import consensus as consensus_mod
+
+    class _OfflineOsvClient:
+        def get_vuln(self, _cve_id):
+            return None
+
+    class _OfflineNvdClient:
+        def get_payload(self, _cve_id):
+            return None
+
+    monkeypatch.setattr(consensus_mod, "_osv_client", lambda: _OfflineOsvClient())
+    monkeypatch.setattr(consensus_mod, "_nvd_client", lambda: _OfflineNvdClient())
+
+
