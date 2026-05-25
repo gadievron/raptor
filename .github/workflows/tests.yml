@@ -76,6 +76,11 @@ jobs:
     timeout-minutes: 2
     outputs:
       should_skip: ${{ steps.dup.outputs.should_skip }}
+      # true for same-repo events (push / merge_group / schedule / dispatch
+      # / branch PRs); false only for fork PRs, whose read-only token can't
+      # pull the private GHCR deps image. Tiers pass this to _tier.yml to
+      # choose the image (fast) vs runner (fallback) path.
+      pkg_access: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - id: dup
         env:
@@ -669,35 +674,25 @@ jobs:
   # venv-download from the fan-out that queues under a runner cap.
   # sandbox (namespaces) + exploit_feasibility (radare2/gcc) will NOT
   # migrate; the slim image can't host them.
+  # CANARY for the reusable-workflow migration. sage proves the _tier.yml
+  # two-path (image / runner-fallback) shape before the other container
+  # tiers (codeql, llm-analysis, fuzzing, orchestration) follow. The
+  # caller keeps its path-filter `if:` and name; _tier.yml picks the
+  # execution path from pkg_access.
   python-unit-tests-sage:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.sage == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     permissions:
       contents: read
-      packages: read              # pull the private GHCR deps image
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-        with:
-          persist-credentials: false
-      - name: Reconcile deps
-        # No-op when this PR didn't touch requirements*.txt (everything
-        # already satisfied in the image); installs only the delta when
-        # a PR changes deps before the image has rebuilt on main.
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Run sage tests
-        # Deps are on the image's system Python — no venv to activate.
-        run: python -m pytest core/sage/tests -n auto
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: sage
+      test_path: core/sage/tests
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-orchestration:
     needs: [pre_check, changes]
@@ -726,4 +721,49 @@ jobs:
         run: pip install --no-cache-dir -r requirements-dev.txt
       - name: Run orchestration tests
         run: python -m pytest core/orchestration/tests -n auto
+
+  # Single aggregate gate over the whole suite. `needs:` every job and
+  # `if: always()` so it still runs when an upstream tier is path-filtered
+  # out (skipped) or fails. This is the one check to pin in a future
+  # branch-protection ruleset: individual tier job names can then change
+  # — notably the reusable-workflow `/ python-<tier>` rename — without
+  # touching protection. Skipped is a pass (dedup / path-filter); only
+  # failure or cancellation blocks.
+  tests-passed:
+    name: tests-passed
+    if: always()
+    needs:
+      - pre_check
+      - changes
+      - deps
+      - python-unit-tests-fast
+      - python-unit-tests-sca
+      - python-unit-tests-sandbox
+      - python-unit-tests-exploit-feasibility
+      - python-prompt-audit
+      - ci-lint-tests
+      - python-unit-tests-codeql
+      - python-unit-tests-llm-analysis
+      - python-unit-tests-cve-diff
+      - python-unit-tests-fuzzing
+      - python-unit-tests-sage
+      - python-unit-tests-orchestration
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify all tiers passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "Tier results: ${RESULTS}"
+          ok=1
+          for r in ${RESULTS}; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A required tier reported '${r}'"; ok=0 ;;
+            esac
+          done
+          [ "$ok" -eq 1 ] || exit 1
+          echo "All tiers passed or were legitimately skipped."
 

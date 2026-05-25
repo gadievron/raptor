@@ -1,0 +1,102 @@
+name: Test tier
+
+# Reusable per-tier test runner with two execution paths, selected by the
+# `use_container` input the caller passes:
+#
+#   image  — runs inside ghcr.io/<owner>/raptor-ci-deps (deps baked in).
+#            The fast path for same-repo events; needs packages:read + a
+#            GHCR login.
+#   runner — builds deps on the bare runner via uv. The fallback for fork
+#            PRs, whose read-only token cannot pull a private GHCR package.
+#            Slower, but never blocked on the image's visibility.
+#
+# Exactly one path runs per call; the other is skipped via `if`. Job
+# display names carry the tier so the status check reads
+# `python-unit-tests-<tier> / python-<tier>[-runner]` — never a bare
+# `image`/`runner` label.
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: Short tier id (e.g. "sage") — used in job display names.
+        required: true
+        type: string
+      test_path:
+        description: pytest target path (e.g. "core/sage/tests").
+        required: true
+        type: string
+      pytest_args:
+        description: Extra pytest args.
+        required: false
+        type: string
+        default: "-n auto"
+      python_version:
+        description: Runner-path Python (must track the image's base).
+        required: false
+        type: string
+        default: "3.12"
+      use_container:
+        description: true → run in the prebuilt image; false → venv on the runner.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # Fast path: deps are already on the image's system Python.
+  image:
+    if: ${{ inputs.use_container }}
+    name: python-${{ inputs.tier }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
+      credentials:
+        username: ${{ github.actor }}
+        # github.token is always available inside a called workflow — no
+        # `secrets: inherit` needed. Read access to the repo's own GHCR
+        # package is covered by the caller's packages:read grant.
+        password: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Reconcile deps
+        # No-op unless this PR changed requirements*.txt before the image
+        # rebuilt on main; then installs only the delta.
+        run: pip install --no-cache-dir -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest ${{ inputs.test_path }} ${{ inputs.pytest_args }}
+
+  # Fallback path: fork PRs can't pull the private image, so install into
+  # the runner's system Python (uv's cache keyed on requirements*.txt).
+  runner:
+    if: ${{ !inputs.use_container }}
+    name: python-${{ inputs.tier }}-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ inputs.python_version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+      - name: Install deps
+        # --system installs into the setup-python interpreter so the test
+        # step's `python` resolves the deps without venv activation,
+        # matching the image path's "system Python, no venv" model.
+        run: uv pip install --system -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest ${{ inputs.test_path }} ${{ inputs.pytest_args }}
