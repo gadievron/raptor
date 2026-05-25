@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Generate trust-corpus entries from a CVE fix pair via CodeQL.
+
+Usage:
+  core/dataflow/scripts/trust-corpus <before_db> <after_db> \
+      --query <spec> --cve CVE-... --cwe CWE-... --out <dir> \
+      [--fix-touched-file <path> ...] [--labeled-at YYYY-MM-DD]
+
+Runs the given CodeQL queries on the pre- and post-fix databases and emits
+labeled corpus entries: a finding still flagged on the post-fix DB is a
+false-positive CANDIDATE (the fix added a sanitizer CodeQL doesn't model);
+pre-fix findings are true positives. See ~/design/trust-witness.md.
+
+Output is CANDIDATE labels — hand-verify before gating anything (an incomplete
+fix can leave a real TP mislabeled FP).
+
+Dev-tooling only — not invoked by the LLM-driven RAPTOR workflows.
+Co-located with ``core/dataflow/`` (the module it operates on) rather than
+``libexec/`` (which is reserved for framework-internal shims called by the
+launcher, hooks, or other libexec scripts). Sibling to ``corpus-run`` /
+``corpus-metrics``.
+"""
+import sys
+from pathlib import Path
+
+# Repo root: this script lives at core/dataflow/scripts/trust-corpus,
+# three levels deep. parents[3] climbs:
+#   [0] core/dataflow/scripts/  (this file's directory)
+#   [1] core/dataflow/
+#   [2] core/
+#   [3] <repo root>
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.dataflow.cvefix_pipeline import main
+
+sys.exit(main())
