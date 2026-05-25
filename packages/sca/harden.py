@@ -14,7 +14,7 @@ Output:
     ``from_version``, ``to_version``, classification, status. The schema
     is designed to host an ``impact_analysis`` block populated by the
     LLM tier (Follow-up #7) without further changes.
-  - ``harden.patch`` (when ``--git-patch``) — git-applyable unified diff.
+  - ``upgrade.patch`` (when ``--git-patch``) — git-applyable unified diff.
   - ``report.md`` — operator-facing summary.
 
 Behaviour notes:
@@ -1120,7 +1120,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "(``==X.Y.Z``); don't tighten loose pins. "
                         "Conservative; mirrors `update --pin-only`.")
     p.add_argument("--git-patch", action="store_true",
-                   help="emit harden.patch alongside candidates.json")
+                   help="emit upgrade.patch alongside candidates.json")
     p.add_argument("--offline", action="store_true",
                    help="don't call registries / OSV; cache only")
     p.add_argument("--no-cache", action="store_true",

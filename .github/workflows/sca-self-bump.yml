@@ -61,6 +61,18 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
         with:
           fetch-depth: 1
+          # The harden --self-test runs every git op (stash / worktree /
+          # apply) through RAPTOR's read-restricted sandbox
+          # (restrict_reads=True — see harden.py). actions/checkout's
+          # default persist-credentials writes an auth config into
+          # .git/config that references a token file under RUNNER_TEMP;
+          # the sandbox correctly denies reading it (credential-exfil
+          # surface — exactly what the Landlock warning flags), so
+          # ``git stash create`` aborts with "bad config line 12 in
+          # .git/config". The harden / bump passes are all local git ops
+          # needing no credentials, so keep the token out of .git/config.
+          # The final push authenticates explicitly via GH_TOKEN instead.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -149,12 +161,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # persist-credentials:false (see Checkout) keeps the GITHUB_TOKEN
+          # out of .git/config, so point origin at a tokenised URL for the
+          # push. Done here — after the sandboxed harden / bump passes — so
+          # the token is never in .git/config while those local git ops run.
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           # ``checkout -B`` recreates the branch from HEAD even if it
           # exists, so weekly runs reuse the same branch name without
-          # carrying stale commits forward. ``push --force-with-lease``
-          # is safe relative to a plain ``--force`` — it refuses if
-          # someone else pushed to the branch since we last saw it
-          # (e.g. an operator amended a commit on the open PR).
+          # carrying stale commits forward.
           git checkout -B sca-self-bump
           git add -A
           git commit -m "chore: SCA-gated self-bump
@@ -163,6 +178,12 @@ jobs:
           Every change passed the full raptor-sca signal set
           (vulns / KEV / EPSS / yanked / license / hygiene /
           supply-chain / capability-delta / reachability)."
+          # Fetch the remote branch (if any) so ``--force-with-lease`` has a
+          # baseline to compare against; best-effort since the first run has
+          # no such branch yet. ``--force-with-lease`` then refuses the push
+          # if the branch moved since this fetch (e.g. an operator amended
+          # the open PR), where a plain ``--force`` would clobber it.
+          git fetch origin sca-self-bump || true
           git push --force-with-lease origin sca-self-bump
 
       - name: Open or update PR
