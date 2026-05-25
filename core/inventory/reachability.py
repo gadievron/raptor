@@ -2375,22 +2375,69 @@ _JAVA_SERVLET_METHODS = frozenset({
     "doGet", "doPost", "doPut", "doDelete", "doHead", "doOptions",
     "doTrace", "service", "doFilter", "init", "destroy",
 })
-# JAX-RS / Spring routing annotation tail-names → the method is a route
-# handler dispatched by the web framework.
-_JAVA_ROUTE_ANNOTATIONS = frozenset({
+# Method-level annotation tail-names whose presence marks the method as
+# framework-dispatched: the container / framework invokes it directly, so it
+# needs no in-project caller to be reachable. Only annotations that denote a
+# *no-caller* dispatch belong here — ``@Async`` / ``@Transactional`` are
+# deliberately excluded because they merely wrap a normally-called method
+# (it still has an in-project caller), so treating them as entries would
+# wrongly shield a genuinely-dead async/transactional method from demotion.
+_JAVA_METHOD_DISPATCH_ANNOTATIONS = frozenset({
+    # JAX-RS / Spring MVC routing
     "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "Path",
     "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
     "DeleteMapping", "PatchMapping",
+    # Spring bean factory + container lifecycle callbacks
+    "Bean", "PostConstruct", "PreDestroy",
+    # Spring events + scheduling (container-invoked, no in-project caller)
+    "EventListener", "Scheduled",
+    # Message-driven listeners (Spring Messaging / Kafka / Rabbit / JMS / STOMP)
+    "KafkaListener", "RabbitListener", "JmsListener",
+    "MessageMapping", "SubscribeMapping", "StreamListener",
+    # JPA / Hibernate entity lifecycle callbacks (persistence-provider-invoked)
+    "PrePersist", "PostPersist", "PreUpdate", "PostUpdate",
+    "PreRemove", "PostRemove", "PostLoad",
+})
+# Class-level stereotype annotation tail-names. The DI container instantiates
+# the annotated class and dispatches into its PUBLIC methods (via injected
+# references / proxies) with no in-project caller. Private / protected /
+# package-private methods stay reachable only through the static closure from
+# those public entries, so they are NOT promoted here.
+_JAVA_CLASS_STEREOTYPES = frozenset({
+    "Component", "Service", "Repository", "Controller", "RestController",
+    "Configuration", "ControllerAdvice", "RestControllerAdvice",
 })
 
 
-def _java_web_entry(name: str, item: Dict[str, Any]) -> bool:
+def _annotation_tail(annotation: Any) -> str:
+    """``@org.springframework...RequestMapping("/x")`` → ``RequestMapping``.
+
+    Strips a fully-qualified prefix, any argument list, and a leading ``@``
+    (the extractor stores attributes already ``@``-stripped, but be defensive).
+    """
+    return str(annotation).split("(")[0].strip().split(".")[-1].lstrip("@")
+
+
+def _java_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A Java method dispatched by a framework / DI container with no
+    in-project caller — servlet lifecycle method, method-level dispatch
+    annotation, or a public method of a stereotyped (container-managed) class.
+
+    Adding an entry only ever *grows* the reachable set, so this can never
+    suppress real code or demote live code; the worst case is failing to
+    demote a genuinely-dead annotated method (under-claiming dead code).
+    """
     if name in _JAVA_SERVLET_METHODS:
         return True
-    for a in (item.get("metadata") or {}).get("attributes") or []:
-        tail = str(a).split("(")[0].strip().split(".")[-1]
-        if tail in _JAVA_ROUTE_ANNOTATIONS:
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _JAVA_METHOD_DISPATCH_ANNOTATIONS:
             return True
+    # Class stereotype → only the bean's PUBLIC methods are container-dispatched.
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _JAVA_CLASS_STEREOTYPES:
+                return True
     return False
 
 
@@ -2416,11 +2463,13 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # and its call tree are reachable even with no explicit caller.
     if p.has_go_init and name == "init":
         return True
-    # Java web handlers are framework-dispatched entries with no in-project
-    # caller: servlet lifecycle methods by name and JAX-RS / Spring routing
-    # annotations. Without this, live servlet handlers (doPost/doGet) read
-    # not_called and get surface-demoted.
-    if p.has_java_web and _java_web_entry(name, item):
+    # Java framework-dispatched entries with no in-project caller: servlet
+    # lifecycle methods, method-level dispatch annotations (routing, Spring
+    # events/scheduling/messaging, bean factories, JPA callbacks), and public
+    # methods of stereotyped (container-managed) classes. Without this, live
+    # container-managed handlers (doPost, @EventListener, @Service methods)
+    # read not_called and get surface-demoted.
+    if p.has_java_web and _java_framework_entry(name, item):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those

@@ -1017,3 +1017,99 @@ class TestGoReachability:
         assert verdict("ig.go", "orphan") == "build_excluded"
         assert verdict("island.go", "islA") == "no_path_from_entry"
         assert verdict("live.go", "Exported") == "reachable"   # over-fire control
+
+
+class TestJavaFrameworkEntries:
+    """End-to-end Java framework-dispatch entry coverage. Spring / Jakarta
+    container-managed methods (routes, @EventListener / @Scheduled, @Bean
+    factories, JPA callbacks, and the public methods of @Service / @Component /
+    @RestController beans) have no in-project caller; without modelling them as
+    entries they read not_called and get surface-demoted. Verdicts need the
+    Java call-graph extractor (tree-sitter-java) and skip without it. Adding
+    entries only grows the reachable set, so the controls (a plain class, an
+    @Async / @Transactional method, a private bean method) must stay
+    not_called — that is the FP/FN-safety guard."""
+
+    _FILES = {
+        # @RestController stereotype: public route method = entry; the private
+        # helper is reachable only through the closure from it.
+        "Api.java": ("package x;\n@RestController\npublic class Api {\n"
+                     "  @GetMapping public String handle() { return fmt(); }\n"
+                     "  private String fmt() { return \"x\"; }\n}\n"),
+        # @Service stereotype: an uncalled PUBLIC method is still a bean entry;
+        # the private helper is not.
+        "Svc.java": ("package x;\n@Service\npublic class Svc {\n"
+                     "  public void process() {}\n"
+                     "  private void helper() {}\n}\n"),
+        # method-level dispatch annotations on a plain (non-stereotype) class.
+        "Ev.java": ("package x;\npublic class Ev {\n"
+                    "  @EventListener public void on() {}\n"
+                    "  @Scheduled public void tick() {}\n}\n"),
+        # nested: a @Service INNER class in a plain OUTER class. The inner
+        # public method is a bean entry; the outer plain method (declared after
+        # the inner class) must NOT inherit the inner stereotype.
+        "Nest.java": ("package x;\npublic class Nest {\n"
+                      "  @Service public static class Inner {\n"
+                      "    public void innerBean() {}\n  }\n"
+                      "  public void outerPlain() {}\n}\n"),
+        # controls — must stay not_called:
+        "Ctl.java": ("package x;\npublic class Ctl {\n"
+                     "  @Async public void bg() {}\n"
+                     "  @Transactional public void wr() {}\n"
+                     "  public void dead() {}\n}\n"),
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_java_stdlib_path_inert(self, tmp_path, monkeypatch):
+        # On the stdlib path (CI without tree-sitter-java) annotations are not
+        # captured, so the feature is inert: methods are still extracted and
+        # fall through to the existing 1-hop verdict — never a crash, never a
+        # hard suppression.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+        saw = False
+        for f in inv["files"]:
+            for it in f["items"]:
+                if it.get("name") == "process":
+                    saw = True
+                    v = classify_reachability(
+                        inv, f["path"], "process",
+                        int(it.get("line_start") or 0), "Svc")
+                    assert v != "reachable"   # not promoted without annotations
+        assert saw   # extraction still works on the stdlib path
+
+    def test_java_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                if f["path"] != rel:
+                    continue
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        m = rel.rsplit(".", 1)[0]
+                        return classify_reachability(
+                            inv, rel, name, int(it.get("line_start") or 0), m)
+            return None
+
+        # gains: framework-dispatched methods become reachable.
+        assert verdict("Api.java", "handle") == "reachable"    # @GetMapping + stereotype
+        assert verdict("Api.java", "fmt") == "reachable"       # reachable via closure
+        assert verdict("Svc.java", "process") == "reachable"   # public bean method
+        assert verdict("Ev.java", "on") == "reachable"         # @EventListener
+        assert verdict("Ev.java", "tick") == "reachable"       # @Scheduled
+        assert verdict("Nest.java", "innerBean") == "reachable"  # inner @Service bean
+        # controls: entries only grow the set, so these stay demoted.
+        assert verdict("Svc.java", "helper") == "not_called"   # private bean method
+        assert verdict("Nest.java", "outerPlain") == "not_called"  # no stereotype leak
+        assert verdict("Ctl.java", "bg") == "not_called"       # @Async is not an entry
+        assert verdict("Ctl.java", "wr") == "not_called"       # @Transactional is not an entry
+        assert verdict("Ctl.java", "dead") == "not_called"     # plain uncalled

@@ -12,7 +12,7 @@ import re
 import logging
 import warnings
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,10 @@ class FunctionMetadata:
     attributes: List[str] = field(default_factory=list)  # decorators AND annotations
     return_type: Optional[str] = None
     parameters: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    # Annotations on the ENCLOSING class (Java only): a method carries its
+    # class's stereotype annotations (@Service / @Component / …) so reachability
+    # can treat public methods of a container-managed bean as framework entries.
+    class_attributes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -851,17 +855,35 @@ class TreeSitterExtractor:
                 logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
                 return []  # Caller will fall back to regex extractor
         functions = []
-        self._walk(_tree.root_node, functions, class_name=None)
+        self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
         return functions
 
-    def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str]) -> None:
+    def _class_annotations(self, node) -> List[str]:
+        """Annotations declared on a class/interface (Java).
+
+        Reads the class node's ``modifiers`` block, the same shape used for
+        method annotations. Other languages don't put annotations there, so
+        this returns ``[]`` for them.
+        """
+        out: List[str] = []
+        for child in node.children:
+            if child.type == "modifiers":
+                for mod in child.children:
+                    if mod.type in ("marker_annotation", "annotation"):
+                        out.append(mod.text.decode().lstrip("@"))
+        return out
+
+    def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str],
+              class_attributes: Sequence[str] = ()) -> None:
         for child in node.children:
             if child.type in self.class_types:
                 cname = self._get_name(child)
-                self._walk(child, functions, class_name=cname)
+                self._walk(child, functions, class_name=cname,
+                           class_attributes=self._class_annotations(child))
             elif child.type in ("lexical_declaration", "variable_declaration"):
                 # JS/TS: const foo = () => {} — arrow function inside variable declaration
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
                 continue
             elif child.type == "variable_declarator":
                 # JS/TS: const bar = () => {} or const bar = function() {}
@@ -884,7 +906,8 @@ class TreeSitterExtractor:
                             ),
                         ))
                     continue
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
                 continue
             elif child.type in self.func_types:
                 # Check for decorated_definition wrapper (Python)
@@ -897,20 +920,24 @@ class TreeSitterExtractor:
                     child = self._find_child(parent, self.func_types) or child
 
                 try:
-                    fi = self._extract_function(child, class_name, attrs)
+                    fi = self._extract_function(child, class_name, attrs, class_attributes)
                     if fi:
                         functions.append(fi)
                 except Exception as e:
                     logger.debug(f"tree-sitter: failed to extract function at line {child.start_point[0]+1}: {e}")
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             elif child.type == "decorated_definition":
                 # Python: walk into decorated definitions
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             else:
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
 
     def _extract_function(self, node, class_name: Optional[str],
-                          attrs: List[str]) -> Optional[FunctionInfo]:
+                          attrs: List[str],
+                          class_attributes: Sequence[str] = ()) -> Optional[FunctionInfo]:
         name = self._get_name(node)
         if not name:
             return None
@@ -935,6 +962,7 @@ class TreeSitterExtractor:
                 attributes=attrs,
                 return_type=return_type,
                 parameters=parameters,
+                class_attributes=list(class_attributes),
             ),
         )
 

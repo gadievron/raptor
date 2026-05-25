@@ -675,3 +675,89 @@ def test_unknown_language_profile_has_no_entry_signal():
     assert p.entry_model == "none"
     assert p.visibility_entry == ""
     assert not p.has_go_init and not p.has_java_web
+
+
+# ---------------------------------------------------------------------------
+# Java framework-dispatch entries (_java_framework_entry / _annotation_tail).
+# Path-independent: operate on synthetic item dicts, so they run on CI without
+# tree-sitter-java. Adding an entry only grows the reachable set, so the key
+# guarantees pinned here are the *negatives* — annotations that do NOT denote a
+# no-caller entry (@Async / @Transactional) and non-public stereotype methods
+# must not be promoted, or live code would never be demoted.
+# ---------------------------------------------------------------------------
+
+
+def _java_item(name, *, attrs=(), class_attrs=(), visibility="public"):
+    return {
+        "name": name,
+        "kind": "function",
+        "metadata": {
+            "attributes": list(attrs),
+            "class_attributes": list(class_attrs),
+            "visibility": visibility,
+        },
+    }
+
+
+def test_annotation_tail_strips_fqn_args_and_at():
+    from core.inventory.reachability import _annotation_tail
+    assert _annotation_tail(
+        "org.springframework.web.bind.annotation.GetMapping(\"/x\")"
+    ) == "GetMapping"
+    assert _annotation_tail("@Service") == "Service"
+    assert _annotation_tail("EventListener") == "EventListener"
+
+
+def test_java_servlet_and_method_dispatch_are_entries():
+    from core.inventory.reachability import _java_framework_entry
+    assert _java_framework_entry("doPost", _java_item("doPost", attrs=()))
+    assert _java_framework_entry("on", _java_item("on", attrs=["EventListener"]))
+    assert _java_framework_entry("tick", _java_item("tick", attrs=["Scheduled"]))
+    assert _java_framework_entry(
+        "consume", _java_item("consume", attrs=["KafkaListener"]))
+    # fully-qualified annotation form resolves via the tail.
+    assert _java_framework_entry(
+        "make",
+        _java_item("make", attrs=["org.springframework.context.annotation.Bean"]),
+    )
+
+
+def test_java_class_stereotype_promotes_public_methods_only():
+    from core.inventory.reachability import _java_framework_entry
+    # public method of a @Service bean → container-dispatched entry.
+    assert _java_framework_entry(
+        "process", _java_item("process", class_attrs=["Service"], visibility="public"))
+    assert _java_framework_entry(
+        "p2", _java_item("p2", class_attrs=["RestController"], visibility="public static"))
+    # private / protected / package-private bean methods are reachable only
+    # through the static closure from the public entries → NOT promoted.
+    assert not _java_framework_entry(
+        "helper", _java_item("helper", class_attrs=["Service"], visibility="private"))
+    assert not _java_framework_entry(
+        "pp", _java_item("pp", class_attrs=["Component"], visibility=None))
+
+
+def test_java_async_transactional_and_plain_are_not_entries():
+    from core.inventory.reachability import _java_framework_entry
+    # @Async / @Transactional only WRAP a normally-called method (it still has
+    # an in-project caller), so they must not be treated as no-caller entries.
+    assert not _java_framework_entry("bg", _java_item("bg", attrs=["Async"]))
+    assert not _java_framework_entry("wr", _java_item("wr", attrs=["Transactional"]))
+    # a plain public method in a non-stereotype class is not an entry.
+    assert not _java_framework_entry("dead", _java_item("dead"))
+
+
+def test_java_framework_entry_degrades_gracefully_on_stale_metadata():
+    # A pre-feature checklist.json (reused for an unchanged file) has no
+    # ``class_attributes`` key — and a malformed record may have no metadata at
+    # all. The entry check must not crash and must not promote (degrades to the
+    # existing 1-hop verdict; FN-safe surface-demote, self-heals on rebuild).
+    from core.inventory.reachability import _java_framework_entry
+    stale = {"name": "process", "kind": "function",
+             "metadata": {"attributes": [], "visibility": "public"}}  # no class_attributes
+    assert _java_framework_entry("process", stale) is False
+    assert _java_framework_entry("x", {"name": "x", "kind": "function"}) is False
+    # a recognised method-level annotation still fires on a stale record (the
+    # ``attributes`` field predates this feature), so Tier-1 dispatch is robust.
+    assert _java_framework_entry(
+        "on", {"name": "on", "metadata": {"attributes": ["EventListener"]}})
