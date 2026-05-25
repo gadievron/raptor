@@ -963,3 +963,57 @@ class TestRustCrateMembership:
         inv2 = build_inventory(str(tmp_path))
         assert {f["path"]: ("build_excluded" in f)
                 for f in inv2["files"]}.get("src/orphan.rs") is False
+
+
+class TestGoReachability:
+    """End-to-end Go dead-code coverage. Go needed no new substrate (it was
+    already complete via //go:build ignore → build_excluded, init-panic →
+    module_aborts, dead-island → no_path_from_entry); this locks the composed
+    verdicts in as a regression guard, mirroring TestCppTuMembership /
+    TestRustCrateMembership. Record-level assertions run on both extractor
+    paths; verdict assertions need the Go call-graph extractor (tree-sitter-go)
+    and skip without it, per the stdlib-path convention."""
+
+    _FILES = {
+        "go.mod": "module x\ngo 1.21\n",
+        "ig.go": ("//go:build ignore\n\npackage main\n"
+                  "func orphan(q string){ _ = q }\nfunc main(){ orphan(\"x\") }\n"),
+        "abort.go": ("package m\nfunc init(){ panic(\"disabled\") }\n"
+                     "func sink(q string){ _ = q }\n"),
+        "live.go": "package m\nfunc Exported(){ helper() }\nfunc helper(){}\n",
+        "island.go": "package m\nfunc islA(){ islB() }\nfunc islB(){ islA() }\n",
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_go_dead_code_records_both_paths(self, tmp_path):
+        # Content-detected records (no extraction needed) — both paths.
+        by = {f["path"]: f for f in self._build(tmp_path)["files"]}
+        assert "build_excluded" in by["ig.go"]              # //go:build ignore
+        assert by["abort.go"].get("module_aborts_on_load")  # init(){ panic(...) }
+
+    def test_go_composed_verdicts(self, tmp_path):
+        # Verdicts compose over the Go call graph → need tree-sitter-go.
+        import pytest
+        pytest.importorskip("tree_sitter_go")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                if f["path"] != rel:
+                    continue
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        m = ".".join(rel.rsplit(".", 1)[0].split("/"))
+                        return classify_reachability(
+                            inv, rel, name, int(it.get("line_start") or 0), m)
+            return None
+
+        assert verdict("abort.go", "sink") == "module_aborts"
+        assert verdict("ig.go", "orphan") == "build_excluded"
+        assert verdict("island.go", "islA") == "no_path_from_entry"
+        assert verdict("live.go", "Exported") == "reachable"   # over-fire control
