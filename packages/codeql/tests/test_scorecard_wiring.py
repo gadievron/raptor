@@ -35,7 +35,7 @@ from packages.codeql.autonomous_analyzer import (
 
 class StubProvider:
     """Lives in ``client.providers`` so ``LLMClient`` doesn't need to
-    construct a real one. Every test test-case attaches a function to
+    construct a real one. Every test-case attaches a function to
     ``self.responder`` that returns a structured response."""
     def __init__(self):
         self.total_cost = 0.0
