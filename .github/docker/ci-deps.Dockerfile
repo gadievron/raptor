@@ -13,6 +13,14 @@
 # env.PYTHON_VERSION (3.12).
 FROM python:3.12-slim-bookworm
 
+# OCI labels surface on the GHCR package page. `description` is the only
+# per-package text GHCR renders (it has no per-image README upload — the
+# package page otherwise shows the repo's main README), so use it to make
+# clear this image is internal CI plumbing, not a RAPTOR distributable.
+LABEL org.opencontainers.image.source="https://github.com/gadievron/raptor" \
+      org.opencontainers.image.title="raptor-ci-deps" \
+      org.opencontainers.image.description="RAPTOR INTERNAL CI build-cache image (GitHub Actions unit-test tiers). NOT a RAPTOR distributable or end-user artifact — do not pull or depend on this image."
+
 # git is required by actions/checkout when this image is used as a
 # container-job base — the slim base ships none, and checkout fails
 # without it. ca-certificates is already present in the slim image.
