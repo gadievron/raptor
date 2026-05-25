@@ -39,9 +39,9 @@ from .call_graph import (
     extract_call_graph_rust,
 )
 from .diff import compare_inventories
-from core.build.macro_config import extract_macro_config
+from core.build.macro_config import extract_build_tus, extract_macro_config
 from .dead_scope import detect_dead_scopes
-from .build_membership import detect_build_excluded
+from .build_membership import detect_build_excluded, tu_membership_excluded
 from .module_load_abort import detect_module_load_abort
 from .translation_view import detect_macro_call_targets, preprocess_view
 
@@ -164,7 +164,18 @@ def build_inventory(
     macro_config = extract_macro_config(target_path)
     if allow_unreachable:
         macro_config = None
+    # Translation-unit set (compile_commands membership), built once for the
+    # C/C++ build-membership witness. A witness record (not a view transform),
+    # so — like the Go //go:build detector — it is NOT disabled under
+    # allow_unreachable; the surface-only consumers ignore it in that mode.
+    build_tus = extract_build_tus(target_path)
     cfg_fp = macro_config.fingerprint() if macro_config else ""
+    # Fold the TU set into the cache key: a compile_commands change (a file
+    # added to / removed from the build) must invalidate cached build_excluded
+    # marks even when file contents are unchanged.
+    if build_tus:
+        cfg_fp += "|tu=" + hashlib.sha256(
+            "\0".join(sorted(build_tus)).encode("utf-8")).hexdigest()[:16]
 
     if output_dir is None:
         output_dir = str(default_cache_dir(
@@ -231,7 +242,7 @@ def build_inventory(
                 executor.submit(
                     _process_single_file, fp, target, exclude_patterns,
                     skip_generated, old_files_by_path, allow_unreachable,
-                    macro_config,
+                    macro_config, build_tus,
                 ): fp
                 for fp in file_list
             }
@@ -261,7 +272,7 @@ def build_inventory(
             _collect_result(
                 _process_single_file(filepath, target, exclude_patterns,
                                      skip_generated, old_files_by_path,
-                                     allow_unreachable, macro_config)
+                                     allow_unreachable, macro_config, build_tus)
             )
 
     # Sort for consistent output
@@ -478,6 +489,7 @@ def _process_single_file(
     old_files: Dict[str, Any] = None,
     allow_unreachable: bool = False,
     macro_config: Optional[object] = None,
+    build_tus: Optional[frozenset] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
 
@@ -702,6 +714,20 @@ def _process_single_file(
                 'line': excluded.line,
                 'summary': excluded.summary,
             }
+        # C/C++ build-membership: a source TU absent from compile_commands.json
+        # is not compiled → dead. Whole-file, heuristic. Only when a
+        # content-based detector above didn't already fire. Headers are exempt
+        # (tu_membership_excluded checks the extension). Path resolved to match
+        # the resolved TU-set entries.
+        if 'build_excluded' not in record and build_tus is not None:
+            tu_excluded = tu_membership_excluded(
+                str(filepath.resolve()), build_tus,
+            )
+            if tu_excluded is not None:
+                record['build_excluded'] = {
+                    'line': tu_excluded.line,
+                    'summary': tu_excluded.summary,
+                }
         return record
 
     except Exception as e:

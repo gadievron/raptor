@@ -867,3 +867,54 @@ class TestConfigAwareView:
         # Empty fingerprint must hash identically to the no-arg call so
         # non-C projects' existing caches are untouched.
         assert default_cache_dir(str(tmp_path), config_fingerprint="") == d_plain
+
+
+class TestCppTuMembership:
+    """C/C++ build-membership: a source TU absent from compile_commands.json is
+    marked build_excluded (heuristic); headers are exempt; no manifest → never
+    fires. Asserts the file-level record (set pre-extraction) so it holds on
+    both extractor paths."""
+
+    def _be_map(self, tmp_path, with_manifest):
+        import json
+        (tmp_path / "built.c").write_text("int f(void){ return 0; }\n")
+        (tmp_path / "unbuilt.c").write_text("int g(void){ return 0; }\n")
+        (tmp_path / "util.h").write_text("static inline int h(void){ return 0; }\n")
+        if with_manifest:
+            (tmp_path / "compile_commands.json").write_text(json.dumps([
+                {"directory": str(tmp_path), "file": "built.c",
+                 "arguments": ["cc", "-c", "built.c"]},
+            ]))
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        return {f["path"]: ("build_excluded" in f) for f in inv["files"]}
+
+    def test_unbuilt_excluded_built_and_header_not(self, tmp_path):
+        be = self._be_map(tmp_path, with_manifest=True)
+        assert be.get("unbuilt.c") is True     # absent from manifest → excluded
+        assert be.get("built.c") is False      # in manifest → not excluded
+        assert be.get("util.h") is False       # header exempt — never a TU
+
+    def test_no_manifest_never_excludes(self, tmp_path):
+        be = self._be_map(tmp_path, with_manifest=False)
+        assert not any(be.values())            # membership unknown → never fire
+
+    def test_manifest_change_invalidates_persistent_cache(self, tmp_path):
+        # Same file content, default persistent (TU-fingerprint-keyed) cache:
+        # adding unbuilt.c to the manifest must drop its build_excluded mark.
+        (tmp_path / "built.c").write_text("int f(void){ return 0; }\n")
+        (tmp_path / "unbuilt.c").write_text("int g(void){ return 0; }\n")
+        cc = tmp_path / "compile_commands.json"
+        cc.write_text(json.dumps([{"directory": str(tmp_path), "file": "built.c",
+                                   "arguments": ["cc", "-c", "built.c"]}]))
+        inv1 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv1["files"]}.get("unbuilt.c") is True
+        cc.write_text(json.dumps([
+            {"directory": str(tmp_path), "file": "built.c",
+             "arguments": ["cc", "-c", "built.c"]},
+            {"directory": str(tmp_path), "file": "unbuilt.c",
+             "arguments": ["cc", "-c", "unbuilt.c"]},
+        ]))
+        inv2 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv2["files"]}.get("unbuilt.c") is False

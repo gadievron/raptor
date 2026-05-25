@@ -103,3 +103,35 @@ def test_malformed_compile_commands_falls_through(tmp_path):
 def test_empty_macroconfig_is_falsy():
     assert not MacroConfig()
     assert MacroConfig(defined={"X": "1"})
+
+
+def test_extract_build_tus_none_when_no_manifest(tmp_path):
+    from core.build.macro_config import extract_build_tus
+    assert extract_build_tus(tmp_path) is None  # no compile_commands → unknown
+
+
+def test_extract_build_tus_collects_resolved_paths(tmp_path):
+    import json
+    from core.build.macro_config import extract_build_tus
+    (tmp_path / "compile_commands.json").write_text(json.dumps([
+        {"directory": str(tmp_path), "file": "a.c",
+         "arguments": ["cc", "-c", "a.c"]},                     # relative
+        {"directory": str(tmp_path), "file": str(tmp_path / "b.c"),
+         "command": "cc -c b.c"},                               # absolute
+    ]))
+    tus = extract_build_tus(tmp_path)
+    assert str((tmp_path / "a.c").resolve()) in tus
+    assert str((tmp_path / "b.c").resolve()) in tus
+
+
+def test_extract_build_tus_empty_manifest_is_none(tmp_path):
+    # An empty/degenerate manifest → unknown, NOT "everything excluded".
+    from core.build.macro_config import extract_build_tus
+    (tmp_path / "compile_commands.json").write_text("[]")
+    assert extract_build_tus(tmp_path) is None
+
+
+def test_extract_build_tus_malformed_is_none(tmp_path):
+    from core.build.macro_config import extract_build_tus
+    (tmp_path / "compile_commands.json").write_text("{not json")
+    assert extract_build_tus(tmp_path) is None

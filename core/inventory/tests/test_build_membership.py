@@ -55,3 +55,46 @@ def test_non_go_languages_return_none():
 
 def test_empty_content():
     assert detect_build_excluded("go", "") is None
+
+
+# --- C/C++ translation-unit membership (compile_commands) ------------------
+
+def test_tu_membership_none_when_no_manifest():
+    from core.inventory.build_membership import tu_membership_excluded
+    assert tu_membership_excluded("/p/x.c", None) is None
+
+
+def test_tu_membership_source_absent_is_excluded():
+    from core.inventory.build_membership import (
+        tu_membership_excluded, BuildExcluded,
+    )
+    r = tu_membership_excluded("/p/unbuilt.c", frozenset({"/p/built.c"}))
+    assert isinstance(r, BuildExcluded)
+    assert r.summary == "not in compile_commands.json"
+
+
+def test_tu_membership_source_present_not_excluded():
+    from core.inventory.build_membership import tu_membership_excluded
+    assert tu_membership_excluded(
+        "/p/built.c", frozenset({"/p/built.c"})) is None
+
+
+def test_tu_membership_headers_exempt():
+    # Headers are never TUs — absent from compile_commands but reachable via
+    # the .c files that #include them. Must never be excluded by membership.
+    from core.inventory.build_membership import tu_membership_excluded
+    for h in ("/p/u.h", "/p/u.hpp", "/p/u.hh", "/p/u.hxx"):
+        assert tu_membership_excluded(h, frozenset({"/p/built.c"})) is None, h
+
+
+def test_tu_membership_non_c_exempt():
+    from core.inventory.build_membership import tu_membership_excluded
+    for other in ("/p/a.py", "/p/a.go", "/p/a.rs", "/p/a.txt"):
+        assert tu_membership_excluded(other, frozenset({"/p/b.c"})) is None
+
+
+def test_tu_membership_cpp_source_extensions_covered():
+    from core.inventory.build_membership import tu_membership_excluded
+    for ext in (".cc", ".cpp", ".cxx", ".c++", ".m", ".mm"):
+        assert tu_membership_excluded(
+            f"/p/x{ext}", frozenset({"/p/y.c"})) is not None, ext

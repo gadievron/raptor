@@ -218,4 +218,47 @@ def extract_macro_config(target: Path) -> MacroConfig:
     return MacroConfig()
 
 
-__all__ = ["MacroConfig", "extract_macro_config"]
+def extract_build_tus(target: Path) -> Optional[frozenset]:
+    """Set of absolute translation-unit paths in ``target``'s
+    ``compile_commands.json`` (resolved so they match the inventory builder's
+    file paths), or ``None`` when there is no parseable, non-empty
+    compile_commands.
+
+    ``None`` means build membership is UNKNOWN — the C/C++ build-membership
+    witness must not fire (a source absent from an absent/empty manifest tells
+    us nothing). Heuristic even when present: a compile_commands may be partial
+    (one target, a sub-build), so a source's absence is evidence, not proof —
+    the witness it feeds is surface-only.
+    """
+    target = Path(target)
+    if not target.is_dir():
+        return None
+    cc = _find_compile_commands(target)
+    if cc is None:
+        return None
+    try:
+        entries = json.loads(cc.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        logger.debug("compile_commands.json TU-set parse failed: %s", exc)
+        return None
+    if not isinstance(entries, list):
+        return None
+    tus = set()
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        f = e.get("file")
+        if not isinstance(f, str) or not f:
+            continue
+        p = Path(f)
+        d = e.get("directory")
+        if not p.is_absolute() and isinstance(d, str):
+            p = Path(d) / f
+        try:
+            tus.add(str(p.resolve()))
+        except OSError:
+            tus.add(str(p))
+    return frozenset(tus) if tus else None
+
+
+__all__ = ["MacroConfig", "extract_macro_config", "extract_build_tus"]

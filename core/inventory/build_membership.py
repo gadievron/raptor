@@ -38,11 +38,18 @@ same ``build_excluded`` witness, wired at the builder level rather than here.)
 from __future__ import annotations
 
 import logging
+import os.path
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Source translation-unit extensions — a file the build COMPILES. Headers are
+# deliberately excluded: a .h is never a TU (never in compile_commands) but its
+# functions are reachable via the .c files that #include it, so header
+# membership must never be inferred from compile_commands.
+_TU_SOURCE_EXT = frozenset({".c", ".cc", ".cpp", ".cxx", ".c++", ".m", ".mm"})
 
 
 @dataclass(frozen=True)
@@ -105,4 +112,33 @@ def _detect_go(content: str) -> Optional[BuildExcluded]:
     return None
 
 
-__all__ = ["BuildExcluded", "detect_build_excluded"]
+def tu_membership_excluded(
+    abs_path: str, tu_files: Optional[frozenset],
+) -> Optional[BuildExcluded]:
+    """C/C++ build-membership witness: a SOURCE translation unit (``.c`` /
+    ``.cpp`` / …) absent from ``compile_commands.json`` is not compiled in this
+    build, so every function in it is dead. Heuristic (the manifest may be
+    partial) → surface-only, never hard-suppress.
+
+    Returns ``None`` (no exclusion) when:
+      * ``tu_files`` is ``None`` — no parseable compile_commands ⇒ membership
+        unknown (never fire on absence-of-evidence);
+      * ``abs_path`` is not a source-TU extension — headers (``.h`` / ``.hpp``)
+        are never TUs but their functions are reachable via includers, so they
+        are exempt; non-C/C++ files are irrelevant;
+      * ``abs_path`` IS in the build.
+
+    ``abs_path`` must be resolved (realpath) to match the ``tu_files`` entries,
+    which :func:`core.build.macro_config.extract_build_tus` resolves.
+    """
+    if tu_files is None:
+        return None
+    ext = os.path.splitext(abs_path)[1].lower()
+    if ext not in _TU_SOURCE_EXT:
+        return None
+    if abs_path in tu_files:
+        return None
+    return BuildExcluded(line=0, summary="not in compile_commands.json")
+
+
+__all__ = ["BuildExcluded", "detect_build_excluded", "tu_membership_excluded"]
