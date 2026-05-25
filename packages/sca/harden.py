@@ -863,8 +863,16 @@ def _run_self_test(
             capture_output=True, text=True, timeout=30,
             caller_label="sca-harden-self-test/git-stash",
         )
-        if stash.returncode != 0:
-            print(f"raptor-sca fix --harden --self-test: `git stash create` failed: "
+        # ``git stash create`` exit codes: 0 = stash commit created
+        # (SHA on stdout, tree had uncommitted changes); 1 = nothing to
+        # stash (clean tree — no output); >1 or signal = genuine failure
+        # (writes stderr). A pristine CI checkout hits the rc=1 clean-tree
+        # case, which is git's normal "nothing to stash" signal, NOT an
+        # error — only an rc outside {0, 1}, or any rc that wrote to
+        # stderr, is fatal. Empty stdout (clean tree) falls back to HEAD.
+        if stash.returncode not in (0, 1) or stash.stderr.strip():
+            print(f"raptor-sca fix --harden --self-test: `git stash create` "
+                  f"failed (rc={stash.returncode}): "
                   f"{stash.stderr or stash.stdout}", file=sys.stderr)
             return 6
         worktree_ref = stash.stdout.strip() or "HEAD"

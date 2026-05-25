@@ -219,3 +219,115 @@ def test_self_test_does_not_use_unsandboxed_subprocess_run(
         allow_degraded=False,
     )
     assert rc == 0
+
+
+def test_self_test_clean_tree_stash_rc1_is_not_an_error(
+    tmp_path: Path, monkeypatch,
+):
+    """``git stash create`` exits 1 with empty output when the tree is
+    clean (nothing to stash) — git's normal signal, and the common case
+    on a pristine CI checkout. It must NOT abort the self-test: we fall
+    back to HEAD and proceed. Regression for the sca-self-bump CI break
+    where ``returncode != 0`` collapsed rc=1 into the failure path."""
+    target = _make_target(tmp_path)
+    patch_path = _make_patch(tmp_path)
+    out_dir = tmp_path / "out"
+
+    recorded: List[dict] = []
+
+    def fake_run_untrusted(cmd, **kwargs):
+        recorded.append({"cmd": cmd, **kwargs})
+        if cmd[:3] == ["git", "stash", "create"]:
+            # Real clean-tree behaviour: rc 1, no stdout, no stderr.
+            return _FakeProc(returncode=1, stdout="", stderr="")
+        return _FakeProc(returncode=0)
+
+    def fake_plan(**kwargs):
+        return []
+
+    real_mkdtemp = __import__("tempfile").mkdtemp
+
+    def mkdtemp_and_seed(*a, **kw):
+        path = Path(real_mkdtemp(*a, **kw))
+        (path / "wt").mkdir(exist_ok=True)
+        return str(path)
+
+    monkeypatch.setattr(
+        "core.sandbox.context.run_untrusted", fake_run_untrusted,
+    )
+    monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
+    monkeypatch.setattr("tempfile.mkdtemp", mkdtemp_and_seed)
+
+    rc = _run_self_test(
+        target=target,
+        out_dir=out_dir,
+        patch_path=patch_path,
+        registries={},
+        osv=None, kev=None, epss=None,
+        offline=True,
+        allow_major=False,
+        pin_only=False,
+        ecosystem_allowlist=None,
+        allow_major_without_review=False,
+        allow_degraded=False,
+    )
+
+    assert rc == 0, (
+        f"clean-tree `git stash create` rc=1 must be treated as "
+        f"'nothing to stash', not a failure; got rc={rc}"
+    )
+    # No stash ref → the worktree must be created from HEAD.
+    wt_add = [r for r in recorded
+              if r["cmd"][:3] == ["git", "worktree", "add"]][0]
+    assert wt_add["cmd"][-1] == "HEAD", (
+        f"clean tree must check out HEAD; got ref {wt_add['cmd'][-1]!r}"
+    )
+
+
+def test_self_test_real_stash_error_still_aborts(
+    tmp_path: Path, monkeypatch,
+):
+    """The rc=1 carve-out is narrow: a genuine ``git stash create``
+    failure writes to stderr (and usually exits >1 / by signal), so it
+    must STILL abort with rc 6 — real breakage is never swallowed."""
+    target = _make_target(tmp_path)
+    patch_path = _make_patch(tmp_path)
+    out_dir = tmp_path / "out"
+
+    recorded: List[dict] = []
+
+    def fake_run_untrusted(cmd, **kwargs):
+        recorded.append({"cmd": cmd, **kwargs})
+        if cmd[:3] == ["git", "stash", "create"]:
+            return _FakeProc(returncode=128, stdout="",
+                             stderr="fatal: not a git repository")
+        return _FakeProc(returncode=0)
+
+    def fake_plan(**kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "core.sandbox.context.run_untrusted", fake_run_untrusted,
+    )
+    monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
+
+    rc = _run_self_test(
+        target=target,
+        out_dir=out_dir,
+        patch_path=patch_path,
+        registries={},
+        osv=None, kev=None, epss=None,
+        offline=True,
+        allow_major=False,
+        pin_only=False,
+        ecosystem_allowlist=None,
+        allow_major_without_review=False,
+        allow_degraded=False,
+    )
+
+    assert rc == 6, f"real stash error must abort with rc 6; got {rc}"
+    # Must stop after the failed stash create — no worktree creation.
+    cmds = [r["cmd"][:3] for r in recorded]
+    assert cmds == [["git", "stash", "create"]], (
+        f"should stop after the failed stash create; got {cmds}"
+    )
