@@ -11,6 +11,7 @@ import pytest
 from core.dataflow.barrier_synth import (
     BarrierProposal,
     assemble_barrier_query,
+    make_llm_proposer,
     run_synthesis_loop,
 )
 
@@ -22,7 +23,7 @@ _GUARD = (
 )
 
 
-def _proposer(_proposal) -> str:
+def _proposer(_proposal, _prior_error=None) -> str:
     return _GUARD
 
 
@@ -100,3 +101,97 @@ def test_loop_rejects_barrier_that_does_not_suppress(tmp_path: Path):
     )
     assert not res.suppressed_fp
     assert not res.is_sound
+
+
+# --- LLM proposer + retry ---
+
+def test_llm_proposer_strips_markdown_fence():
+    captured = {}
+
+    def complete(system_prompt, user_prompt):
+        captured["sys"] = system_prompt
+        captured["user"] = user_prompt
+        return f"```ql\n{_GUARD}\n```"
+
+    proposer = make_llm_proposer(complete)
+    out = proposer(_proposal(), None)
+    assert out.strip().startswith("predicate proposedGuard")
+    assert "```" not in out
+    # the proposal context reaches the prompt
+    assert "os.system(...)" in captured["user"]
+
+
+def test_llm_proposer_passes_prior_error_on_retry():
+    seen = []
+
+    def complete(system_prompt, user_prompt):
+        seen.append(user_prompt)
+        return _GUARD
+
+    proposer = make_llm_proposer(complete)
+    proposer(_proposal(), "ValueError: proposer must define a `proposedGuard` predicate")
+    assert "PREVIOUS attempt failed" in seen[0]
+    assert "proposedGuard" in seen[0]
+
+
+def test_loop_retries_on_bad_proposal_then_succeeds(tmp_path: Path):
+    after_db, before_db = tmp_path / "adb", tmp_path / "bdb"
+    runner = _stub_runner({str(after_db): 0, str(before_db): 1})
+    calls = {"n": 0}
+
+    def flaky_proposer(_proposal, prior_error):
+        calls["n"] += 1
+        # First attempt: garbage (assembly rejects -> ValueError -> retry).
+        if prior_error is None:
+            return "this is not a predicate"
+        return _GUARD  # corrected on retry
+
+    res = run_synthesis_loop(
+        _proposal(), after_db, before_db,
+        proposer=flaky_proposer, work_dir=tmp_path / "work", runner=runner,
+        max_attempts=2,
+    )
+    assert calls["n"] == 2
+    assert res is not None and res.is_sound
+
+
+def test_loop_returns_none_when_proposer_never_compiles(tmp_path: Path):
+    after_db, before_db = tmp_path / "adb", tmp_path / "bdb"
+    runner = _stub_runner({str(after_db): 0, str(before_db): 1})
+    res = run_synthesis_loop(
+        _proposal(), after_db, before_db,
+        proposer=lambda p, e: "garbage, no predicate here",
+        work_dir=tmp_path / "work", runner=runner, max_attempts=3,
+    )
+    assert res is None
+
+
+# --- CLI (stubbed LLM + CodeQL) ---
+
+def test_main_cli_synthesizes_and_emits_sound_query(tmp_path: Path, monkeypatch, capsys):
+    from core.dataflow import barrier_synth
+
+    before_db, after_db = tmp_path / "bdb", tmp_path / "adb"
+    src = tmp_path / "app.py"
+    src.write_text("def host_is_allowed(h):\n    return h in ('localhost',)\n", encoding="utf-8")
+
+    # stub the LLM proposer
+    monkeypatch.setattr(barrier_synth, "default_completer", lambda: (lambda s, u: _GUARD))
+    # stub CodeQL: post-fix suppressed (0), pre-fix preserved (1)
+    counts = {str(after_db): 0, str(before_db): 1}
+
+    def stub_analyze(db_path, queries, output_path, **kwargs):
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        n = counts[str(db_path)]
+        Path(output_path).write_text(json.dumps({"runs": [{"results": [{} for _ in range(n)]}]}))
+        return SimpleNamespace(sarif_path=output_path)
+
+    monkeypatch.setattr(barrier_synth, "analyze", stub_analyze)
+
+    rc = barrier_synth.main([
+        str(before_db), str(after_db), "--sink-class", "cmdi",
+        "--finding-id", "F1", "--sink", "os.system(host)",
+        "--source-file", str(src), "--work-dir", str(tmp_path / "w"),
+    ])
+    assert rc == 0  # sound
+    assert "proposedGuard" in capsys.readouterr().out  # synthesized query to stdout
