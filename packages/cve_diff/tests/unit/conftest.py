@@ -106,19 +106,19 @@ def _no_real_retry_backoff(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
 
 
-  @pytest.fixture(autouse=True)
-  def _no_retry_backoff_sleep(monkeypatch):
-      """Neutralise the LLM client's retry backoff for unit tests.
+@pytest.fixture(autouse=True)
+def _no_retry_backoff_sleep(monkeypatch):
+    """Neutralise the LLM client's retry backoff for unit tests.
 
-      cve_diff/llm/client.py retries a failed provider.generate with
-      time.sleep(backoff_factor ** attempt) (factor 2.0 -> 2+4+8s...). Any
-      test that drives the pipeline into retries or the meta-retry path
-      otherwise pays real backoff seconds -- the dominant cost behind the
-      slow cve_diff pipeline tests. No-op the sleep: retry *logic* is
-      unchanged, only the wall-clock delay is removed. The infra rate-limit
-      tests inject their own fake clock, so they are unaffected by this
-      global patch.
-      """
-      monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    cve_diff/llm/client.py retries a failed provider.generate with
+    time.sleep(backoff_factor ** attempt) (factor 2.0 -> 2+4+8s...). Any
+    test that drives the pipeline into retries or the meta-retry path
+    otherwise pays real backoff seconds -- the dominant cost behind the
+    slow cve_diff pipeline tests. No-op the sleep: retry *logic* is
+    unchanged, only the wall-clock delay is removed. The infra rate-limit
+    tests inject their own fake clock, so they are unaffected by this
+    global patch.
+    """
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
 
 
