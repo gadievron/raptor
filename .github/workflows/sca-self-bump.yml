@@ -133,6 +133,25 @@ jobs:
             --repo-label "self-bump $(date -u +%Y-%m-%d)" \
             > pr-body.md
 
+      - name: Exclude workflow-file changes (GITHUB_TOKEN can't push them)
+        run: |
+          set -euo pipefail
+          # GitHub categorically refuses to let the default GITHUB_TOKEN
+          # push any change to .github/workflows/* — and there is NO
+          # ``workflows`` permission grantable to it (the key doesn't
+          # exist), so this can't be fixed with a permissions: block.
+          # Revert any workflow-file edits the harden / bump passes applied
+          # so the branch is pushable; pr-body.md still lists them for the
+          # operator to pin manually. This also keeps the weekly bot from
+          # rewriting CI definitions — consistent with this workflow's
+          # threat model (see header). To auto-pin workflow files instead,
+          # push with a ``workflows``-scoped PAT / GitHub App token rather
+          # than the default GITHUB_TOKEN.
+          if [[ -n "$(git status --porcelain -- .github/workflows/)" ]]; then
+            git checkout -- .github/workflows/
+            printf '\n---\n**Note:** proposed changes to `.github/workflows/*` were excluded from this PR — GitHub forbids the default `GITHUB_TOKEN` from pushing workflow files. Pin those manually, or run this job with a `workflows`-scoped token.\n' >> pr-body.md
+          fi
+
       - name: Detect changes
         id: changes
         run: |
