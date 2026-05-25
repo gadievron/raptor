@@ -557,27 +557,15 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.codeql == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
     permissions:
       contents: read
-      packages: read              # pull the private GHCR deps image
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-        with:
-          persist-credentials: false
-      - name: Reconcile deps
-        # No-op unless this PR changed requirements*.txt before the
-        # image rebuilt on main; then installs only the delta.
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Run codeql tests
-        run: python -m pytest packages/codeql/tests -n auto
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: codeql
+      test_path: packages/codeql/tests
+      timeout_minutes: 25
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-llm-analysis:
     needs: [pre_check, changes]
@@ -585,27 +573,15 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.llm_analysis == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
     permissions:
       contents: read
-      packages: read              # pull the private GHCR deps image
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-        with:
-          persist-credentials: false
-      - name: Reconcile deps
-        # No-op unless this PR changed requirements*.txt before the
-        # image rebuilt on main; then installs only the delta.
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Run llm_analysis tests
-        run: python -m pytest packages/llm_analysis/tests -n auto
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: llm_analysis
+      test_path: packages/llm_analysis/tests
+      timeout_minutes: 25
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   python-unit-tests-cve-diff:
     needs: [pre_check, changes, deps]
@@ -643,27 +619,14 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.fuzzing == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     permissions:
       contents: read
-      packages: read              # pull the private GHCR deps image
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-        with:
-          persist-credentials: false
-      - name: Reconcile deps
-        # No-op unless this PR changed requirements*.txt before the
-        # image rebuilt on main; then installs only the delta.
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Run fuzzing tests
-        run: python -m pytest packages/fuzzing/tests -n auto
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: fuzzing
+      test_path: packages/fuzzing/tests
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
   # fix). sage is the proving ground: zero subprocess usage in
@@ -700,27 +663,14 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.orchestration == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     permissions:
       contents: read
-      packages: read              # pull the private GHCR deps image
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-        with:
-          persist-credentials: false
-      - name: Reconcile deps
-        # No-op unless this PR changed requirements*.txt before the
-        # image rebuilt on main; then installs only the delta.
-        run: pip install --no-cache-dir -r requirements-dev.txt
-      - name: Run orchestration tests
-        run: python -m pytest core/orchestration/tests -n auto
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: orchestration
+      test_path: core/orchestration/tests
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
   # Single aggregate gate over the whole suite. `needs:` every job and
   # `if: always()` so it still runs when an upstream tier is path-filtered

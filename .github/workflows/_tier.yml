@@ -39,6 +39,11 @@ on:
         required: false
         type: string
         default: "3.12"
+      timeout_minutes:
+        description: Per-job timeout in minutes. Heavier tiers (codeql, llm_analysis) override the 20 default.
+        required: false
+        type: number
+        default: 20
       use_container:
         description: true → run in the prebuilt image; false → venv on the runner.
         required: true
@@ -53,7 +58,7 @@ jobs:
   image:
     if: ${{ inputs.use_container }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     container:
       image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
       credentials:
@@ -79,7 +84,7 @@ jobs:
   runner:
     if: ${{ !inputs.use_container }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
