@@ -179,43 +179,18 @@ def _format_reachability_block(metadata: Dict[str, Any]) -> str:
 
     priority = metadata.get("priority")
     priority_reason = metadata.get("priority_reason") or ""
-    if priority_reason == "reachability:module_aborts":
-        # S4: whole-file module-load abort. Distinct verdict from
-        # NOT_CALLED — the function's def never executes, so there's
-        # no framework-dispatch escape hatch and in-file callers are
-        # equally dead. The system prompt explains how to treat it.
-        lines.append(
-            "Verdict: MODULE_ABORTS_ON_LOAD — file aborts at load "
-            "before this function binds; never importable/callable"
-        )
-    elif priority_reason == "reachability:lexical_dead":
-        # S3: function defined inside an always-false guard
-        # (if False: / if (false) / #[cfg(any())]). Body never
-        # runs / compiles, so the function never binds — trumps
-        # in-scope call edges. System prompt explains treatment.
-        lines.append(
-            "Verdict: LEXICAL_DEAD — defined inside an always-false "
-            "guard (if False / #[cfg(any())]); never binds"
-        )
-    elif priority_reason == "reachability:build_excluded":
-        # Whole-file build exclusion (e.g. Go //go:build ignore): the file
-        # is never compiled, so nothing in it is reachable. Heuristic
-        # (config-dependent — a forced build could include it), so it's a
-        # surface signal, not a hard verdict; the system prompt explains it.
-        lines.append(
-            "Verdict: BUILD_EXCLUDED — file is excluded from the build "
-            "(e.g. //go:build ignore); never compiled in this configuration"
-        )
-    elif priority_reason == "reachability:no_path_from_entry":
-        # U7: transitive entry-reachability. The function may have an
-        # in-project caller, but no path from any entry point (main /
-        # framework dispatch / exported-public symbol) reaches it — the
-        # whole calling chain is an orphaned dead-island. System prompt
-        # explains how to treat it.
-        lines.append(
-            "Verdict: NO_PATH_FROM_ENTRY — has callers, but none reachable "
-            "from any entry point (orphaned dead-island)"
-        )
+    # Reachability verdict line. The structural dead verdicts (module_aborts /
+    # lexical_dead / build_excluded / no_path_from_entry) render a canonical
+    # "Verdict: …" line from the witness table — single source of truth, so a
+    # new dead witness surfaces here automatically. not_called falls to the
+    # low-priority catch-all; framework / registration render an affirmative
+    # "REACHABLE via …" line (annotated without demotion).
+    from core.inventory.reach_witness import prompt_verdict_for
+    verdict = (priority_reason.split("reachability:", 1)[1]
+               if priority_reason.startswith("reachability:") else "")
+    pv = prompt_verdict_for(verdict)
+    if pv:
+        lines.append(pv)
     elif priority == "low":
         lines.append(
             f"Verdict: NOT_CALLED ({priority_reason or 'no callers in project'})"
@@ -224,12 +199,6 @@ def _format_reachability_block(metadata: Dict[str, Any]) -> str:
         "reachability:framework_callable",
         "reachability:registered_via_call",
     ):
-        # The reachability enricher annotates these reasons WITHOUT
-        # demoting priority — the function is reachable via runtime
-        # dispatch the static graph doesn't see. Surfacing the
-        # mechanism lets the LLM trust the reachability picture
-        # instead of seeing "no static callers" and inferring dead
-        # code.
         mechanism = (
             "framework decorator dispatch"
             if priority_reason == "reachability:framework_callable"

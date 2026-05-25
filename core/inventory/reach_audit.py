@@ -38,6 +38,93 @@ _LIVE_VERDICTS = frozenset({
 # "uncertain" is neither — the substrate declines to claim.
 
 
+@dataclass
+class _ClassifyCtx:
+    """Per-target inputs shared by the precedence stages."""
+    inventory: Dict[str, object]
+    file_path: str
+    name: str
+    line: int
+    module: str
+    target: object          # reachability.InternalFunction
+
+
+# --- precedence stages: each (ctx, R) -> verdict string | None -------------
+# R is the core.inventory.reachability module (the accessors). A stage returns
+# its verdict when it fires, else None to fall through to the next stage.
+
+def _stage_module_aborts(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    abort = R.module_aborts_on_load(ctx.inventory, ctx.file_path)
+    if abort and ctx.line and ctx.line > int(abort.get("line") or 0):
+        return "module_aborts"
+    return None
+
+
+def _stage_lexical_dead(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.is_lexically_dead(ctx.inventory, ctx.file_path, ctx.name, ctx.line):
+        return "lexical_dead"
+    return None
+
+
+def _stage_build_excluded(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.build_excluded(ctx.inventory, ctx.file_path):
+        return "build_excluded"
+    return None
+
+
+def _stage_framework(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.is_framework_callable(ctx.inventory, ctx.target):
+        return "framework_callable"
+    return None
+
+
+def _stage_registered(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.is_registered_via_call(ctx.inventory, ctx.target):
+        return "registered_via_call"
+    return None
+
+
+def _stage_entry(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    er = R.entry_reachability(ctx.inventory, ctx.target)
+    if er == "reachable":
+        return "reachable"
+    if er == "no_path_from_entry":
+        return "no_path_from_entry"
+    return None
+
+
+def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    try:
+        verdict = R.function_called(
+            ctx.inventory, f"{ctx.module}.{ctx.name}").verdict
+    except ValueError:
+        return None
+    if verdict == R.Verdict.CALLED:
+        return "called"
+    if verdict == R.Verdict.NOT_CALLED:
+        return "not_called"
+    return None
+
+
+# Ordered precedence. Sound witnesses (module_aborts / lexical_dead) first so
+# they win where they apply (they can hard-suppress); build_excluded
+# (heuristic, whole-file) next so it catches anything in a never-compiled file
+# — incl. functions above a module-abort line and framework-decorated ones,
+# since a file the build never compiles registers nothing; then the specific
+# reachable reasons (framework / registration) before the general
+# entry-reachability and the 1-hop fallback. Adding a witness = insert a stage
+# here + a VERDICTS entry in reach_witness.
+PRECEDENCE = (
+    _stage_module_aborts,
+    _stage_lexical_dead,
+    _stage_build_excluded,
+    _stage_framework,
+    _stage_registered,
+    _stage_entry,
+    _stage_one_hop,
+)
+
+
 def classify_reachability(
     inventory: Dict[str, object],
     file_path: str,
@@ -45,63 +132,20 @@ def classify_reachability(
     line: int,
     module: str,
 ) -> str:
-    """Strongest applicable reachability verdict for one function, in the
-    same precedence the enrichment prepass uses:
-
-    module_aborts → lexical_dead → build_excluded → framework/registration
-    → entry-reachability (reachable / no_path_from_entry / uncertain) →
-    1-hop function_called (called / not_called / uncertain).
-
-    Sound witnesses (module_aborts / lexical_dead) come first so they win
-    where they apply (they can hard-suppress); build_excluded (heuristic,
-    whole-file) then catches anything in a never-compiled file — including
-    functions above a module-abort line and framework-decorated functions,
-    since a file the build never compiles registers nothing.
-    """
-    from core.inventory.reachability import (
-        InternalFunction,
-        Verdict,
-        build_excluded,
-        entry_reachability,
-        function_called,
-        is_framework_callable,
-        is_lexically_dead,
-        is_registered_via_call,
-        module_aborts_on_load,
+    """Strongest applicable reachability verdict for one function — the first
+    stage in :data:`PRECEDENCE` that fires, else ``"uncertain"``. Single
+    source of truth consumed by the CodeQL prefilter, the /agentic enrichment
+    prepass, and the /validate demoter."""
+    from core.inventory import reachability as R
+    ctx = _ClassifyCtx(
+        inventory=inventory, file_path=file_path, name=name, line=line,
+        module=module,
+        target=R.InternalFunction(file_path=file_path, name=name, line=line),
     )
-
-    abort = module_aborts_on_load(inventory, file_path)
-    if abort and line and line > int(abort.get("line") or 0):
-        return "module_aborts"
-    if is_lexically_dead(inventory, file_path, name, line):
-        return "lexical_dead"
-    if build_excluded(inventory, file_path):
-        return "build_excluded"
-
-    target = InternalFunction(file_path=file_path, name=name, line=line)
-    # Specific reachable reasons first — framework decorator dispatch and
-    # function-as-argument registration — so they surface as their own
-    # (informative) verdicts rather than being absorbed into the general
-    # "reachable" by entry-reachability (which also counts them as entries).
-    if is_framework_callable(inventory, target):
-        return "framework_callable"
-    if is_registered_via_call(inventory, target):
-        return "registered_via_call"
-    # General entry-point forward reachability.
-    er = entry_reachability(inventory, target)
-    if er == "reachable":
-        return "reachable"
-    if er == "no_path_from_entry":
-        return "no_path_from_entry"
-    # er == "uncertain": fall through to the 1-hop verdict.
-    try:
-        verdict = function_called(inventory, f"{module}.{name}").verdict
-    except ValueError:
-        return "uncertain"
-    if verdict == Verdict.CALLED:
-        return "called"
-    if verdict == Verdict.NOT_CALLED:
-        return "not_called"
+    for stage in PRECEDENCE:
+        verdict = stage(ctx, R)
+        if verdict:
+            return verdict
     return "uncertain"
 
 

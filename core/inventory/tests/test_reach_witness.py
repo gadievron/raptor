@@ -108,10 +108,10 @@ def test_verdict_map_covers_every_classifier_output():
     # explicitly mapped (not silently routed to the uncertain fail-safe).
     # If classify_reachability gains a verdict, this fails until it's mapped.
     from core.inventory.reach_audit import _DEAD_VERDICTS, _LIVE_VERDICTS
-    from core.inventory.reach_witness import _VERDICT_MAP
+    from core.inventory.reach_witness import VERDICTS
     emitted = set(_DEAD_VERDICTS) | set(_LIVE_VERDICTS) | {"uncertain"}
-    unmapped = emitted - set(_VERDICT_MAP)
-    assert not unmapped, f"classifier verdicts missing from map: {unmapped}"
+    unmapped = emitted - set(VERDICTS)
+    assert not unmapped, f"classifier verdicts missing from VERDICTS: {unmapped}"
 
 
 def test_resolve_reachability_end_to_end():
@@ -129,3 +129,39 @@ def test_resolve_reachability_end_to_end():
     assert rv.witness.kind is WitnessKind.MODULE_ABORTS
     assert rv.may_suppress() is False              # not earned by default
     assert rv.may_suppress(_EARNED) is True        # corpus-earned
+
+
+def test_structurally_suppressible_derived_from_table():
+    # The suppressible set is DERIVED from VERDICTS[*].earns_suppression, not
+    # hand-maintained. Pin the expected membership so a stray earns_suppression
+    # flip is caught.
+    from core.inventory.reach_witness import (
+        STRUCTURALLY_SUPPRESSIBLE_KINDS, WitnessKind,
+    )
+    assert STRUCTURALLY_SUPPRESSIBLE_KINDS == frozenset({
+        WitnessKind.MODULE_ABORTS, WitnessKind.LEXICAL_DEAD,
+    })
+
+
+def test_verdicts_blocker_detail_consistency():
+    # A {detail} slot in a blocker template requires a detail source, and a
+    # declared detail source requires a {detail} slot — else the demoter
+    # silently drops/misformats the witness summary.
+    from core.inventory.reach_witness import VERDICTS
+    for v, spec in VERDICTS.items():
+        if "{detail}" in spec.blocker_template:
+            assert spec.blocker_detail in ("module_aborts", "build_excluded"), v
+        if spec.blocker_detail:
+            assert "{detail}" in spec.blocker_template, v
+
+
+def test_blocker_for_and_prompt_verdict_for_round_trip():
+    from core.inventory.reach_witness import blocker_for, prompt_verdict_for
+    # blocker fills fq + detail; non-dead verdicts have no blocker.
+    b = blocker_for("module_aborts", "`m.f`", "raise ImportError")
+    assert b and "`m.f`" in b and "raise ImportError" in b
+    assert blocker_for("reachable", "`m.f`") is None
+    # prompt verdict present for structural dead verdicts, empty for the rest.
+    assert prompt_verdict_for("build_excluded").startswith("Verdict: BUILD_EXCLUDED")
+    assert prompt_verdict_for("not_called") == ""
+    assert prompt_verdict_for("framework_callable") == ""
