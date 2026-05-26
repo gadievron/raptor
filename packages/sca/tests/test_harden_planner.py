@@ -720,3 +720,40 @@ def test_no_downgrade_when_clean_version_above_exists() -> None:
     )
     assert cand.status == "promoted"
     assert cand.to_version == "2.9"
+
+
+# ---------------------------------------------------------------------------
+# Non-PyPI promotion: harden now bumps versioned npm/Maven/Cargo deps via the
+# per-ecosystem comparator (regression for _versions_above_installed having
+# short-circuited every non-PyPI dep to up_to_date with `else 0`).
+# ---------------------------------------------------------------------------
+
+def test_npm_exact_pin_now_promotable() -> None:
+    """A versioned npm dep is compared with semver and gets promoted —
+    previously it short-circuited to up_to_date."""
+    dep = replace(_dep(ecosystem="npm", name="lodash", version="4.17.0",
+                       pin_style=PinStyle.EXACT),
+                  declared_in=Path("/x/package.json"))
+    cand = _plan_one(
+        dep,
+        registries={"npm": _FakeRegistry(["4.17.0", "4.17.21"], ecosystem="npm")},
+        osv=_FakeOsv({"4.17.21": []}),
+        offline=False, allow_major=False,
+    )
+    assert cand.status == "promoted", cand.status
+    assert cand.to_version == "4.17.21"
+
+
+def test_npm_range_spec_still_up_to_date() -> None:
+    """A RANGE dep's recorded version is the whole spec string, not a
+    comparable version, so the comparator can't place it 'above' anything
+    — it stays up_to_date (unchanged, no spurious bump)."""
+    dep = replace(_dep(ecosystem="npm", name="x", version=">=4.0.0 <5.0.0",
+                       pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/package.json"))
+    cand = _plan_one(
+        dep,
+        registries={"npm": _FakeRegistry(["4.5.0", "4.9.0"], ecosystem="npm")},
+        osv=_FakeOsv(), offline=False, allow_major=False,
+    )
+    assert cand.status == "up_to_date", cand.status

@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .versions import pep440
+from .versions import compare as version_compare
 from core.json import JsonCache
 from . import SCA_CACHE_ROOT
 from .discovery import find_manifests
@@ -574,13 +575,22 @@ def _versions_above_installed(
 
     If ``installed`` is None (unpinned dep), return ``versions`` unchanged
     so we can still propose the latest. Output preserves input ordering.
+
+    Uses the per-ecosystem comparator (``version_compare``) rather than
+    PyPI's only. Previously non-PyPI ecosystems short-circuited to ``0``
+    (nothing ever above installed → every versioned npm/Maven/NuGet/Cargo
+    dep fell through to ``up_to_date``, so ``--harden`` never bumped them).
+    ``version_compare`` raises ``VersionError`` for ecosystems with no
+    comparator (e.g. Debian) or unparseable inputs (a RANGE dep whose
+    ``installed`` is the whole spec string) — both caught below and that
+    version skipped, so those keep the prior no-bump behaviour.
     """
     if installed is None:
         return list(versions)
     out = []
     for v in versions:
         try:
-            cmp = pep440.compare(v, installed) if ecosystem == "PyPI" else 0
+            cmp = version_compare(ecosystem, v, installed)
         except Exception:                   # noqa: BLE001
             continue
         if cmp > 0:
