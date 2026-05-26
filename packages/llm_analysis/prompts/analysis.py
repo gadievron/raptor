@@ -301,6 +301,38 @@ def _build_strategy_block(
     )
 
 
+def _build_verified_exemplar_block(
+    *,
+    rule_id: str,
+    cwe_id: Optional[str],
+    file_path: str,
+    verified_outcomes: Iterable[Any],
+) -> str:
+    """Render RAPTOR's own prior verified outcomes for this finding.
+
+    Tier-3 retrieval: the nearest previously-confirmed outcomes (witness /
+    CodeQL backends) primed as exemplars beside the curated CVE ones — RAPTOR's
+    own ground truth, so the set sharpens as it runs. Empty when nothing
+    matches or the substrate is absent. Best-effort: analysis continues
+    regardless. The caller places the returned text inside an
+    ``UntrustedBlock`` envelope (it carries scanned-repo-derived fields), not
+    the trusted system prompt.
+    """
+    outcomes = list(verified_outcomes)
+    if not outcomes:
+        return ""
+    try:
+        from core.verified_outcome import render_verified_exemplars
+    except Exception:
+        return ""  # substrate absent (older deployment) — skip silently
+    try:
+        finding = {"id": rule_id, "cwe_id": cwe_id, "file": file_path}
+        return render_verified_exemplars(finding, outcomes)
+    except Exception as e:
+        logger.debug(f"verified-exemplar block render failed: {e}", exc_info=True)
+        return ""
+
+
 def build_analysis_prompt_bundle(
     *,
     rule_id: str,
@@ -325,6 +357,7 @@ def build_analysis_prompt_bundle(
     function_calls_made: Iterable[str] = (),
     ast_view: Optional[Dict[str, Any]] = None,
     allow_unreachable: bool = False,
+    verified_outcomes: Iterable[Any] = (),
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -370,6 +403,25 @@ def build_analysis_prompt_bundle(
         system += "\n\n" + strategy_block
 
     blocks: list[UntrustedBlock] = []
+
+    # RAPTOR's own prior verified outcomes for this finding (Tier-3
+    # retrieval). These carry scanned-repo-derived data (file paths), so —
+    # unlike the operator-curated strategy lenses above — they ride the
+    # untrusted-block envelope rather than the trusted system prompt. Empty
+    # unless the caller supplies a corpus and something ranks against this
+    # finding, so default behaviour is unchanged.
+    verified_block = _build_verified_exemplar_block(
+        rule_id=rule_id,
+        cwe_id=cwe_id,
+        file_path=file_path,
+        verified_outcomes=verified_outcomes,
+    )
+    if verified_block:
+        blocks.append(UntrustedBlock(
+            content=verified_block,
+            kind="verified-exemplars",
+            origin="raptor-verified-outcomes",
+        ))
 
     if message:
         blocks.append(UntrustedBlock(

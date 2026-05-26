@@ -501,7 +501,8 @@ class AutonomousSecurityAgentV2:
                  synthesise_checkers: bool = True,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
-                 record_witnesses: bool = True):
+                 record_witnesses: bool = True,
+                 use_verified_exemplars: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -542,6 +543,14 @@ class AutonomousSecurityAgentV2:
         # opt out via ``--no-record-witnesses``.
         self.record_witnesses = record_witnesses
         self._witness_store = None  # lazy
+        # Tier-3 retrieval: prime each analysis prompt with RAPTOR's own
+        # nearest previously-confirmed outcomes (this run's witness store +,
+        # when a project is active, sibling runs') as exemplars beside the
+        # curated CVE ones. Default on; opt out via ``--no-verified-exemplars``.
+        # Empty corpus (fresh run, no project) -> no-op, so a first run's
+        # prompts are unchanged.
+        self.use_verified_exemplars = use_verified_exemplars
+        self._verified_outcomes = None  # lazy, collected once per run
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -829,6 +838,10 @@ class AutonomousSecurityAgentV2:
             file_includes=file_includes,
             function_calls_made=function_calls_made,
             extra_blocks=si_blocks,
+            verified_outcomes=(
+                self._get_verified_outcomes()
+                if self.use_verified_exemplars else ()
+            ),
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -1369,6 +1382,37 @@ class AutonomousSecurityAgentV2:
                 f"   · Intent-match: uncertain "
                 f"(used_llm={verdict.used_llm})"
             )
+
+    def _get_verified_outcomes(self):
+        """Collect (once per run) the verified-outcome corpus visible to this
+        run — its own witness store plus, when a project is active, sibling
+        runs'. The substrate that primes analysis prompts with RAPTOR's own
+        prior confirmations (Tier-3 retrieval).
+
+        Best-effort: returns ``[]`` on any failure (substrate absent, no
+        stores, project resolution error) so analysis is never blocked.
+        """
+        if self._verified_outcomes is not None:
+            return self._verified_outcomes
+        outcomes = []
+        try:
+            from core.verified_outcome import collect_outcomes
+            project_root = None
+            try:
+                from core.run.output import _resolve_active_project
+                active = _resolve_active_project()
+                if active:
+                    project_root = Path(active[0])
+            except Exception:
+                project_root = None
+            outcomes = collect_outcomes(self.out_dir, project_root=project_root)
+        except Exception as e:
+            logger.debug(
+                f"verified-outcome collection skipped: {e}", exc_info=True,
+            )
+            outcomes = []
+        self._verified_outcomes = outcomes
+        return outcomes
 
     def _record_exploit_witness(
         self, vuln: VulnerabilityContext, exploit_code: str,
@@ -2125,6 +2169,17 @@ def main() -> None:
              "byte-for-byte and for ephemeral CI runs that don't "
              "persist the out/ tree.",
     )
+    ap.add_argument(
+        "--no-verified-exemplars",
+        action="store_true",
+        help="Don't prime analysis prompts with RAPTOR's own prior "
+             "verified outcomes (default on). When a project is active, "
+             "each finding's nearest previously-confirmed outcomes "
+             "(witness / CodeQL backends) are rendered as exemplars "
+             "beside the curated CVE ones. No effect on a fresh run with "
+             "no prior corpus; the opt-out exists for cost control and "
+             "byte-for-byte run comparison.",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -2203,6 +2258,7 @@ def main() -> None:
         verify_exploits=not args.no_verify_exploits,
         judge_intent=not args.no_judge_intent,
         record_witnesses=not args.no_record_witnesses,
+        use_verified_exemplars=not args.no_verified_exemplars,
     )
 
     # Load checklist for metadata lookup
