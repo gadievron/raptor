@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:54:04Z",
+    "fetched_at": "2026-05-26T23:19:21Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -2872,11 +2872,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch-auth/src/lib.rs:16",
-          "meilisearch-auth/src/store.rs:17",
           "dump/src/lib.rs:12",
           "dump/src/lib.rs:214",
           "dump/src/writer.rs:11",
+          "dump/src/reader/v6/mod.rs:7",
+          "dump/src/reader/v2/updates.rs:2",
           "... (+42 more)"
         ],
         "verdict": "imported"

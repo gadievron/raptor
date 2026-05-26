@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:50:42Z",
+    "fetched_at": "2026-05-26T23:17:30Z",
     "git_ref": "jenkins-2.387.1",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of jenkins-2.387",
@@ -59,7 +59,7 @@
         "evidence": [
           "PluginWrapper.java:35",
           "FilePath.java:31",
-          "Graph.java:26"
+          "UpdateCenter.java:30"
         ],
         "verdict": "imported"
       },
@@ -132,7 +132,7 @@
         "evidence": [
           "PluginWrapper.java:35",
           "FilePath.java:31",
-          "Graph.java:26"
+          "UpdateCenter.java:30"
         ],
         "verdict": "imported"
       },
@@ -204,8 +204,8 @@
         },
         "evidence": [
           "Main.java:26",
-          "XmlFile.java:26",
-          "Plugin.java:26"
+          "WebAppMain.java:30",
+          "RobustReflectionConverter.java:36"
         ],
         "verdict": "imported"
       },
@@ -414,7 +414,7 @@
         "evidence": [
           "PlainCLIProtocol.java:40",
           "Symbol.java:17",
-          "TcpSlaveAgentListener.java:58"
+          "PluginManager.java:151"
         ],
         "verdict": "imported"
       },
@@ -554,9 +554,9 @@
           "reason": "Java imports under 'org.apache.commons' from 102 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "CLI.java:66",
-          "Icon.java:34",
-          "Symbol.java:18"
+          "PlainCLIProtocol.java:40",
+          "Symbol.java:17",
+          "PluginManager.java:151"
         ],
         "verdict": "imported"
       },
@@ -627,9 +627,9 @@
           "reason": "Java imports under 'org.apache.commons' from 102 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "CLI.java:66",
-          "Icon.java:34",
-          "Symbol.java:18"
+          "PlainCLIProtocol.java:40",
+          "Symbol.java:17",
+          "PluginManager.java:151"
         ],
         "verdict": "imported"
       },
@@ -700,9 +700,9 @@
           "reason": "Java imports under 'org.apache.commons' from 102 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "CLI.java:66",
-          "Icon.java:34",
-          "Symbol.java:18"
+          "PlainCLIProtocol.java:40",
+          "Symbol.java:17",
+          "PluginManager.java:151"
         ],
         "verdict": "imported"
       },
@@ -917,9 +917,9 @@
           "reason": "Java imports under 'org.apache.sshd' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SSHCLI.java:42",
-          "SSHCLI.java:43",
-          "SSHCLI.java:44"
+          "PrivateKeyProvider.java:48",
+          "PrivateKeyProvider.java:49",
+          "PrivateKeyProvider.java:50"
         ],
         "verdict": "imported"
       },
@@ -991,9 +991,9 @@
           "reason": "Java imports under 'org.apache.sshd' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SSHCLI.java:42",
-          "SSHCLI.java:43",
-          "SSHCLI.java:44"
+          "PrivateKeyProvider.java:48",
+          "PrivateKeyProvider.java:49",
+          "PrivateKeyProvider.java:50"
         ],
         "verdict": "imported"
       },
@@ -3445,8 +3445,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "war/src/main/js/filter-build-history.js:1",
-          "war/src/main/js/plugin-manager-ui.js:1"
+          "war/src/main/js/plugin-manager-ui.js:1",
+          "war/src/main/js/filter-build-history.js:1"
         ],
         "verdict": "imported"
       },
@@ -3517,8 +3517,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "war/src/main/js/filter-build-history.js:1",
-          "war/src/main/js/plugin-manager-ui.js:1"
+          "war/src/main/js/plugin-manager-ui.js:1",
+          "war/src/main/js/filter-build-history.js:1"
         ],
         "verdict": "imported"
       },
@@ -3588,8 +3588,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "war/src/main/js/filter-build-history.js:1",
-          "war/src/main/js/plugin-manager-ui.js:1"
+          "war/src/main/js/plugin-manager-ui.js:1",
+          "war/src/main/js/filter-build-history.js:1"
         ],
         "verdict": "imported"
       },

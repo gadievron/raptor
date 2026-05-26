@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:39:11Z",
+    "fetched_at": "2026-05-26T23:14:06Z",
     "git_ref": "v7.1.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of rails",
@@ -126,11 +126,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "railties/lib/rails/info.rb:2",
-          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
-          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
           "actionview/lib/action_view/helpers/form_helper.rb:2",
-          "actionview/lib/action_view/helpers/form_options_helper.rb:2"
+          "actionview/lib/action_view/helpers/form_options_helper.rb:2",
+          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
+          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
+          "railties/lib/rails/info.rb:2"
         ],
         "verdict": "imported"
       },
@@ -203,11 +203,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "railties/lib/rails/info.rb:2",
-          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
-          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
           "actionview/lib/action_view/helpers/form_helper.rb:2",
-          "actionview/lib/action_view/helpers/form_options_helper.rb:2"
+          "actionview/lib/action_view/helpers/form_options_helper.rb:2",
+          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
+          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
+          "railties/lib/rails/info.rb:2"
         ],
         "verdict": "imported"
       },
@@ -978,11 +978,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1054,11 +1054,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1132,11 +1132,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1210,11 +1210,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1287,11 +1287,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1365,11 +1365,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1439,11 +1439,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1516,11 +1516,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1592,11 +1592,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1670,11 +1670,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1747,11 +1747,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1825,11 +1825,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1902,11 +1902,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -1979,11 +1979,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2055,11 +2055,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2132,11 +2132,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2210,11 +2210,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2287,11 +2287,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2363,11 +2363,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2440,11 +2440,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2518,11 +2518,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2595,11 +2595,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2668,11 +2668,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -2815,8 +2815,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11",
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8"
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8",
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11"
         ],
         "verdict": "imported"
       },
@@ -3241,11 +3241,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3311,11 +3311,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3382,11 +3382,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3456,11 +3456,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3526,11 +3526,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3597,11 +3597,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3665,11 +3665,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3736,11 +3736,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3807,11 +3807,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -5320,11 +5320,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_controller/railtie.rb:2",
-          "activerecord/lib/rails/generators/active_record.rb:2",
-          "activerecord/lib/rails/generators/active_record.rb:4",
-          "activerecord/lib/rails/generators/active_record.rb:5",
-          "activerecord/lib/rails/generators/active_record/migration.rb:2",
+          "actionview/lib/action_view/railtie.rb:4",
+          "actioncable/lib/action_cable/engine.rb:2",
+          "activemodel/lib/active_model/railtie.rb:4",
+          "actiontext/lib/action_text/engine.rb:2",
+          "actionmailbox/lib/generators/action_mailbox/install/install_generator.rb:2",
           "... (+148 more)"
         ],
         "verdict": "imported"
@@ -6276,8 +6276,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -6345,8 +6345,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -6414,8 +6414,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -6483,8 +6483,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -6552,8 +6552,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -7667,11 +7667,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -7748,11 +7748,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -7828,11 +7828,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -7906,11 +7906,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"

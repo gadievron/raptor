@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:46:29Z",
+    "fetched_at": "2026-05-26T23:17:01Z",
     "git_ref": "v3.6.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of strapi-3",
@@ -129,11 +129,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -205,11 +205,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -280,11 +280,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -356,11 +356,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -431,11 +431,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -506,11 +506,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -582,11 +582,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -657,11 +657,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -871,9 +871,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -948,9 +948,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1025,9 +1025,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1097,9 +1097,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1172,9 +1172,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1245,9 +1245,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1320,9 +1320,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1396,9 +1396,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -1469,11 +1469,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1553,11 +1553,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1629,11 +1629,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1705,11 +1705,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1789,11 +1789,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1865,11 +1865,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -1941,11 +1941,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -2025,11 +2025,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -2462,10 +2462,10 @@
         },
         "evidence": [
           "packages/create-strapi-starter/utils/fetch-github.js:4",
+          "packages/strapi/lib/utils/openBrowser.js:14",
+          "packages/strapi/lib/utils/success.js:7",
           "packages/strapi/lib/services/webhook-runner.js:8",
           "packages/strapi/lib/services/metrics/sender.js:7",
-          "packages/strapi/lib/utils/success.js:7",
-          "packages/strapi/lib/utils/openBrowser.js:14",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -4978,9 +4978,9 @@
         },
         "evidence": [
           "packages/strapi-admin/services/permission/engine.js:18",
-          "packages/strapi-admin/services/permission/permissions-manager/query-builers.js:4",
           "packages/strapi-admin/services/permission/permissions-manager/index.js:4",
-          "packages/strapi-admin/services/permission/permissions-manager/index.js:5"
+          "packages/strapi-admin/services/permission/permissions-manager/index.js:5",
+          "packages/strapi-admin/services/permission/permissions-manager/query-builers.js:4"
         ],
         "verdict": "imported"
       },
@@ -5052,11 +5052,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5130,11 +5130,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5205,11 +5205,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5281,11 +5281,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5357,11 +5357,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5434,11 +5434,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5511,11 +5511,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5585,11 +5585,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5661,11 +5661,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5737,11 +5737,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5813,11 +5813,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5889,11 +5889,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -5965,11 +5965,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -6043,11 +6043,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -6119,11 +6119,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -6195,11 +6195,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -6274,9 +6274,9 @@
         "evidence": [
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/reducer.js:1",
           "packages/strapi-plugin-i18n/admin/src/hooks/reducers.js:1",
-          "packages/strapi-admin/ee/admin/containers/Roles/ListPage/reducer.js:2",
-          "packages/strapi-admin/ee/admin/hooks/useAuthProviders/reducer.js:2",
-          "packages/strapi-admin/admin/src/components/Roles/Permissions/reducer.js:1",
+          "packages/strapi-plugin-content-manager/admin/src/containers/EditViewLayoutManager/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/Main/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/RBACManager/reducer.js:6",
           "... and 31 more"
         ],
         "verdict": "imported"
@@ -6349,9 +6349,9 @@
         "evidence": [
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/reducer.js:1",
           "packages/strapi-plugin-i18n/admin/src/hooks/reducers.js:1",
-          "packages/strapi-admin/ee/admin/containers/Roles/ListPage/reducer.js:2",
-          "packages/strapi-admin/ee/admin/hooks/useAuthProviders/reducer.js:2",
-          "packages/strapi-admin/admin/src/components/Roles/Permissions/reducer.js:1",
+          "packages/strapi-plugin-content-manager/admin/src/containers/EditViewLayoutManager/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/Main/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/RBACManager/reducer.js:6",
           "... and 31 more"
         ],
         "verdict": "imported"
@@ -6425,11 +6425,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/FormModal/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/utils/createModifiedDataSchema.js:1",
-          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/HomePage/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/SettingsPage/reducer.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
           "... and 22 more"
         ],
         "verdict": "imported"
@@ -6503,11 +6503,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/FormModal/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/utils/createModifiedDataSchema.js:1",
-          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/HomePage/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/SettingsPage/reducer.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
           "... and 22 more"
         ],
         "verdict": "imported"
@@ -6647,9 +6647,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -6720,9 +6720,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -6793,9 +6793,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -6866,10 +6866,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/utils/formatFilter.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:3",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/utils/filtersForm.js:2",
-          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersList/utils/formatFilter.js:1",
           "... and 7 more"
         ],
@@ -6942,10 +6942,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/utils/formatFilter.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:3",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/utils/filtersForm.js:2",
-          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersList/utils/formatFilter.js:1",
           "... and 7 more"
         ],
@@ -7021,9 +7021,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7097,9 +7097,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7173,9 +7173,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7249,9 +7249,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7325,9 +7325,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7401,9 +7401,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -7693,11 +7693,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -7772,11 +7772,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -7850,11 +7850,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -7930,11 +7930,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8009,11 +8009,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8089,11 +8089,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8168,11 +8168,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8247,11 +8247,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8325,11 +8325,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8405,11 +8405,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8484,11 +8484,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8564,11 +8564,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -8641,10 +8641,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -8718,10 +8718,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -8795,10 +8795,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -8871,8 +8871,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -8946,8 +8946,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -9021,8 +9021,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -9096,8 +9096,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -9170,8 +9170,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/target.js:14",
+          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/helpers/file/index.js:12"
         ],
         "verdict": "imported"
@@ -9244,8 +9244,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/target.js:14",
+          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/helpers/file/index.js:12"
         ],
         "verdict": "imported"

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:43:40Z",
+    "fetched_at": "2026-05-26T23:15:11Z",
     "git_ref": "8.22.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of sentry-8.22",
@@ -783,11 +783,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -864,11 +864,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -944,11 +944,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -1022,11 +1022,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -1096,8 +1096,8 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:13",
-          "src/sentry/static/sentry/app/views/stream.jsx:5",
-          "src/sentry/static/sentry/app/views/app.jsx:6"
+          "src/sentry/static/sentry/app/views/app.jsx:6",
+          "src/sentry/static/sentry/app/views/stream.jsx:5"
         ],
         "verdict": "imported"
       },
@@ -1169,10 +1169,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1245,10 +1245,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1317,10 +1317,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1392,10 +1392,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1468,10 +1468,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1547,10 +1547,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1624,10 +1624,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1700,10 +1700,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1776,10 +1776,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1851,10 +1851,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1927,10 +1927,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -1999,10 +1999,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -2074,10 +2074,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -2150,10 +2150,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -2229,10 +2229,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -2306,10 +2306,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -2381,9 +2381,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2454,9 +2454,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2523,9 +2523,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2597,9 +2597,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2670,9 +2670,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2742,9 +2742,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2815,9 +2815,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2888,9 +2888,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -2957,9 +2957,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -3031,9 +3031,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -3103,9 +3103,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -3177,10 +3177,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -3253,10 +3253,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -3329,10 +3329,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -3405,10 +3405,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -3481,10 +3481,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -3557,10 +3557,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -4741,8 +4741,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/social_auth/backends/__init__.py:33",
-          "src/social_auth/backends/utils.py:3"
+          "src/social_auth/backends/utils.py:3",
+          "src/social_auth/backends/__init__.py:33"
         ],
         "verdict": "imported"
       },
@@ -4814,8 +4814,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/social_auth/backends/__init__.py:33",
-          "src/social_auth/backends/utils.py:3"
+          "src/social_auth/backends/utils.py:3",
+          "src/social_auth/backends/__init__.py:33"
         ],
         "verdict": "imported"
       },

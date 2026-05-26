@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:55:18Z",
+    "fetched_at": "2026-05-26T23:19:32Z",
     "git_ref": "v2.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of orchardcore-2.0",
@@ -808,9 +808,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -880,9 +880,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -954,9 +954,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -1026,9 +1026,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -1100,9 +1100,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -1172,9 +1172,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -1246,9 +1246,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -1318,9 +1318,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -2246,9 +2246,9 @@
         "evidence": [
           "gulpfile.js:2",
           ".scripts/update.js:5",
+          ".scripts/cleanup.js:5",
           ".scripts/project.js:23",
-          ".scripts/install.js:5",
-          ".scripts/cleanup.js:5"
+          ".scripts/install.js:5"
         ],
         "verdict": "imported"
       },
@@ -3476,9 +3476,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -3549,9 +3549,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -3621,9 +3621,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -7001,9 +7001,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-pug.js:4",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-pug.js:4",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-pug.js:4",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-pug.js:4"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-pug.js:4"
         ],
         "verdict": "imported"
       },
@@ -8197,8 +8197,8 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/OrchardCore/OrchardCore.Infrastructure/Email/EmailAddressValidator.cs:1",
-          "src/OrchardCore.Modules/OrchardCore.Email.Smtp/Services/SmtpEmailProviderBase.cs:8"
+          "src/OrchardCore.Modules/OrchardCore.Email.Smtp/Services/SmtpEmailProviderBase.cs:8",
+          "src/OrchardCore/OrchardCore.Infrastructure/Email/EmailAddressValidator.cs:1"
         ],
         "verdict": "imported"
       },

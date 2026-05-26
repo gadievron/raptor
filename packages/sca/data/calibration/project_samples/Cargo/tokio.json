@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:37:27Z",
+    "fetched_at": "2026-05-26T23:12:35Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -339,11 +339,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio/src/net/unix/pipe.rs:5",
-          "tokio/src/signal/unix.rs:14",
-          "tokio/src/io/async_fd.rs:4",
-          "tokio/src/io/poll_evented.rs:4",
-          "tokio/src/io/bsd/poll_aio.rs:6",
+          "tokio/src/process/unix/mod.rs:35",
+          "tokio/src/process/unix/mod.rs:37",
+          "tokio/src/runtime/signal/mod.rs:7",
+          "tokio/src/runtime/io/driver.rs:12",
+          "tokio/src/runtime/io/registration.rs:6",
           "... (+8 more)"
         ],
         "verdict": "imported"

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:45:08Z",
+    "fetched_at": "2026-05-26T23:16:29Z",
     "git_ref": "0.36.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of superset-0.36",
@@ -1346,8 +1346,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/sql_lab.py:29",
           "superset/extensions.py:24",
+          "superset/sql_lab.py:29",
           "superset/config.py:33",
           "superset/tasks/cache.py:25",
           "superset/sql_lab.py:29",
@@ -2163,11 +2163,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2240,11 +2240,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2318,11 +2318,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2395,11 +2395,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2471,11 +2471,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2546,11 +2546,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2622,11 +2622,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2697,11 +2697,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2772,11 +2772,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2849,11 +2849,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2926,11 +2926,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -3002,11 +3002,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -3079,11 +3079,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -3221,11 +3221,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:22",
           "superset/typing.py:19",
-          "superset/viz.py:42",
+          "superset/app.py:22",
+          "superset/cli.py:26",
+          "superset/cli.py:27",
           "superset/__init__.py:18",
-          "superset/jinja_context.py:22",
           "... and 45 more"
         ],
         "verdict": "imported"
@@ -3299,11 +3299,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:22",
           "superset/typing.py:19",
-          "superset/viz.py:42",
+          "superset/app.py:22",
+          "superset/cli.py:26",
+          "superset/cli.py:27",
           "superset/__init__.py:18",
-          "superset/jinja_context.py:22",
           "... and 45 more"
         ],
         "verdict": "imported"
@@ -4462,11 +4462,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
+          "superset/dataframe.py:21",
           "superset/viz.py:38",
           "superset/viz.py:46",
-          "superset/dataframe.py:21",
           "superset/result_set.py:26",
-          "superset/db_engine_specs/presto.py:28",
+          "superset/connectors/druid/models.py:29",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -5025,8 +5025,8 @@
         },
         "evidence": [
           "superset/cli.py:24",
-          "superset/datasets/api.py:19",
           "superset/views/base.py:24",
+          "superset/datasets/api.py:19",
           "superset/models/helpers.py:29"
         ],
         "verdict": "imported"
@@ -5100,8 +5100,8 @@
         },
         "evidence": [
           "superset/cli.py:24",
-          "superset/datasets/api.py:19",
           "superset/views/base.py:24",
+          "superset/datasets/api.py:19",
           "superset/models/helpers.py:29"
         ],
         "verdict": "imported"
@@ -5318,7 +5318,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -5394,7 +5394,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -5472,7 +5472,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -6226,10 +6226,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6304,10 +6304,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6379,10 +6379,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6451,10 +6451,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6523,10 +6523,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6600,10 +6600,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6677,10 +6677,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6747,10 +6747,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6824,10 +6824,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -8648,10 +8648,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -8724,10 +8724,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -8799,10 +8799,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -8876,10 +8876,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -8952,10 +8952,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -9027,10 +9027,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -9885,10 +9885,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -9961,10 +9961,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -10038,10 +10038,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -10114,10 +10114,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -10191,10 +10191,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -10267,10 +10267,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -21575,9 +21575,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/App.jsx:23",
+          "superset-frontend/src/modules/utils.js:20",
           "superset-frontend/src/setup/setupApp.ts:20",
-          "superset-frontend/src/modules/utils.js:20"
+          "superset-frontend/src/SqlLab/components/App.jsx:23"
         ],
         "verdict": "imported"
       },
@@ -21652,9 +21652,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/App.jsx:23",
+          "superset-frontend/src/modules/utils.js:20",
           "superset-frontend/src/setup/setupApp.ts:20",
-          "superset-frontend/src/modules/utils.js:20"
+          "superset-frontend/src/SqlLab/components/App.jsx:23"
         ],
         "verdict": "imported"
       },
@@ -25898,8 +25898,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25969,8 +25969,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26041,8 +26041,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26113,8 +26113,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26184,8 +26184,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26256,8 +26256,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26328,8 +26328,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -26401,8 +26401,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },

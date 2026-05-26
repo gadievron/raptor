@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:54:40Z",
+    "fetched_at": "2026-05-26T23:19:02Z",
     "git_ref": "v23.10",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bookstack-23",
@@ -211,11 +211,11 @@
           "reason": "`use League\\Commonmark\\...` found in non-test source"
         },
         "evidence": [
-          "app/Activity/CommentRepo.php:8",
           "app/Entities/Tools/Markdown/MarkdownToHtml.php:7",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:8",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:9",
-          "app/Entities/Tools/Markdown/CustomListItemRenderer.php:4",
+          "app/Activity/CommentRepo.php:8",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:4",
+          "app/Entities/Tools/Markdown/CustomStrikeThroughExtension.php:7",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:6",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -282,11 +282,11 @@
           "reason": "`use League\\Commonmark\\...` found in non-test source"
         },
         "evidence": [
-          "app/Activity/CommentRepo.php:8",
           "app/Entities/Tools/Markdown/MarkdownToHtml.php:7",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:8",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:9",
-          "app/Entities/Tools/Markdown/CustomListItemRenderer.php:4",
+          "app/Activity/CommentRepo.php:8",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:4",
+          "app/Entities/Tools/Markdown/CustomStrikeThroughExtension.php:7",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:6",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -356,11 +356,11 @@
           "reason": "`use League\\Commonmark\\...` found in non-test source"
         },
         "evidence": [
-          "app/Activity/CommentRepo.php:8",
           "app/Entities/Tools/Markdown/MarkdownToHtml.php:7",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:8",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:9",
-          "app/Entities/Tools/Markdown/CustomListItemRenderer.php:4",
+          "app/Activity/CommentRepo.php:8",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:4",
+          "app/Entities/Tools/Markdown/CustomStrikeThroughExtension.php:7",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:6",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -428,11 +428,11 @@
           "reason": "`use League\\Commonmark\\...` found in non-test source"
         },
         "evidence": [
-          "app/Activity/CommentRepo.php:8",
           "app/Entities/Tools/Markdown/MarkdownToHtml.php:7",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:8",
-          "app/Entities/Tools/Markdown/MarkdownToHtml.php:9",
-          "app/Entities/Tools/Markdown/CustomListItemRenderer.php:4",
+          "app/Activity/CommentRepo.php:8",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:4",
+          "app/Entities/Tools/Markdown/CustomStrikeThroughExtension.php:7",
+          "app/Entities/Tools/Markdown/CustomStrikethroughRenderer.php:6",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -1956,11 +1956,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Access/SocialAuthService.php:17",
-          "app/Http/DownloadResponseFactory.php:8",
-          "app/Uploads/ImageStorageDisk.php:8",
-          "app/Uploads/ImageService.php:14",
-          "app/Http/Middleware/PreventResponseCaching.php:6",
+          "app/Exceptions/ApiAuthException.php:4",
+          "app/Exceptions/PrettyException.php:7",
+          "app/Exceptions/NotifyException.php:7",
+          "app/Exceptions/Handler.php:14",
+          "app/Exceptions/Handler.php:13",
           "... (+11 more)"
         ],
         "verdict": "imported"
@@ -2034,11 +2034,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Access/SocialAuthService.php:17",
-          "app/Http/DownloadResponseFactory.php:8",
-          "app/Uploads/ImageStorageDisk.php:8",
-          "app/Uploads/ImageService.php:14",
-          "app/Http/Middleware/PreventResponseCaching.php:6",
+          "app/Exceptions/ApiAuthException.php:4",
+          "app/Exceptions/PrettyException.php:7",
+          "app/Exceptions/NotifyException.php:7",
+          "app/Exceptions/Handler.php:14",
+          "app/Exceptions/Handler.php:13",
           "... (+11 more)"
         ],
         "verdict": "imported"
@@ -2112,11 +2112,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Access/SocialAuthService.php:17",
-          "app/Http/DownloadResponseFactory.php:8",
-          "app/Uploads/ImageStorageDisk.php:8",
-          "app/Uploads/ImageService.php:14",
-          "app/Http/Middleware/PreventResponseCaching.php:6",
+          "app/Exceptions/ApiAuthException.php:4",
+          "app/Exceptions/PrettyException.php:7",
+          "app/Exceptions/NotifyException.php:7",
+          "app/Exceptions/Handler.php:14",
+          "app/Exceptions/Handler.php:13",
           "... (+11 more)"
         ],
         "verdict": "imported"

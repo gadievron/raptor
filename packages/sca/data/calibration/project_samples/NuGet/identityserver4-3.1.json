@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:52:18Z",
+    "fetched_at": "2026-05-26T23:18:05Z",
     "git_ref": "3.1.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of identityserver4-3.1",
@@ -3068,11 +3068,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:4",
-          "src/EntityFramework/src/TokenCleanupHost.cs:6",
-          "src/EntityFramework/src/IdentityServerEntityFrameworkBuilderExtensions.cs:12",
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:5",
-          "src/EntityFramework.Storage/src/TokenCleanup/IOperationalStoreNotification.cs:7",
+          "src/AspNetIdentity/host/Startup.cs:9",
+          "src/AspNetIdentity/host/Quickstart/Home/ErrorViewModel.cs:3",
+          "src/AspNetIdentity/host/Quickstart/Consent/ConsentController.cs:6",
+          "src/AspNetIdentity/host/Quickstart/Device/DeviceController.cs:10",
+          "src/AspNetIdentity/host/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"
@@ -3148,11 +3148,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:4",
-          "src/EntityFramework/src/TokenCleanupHost.cs:6",
-          "src/EntityFramework/src/IdentityServerEntityFrameworkBuilderExtensions.cs:12",
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:5",
-          "src/EntityFramework.Storage/src/TokenCleanup/IOperationalStoreNotification.cs:7",
+          "src/AspNetIdentity/host/Startup.cs:9",
+          "src/AspNetIdentity/host/Quickstart/Home/ErrorViewModel.cs:3",
+          "src/AspNetIdentity/host/Quickstart/Consent/ConsentController.cs:6",
+          "src/AspNetIdentity/host/Quickstart/Device/DeviceController.cs:10",
+          "src/AspNetIdentity/host/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"

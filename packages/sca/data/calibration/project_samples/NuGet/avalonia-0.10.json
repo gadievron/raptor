@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:52:35Z",
+    "fetched_at": "2026-05-26T23:18:13Z",
     "git_ref": "0.10.18",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of avalonia-0.10",
@@ -7355,10 +7355,10 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/Avalonia.FreeDesktop/DBusMenu.cs:6",
           "src/Avalonia.FreeDesktop/DBusMenuExporter.cs:13",
-          "src/Avalonia.FreeDesktop/DBusTrayIconImpl.cs:11",
           "src/Avalonia.FreeDesktop/DBusHelper.cs:5",
+          "src/Avalonia.FreeDesktop/DBusTrayIconImpl.cs:11",
+          "src/Avalonia.FreeDesktop/DBusMenu.cs:6",
           "src/Avalonia.FreeDesktop/DBusIme/X11DBusImeHelper.cs:5",
           "... (+5 more)"
         ],

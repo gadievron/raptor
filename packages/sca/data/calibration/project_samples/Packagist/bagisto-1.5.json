@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:53:35Z",
+    "fetched_at": "2026-05-26T23:18:50Z",
     "git_ref": "v1.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bagisto-1.5",
@@ -122,8 +122,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sanctum.php:2",
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
+          "config/sanctum.php:2"
         ],
         "verdict": "imported"
       },
@@ -200,8 +200,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sanctum.php:2",
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
+          "config/sanctum.php:2"
         ],
         "verdict": "imported"
       },
@@ -2818,11 +2818,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -2895,11 +2895,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -2972,11 +2972,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3048,11 +3048,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3122,11 +3122,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3199,11 +3199,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3276,11 +3276,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3355,11 +3355,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3433,11 +3433,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3511,11 +3511,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3738,11 +3738,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3812,11 +3812,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3889,11 +3889,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3962,11 +3962,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4039,11 +4039,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4114,11 +4114,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4189,11 +4189,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4264,11 +4264,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4341,11 +4341,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4414,11 +4414,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4489,11 +4489,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4564,11 +4564,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4639,11 +4639,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4715,11 +4715,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4790,11 +4790,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4865,11 +4865,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4942,11 +4942,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5017,11 +5017,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5092,11 +5092,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -6422,11 +6422,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -6502,11 +6502,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -6576,10 +6576,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4"
         ],
         "verdict": "imported"
       },

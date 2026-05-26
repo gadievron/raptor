@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:53:44Z",
+    "fetched_at": "2026-05-26T23:18:30Z",
     "git_ref": "v0.7.19",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-0.7",
@@ -262,11 +262,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -341,11 +341,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -423,11 +423,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -500,11 +500,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1264,10 +1264,10 @@
         },
         "evidence": [
           "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:6",
-          "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4",
-          "tests/Assertions/CommandAssertionsTrait.php:11",
           "tests/Assertions/ControllerAssertionsTrait.php:14",
-          "tests/Assertions/NestedObjectAssertionsTrait.php:11"
+          "tests/Assertions/CommandAssertionsTrait.php:11",
+          "tests/Assertions/NestedObjectAssertionsTrait.php:11",
+          "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4"
         ],
         "verdict": "not_reachable"
       },
@@ -1410,11 +1410,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1487,11 +1487,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1564,11 +1564,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Daemon/ApiKeyTransformer.php:8",
-          "app/Transformers/Api/Application/BaseTransformer.php:9",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
           "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:7",
-          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:32",
+          "app/Transformers/Api/Application/BaseTransformer.php:9",
+          "app/Transformers/Daemon/ApiKeyTransformer.php:8",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:8",
           "... (+2 more)"
         ],
         "verdict": "imported"
@@ -1786,10 +1786,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -1864,10 +1864,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -1944,10 +1944,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2023,10 +2023,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2104,10 +2104,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2183,10 +2183,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2261,10 +2261,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2341,10 +2341,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"

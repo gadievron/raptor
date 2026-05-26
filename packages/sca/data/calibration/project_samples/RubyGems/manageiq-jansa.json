@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:49:20Z",
+    "fetched_at": "2026-05-26T23:17:00Z",
     "git_ref": "jansa-1",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of manageiq-jansa",
@@ -266,8 +266,8 @@
         },
         "evidence": [
           "config/boot.rb:5",
-          "tools/configure_server_settings.rb:2",
           "tools/fix_auth.rb:3",
+          "tools/configure_server_settings.rb:2",
           "tools/pg_inspector/inspect_pg_server.rb:2"
         ],
         "verdict": "imported"
@@ -340,8 +340,8 @@
         },
         "evidence": [
           "config/boot.rb:5",
-          "tools/configure_server_settings.rb:2",
           "tools/fix_auth.rb:3",
+          "tools/configure_server_settings.rb:2",
           "tools/pg_inspector/inspect_pg_server.rb:2"
         ],
         "verdict": "imported"
@@ -414,8 +414,8 @@
         },
         "evidence": [
           "config/boot.rb:5",
-          "tools/configure_server_settings.rb:2",
           "tools/fix_auth.rb:3",
+          "tools/configure_server_settings.rb:2",
           "tools/pg_inspector/inspect_pg_server.rb:2"
         ],
         "verdict": "imported"
@@ -488,8 +488,8 @@
         },
         "evidence": [
           "config/initializers/session_store.rb:18",
-          "app/models/miq_worker/runner.rb:322",
-          "app/models/miq_server/worker_management/monitor.rb:169"
+          "app/models/miq_server/worker_management/monitor.rb:169",
+          "app/models/miq_worker/runner.rb:322"
         ],
         "verdict": "imported"
       },

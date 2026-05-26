@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:41:11Z",
+    "fetched_at": "2026-05-26T23:15:01Z",
     "git_ref": "v2.1.0.RELEASE",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot-2.1",
@@ -59,9 +59,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -135,9 +135,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -209,9 +209,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -283,9 +283,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -357,9 +357,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -432,9 +432,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -506,9 +506,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -577,9 +577,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -650,9 +650,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -724,9 +724,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -798,9 +798,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -873,9 +873,9 @@
           "reason": "Java imports under 'ch.qos.logback.classic' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "DefaultLogbackConfiguration.java:20",
-          "ColorConverter.java:22",
-          "LogbackLoggingSystem.java:27"
+          "SpringBootJoranConfigurator.java:18",
+          "LogbackLoggingSystem.java:30",
+          "ExtendedWhitespaceThrowableProxyConverter.java:18"
         ],
         "verdict": "imported"
       },
@@ -1246,9 +1246,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1320,9 +1320,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1394,9 +1394,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1468,9 +1468,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1543,9 +1543,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1616,9 +1616,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -1692,9 +1692,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -1767,9 +1767,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -5993,9 +5993,9 @@
           "reason": "Java imports under 'org.hibernate' from 8 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "HibernateJpaConfiguration.java:32",
-          "SpringImplicitNamingStrategy.java:21",
-          "HibernateJpaConfiguration.java:33"
+          "SpringJtaPlatform.java:21",
+          "SpringPhysicalNamingStrategy.java:20",
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -6068,9 +6068,9 @@
           "reason": "Java imports under 'org.hibernate' from 8 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "HibernateJpaConfiguration.java:32",
-          "SpringImplicitNamingStrategy.java:21",
-          "HibernateJpaConfiguration.java:33"
+          "SpringJtaPlatform.java:21",
+          "SpringPhysicalNamingStrategy.java:20",
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -6142,9 +6142,9 @@
           "reason": "Java imports under 'org.hibernate' from 8 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "HibernateJpaConfiguration.java:32",
-          "SpringImplicitNamingStrategy.java:21",
-          "HibernateJpaConfiguration.java:33"
+          "SpringJtaPlatform.java:21",
+          "SpringPhysicalNamingStrategy.java:20",
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -6216,8 +6216,8 @@
           "reason": "Java imports under 'org.hibernate.validator' only from test files"
         },
         "evidence": [
-          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22",
-          "MessageInterpolatorFactoryTests.java:20"
+          "MessageInterpolatorFactoryTests.java:20",
+          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22"
         ],
         "verdict": "imported"
       },
@@ -6290,8 +6290,8 @@
           "reason": "Java imports under 'org.hibernate.validator' only from test files"
         },
         "evidence": [
-          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22",
-          "MessageInterpolatorFactoryTests.java:20"
+          "MessageInterpolatorFactoryTests.java:20",
+          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22"
         ],
         "verdict": "imported"
       },
@@ -6363,8 +6363,8 @@
           "reason": "Java imports under 'org.hibernate.validator' only from test files"
         },
         "evidence": [
-          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22",
-          "MessageInterpolatorFactoryTests.java:20"
+          "MessageInterpolatorFactoryTests.java:20",
+          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22"
         ],
         "verdict": "imported"
       },
@@ -6434,8 +6434,8 @@
           "reason": "Java imports under 'org.hibernate.validator' only from test files"
         },
         "evidence": [
-          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22",
-          "MessageInterpolatorFactoryTests.java:20"
+          "MessageInterpolatorFactoryTests.java:20",
+          "MessageInterpolatorFactoryWithoutElIntegrationTests.java:22"
         ],
         "verdict": "imported"
       },
@@ -6506,8 +6506,8 @@
           "reason": "Java imports under 'org.jolokia' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JolokiaEndpointAutoConfiguration.java:18",
-          "JolokiaEndpoint.java:21"
+          "JolokiaEndpoint.java:21",
+          "JolokiaEndpointAutoConfiguration.java:18"
         ],
         "verdict": "imported"
       },
@@ -6649,9 +6649,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -6727,9 +6727,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -6799,9 +6799,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -6869,9 +6869,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -6942,9 +6942,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -7015,9 +7015,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -7156,9 +7156,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7229,9 +7229,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7304,9 +7304,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7378,9 +7378,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7451,9 +7451,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7526,9 +7526,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7599,9 +7599,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7673,9 +7673,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7747,9 +7747,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7821,9 +7821,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7895,9 +7895,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -7969,9 +7969,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8040,9 +8040,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8114,9 +8114,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8188,9 +8188,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8259,9 +8259,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8332,9 +8332,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8406,9 +8406,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8479,9 +8479,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8553,9 +8553,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8626,9 +8626,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8698,9 +8698,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8772,9 +8772,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8845,9 +8845,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8918,9 +8918,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -8991,9 +8991,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9065,9 +9065,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9138,9 +9138,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9210,9 +9210,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9284,9 +9284,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9358,9 +9358,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9431,9 +9431,9 @@
           "reason": "Java imports under 'io.undertow' from 17 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketServletWebServerCustomizer.java:18",
-          "UndertowReactiveWebServerFactory.java:33",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowCompressionConfigurer.java:21",
+          "UndertowCompressionConfigurer.java:23",
+          "UndertowCompressionConfigurer.java:24"
         ],
         "verdict": "imported"
       },
@@ -9507,9 +9507,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 18 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JettyWebSocketServletWebServerCustomizer.java:18",
-          "JettyWebSocketServletWebServerCustomizer.java:20",
-          "ServletContextInitializerConfiguration.java:22"
+          "JettyServerCustomizer.java:18",
+          "JettyReactiveWebServerFactory.java:32",
+          "JettyWebServer.java:29"
         ],
         "verdict": "imported"
       },
@@ -9651,9 +9651,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -9724,9 +9724,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -9797,9 +9797,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -9871,9 +9871,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -9944,9 +9944,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -10019,9 +10019,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -10092,9 +10092,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -10165,9 +10165,9 @@
           "reason": "Java imports under 'org.yaml' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "OriginTrackedYamlLoader.java:24",
-          "OriginTrackedYamlLoader.java:26",
-          "OriginTrackedYamlLoader.java:27"
+          "YamlJsonParser.java:21",
+          "OriginTrackedYamlLoader.java:27",
+          "OriginTrackedYamlLoader.java:24"
         ],
         "verdict": "imported"
       },
@@ -10237,9 +10237,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -10310,9 +10310,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -10382,9 +10382,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -10883,9 +10883,9 @@
           "reason": "Java imports under 'org.springframework.batch' from 7 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "BatchConfigurerConfiguration.java:21",
-          "BasicBatchConfigurer.java:21",
-          "BasicBatchConfigurer.java:23"
+          "BatchAutoConfiguration.java:20",
+          "BatchAutoConfiguration.java:22",
+          "JobLauncherCommandLineRunner.java:40"
         ],
         "verdict": "imported"
       },
@@ -10954,9 +10954,9 @@
           "reason": "Java imports under 'org.springframework.batch' from 7 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "BatchConfigurerConfiguration.java:21",
-          "BasicBatchConfigurer.java:21",
-          "BasicBatchConfigurer.java:23"
+          "BatchAutoConfiguration.java:20",
+          "BatchAutoConfiguration.java:22",
+          "JobLauncherCommandLineRunner.java:40"
         ],
         "verdict": "imported"
       },
@@ -12081,8 +12081,8 @@
         },
         "evidence": [
           "ArchiveCommand.java:36",
-          "GroovyCompiler.java:31",
-          "DependencyAutoConfigurationTransformation.java:20"
+          "GroovyBeansTransformation.java:21",
+          "GenericBomAstTransformation.java:23"
         ],
         "verdict": "imported"
       },
@@ -12154,9 +12154,9 @@
           "reason": "Java imports under 'org.apache.http' from 7 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SendGridAutoConfiguration.java:21",
-          "RestClientAutoConfiguration.java:18",
-          "JestAutoConfiguration.java:25"
+          "RestTemplateProxyCustomizationExample.java:22",
+          "RestTemplateProxyCustomizationExample.java:23",
+          "SendGridAutoConfiguration.java:22"
         ],
         "verdict": "imported"
       },
@@ -12299,9 +12299,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -12371,9 +12371,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -12443,9 +12443,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -12521,9 +12521,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -12599,9 +12599,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1063 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -12669,9 +12669,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -12742,9 +12742,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -12812,9 +12812,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -12882,9 +12882,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -12951,9 +12951,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -13026,9 +13026,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -13242,8 +13242,8 @@
         },
         "evidence": [
           "RabbitAutoConfiguration.java:21",
-          "RabbitConnectionFactoryMetricsPostProcessor.java:18",
-          "RabbitMetricsAutoConfiguration.java:18"
+          "RabbitMetricsAutoConfiguration.java:18",
+          "RabbitConnectionFactoryMetricsPostProcessor.java:18"
         ],
         "verdict": "imported"
       },
@@ -13594,9 +13594,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -13673,9 +13673,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -13747,9 +13747,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -13820,9 +13820,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -13899,9 +13899,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -13975,9 +13975,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14054,9 +14054,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14133,9 +14133,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14207,9 +14207,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14280,9 +14280,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14353,9 +14353,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14426,9 +14426,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14497,9 +14497,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:23",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -14570,9 +14570,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -14786,9 +14786,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -14859,9 +14859,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -14934,9 +14934,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -15010,9 +15010,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -15083,9 +15083,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -15158,9 +15158,9 @@
           "reason": "Java imports under 'org.apache.kafka' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "KafkaStreamsAnnotationDrivenConfiguration.java:20",
-          "KafkaStreamsBeanExample.java:21",
-          "KafkaStreamsAnnotationDrivenConfiguration.java:22"
+          "KafkaStreamsBeanExample.java:18",
+          "KafkaStreamsBeanExample.java:20",
+          "KafkaStreamsBeanExample.java:21"
         ],
         "verdict": "imported"
       },
@@ -16039,8 +16039,8 @@
           "reason": "Java imports under 'org.assertj' from 3 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AbstractConfigurationClassTests.java:37",
           "WarCommandIT.java:27",
+          "AbstractConfigurationClassTests.java:37",
           "Matched.java:18"
         ],
         "verdict": "imported"
@@ -16112,7 +16112,7 @@
           "reason": "Java imports under 'org.glassfish' from 8 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:36",
+          "JerseySetStatusOverSendErrorExample.java:22",
           "JerseyAutoConfiguration.java:37",
           "ResourceConfigCustomizer.java:18"
         ],
@@ -17618,9 +17618,9 @@
           "reason": "Java imports under 'org.slf4j' from 6 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedMongoAutoConfiguration.java:48",
-          "LogbackLoggingSystem.java:38",
-          "LogbackInitializer.java:21"
+          "Slf4JLoggingSystem.java:23",
+          "LogbackLoggingSystem.java:40",
+          "LogbackLoggingSystem.java:37"
         ],
         "verdict": "imported"
       },
@@ -17694,9 +17694,9 @@
           "reason": "Java imports under 'org.springframework' from 1581 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:47"
+          "AnnotatedSample.java:20",
+          "AtomikosDataSourceBean.java:22",
+          "AtomikosProperties.java:21"
         ],
         "verdict": "imported"
       },
@@ -17841,9 +17841,9 @@
           "reason": "Java imports under 'org.springframework.security' from 45 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SecurityDataConfiguration.java:23",
-          "OAuth2ClientPropertiesRegistrationAdapter.java:26",
-          "OAuth2ClientPropertiesRegistrationAdapter.java:27"
+          "ApplicationContextServerWebExchangeMatcher.java:25",
+          "StaticResourceRequest.java:31",
+          "PathRequest.java:20"
         ],
         "verdict": "imported"
       },
@@ -17915,9 +17915,9 @@
           "reason": "Java imports under 'org.springframework.ws' from 7 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebServicesAutoConfiguration.java:48",
-          "WebServicesAutoConfiguration.java:49",
-          "WebServicesAutoConfiguration.java:50"
+          "HttpWebServiceMessageSenderBuilder.java:27",
+          "WebServiceTemplateBuilder.java:39",
+          "HttpWebServiceMessageSenderBuilder.java:28"
         ],
         "verdict": "imported"
       },
@@ -18596,9 +18596,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -18669,9 +18669,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -18742,9 +18742,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -18815,9 +18815,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -18888,9 +18888,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -18961,9 +18961,9 @@
           "reason": "Java imports under 'org.apache.commons' from 142 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurationPackages.java:25",
-          "AutoConfigurationImportSelector.java:31",
-          "JerseyAutoConfiguration.java:34"
+          "SpringApplicationBannerPrinter.java:24",
+          "ImageBanner.java:33",
+          "SpringApplication.java:32"
         ],
         "verdict": "imported"
       },
@@ -19239,9 +19239,9 @@
           "reason": "Java imports under 'org.apache.maven' from 23 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AbstractRunMojo.java:31",
-          "AbstractDependencyFilterMojo.java:23",
-          "IncludeFilter.java:20"
+          "DependencyManagementBomTransformation.java:31",
+          "ArtifactsLibraries.java:28",
+          "RepackageMojo.java:28"
         ],
         "verdict": "imported"
       },
@@ -19312,9 +19312,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:23",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -19383,9 +19383,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:23",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },

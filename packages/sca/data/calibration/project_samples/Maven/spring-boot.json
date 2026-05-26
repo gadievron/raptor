@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:37:55Z",
+    "fetched_at": "2026-05-26T23:12:56Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -56,9 +56,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -129,9 +129,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -201,9 +201,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -274,9 +274,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -348,9 +348,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -422,9 +422,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -989,9 +989,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1063,9 +1063,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1137,9 +1137,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1212,9 +1212,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1286,9 +1286,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1357,9 +1357,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },

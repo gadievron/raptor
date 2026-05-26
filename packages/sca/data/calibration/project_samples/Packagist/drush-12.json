@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:54:49Z",
+    "fetched_at": "2026-05-26T23:19:13Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -60,9 +60,9 @@
         "evidence": [
           "src/Commands/core/CliCommands.php:16",
           "src/Commands/core/CliCommands.php:17",
-          "src/Psysh/Shell.php:6",
           "src/Psysh/DrushHelpCommand.php:6",
-          "src/Psysh/DrushCommand.php:10"
+          "src/Psysh/DrushCommand.php:10",
+          "src/Psysh/Shell.php:6"
         ],
         "verdict": "imported"
       },
@@ -133,11 +133,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -212,11 +212,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -291,11 +291,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -369,11 +369,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -449,11 +449,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -528,11 +528,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -609,10 +609,10 @@
         },
         "evidence": [
           "tests/unit/SiteAliasNameTest.php:6",
-          "tests/unit/ExpandWildcardTablesTest.php:8",
           "tests/unit/EnvironmentTest.php:8",
+          "tests/unit/SiteAliasFileDiscoveryTest.php:6",
           "tests/unit/SiteAliasFileLoaderTest.php:9",
-          "tests/unit/MigrateRunnerTest.php:11",
+          "tests/unit/UserAbortExceptionTest.php:8",
           "... (+9 more)"
         ],
         "verdict": "not_reachable"
@@ -687,10 +687,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
           "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
+          "src/Commands/DrushCommands.php:27",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -1232,11 +1232,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1308,11 +1308,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1387,11 +1387,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1462,11 +1462,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1541,11 +1541,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1620,11 +1620,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1698,11 +1698,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1777,11 +1777,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1856,11 +1856,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -1931,11 +1931,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2012,11 +2012,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2087,11 +2087,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2166,11 +2166,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2241,11 +2241,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2321,11 +2321,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2393,11 +2393,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2465,11 +2465,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2538,11 +2538,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2609,11 +2609,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2689,11 +2689,11 @@
           "reason": "`use Drupal\\Core\\...` found in non-test source"
         },
         "evidence": [
-          "src/Drupal/DrupalUtil.php:6",
-          "src/Drupal/DrupalUtil.php:8",
-          "src/Drupal/ExtensionDiscovery.php:6",
-          "src/Drupal/DrupalKernelTrait.php:8",
-          "src/Drupal/DrupalKernelTrait.php:9",
+          "src/Commands/sql/SqlCommands.php:13",
+          "src/Commands/core/SiteInstallCommands.php:13",
+          "src/Commands/core/UpdateDBCommands.php:11",
+          "src/Boot/DrupalBoot8.php:9",
+          "src/Sql/SqlBase.php:8",
           "... (+180 more)"
         ],
         "verdict": "imported"
@@ -2768,10 +2768,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
           "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
+          "src/Commands/DrushCommands.php:27",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -2846,10 +2846,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
           "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
+          "src/Commands/DrushCommands.php:27",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -2924,10 +2924,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/PhpCommands.php:12",
           "src/Commands/core/TwigCommands.php:19",
+          "src/Commands/core/PhpCommands.php:12",
           "drush.php:8",
-          "src/Utils/FsUtils.php:11",
+          "src/Commands/DrushCommands.php:27",
           "... (+261 more)"
         ],
         "verdict": "imported"

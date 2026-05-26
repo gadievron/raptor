@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:41:26Z",
+    "fetched_at": "2026-05-26T23:13:42Z",
     "git_ref": "v4.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of rails-4.2",
@@ -772,11 +772,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -847,11 +847,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -913,11 +913,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -988,11 +988,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1057,11 +1057,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1128,11 +1128,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1203,11 +1203,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1272,11 +1272,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1347,11 +1347,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1422,11 +1422,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1497,11 +1497,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1566,11 +1566,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1641,11 +1641,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1715,11 +1715,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1785,11 +1785,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1860,11 +1860,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1932,11 +1932,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2008,11 +2008,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2083,11 +2083,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2149,11 +2149,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2224,11 +2224,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2297,11 +2297,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2373,11 +2373,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2449,11 +2449,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2522,11 +2522,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2597,11 +2597,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2666,11 +2666,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2741,11 +2741,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2816,11 +2816,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2885,11 +2885,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2955,11 +2955,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3030,11 +3030,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3103,11 +3103,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3178,11 +3178,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3253,11 +3253,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3320,11 +3320,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3395,11 +3395,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3471,11 +3471,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3541,11 +3541,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3616,11 +3616,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },
@@ -3690,11 +3690,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
           "guides/rails_guides.rb:43",
+          "guides/rails_guides/kindle.rb:6",
           "guides/rails_guides/markdown.rb:4",
-          "guides/rails_guides/kindle.rb:6"
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
         ],
         "verdict": "imported"
       },

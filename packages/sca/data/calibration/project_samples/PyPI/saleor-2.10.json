@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:42:49Z",
+    "fetched_at": "2026-05-26T23:15:17Z",
     "git_ref": "2.10.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of saleor-2.10",
@@ -3218,10 +3218,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3298,10 +3298,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3378,10 +3378,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3459,10 +3459,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3538,10 +3538,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3618,10 +3618,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3700,10 +3700,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3780,10 +3780,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3860,10 +3860,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -3940,10 +3940,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4020,10 +4020,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4099,10 +4099,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4179,10 +4179,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4259,10 +4259,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4338,10 +4338,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4418,10 +4418,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4497,10 +4497,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -4647,11 +4647,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/product/filters.py:9",
-          "saleor/core/filters.py:2",
+          "saleor/graphql/discount/filters.py:3",
           "saleor/graphql/menu/filters.py:1",
-          "saleor/graphql/page/filters.py:1",
           "saleor/graphql/account/filters.py:1",
+          "saleor/graphql/account/deprecated/filters.py:1",
+          "saleor/graphql/page/filters.py:1",
           "... and 10 more"
         ],
         "verdict": "imported"
@@ -8982,10 +8982,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -9058,10 +9058,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -9134,10 +9134,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -9211,10 +9211,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],

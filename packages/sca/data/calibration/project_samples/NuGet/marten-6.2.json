@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:53:16Z",
+    "fetched_at": "2026-05-26T23:18:50Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of marten-6.2",
@@ -9395,11 +9395,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/Marten.Testing/Documents/StringDoc.cs:1",
-          "src/Marten.Testing/Documents/Target.cs:4",
-          "src/EventSourcingTests/SchemaChange/SimpleMappings.cs:3",
-          "src/DocumentDbTests/Reading/Linq/recognizing_json_names_from_attributes.cs:3",
-          "src/Marten/Linq/QueryPlan.cs:1",
+          "src/EventSourcingTests/Bugs/Bug_2465_make_event_serialization_strategy_be_lazy.cs:1",
+          "src/EventSourcingTests/SchemaChange/Upcasters.cs:4",
+          "src/EventSourcingTests/SchemaChange/MultipleVersions/Classes/SystemTextJsonUpcastConfiguration.cs:3",
+          "src/Marten/Services/SystemTextJsonSerializer.cs:5",
+          "src/Marten/Services/Json/SnakeCaseNamingPolicy.cs:4",
           "... (+15 more)"
         ],
         "verdict": "imported"

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:47:36Z",
+    "fetched_at": "2026-05-26T23:15:58Z",
     "git_ref": "v2.10.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of prometheus-2.10",
@@ -1046,11 +1046,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "util/treecache/treecache.go:23",
-          "util/stats/query_stats.go:18",
+          "rules/manager.go:28",
+          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
+          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
           "template/template.go:29",
-          "discovery/manager.go:23",
-          "discovery/dns/dns.go:26",
+          "cmd/prometheus/main.go:39",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -1126,11 +1126,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "util/treecache/treecache.go:23",
-          "util/stats/query_stats.go:18",
+          "rules/manager.go:28",
+          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
+          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
           "template/template.go:29",
-          "discovery/manager.go:23",
-          "discovery/dns/dns.go:26",
+          "cmd/prometheus/main.go:39",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -1206,11 +1206,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "util/treecache/treecache.go:23",
-          "util/stats/query_stats.go:18",
+          "rules/manager.go:28",
+          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
+          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
           "template/template.go:29",
-          "discovery/manager.go:23",
-          "discovery/dns/dns.go:26",
+          "cmd/prometheus/main.go:39",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -34450,11 +34450,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34526,11 +34526,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34598,11 +34598,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34677,11 +34677,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34753,11 +34753,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34825,11 +34825,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34904,11 +34904,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34980,11 +34980,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -35052,11 +35052,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
-          "prompb/rpc.pb.go:12",
-          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:18",
+          "prompb/rpc.pb.gw.go:17",
+          "prompb/rpc.pb.go:12",
+          "web/api/v2/api.go:31",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -35130,11 +35130,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35209,11 +35209,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35289,11 +35289,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35368,11 +35368,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35447,11 +35447,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35527,11 +35527,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35606,11 +35606,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35685,11 +35685,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35765,11 +35765,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "discovery/file/file.go:32",
-          "rules/recording.go:21",
           "rules/alerting.go:23",
+          "rules/recording.go:21",
+          "cmd/promtool/unittest.go:28",
+          "discovery/file/file.go:32",
           "pkg/rulefmt/rulefmt.go:22",
-          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"

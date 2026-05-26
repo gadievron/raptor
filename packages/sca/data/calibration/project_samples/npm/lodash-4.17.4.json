@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:41:15Z",
+    "fetched_at": "2026-05-26T23:13:21Z",
     "git_ref": "4.17.4",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of lodash-4.17.4",
@@ -694,11 +694,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -766,11 +766,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -841,11 +841,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -917,11 +917,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -996,11 +996,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1073,11 +1073,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1149,11 +1149,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1225,11 +1225,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1297,11 +1297,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1372,11 +1372,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1448,11 +1448,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1527,11 +1527,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1604,11 +1604,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1680,11 +1680,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1756,11 +1756,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1831,11 +1831,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"

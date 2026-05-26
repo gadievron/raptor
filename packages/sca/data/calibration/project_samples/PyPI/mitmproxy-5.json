@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:48:22Z",
+    "fetched_at": "2026-05-26T23:16:36Z",
     "git_ref": "v5.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of mitmproxy-5",
@@ -3290,9 +3290,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3366,9 +3366,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3438,9 +3438,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3513,9 +3513,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3589,9 +3589,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3668,9 +3668,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3745,9 +3745,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3821,9 +3821,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3897,9 +3897,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -3972,9 +3972,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4048,9 +4048,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4124,9 +4124,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4199,9 +4199,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4276,9 +4276,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4352,9 +4352,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -4427,9 +4427,9 @@
         "evidence": [
           "web/gulpfile.js:21",
           "web/src/js/utils.js:1",
+          "web/src/js/ducks/options.js:3",
+          "web/src/js/ducks/ui/flow.js:4",
           "web/src/js/flow/utils.js:1",
-          "web/src/js/components/FlowView.jsx:3",
-          "web/src/js/components/Modal/OptionModal.jsx:6",
           "... and 17 more"
         ],
         "verdict": "imported"
@@ -10200,8 +10200,8 @@
         "evidence": [
           "web/src/js/app.jsx:2",
           "web/src/js/components/FlowTable.jsx:3",
-          "web/src/js/components/EventLog/EventList.jsx:3",
-          "web/src/js/components/FlowView/Headers.jsx:3",
+          "web/src/js/components/helpers/AutoScroll.js:2",
+          "web/src/js/components/ContentView/ShowFullContentButton.jsx:4",
           "web/src/js/components/Header/FilterInput.jsx:3",
           "... and 12 more"
         ],

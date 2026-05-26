@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T18:49:57Z",
+    "fetched_at": "2026-05-26T23:17:20Z",
     "git_ref": "v1.11.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-1.11",
@@ -50,8 +50,8 @@
           "reason": "vendor `Aws\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Extensions/Filesystem/S3Filesystem.php:4",
-          "app/Extensions/Backups/BackupManager.php:6"
+          "app/Extensions/Backups/BackupManager.php:6",
+          "app/Extensions/Filesystem/S3Filesystem.php:4"
         ],
         "verdict": "imported"
       },
@@ -125,8 +125,8 @@
           "reason": "vendor `Aws\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Extensions/Filesystem/S3Filesystem.php:4",
-          "app/Extensions/Backups/BackupManager.php:6"
+          "app/Extensions/Backups/BackupManager.php:6",
+          "app/Extensions/Filesystem/S3Filesystem.php:4"
         ],
         "verdict": "imported"
       },
@@ -198,8 +198,8 @@
           "reason": "vendor `Aws\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Extensions/Filesystem/S3Filesystem.php:4",
-          "app/Extensions/Backups/BackupManager.php:6"
+          "app/Extensions/Backups/BackupManager.php:6",
+          "app/Extensions/Filesystem/S3Filesystem.php:4"
         ],
         "verdict": "imported"
       },
@@ -272,8 +272,8 @@
           "app/Models/Traits/HasAccessTokens.php:6",
           "app/Providers/AuthServiceProvider.php:4",
           "app/Models/Traits/HasAccessTokens.php:8",
-          "app/Http/Middleware/EnsureStatefulRequests.php:4",
-          "app/Http/Middleware/Api/AuthenticateIPAccess.php:9",
+          "app/Extensions/Laravel/Sanctum/NewAccessToken.php:6",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:7",
           "... (+2 more)"
         ],
         "verdict": "imported"
@@ -354,8 +354,8 @@
           "app/Models/Traits/HasAccessTokens.php:6",
           "app/Providers/AuthServiceProvider.php:4",
           "app/Models/Traits/HasAccessTokens.php:8",
-          "app/Http/Middleware/EnsureStatefulRequests.php:4",
-          "app/Http/Middleware/Api/AuthenticateIPAccess.php:9",
+          "app/Extensions/Laravel/Sanctum/NewAccessToken.php:6",
+          "app/Http/Requests/Api/Application/ApplicationApiRequest.php:7",
           "... (+2 more)"
         ],
         "verdict": "imported"
@@ -988,11 +988,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Models/Node.php:6",
+          "bootstrap/tests.php:6",
           "app/Http/Middleware/AdminAuthenticate.php:6",
           "app/Http/Middleware/Api/AuthenticateIPAccess.php:10",
+          "app/Http/Middleware/Api/Application/AuthenticateApplicationUser.php:6",
           "app/Http/Middleware/Api/Client/RequireClientApiKey.php:7",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:11",
           "... (+41 more)"
         ],
         "verdict": "imported"
@@ -1068,10 +1068,10 @@
           "reason": "vendor referenced only by test code"
         },
         "evidence": [
-          "tests/Integration/Api/Client/TwoFactorControllerTest.php:10",
           "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:7",
           "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4",
-          "tests/Assertions/AssertsActivityLogged.php:4"
+          "tests/Assertions/AssertsActivityLogged.php:4",
+          "tests/Integration/Api/Client/TwoFactorControllerTest.php:10"
         ],
         "verdict": "not_reachable"
       },
@@ -1143,11 +1143,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
+          "app/Http/Controllers/Api/Client/Servers/CommandController.php:9",
+          "app/Repositories/Wings/DaemonFileRepository.php:9",
+          "app/Services/Backups/DeleteBackupService.php:7",
           "app/Repositories/Wings/DaemonServerRepository.php:7",
           "app/Repositories/Wings/DaemonTransferRepository.php:7",
-          "app/Exceptions/Http/Connection/DaemonConnectionException.php:7",
-          "app/Repositories/Wings/DaemonServerRepository.php:8",
-          "app/Repositories/Wings/DaemonFileRepository.php:10",
           "... (+10 more)"
         ],
         "verdict": "imported"
@@ -1218,11 +1218,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Api/Client/ServerTransformer.php:8",
-          "app/Transformers/Api/Client/DatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/ServerTransformer.php:6",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/EggTransformer.php:9",
+          "app/Extensions/Backups/BackupManager.php:11",
+          "app/Extensions/Backups/BackupManager.php:13",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:6",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -1289,11 +1289,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Api/Client/ServerTransformer.php:8",
-          "app/Transformers/Api/Client/DatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/ServerTransformer.php:6",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/EggTransformer.php:9",
+          "app/Extensions/Backups/BackupManager.php:11",
+          "app/Extensions/Backups/BackupManager.php:13",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:6",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -1363,11 +1363,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Api/Client/ServerTransformer.php:8",
-          "app/Transformers/Api/Client/DatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/ServerTransformer.php:6",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/EggTransformer.php:9",
+          "app/Extensions/Backups/BackupManager.php:11",
+          "app/Extensions/Backups/BackupManager.php:13",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:6",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -1435,11 +1435,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Api/Client/ServerTransformer.php:8",
-          "app/Transformers/Api/Client/DatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/ServerTransformer.php:6",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:6",
-          "app/Transformers/Api/Application/EggTransformer.php:9",
+          "app/Extensions/Backups/BackupManager.php:11",
+          "app/Extensions/Backups/BackupManager.php:13",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:6",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -1650,11 +1650,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Models/Node.php:6",
+          "bootstrap/tests.php:6",
           "app/Http/Middleware/AdminAuthenticate.php:6",
           "app/Http/Middleware/Api/AuthenticateIPAccess.php:10",
+          "app/Http/Middleware/Api/Application/AuthenticateApplicationUser.php:6",
           "app/Http/Middleware/Api/Client/RequireClientApiKey.php:7",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:11",
           "... (+41 more)"
         ],
         "verdict": "imported"
@@ -1728,11 +1728,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Models/Node.php:6",
+          "bootstrap/tests.php:6",
           "app/Http/Middleware/AdminAuthenticate.php:6",
           "app/Http/Middleware/Api/AuthenticateIPAccess.php:10",
+          "app/Http/Middleware/Api/Application/AuthenticateApplicationUser.php:6",
           "app/Http/Middleware/Api/Client/RequireClientApiKey.php:7",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:11",
           "... (+41 more)"
         ],
         "verdict": "imported"
@@ -1806,11 +1806,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Models/Node.php:6",
+          "bootstrap/tests.php:6",
           "app/Http/Middleware/AdminAuthenticate.php:6",
           "app/Http/Middleware/Api/AuthenticateIPAccess.php:10",
+          "app/Http/Middleware/Api/Application/AuthenticateApplicationUser.php:6",
           "app/Http/Middleware/Api/Client/RequireClientApiKey.php:7",
-          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:11",
           "... (+41 more)"
         ],
         "verdict": "imported"
@@ -1883,11 +1883,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -1961,11 +1961,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2036,11 +2036,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2112,11 +2112,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2188,11 +2188,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2266,11 +2266,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2340,11 +2340,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2416,11 +2416,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2492,11 +2492,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2568,11 +2568,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2644,11 +2644,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2720,11 +2720,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2798,11 +2798,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2874,11 +2874,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -2950,11 +2950,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/scripts/components/server/files/UploadButton.tsx:1",
-          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/interceptors.ts:2",
-          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/http.ts:1",
           "resources/scripts/api/account/ssh-keys.ts:4",
+          "resources/scripts/api/account/activity.ts:3",
+          "resources/scripts/api/server/activity.ts:3",
           "... and 1 more"
         ],
         "verdict": "imported"
