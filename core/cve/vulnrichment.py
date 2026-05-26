@@ -54,8 +54,10 @@ from core.json import JsonCache
 logger = logging.getLogger(__name__)
 
 
+# ``develop`` is the repo's default branch — CISA does not publish
+# to ``main`` (raw fetches against ``/main/`` 404).
 _REPO_RAW_BASE = (
-    "https://raw.githubusercontent.com/cisagov/vulnrichment/main"
+    "https://raw.githubusercontent.com/cisagov/vulnrichment/develop"
 )
 _DEFAULT_TTL = 7 * 24 * 3600   # SSVC drifts slowly; weekly refresh is fine
 _CACHE_KEY_PREFIX = "vulnrichment"

@@ -654,6 +654,51 @@ def _is_exploit_host_url(url: str) -> bool:
     return host in _OSV_EVIDENCE_EXPLOIT_HOSTS
 
 
+# Decompression-bomb defence for the Vulnrichment tarball walk
+# (:func:`_build_vulnrichment`). ``get_bytes`` bounds the
+# *compressed* download, but the gzip + tar layers below can expand
+# without limit. We cap total decompressed bytes at
+# ``len(compressed) * _DECOMP_RATIO`` (floored at ``_DECOMP_FLOOR``).
+# JSON text gzips ~4-15x, so 50x sits far above any honest ratio yet
+# trips the 1000x+ expansion that defines a bomb. Anchoring the
+# ceiling to the bytes we actually fetched means it auto-scales as the
+# corpus grows — there is no absolute size to re-tune.
+_DECOMP_RATIO = 50
+_DECOMP_FLOOR = 64 * 1024 * 1024
+# A single CVE-JSON-5 record is tens of KB; 8 MB is wildly generous
+# and bounds the in-memory read of any one member so a forged-huge
+# header size can't balloon memory before the stream-level guard fires.
+_PER_RECORD_CAP = 8 * 1024 * 1024
+
+
+class _CappedReader:
+    """Wrap a (decompressed) stream and trip once cumulative bytes
+    read exceed ``cap``.
+
+    Wrapping the gzip layer — rather than only bounding each extracted
+    record — catches a decompression bomb hidden in ANY tar member,
+    including ones the caller filters out: a streaming ``tarfile`` must
+    still read through their decompressed data to reach the next
+    header. Only ``read`` is needed for ``tarfile`` stream mode
+    (``r|``); the wrapped object is closed by its own ``with`` block.
+    """
+
+    def __init__(self, inner: Any, cap: int) -> None:
+        self._inner = inner
+        self._cap = cap
+        self._seen = 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._inner.read(size)
+        self._seen += len(chunk)
+        if self._seen > self._cap:
+            raise RuntimeError(
+                "vulnrichment tarball decompressed beyond "
+                f"{self._cap} bytes — possible decompression bomb"
+            )
+        return chunk
+
+
 def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     """Fetch the CISA Vulnrichment repository tarball, walk every
     CVE-*.json record, and emit a CVE-keyed signal file for any
@@ -684,17 +729,23 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     import io
     import tarfile
 
+    # ``develop`` is the repo's default branch — CISA does not
+    # publish to ``main`` (a fetch of ``refs/heads/main`` 404s).
     VULNRICHMENT_TARBALL = (
         "https://codeload.github.com/cisagov/vulnrichment/tar.gz/"
-        "refs/heads/main"
+        "refs/heads/develop"
     )
     raw = http.get_bytes(
         VULNRICHMENT_TARBALL, max_bytes=300 * 1024 * 1024,
     )
+    # Bound total decompression so a bomb hidden anywhere in the
+    # tarball can't OOM the runner (see ``_CappedReader``).
+    max_decompressed = max(_DECOMP_FLOOR, len(raw) * _DECOMP_RATIO)
     signals: Dict[str, Dict[str, Any]] = {}
     files_scanned = 0
     with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
-        with tarfile.open(fileobj=gz, mode="r|") as tar:
+        capped = _CappedReader(gz, max_decompressed)
+        with tarfile.open(fileobj=capped, mode="r|") as tar:
             for member in tar:
                 if not member.isfile():
                     continue
@@ -708,8 +759,19 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
                 f = tar.extractfile(member)
                 if f is None:
                     continue
+                # Bound the per-member read: a real CVE record is tiny,
+                # so a member that reads past the cap is not a genuine
+                # entry — skip it rather than buffer an arbitrary size.
+                blob = f.read(_PER_RECORD_CAP + 1)
+                if len(blob) > _PER_RECORD_CAP:
+                    logger.warning(
+                        "sca.calibration: vulnrichment member %s exceeds "
+                        "%d bytes — skipping (not a genuine CVE record)",
+                        name, _PER_RECORD_CAP,
+                    )
+                    continue
                 try:
-                    record = json.loads(f.read())
+                    record = json.loads(blob)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 decision = _vulnrichment_extract_ssvc(record)

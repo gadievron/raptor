@@ -210,6 +210,8 @@ jobs:
               --base main \
               --head "$BRANCH" \
               --title "chore(sca): refit risk-score multipliers" \
+              --label sca \
+              --label automated \
               --body "$BODY"
           else
             gh pr edit "$BRANCH" --body "$BODY"

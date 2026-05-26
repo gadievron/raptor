@@ -5,9 +5,13 @@ Wraps :func:`packages.sca.calibration.build_corpus`. Designed for both
 operator-driven runs and the scheduled GHA refresh workflow.
 
 Exit codes:
-  0  every source attempted produced output (changed or unchanged)
-  1  at least one source failed (network down, schema drift); other
-     sources still wrote what they could.
+  0  at least one source produced output (changed or unchanged).
+     Individual source failures (e.g. an upstream default-branch
+     rename or schema drift) are logged to stderr and surfaced in
+     the PR body, but do NOT fail the run — one drifted source must
+     not discard the refresh of the others.
+  1  every source failed (likely a global outage / network down);
+     retried at the next schedule.
   2  invalid arguments / unwriteable output dir.
 
 Usage:
@@ -81,20 +85,35 @@ def main() -> int:
     from packages.sca.calibration import build_corpus
     results = build_corpus(out_dir=out_dir, sources=sources)
 
-    any_failed = False
     any_changed = False
+    any_ok = False
+    failed_sources = []
     for r in results:
         prefix = "raptor-sca-build-corpus:"
         if r.error:
-            any_failed = True
+            failed_sources.append(r.source)
             print(f"{prefix} {r.source} FAILED: {r.error}", file=sys.stderr)
         else:
+            any_ok = True
             any_changed = any_changed or r.written
             status = "updated" if r.written else "unchanged"
             print(f"{prefix} {r.source} {status} ({r.record_count} records)")
-    if args.verbose and not any_changed and not any_failed:
+    if args.verbose and not any_changed and not failed_sources:
         print("raptor-sca-build-corpus: corpus already current; no writes.")
-    return 1 if any_failed else 0
+    # Exit non-zero ONLY when every source failed (a global outage,
+    # retried next schedule). A single source drifting — e.g. an
+    # upstream default-branch rename, the exact failure that bit
+    # vulnrichment — must NOT discard the others' refresh. Degrade
+    # gracefully: the auto-PR still lands with whatever succeeded,
+    # and the failed sources are named here + in the PR body.
+    if failed_sources:
+        scope = "others refreshed" if any_ok else "ALL sources failed"
+        print(
+            f"raptor-sca-build-corpus: {len(failed_sources)} source(s) "
+            f"failed ({', '.join(failed_sources)}) — {scope}.",
+            file=sys.stderr,
+        )
+    return 0 if any_ok else 1
 
 
 if __name__ == "__main__":

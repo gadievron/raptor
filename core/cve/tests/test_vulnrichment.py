@@ -61,13 +61,13 @@ class TestUrlForCve:
     def test_high_number(self):
         assert _url_for_cve("CVE-2024-12345") == (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
 
     def test_low_number_uses_0xxx(self):
         assert _url_for_cve("CVE-2024-500") == (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/0xxx/CVE-2024-500.json"
+            "develop/2024/0xxx/CVE-2024-500.json"
         )
 
     def test_case_insensitive_input(self):
@@ -218,7 +218,7 @@ class TestVulnrichmentClient:
     def test_lookup_hits_canonical_url(self, tmp_path: Path):
         url = (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
         http = FakeHttp(responses={
             url: _vulnrichment_record(exploitation="active"),
@@ -236,7 +236,7 @@ class TestVulnrichmentClient:
         once."""
         url = (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
         http = FakeHttp(responses={
             url: _vulnrichment_record(exploitation="poc"),
@@ -258,7 +258,7 @@ class TestVulnrichmentClient:
         without hitting HTTP."""
         url = (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
         cache = JsonCache(root=tmp_path)
         http_a = FakeHttp(responses={
@@ -283,7 +283,7 @@ class TestVulnrichmentClient:
         lookup within the negative-TTL window doesn't re-probe."""
         url = (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
         http = FakeHttp(errors={
             url: HttpError("404 Not Found"),
@@ -310,7 +310,7 @@ class TestVulnrichmentClient:
         The next call gets a fresh attempt."""
         url = (
             "https://raw.githubusercontent.com/cisagov/vulnrichment/"
-            "main/2024/12xxx/CVE-2024-12345.json"
+            "develop/2024/12xxx/CVE-2024-12345.json"
         )
         cache = JsonCache(root=tmp_path)
         http_fail = FakeHttp(errors={
