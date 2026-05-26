@@ -98,6 +98,12 @@ class HardenCandidate:
                                 workflow / shell script)
       - ``no_versions``      — registry returned nothing (404, etc.)
       - ``registry_unsupported`` — ecosystem has no client yet
+      - ``pinning_deferred`` — Debian/apt dep not pinned: either pinning
+                                is off (the default — opt in with
+                                ``--pin-debian``) or ``--pin-debian`` is
+                                set but the base image has no determinable
+                                Debian suite to pin within (so a pin would
+                                risk being uninstallable)
       - ``needs_network``    — ``--offline`` and no cached versions
       - ``error``            — something else failed; see ``detail``
     """
@@ -185,6 +191,7 @@ def main(argv: Sequence[str]) -> int:
         offline=args.offline,
         allow_major=args.allow_major,
         pin_only=args.pin_only,
+        pin_debian=args.pin_debian,
     )
 
     # ``--ecosystems`` is a post-plan filter: candidates outside the
@@ -258,7 +265,7 @@ def main(argv: Sequence[str]) -> int:
             target=target, out_dir=out_dir, patch_path=patch_path,
             registries=registries, osv=osv, kev=kev, epss=epss,
             offline=args.offline, allow_major=args.allow_major,
-            pin_only=args.pin_only,
+            pin_only=args.pin_only, pin_debian=args.pin_debian,
             ecosystem_allowlist=ecosystem_allowlist,
             allow_major_without_review=args.allow_major_without_review,
             allow_degraded=args.allow_degraded,
@@ -285,6 +292,7 @@ def plan(
     offline: bool,
     allow_major: bool,
     pin_only: bool = False,
+    pin_debian: bool = False,
 ) -> List[HardenCandidate]:
     """Walk the target and produce one HardenCandidate per dep.
 
@@ -338,7 +346,7 @@ def plan(
         out.append(_plan_one(dep, registries=registries, osv=osv,
                              kev=kev, epss=epss,
                              offline=offline, allow_major=allow_major,
-                             pin_only=pin_only,
+                             pin_only=pin_only, pin_debian=pin_debian,
                              platform_matrix=platform_matrix))
     return out
 
@@ -353,6 +361,7 @@ def _plan_one(
     offline: bool,
     allow_major: bool,
     pin_only: bool = False,
+    pin_debian: bool = False,
     platform_matrix=None,
 ) -> HardenCandidate:
     cand = HardenCandidate(
@@ -402,15 +411,58 @@ def _plan_one(
         cand.detail = f"no registry client for ecosystem {dep.ecosystem!r}"
         return cand
 
+    # Debian/apt pinning is OFF by default and opt-in via ``--pin-debian``.
+    # An exact apt pin is inherently fragile — Debian keeps only the current
+    # version per suite, so a ``pkg=version`` pin breaks the build once it's
+    # superseded (snapshot.debian.org is the robust alternative). When the
+    # operator does opt in, we pin to the newest version *in the suite of
+    # the base image governing this apt line* (attributed by the parser into
+    # ``source_extra["suite"]``) so the pin is actually installable there.
+    # A dep with no determinable Debian suite (non-Debian base, silent tag,
+    # no FROM) is skipped rather than pinned to a guessed suite.
+    # (Keyed on the ecosystem string — the only way to resolve a
+    # ``DebianClient`` above is ``dep.ecosystem == "Debian"``, since the
+    # registries dict is ecosystem-keyed.)
+    debian_suite: Optional[str] = None
+    if dep.ecosystem == "Debian":
+        if not pin_debian:
+            cand.status = "pinning_deferred"
+            cand.detail = (
+                "Debian/apt pinning is off by default; rerun with "
+                "--pin-debian to opt in. Note: an exact apt pin is fragile "
+                "— Debian keeps only the current version per suite, so the "
+                "pin breaks once it's superseded (see snapshot.debian.org "
+                "for reproducible installs)."
+            )
+            return cand
+        debian_suite = (dep.source_extra or {}).get("suite")
+        if not debian_suite:
+            base = (dep.source_extra or {}).get("base_image")
+            cand.status = "pinning_deferred"
+            cand.detail = (
+                f"--pin-debian set but no resolvable Debian suite for base "
+                f"image {base!r}; refusing to guess a version (would risk an "
+                f"uninstallable pin)"
+            )
+            return cand
+
+    # Fetch the candidate versions. For an opted-in Debian dep, restrict to
+    # the governing base image's suite so the pin is installable there;
+    # everything else lists all of the ecosystem's versions.
+    def _fetch() -> List[str]:
+        if debian_suite is not None:
+            return registry.versions_in_suite(dep.name, debian_suite)
+        return registry.list_versions(dep.name)
+
     if offline:
         # Best-effort: try the cache via the registry client. If it
         # comes back empty, mark needs_network.
-        versions = registry.list_versions(dep.name)
+        versions = _fetch()
         if not versions:
             cand.status = "needs_network"
             return cand
     else:
-        versions = registry.list_versions(dep.name)
+        versions = _fetch()
         if not versions:
             cand.status = "no_versions"
             cand.detail = (
@@ -603,9 +655,11 @@ def _versions_above_installed(
     (nothing ever above installed → every versioned npm/Maven/NuGet/Cargo
     dep fell through to ``up_to_date``, so ``--harden`` never bumped them).
     ``version_compare`` raises ``VersionError`` for ecosystems with no
-    comparator (e.g. Debian) or unparseable inputs (a RANGE dep whose
-    ``installed`` is the whole spec string) — both caught below and that
-    version skipped, so those keep the prior no-bump behaviour.
+    comparator or unparseable inputs (a RANGE dep whose ``installed`` is
+    the whole spec string) — both caught below and that version skipped,
+    so those keep the prior no-bump behaviour. (Debian *has* a comparator
+    now but is gated out earlier in ``_plan_one`` pending a registry fix,
+    so it never reaches here.)
     """
     if installed is None:
         return list(versions)
@@ -919,6 +973,7 @@ def _run_self_test(
     ecosystem_allowlist: Optional[set],
     allow_major_without_review: bool,
     allow_degraded: bool,
+    pin_debian: bool = False,
 ) -> int:
     """Apply patch to a temp copy of ``target`` and re-run the planner.
 
@@ -1021,11 +1076,15 @@ def _run_self_test(
                   f"{proc.stderr or proc.stdout}", file=sys.stderr)
             return 6
 
-        # Re-plan against the post-state.
+        # Re-plan against the post-state. Same flags as pass 1 — notably
+        # ``pin_debian``, so apt pins are re-validated as up_to_date rather
+        # than silently deferred (which would make the self-test pass
+        # vacuously without confirming the pin landed).
         post_candidates = plan(
             target=worktree,
             registries=registries, osv=osv, kev=kev, epss=epss,
             offline=offline, allow_major=allow_major, pin_only=pin_only,
+            pin_debian=pin_debian,
         )
         post_actionable = _count_actionable(
             post_candidates,
@@ -1233,6 +1292,16 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                    help="only promote deps that are *already* exact-pinned "
                         "(``==X.Y.Z``); don't tighten loose pins. "
                         "Conservative; mirrors `update --pin-only`.")
+    p.add_argument("--pin-debian", action="store_true",
+                   help="opt in to pinning Debian/apt packages (off by "
+                        "default). Pins to the newest version in the suite "
+                        "of the base image governing each apt-get line "
+                        "(from the Dockerfile FROM); skips deps whose base "
+                        "isn't a determinable Debian suite. Note: an exact "
+                        "apt pin is fragile — Debian keeps only the current "
+                        "version per suite, so the pin breaks once it's "
+                        "superseded; snapshot.debian.org is the robust "
+                        "alternative for reproducible apt installs.")
     p.add_argument("--git-patch", action="store_true",
                    help="emit upgrade.patch alongside candidates.json")
     p.add_argument("--offline", action="store_true",

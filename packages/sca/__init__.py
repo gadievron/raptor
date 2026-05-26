@@ -60,7 +60,7 @@ SCA_ALLOWED_HOSTS = (
     "search.maven.org",
     "repo.packagist.org",
     "api.nuget.org",
-    "sources.debian.org",
+    "api.ftp-master.debian.org",                    # Debian madison (binary-aware, per-suite versions)
     "formulae.brew.sh",
     # GHSA — GitHub's security advisory feed; not the same
     # data as OSV's GHSA mirror (slight latency + occasional

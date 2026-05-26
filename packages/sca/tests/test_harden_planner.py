@@ -145,6 +145,113 @@ def test_no_registry_for_ecosystem() -> None:
     assert "Debian" in cand.detail
 
 
+# ---------------------------------------------------------------------------
+# Status: pinning_deferred — Debian/apt pinning is OFF by default. With
+# --pin-debian it opts in, but only pins within the suite of the base image
+# governing the apt line; a dep with no determinable suite still defers
+# (never a guessed, possibly-uninstallable pin).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ExplodingRegistry:
+    """Registry that fails if queried — proves the default (no --pin-debian)
+    gate short-circuits before any registry call."""
+
+    ecosystem: str = "Debian"
+
+    def list_versions(self, name: str) -> List[str]:  # pragma: no cover
+        raise AssertionError("registry must not be queried when pinning is off")
+
+    def versions_in_suite(self, name: str, suite: str) -> List[str]:  # pragma: no cover
+        raise AssertionError("registry must not be queried when pinning is off")
+
+
+@dataclass
+class _FakeDebianRegistry:
+    """Debian registry stub: ``versions_in_suite`` returns a canned per-suite
+    list; ``list_versions`` (all suites) should not be used by the pin path."""
+
+    by_suite: Dict[str, List[str]]
+    ecosystem: str = "Debian"
+    suite_calls: List[str] = field(default_factory=list)
+
+    def list_versions(self, name: str) -> List[str]:  # pragma: no cover
+        raise AssertionError("pin path must call versions_in_suite, not list_versions")
+
+    def versions_in_suite(self, name: str, suite: str) -> List[str]:
+        self.suite_calls.append(suite)
+        return list(self.by_suite.get(suite, []))
+
+
+def _debian_dep(version: Optional[str], pin_style: PinStyle,
+                source_extra: Optional[Dict] = None) -> Dependency:
+    return Dependency(
+        ecosystem="Debian", name="gcc", version=version,
+        declared_in=Path("/x/Dockerfile"),
+        scope="main", is_lockfile=False,
+        pin_style=pin_style, direct=True,
+        purl=f"pkg:deb/debian/gcc@{version}",
+        parser_confidence=Confidence("high", reason="test"),
+        source_kind="dockerfile", source_extra=source_extra,
+    )
+
+
+def test_debian_deferred_by_default() -> None:
+    """Without --pin-debian, an apt dep is recorded but never pinned, and
+    the registry isn't even queried."""
+    dep = _debian_dep(version=None, pin_style=PinStyle.UNKNOWN,
+                      source_extra={"base_image": "debian:bookworm",
+                                    "suite": "bookworm"})
+    cand = _plan_one(dep, registries={"Debian": _ExplodingRegistry()},
+                     osv=_FakeOsv(), offline=False, allow_major=False)
+    assert cand.status == "pinning_deferred"
+    assert cand.to_version is None
+    assert "--pin-debian" in cand.detail
+
+
+def test_debian_pin_opt_in_pins_to_newest_in_suite() -> None:
+    """--pin-debian pins an unpinned apt dep to the newest version in the
+    base image's suite (not 'newest across all suites' = experimental)."""
+    reg = _FakeDebianRegistry(by_suite={
+        "bookworm": ["1.22.1-9+deb12u6", "1.22.1-9+deb12u5"],
+        "experimental": ["99:0-1"],            # must NOT be considered
+    })
+    dep = _debian_dep(version=None, pin_style=PinStyle.UNKNOWN,
+                      source_extra={"base_image": "debian:bookworm-slim",
+                                    "suite": "bookworm"})
+    cand = _plan_one(dep, registries={"Debian": reg}, osv=_FakeOsv(),
+                     offline=False, allow_major=False, pin_debian=True)
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.22.1-9+deb12u6"
+    assert reg.suite_calls == ["bookworm"]     # queried the right suite
+
+
+def test_debian_pin_opt_in_bumps_behind_suite_version() -> None:
+    """A dep pinned below the current suite version is bumped up to it."""
+    reg = _FakeDebianRegistry(by_suite={"bookworm": ["1.22.1-9+deb12u6"]})
+    dep = _debian_dep(version="1.22.1-9+deb12u5", pin_style=PinStyle.EXACT,
+                      source_extra={"base_image": "debian:bookworm",
+                                    "suite": "bookworm"})
+    cand = _plan_one(dep, registries={"Debian": reg}, osv=_FakeOsv(),
+                     offline=False, allow_major=False, pin_debian=True)
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.22.1-9+deb12u6"
+
+
+def test_debian_pin_opt_in_skips_when_no_suite() -> None:
+    """--pin-debian on a dep whose base isn't a determinable Debian suite
+    (Ubuntu / silent tag / no FROM) still defers — never a guessed pin."""
+    dep = _debian_dep(version=None, pin_style=PinStyle.UNKNOWN,
+                      source_extra={"base_image": "ubuntu:22.04", "suite": None})
+    cand = _plan_one(dep, registries={"Debian": _ExplodingRegistry()},
+                     osv=_FakeOsv(), offline=False, allow_major=False,
+                     pin_debian=True)
+    assert cand.status == "pinning_deferred"
+    assert cand.to_version is None
+    assert "ubuntu:22.04" in cand.detail
+    assert "uninstallable" in cand.detail
+
+
 def test_git_pin_style_unsupported() -> None:
     dep = _dep(pin_style=PinStyle.GIT)
     cand = _plan_one(dep, registries={"PyPI": _FakeRegistry(["2.0"])},

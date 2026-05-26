@@ -1,37 +1,58 @@
 """Debian registry client.
 
-Fetches ``https://sources.debian.org/api/src/<package>/`` — the canonical
-"all known versions of this Debian source package" endpoint. Returns
-versions newest-first.
+Lists the versions of a Debian *binary* package across the active Debian
+suites via the ftp-master ``madison`` service:
+``https://api.ftp-master.debian.org/madison?package=<name>&f=json``.
 
-Note: the Debian Sources API lists *source-package* versions, not the
-binary-package versions you'd see in ``apt list``. For most cases the
-two track each other (binary nginx ↔ source nginx). When they diverge
-the source list is the conservative choice — every binary derives from
-some source version.
+Why madison and not ``sources.debian.org/api/src/<name>/``: the Sources
+API is keyed by *source*-package name and lists every historical version
+back to the distribution's origins. Querying it by *binary* name silently
+mis-resolves —
 
-Suite-aware queries (which versions are in which release) are deferred:
-the simple "list versions" endpoint is sufficient for harden's
-pick-latest-safe semantic.
+  - ``gcc`` hits an ancient standalone source package (newest ``2.95.2-20``
+    from woody, ~2002); the modern binary builds from ``gcc-defaults``,
+  - ``g++`` 404s (there is no source named ``g++``),
+  - ``make`` is really the source ``make-dfsg``,
+
+and even when names coincide it returns long-dead releases unsorted.
+madison is *binary-package-aware* (no binary→source mapping needed), only
+covers *active* suites (oldstable…experimental, plus -security/-backports/
+-proposed-updates), and we sort newest-first with the dpkg version
+comparator (:mod:`packages.sca.versions.debian`).
+
+Note on use: RAPTOR's own ``harden`` deliberately does NOT pin or bump apt
+deps — an exact ``pkg=version`` pin is fragile (Debian keeps only the
+current version per suite, so the pin breaks the build once it's
+superseded). See the ``pinning_deferred`` gate in ``harden._plan_one``.
+This client exists so the version data is *correct* for direct inspection
+and for any consumer that explicitly opts in.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
-from typing import List, Optional
+import urllib.parse
+from typing import Any, List, Optional
 
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ..versions.debian import compare as _debian_compare
+
 logger = logging.getLogger(__name__)
 
 
-_CACHE_KEY_PREFIX = "debian-versions"
+_MADISON_URL = "https://api.ftp-master.debian.org/madison"
+# ``-madison`` (was ``debian-versions``) so any entries cached by the old
+# source-API client are bypassed rather than served stale for a TTL window
+# — those held the wrong (source-by-binary, unsorted) version lists.
+_CACHE_KEY_PREFIX = "debian-madison"
 _DEFAULT_TTL = 24 * 3600
 
 
 class DebianClient:
-    """List versions from the Debian Sources API."""
+    """List binary-package versions from the Debian madison service."""
 
     ecosystem = "Debian"
 
@@ -49,7 +70,27 @@ class DebianClient:
         self._offline = offline
 
     def list_versions(self, name: str) -> List[str]:
-        cache_key = f"{_CACHE_KEY_PREFIX}:{name}"
+        """All versions across the active suites, newest-first.
+
+        For direct inspection / SBOM use. ``apt`` pinning wants a single
+        suite — see :meth:`versions_in_suite`.
+        """
+        return self._query(name, suite=None)
+
+    def versions_in_suite(self, name: str, suite: str) -> List[str]:
+        """Versions of ``name`` available in a single suite, newest-first.
+
+        ``suite`` is whatever a Dockerfile ``FROM`` yields — a codename
+        (``bookworm``), an alias (``stable``), or a pocket
+        (``bookworm-security``). madison resolves codenames to their
+        current alias server-side, so no (drifting) codename↔alias table
+        is needed here.
+        """
+        return self._query(name, suite=suite)
+
+    def _query(self, name: str, *, suite: Optional[str]) -> List[str]:
+        cache_key = (f"{_CACHE_KEY_PREFIX}:{name}" if suite is None
+                     else f"{_CACHE_KEY_PREFIX}:{name}:{suite}")
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -58,9 +99,16 @@ class DebianClient:
         if self._offline:
             return []
 
+        # madison's query string treats ``+`` as a space, so a binary name
+        # like ``g++`` MUST be percent-encoded (``safe=""`` encodes ``+``,
+        # ``&``, ``=`` …). This is also the injection guard for names (and
+        # suites) that originate from a scanned manifest.
+        url = (f"{_MADISON_URL}?package={urllib.parse.quote(name, safe='')}"
+               f"&f=json")
+        if suite is not None:
+            url += f"&s={urllib.parse.quote(suite, safe='')}"
         try:
-            data = self._http.get_json(
-                f"https://sources.debian.org/api/src/{name}/")
+            data = self._http.get_json(url)
         except Exception as e:                # noqa: BLE001
             logger.warning("sca.registries.debian: fetch failed for %r: %s",
                            name, e)
@@ -74,32 +122,37 @@ class DebianClient:
         return versions
 
 
-def _extract_versions(data: dict) -> List[str]:
-    """Pull versions from the Debian Sources response.
+def _extract_versions(data: Any) -> List[str]:
+    """Pull versions from a madison ``f=json`` response, newest-first.
 
-    Shape:
-        {
-          "package": "nginx",
-          "versions": [
-            {"version": "1.22.1-9", "suites": ["bookworm"], ...},
-            {"version": "1.18.0-6.1+deb11u3", "suites": ["bullseye"], ...}
-          ]
-        }
+    Shape (a one-element list; ``[]`` for an unknown package)::
+
+        [ { "<pkg>": { "<suite>": { "<version>": {<metadata>}, ... },
+                       "<suite>-security": { ... }, ... } } ]
+
+    The same version recurs across suites (e.g. ``oldstable`` and its
+    ``oldstable-debug`` shadow); collect across every suite, dedup, then
+    sort with the dpkg comparator so the newest version is first (matching
+    the other registry clients' contract).
     """
-    raw = data.get("versions") or []
-    if not isinstance(raw, list):
+    if not isinstance(data, list):
         return []
     seen: set = set()
     out: List[str] = []
-    for v in raw:
-        if not isinstance(v, dict):
+    for entry in data:
+        if not isinstance(entry, dict):
             continue
-        ver = v.get("version")
-        if not isinstance(ver, str) or ver in seen:
-            continue
-        seen.add(ver)
-        out.append(ver)
-    # The API returns roughly newest-first; preserve.
+        for suites in entry.values():
+            if not isinstance(suites, dict):
+                continue
+            for versions in suites.values():
+                if not isinstance(versions, dict):
+                    continue
+                for ver in versions:
+                    if isinstance(ver, str) and ver not in seen:
+                        seen.add(ver)
+                        out.append(ver)
+    out.sort(key=functools.cmp_to_key(_debian_compare), reverse=True)
     return out
 
 

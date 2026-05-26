@@ -389,16 +389,31 @@ def _extract_apt_via_core_dockerfile(
             path, exc_info=True,
         )
         return []
+    from ._base_image_suite import stage_image_map
+    stage_img = stage_image_map(instructions)
     out: List[Dependency] = []
     for ap in extract_apt_packages(instructions):
-        out.append(_apt_package_to_dep(ap, path))
+        out.append(_apt_package_to_dep(ap, path,
+                                       base_image=stage_img.get(ap.stage)))
     return out
 
 
-def _apt_package_to_dep(ap, declared_in: Path) -> Dependency:
+def _apt_package_to_dep(ap, declared_in: Path,
+                        base_image: Optional[str] = None) -> Dependency:
     canon = _canonicalise_name(ap.name, "Debian")
     purl_base = f"pkg:deb/debian/{canon}"
     purl = f"{purl_base}@{ap.version}" if ap.version else purl_base
+    # Attribute the apt package to the Debian suite of the base image
+    # governing its build stage, so harden's opt-in ``--pin-debian`` can
+    # pin to a version that's actually installable there. A ``None`` suite
+    # (non-Debian base, undeterminable tag, no FROM) means "don't pin".
+    source_extra = None
+    if base_image:
+        from ._base_image_suite import debian_suite_from_image
+        source_extra = {
+            "base_image": base_image,
+            "suite": debian_suite_from_image(base_image),
+        }
     return Dependency(
         ecosystem="Debian",
         name=canon,
@@ -418,6 +433,7 @@ def _apt_package_to_dep(ap, declared_in: Path) -> Dependency:
         ),
         commented_out=False,
         source_kind="dockerfile",
+        source_extra=source_extra,
     )
 
 
