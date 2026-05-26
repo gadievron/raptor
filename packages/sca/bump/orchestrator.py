@@ -161,8 +161,16 @@ def run_bump(
     if policy.skip:
         kept: List[BumpCandidate] = []
         for cand in candidates:
+            # Target-relative POSIX path for ``skip: - path:`` rules. The
+            # walker enumerates absolute paths under the resolved target;
+            # fall back to the raw path if it's somehow outside.
+            try:
+                rel_path = cand.file.resolve().relative_to(
+                    target.resolve()).as_posix()
+            except (ValueError, OSError):
+                rel_path = cand.file.as_posix()
             rule = policy.is_skipped(
-                kind=cand.kind, locator=cand.locator,
+                kind=cand.kind, locator=cand.locator, path=rel_path,
             )
             if rule is not None:
                 skipped.append((

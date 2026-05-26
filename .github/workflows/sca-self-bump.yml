@@ -127,11 +127,16 @@ jobs:
           # ``--apply`` writes Clean-verdict bumps in place. Review /
           # Block verdicts are never auto-applied — they surface in
           # the report only.
+          # Write the PR body OUTSIDE the worktree ($RUNNER_TEMP persists
+          # across steps in the job) so the later ``git add -A`` can't sweep
+          # it into the bump branch — otherwise pr-body.md lands as a
+          # committed file in the PR and the "Detect changes" step always
+          # sees a spurious change.
           bin/raptor-sca bump . \
             --apply \
             --pr-comment \
             --repo-label "self-bump $(date -u +%Y-%m-%d)" \
-            > pr-body.md
+            > "$RUNNER_TEMP/pr-body.md"
 
       - name: Exclude workflow-file changes (GITHUB_TOKEN can't push them)
         run: |
@@ -149,7 +154,7 @@ jobs:
           # than the default GITHUB_TOKEN.
           if [[ -n "$(git status --porcelain -- .github/workflows/)" ]]; then
             git checkout -- .github/workflows/
-            printf '\n---\n**Note:** proposed changes to `.github/workflows/*` were excluded from this PR — GitHub forbids the default `GITHUB_TOKEN` from pushing workflow files. Pin those manually, or run this job with a `workflows`-scoped token.\n' >> pr-body.md
+            printf '\n---\n**Note:** proposed changes to `.github/workflows/*` were excluded from this PR — GitHub forbids the default `GITHUB_TOKEN` from pushing workflow files. Pin those manually, or run this job with a `workflows`-scoped token.\n' >> "$RUNNER_TEMP/pr-body.md"
           fi
 
       - name: Detect changes
@@ -220,7 +225,7 @@ jobs:
             --json number \
             --jq '.[0].number // empty')
           if [[ -n "$pr_num" ]]; then
-            gh pr edit "$pr_num" --body-file pr-body.md
+            gh pr edit "$pr_num" --body-file "$RUNNER_TEMP/pr-body.md"
             echo "Updated existing PR #$pr_num"
             pr_ref="$pr_num"
           else
@@ -233,7 +238,7 @@ jobs:
               --base main \
               --head sca-self-bump \
               --title "chore: SCA-gated self-bump" \
-              --body-file pr-body.md)
+              --body-file "$RUNNER_TEMP/pr-body.md")
             echo "Opened PR $pr_ref"
           fi
           # Best-effort labels — a missing label must never fail the run.

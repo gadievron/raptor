@@ -64,7 +64,11 @@ jobs:
         # rest. (GHA's default shell sets pipefail, so the script's
         # exit code propagates through the ``tee``.)
         run: |
-          packages/sca/scripts/raptor-sca-build-corpus -v 2>&1 | tee refresh.log
+          # Log to $RUNNER_TEMP (persists across steps, outside the
+          # worktree) so it can't be swept into the commit if the scoped
+          # ``git add`` below is ever broadened, and never dirties the tree.
+          packages/sca/scripts/raptor-sca-build-corpus -v 2>&1 \
+            | tee "$RUNNER_TEMP/refresh.log"
 
       - name: License-compliance check
         # Defence in depth: enforces the ATTRIBUTION.md cross-
@@ -137,7 +141,12 @@ jobs:
           # Force-push so weekly re-runs update the same branch (and
           # therefore the same open PR). Safe: branch is namespaced
           # ``auto/`` and never touched by humans.
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'
@@ -165,7 +174,7 @@ jobs:
 
           EOF
             echo '```'
-            cat refresh.log 2>/dev/null || echo '(per-source status unavailable)'
+            cat "$RUNNER_TEMP/refresh.log" 2>/dev/null || echo '(per-source status unavailable)'
             echo '```'
             cat <<'EOF'
 
@@ -184,7 +193,7 @@ jobs:
           - [ ] No license-restricted content in the diff
           - [ ] `ATTRIBUTION.md` still covers every JSON file
           EOF
-          } > pr-body.md
+          } > "$RUNNER_TEMP/pr-body.md"
           # Idempotent create-or-update: ``gh pr create`` exits non-zero
           # when a PR for the branch already exists — fall through to
           # ``gh pr edit`` to refresh the body. (Labels applied below.)
@@ -192,8 +201,8 @@ jobs:
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration corpus" \
-                --body-file pr-body.md 2>/dev/null; then
-            gh pr edit "$BRANCH" --body-file pr-body.md
+                --body-file "$RUNNER_TEMP/pr-body.md" 2>/dev/null; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
           fi
           # Labels best-effort (see sca-self-bump): pull-requests:write
           # applies EXISTING labels but can't create them, and

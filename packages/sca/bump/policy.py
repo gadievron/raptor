@@ -3,7 +3,11 @@
 The bumper's defaults are sensible but unconfigurable today.
 Operators wanting different behaviour — tighter rapid-release
 window, longer maintainer-cooldown, skip certain locators
-entirely — supply a policy file at the project root:
+entirely — supply a policy file, either as the root
+``.raptor-sca-bump.yml`` dotfile or, to keep CI/bot config out of
+the project root, at ``.github/sca/raptor-sca-bump-policy.yml``
+(mirrors ``.github/codeql/codeql-config.yml``). Root wins if both
+exist. Schema is identical wherever it lives:
 
     # .raptor-sca-bump.yml
     skip:
@@ -12,6 +16,8 @@ entirely — supply a policy file at the project root:
       - kind: from_image
         locator: docker.io/library/postgres
         reason: "schema migration blocker — manual coord required"
+      - path: "test/data/**"
+        reason: "test fixtures: versions are part of the test contract"
 
     thresholds:
       rapid_release_days: 14    # tighter than the default 30
@@ -19,11 +25,12 @@ entirely — supply a policy file at the project root:
 
 Schema:
 
-* ``skip``: list of locator-match rules; each can match by
+* ``skip``: list of match rules; a rule may constrain by
   ``kind`` (any/arg/from_image/yaml_image/gha_uses/helm_chart/
-  git_submodule), ``locator`` (exact or wildcard via ``*``).
-  Matching rules cause the candidate to NOT be emitted by
-  the walker.
+  git_submodule), ``locator`` (exact or ``*``-wildcard), and/or
+  ``path`` (target-relative file glob, e.g. ``test/data/**`` — ``*``
+  spans ``/``). A rule with several set matches only when ALL match.
+  Matching candidates are NOT emitted by the walker.
 * ``thresholds.rapid_release_days``: override the
   ``recent_publish`` detector's window (default 30; smaller
   values are stricter).
@@ -46,21 +53,34 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
+# Operator policy discovery, in precedence order:
+#   1. ``<target>/.raptor-sca-bump.yml`` — root dotfile; the simple default
+#      for any project (a non-GitHub repo may have no ``.github/``).
+#   2. ``<target>/.github/sca/raptor-sca-bump-policy.yml`` — for repos that
+#      keep CI/bot config in per-tool ``.github/`` subdirs (mirrors the
+#      existing ``.github/codeql/codeql-config.yml`` convention).
 _POLICY_FILE = ".raptor-sca-bump.yml"
+_POLICY_FILE_GITHUB = ".github/sca/raptor-sca-bump-policy.yml"
+_POLICY_LOCATIONS = (_POLICY_FILE, _POLICY_FILE_GITHUB)
 
 
 @dataclass(frozen=True)
 class SkipRule:
-    """One entry in the ``skip:`` list."""
+    """One entry in the ``skip:`` list. A rule with multiple fields set
+    matches only when ALL of them match (AND)."""
 
     kind: Optional[str] = None       # None → any kind matches
     locator: Optional[str] = None    # None → any locator matches; ``*``-glob ok
+    path: Optional[str] = None       # None → any file; target-relative glob
     reason: str = ""
 
-    def matches(self, *, candidate_kind: str, candidate_locator: str) -> bool:
+    def matches(self, *, candidate_kind: str, candidate_locator: str,
+                candidate_path: str = "") -> bool:
         if self.kind and self.kind != candidate_kind:
             return False
         if self.locator and not _locator_match(self.locator, candidate_locator):
+            return False
+        if self.path and not _path_match(self.path, candidate_path):
             return False
         return True
 
@@ -110,25 +130,33 @@ class BumpPolicy:
     binary_capability_delta_enabled: bool = False
 
     def is_skipped(
-        self, *, kind: str, locator: str,
+        self, *, kind: str, locator: str, path: str = "",
     ) -> Optional[SkipRule]:
         """Return the first matching skip rule, or ``None``."""
         for rule in self.skip:
-            if rule.matches(candidate_kind=kind, candidate_locator=locator):
+            if rule.matches(candidate_kind=kind, candidate_locator=locator,
+                            candidate_path=path):
                 return rule
         return None
 
 
 def load_policy(target: Path) -> BumpPolicy:
-    """Load ``.raptor-sca-bump.yml`` from the target directory.
+    """Load the bump policy from the target directory.
 
-    Missing file → default policy (no skips, default thresholds).
-    Malformed file → warning log + default policy. The bumper
-    never crashes on a bad policy — operators get the default
-    behaviour and a log entry to fix the file.
+    Searched in order (see ``_POLICY_LOCATIONS``): the root
+    ``.raptor-sca-bump.yml`` dotfile, then
+    ``.github/sca/raptor-sca-bump-policy.yml``. The first that exists wins.
+
+    No file in any location → default policy (no skips, default
+    thresholds). Malformed file → warning log + default policy. The bumper
+    never crashes on a bad policy — operators get the default behaviour and
+    a log entry to fix the file.
     """
-    policy_path = target / _POLICY_FILE
-    if not policy_path.exists():
+    policy_path = next(
+        (target / rel for rel in _POLICY_LOCATIONS if (target / rel).exists()),
+        None,
+    )
+    if policy_path is None:
         return BumpPolicy()
     try:
         text = policy_path.read_text(encoding="utf-8")
@@ -170,16 +198,19 @@ def load_policy(target: Path) -> BumpPolicy:
                 continue
             kind = entry.get("kind")
             locator = entry.get("locator")
+            path = entry.get("path")
             reason = entry.get("reason") or ""
             if not isinstance(kind, str) and kind is not None:
                 continue
             if not isinstance(locator, str) and locator is not None:
                 continue
-            if kind is None and locator is None:
+            if not isinstance(path, str) and path is not None:
+                continue
+            if kind is None and locator is None and path is None:
                 # Empty rule would skip everything — refuse silently.
                 continue
             skips.append(SkipRule(
-                kind=kind, locator=locator,
+                kind=kind, locator=locator, path=path,
                 reason=str(reason),
             ))
 
@@ -230,3 +261,12 @@ def _locator_match(pattern: str, locator: str) -> bool:
     if "*" in pattern or "?" in pattern:
         return fnmatch.fnmatchcase(locator, pattern)
     return pattern == locator
+
+
+def _path_match(pattern: str, candidate_path: str) -> bool:
+    """Match a candidate's file path (target-relative, POSIX) against an
+    operator glob. ``*`` already spans ``/`` in fnmatch, so both
+    ``test/data/*`` and ``test/data/**`` match nested files. Case-sensitive
+    — source paths are on Linux. Backslashes are normalised so a
+    Windows-authored candidate path still matches a POSIX pattern."""
+    return fnmatch.fnmatchcase(candidate_path.replace("\\", "/"), pattern)
