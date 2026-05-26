@@ -54,8 +54,11 @@ from core.json import JsonCache
 logger = logging.getLogger(__name__)
 
 
+# ``HEAD`` resolves to the repo's default branch at request time
+# (CISA publishes to ``develop``, not ``main``); raw.githubusercontent
+# honours it, so a future default-branch rename can't 404 us.
 _REPO_RAW_BASE = (
-    "https://raw.githubusercontent.com/cisagov/vulnrichment/main"
+    "https://raw.githubusercontent.com/cisagov/vulnrichment/HEAD"
 )
 _DEFAULT_TTL = 7 * 24 * 3600   # SSVC drifts slowly; weekly refresh is fine
 _CACHE_KEY_PREFIX = "vulnrichment"

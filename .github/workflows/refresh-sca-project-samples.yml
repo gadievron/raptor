@@ -120,7 +120,12 @@ jobs:
           against a curated OSS project; project source is not
           redistributed. See packages/sca/data/calibration/ATTRIBUTION.md
           for the project list and licensing posture."
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'
@@ -132,33 +137,19 @@ jobs:
           BODY=$(cat <<'EOF'
           Auto-PR from `.github/workflows/refresh-sca-project-samples.yml`.
 
-          Refreshes the calibration corpus's project-sample scans.
-          Each sample is RAPTOR-generated SCA output against a
-          curated OSS project — project source itself is never
-          redistributed.
+          Refreshes the calibration corpus's project-sample scans. Each sample is RAPTOR-generated SCA output against a curated OSS project — project source itself is never redistributed.
 
           ## Per-sample status
 
-          See the workflow run log for the per-sample
-          `raptor-sca-collect-samples: <eco>/<name> ok (N findings)`
-          output.
+          See the workflow run log for the per-sample `raptor-sca-collect-samples: <eco>/<name> ok (N findings)` output.
 
           ## License compliance
 
-          The license-compliance check runs in CI and rejects any
-          file with forbidden field names (`body`, `payload`,
-          `shellcode`, `exploit_code`, `poc_code`). Project samples
-          ship under MIT (RAPTOR-generated output).
+          The license-compliance check runs in CI and rejects any file with forbidden field names (`body`, `payload`, `shellcode`, `exploit_code`, `poc_code`). Project samples ship under MIT (RAPTOR-generated output).
 
           ## Why this matters
 
-          The accumulated samples are what the calibration
-          validation function (`raptor-sca-validate-corpus`) uses
-          to compute top-N precision and Spearman correlation
-          against the ground-truth signals. Until ~6 months of
-          weekly snapshots accumulate, validation will report
-          `unverified`; this PR is one of the monthly steps
-          toward `validated_v1`.
+          The accumulated samples are what the calibration validation function (`raptor-sca-validate-corpus`) uses to compute top-N precision and Spearman correlation against the ground-truth signals. Until ~6 months of weekly snapshots accumulate, validation will report `unverified`; this PR is one of the monthly steps toward `validated_v1`.
 
           ## Review checklist
 
@@ -171,9 +162,12 @@ jobs:
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration project samples" \
-                --body "$BODY" \
-                --label sca \
-                --label data-refresh \
-                --label automated 2>/dev/null; then
+                --body "$BODY" 2>/dev/null; then
             gh pr edit "$BRANCH" --body "$BODY"
           fi
+          # Labels best-effort (see sca-self-bump): a missing label must
+          # never block the PR. Create them once under Settings → Labels.
+          for lbl in automated sca data-refresh; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

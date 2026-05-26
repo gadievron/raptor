@@ -173,7 +173,12 @@ jobs:
           if joint top-20 precision improvement clears 5 percentage
           points. See packages/sca/data/calibration/refit/<date>.json
           for per-constant deltas."
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'
@@ -185,19 +190,12 @@ jobs:
           BODY=$(cat <<'EOF'
           Auto-PR from `.github/workflows/refit-sca-calibration.yml`.
 
-          Per-constant grid search over `packages/sca/risk.py`'s
-          multiplier constants. Each constant tested at ±10% of its
-          current value against the calibration corpus's project
-          samples; the variant maximising top-20 precision wins.
-          Joint improvement gate: ≥5 percentage points or no ship.
+          Per-constant grid search over `packages/sca/risk.py`'s multiplier constants. Each constant tested at ±10% of its current value against the calibration corpus's project samples; the variant maximising top-20 precision wins. Joint improvement gate: ≥5 percentage points or no ship.
 
           Review checklist:
-          - [ ] `packages/sca/data/calibration/refit/<date>.json`
-                shows the per-constant deltas + precision metrics
+          - [ ] `packages/sca/data/calibration/refit/<date>.json` shows the per-constant deltas + precision metrics
           - [ ] Joint precision improvement clears 5%
-          - [ ] No constant moved more than 10% from its previous
-                value (the workflow enforces, but spot-check the
-                diff)
+          - [ ] No constant moved more than 10% from its previous value (the workflow enforces, but spot-check the diff)
           - [ ] Existing risk-scoring tests still pass post-refit
 
           Sources: same calibration corpus (KEV / EPSS / EDB / MSF /
@@ -214,3 +212,9 @@ jobs:
           else
             gh pr edit "$BRANCH" --body "$BODY"
           fi
+          # Labels best-effort (see sca-self-bump): a missing label must
+          # never block the PR. Create them once under Settings → Labels.
+          for lbl in automated sca; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

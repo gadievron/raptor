@@ -103,7 +103,12 @@ jobs:
           # Force-push so weekly re-runs update the same branch (and
           # therefore the same open PR). Safe: branch is namespaced
           # ``auto/`` and never touched by humans.
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'
@@ -119,19 +124,13 @@ jobs:
           BODY=$(cat <<'EOF'
           Auto-PR from `.github/workflows/refresh-sca-data.yml`.
 
-          The bundled `packages/sca/data/popular/<eco>.json` lists
-          drive `/sca`'s typosquat detector. Refreshed weekly so a
-          newly-popular package becomes typosquat-detectable
-          without waiting for a code release.
+          The bundled `packages/sca/data/popular/<eco>.json` lists drive `/sca`'s typosquat detector. Refreshed weekly so a newly-popular package becomes typosquat-detectable without waiting for a code release.
 
-          **What changed:** see the diff. The refresh script is
-          idempotent — when upstream is unchanged, no PR opens.
+          **What changed:** see the diff. The refresh script is idempotent — when upstream is unchanged, no PR opens.
 
           **Reviewer checklist:**
-          - The diff is additive or shifts ranking; new entries
-            are real package names (no garbage).
-          - No ecosystem suddenly emptied (would silently disarm
-            the detector).
+          - The diff is additive or shifts ranking; new entries are real package names (no garbage).
+          - No ecosystem suddenly emptied (would silently disarm the detector).
           - Tests pass.
           EOF
           )
@@ -139,9 +138,12 @@ jobs:
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh bundled popular-package lists" \
-                --body "$BODY" \
-                --label sca \
-                --label data-refresh \
-                --label automated 2>/dev/null; then
+                --body "$BODY" 2>/dev/null; then
             gh pr edit "$BRANCH" --body "$BODY"
           fi
+          # Labels best-effort (see sca-self-bump): a missing label must
+          # never block the PR. Create them once under Settings → Labels.
+          for lbl in automated sca data-refresh; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

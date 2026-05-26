@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
+import tarfile
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
 
+from packages.sca.calibration import build
 from packages.sca.calibration.build import (
     _bytes_equal_excluding_timestamp,
     _build_exploitdb,
@@ -14,11 +19,50 @@ from packages.sca.calibration.build import (
     _build_epss,
     _build_metasploit,
     _build_osv_evidence,
+    _build_vulnrichment,
     _is_exploit_host_url,
     _msf_ref_to_cve,
     _write_if_changed,
     build_corpus,
 )
+
+_VULNRICHMENT_URL = (
+    "https://codeload.github.com/cisagov/vulnrichment/tar.gz/HEAD"
+)
+
+
+def _make_targz(members: Dict[str, bytes]) -> bytes:
+    """Build an in-memory ``.tar.gz`` from ``{member_name: bytes}``."""
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+        with tarfile.open(fileobj=gz, mode="w") as tar:
+            for name, data in members.items():
+                info = tarfile.TarInfo(name=name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def _ssvc_record(cve_id: str, exploitation: str, **extra: Any) -> bytes:
+    """Serialise a minimal CVE-JSON-5 record carrying a CISA-ADP
+    SSVC scorecard with the given ``Exploitation`` value."""
+    record: Dict[str, Any] = {
+        "cveMetadata": {"cveId": cve_id},
+        "containers": {
+            "adp": [{
+                "providerMetadata": {"shortName": "CISA-ADP"},
+                "metrics": [{
+                    "other": {"content": {"options": [
+                        {"Exploitation": exploitation},
+                        {"Automatable": "no"},
+                        {"Technical Impact": "partial"},
+                    ]}},
+                }],
+            }],
+        },
+    }
+    record.update(extra)
+    return json.dumps(record).encode("utf-8")
 
 
 class _StubHttp:
@@ -132,7 +176,7 @@ def test_build_kev_idempotent_on_second_run(tmp_path: Path) -> None:
 
 def test_build_epss_writes_signal_file(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000": {
+        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000&offset=0": {
             "data": [
                 {"cve": "CVE-2024-1", "epss": "0.85",
                  "percentile": "0.99", "date": "2024-09-01"},
@@ -150,7 +194,7 @@ def test_build_epss_writes_signal_file(tmp_path: Path) -> None:
 
 def test_build_epss_skips_malformed_scores(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000": {
+        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000&offset=0": {
             "data": [
                 {"cve": "CVE-2024-OK", "epss": "0.5", "percentile": "0.9"},
                 {"cve": "CVE-2024-BAD", "epss": "not-a-number"},
@@ -160,6 +204,33 @@ def test_build_epss_skips_malformed_scores(tmp_path: Path) -> None:
     })
     result = _build_epss(tmp_path, http)
     assert result.record_count == 1
+
+
+def test_build_epss_paginates_to_completeness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Small page size so two staged pages exercise the offset/total
+    # loop. Only offset=0 and offset=2 are staged — if the loop made a
+    # wasteful third fetch (offset=4) the stub would raise on the
+    # unexpected URL, so a passing test also proves it stops at total.
+    monkeypatch.setattr(build, "_EPSS_PAGE_SIZE", 2)
+    base = "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=2"
+    http = _StubHttp({
+        f"{base}&offset=0": {"total": 4, "data": [
+            {"cve": "CVE-2024-1", "epss": "0.9", "percentile": "0.99"},
+            {"cve": "CVE-2024-2", "epss": "0.8", "percentile": "0.98"},
+        ]},
+        f"{base}&offset=2": {"total": 4, "data": [
+            {"cve": "CVE-2024-3", "epss": "0.7", "percentile": "0.97"},
+            {"cve": "CVE-2024-4", "epss": "0.6", "percentile": "0.96"},
+        ]},
+    })
+    result = _build_epss(tmp_path, http)
+    data = json.loads((tmp_path / "epss_signals.json").read_text())
+    assert set(data["signals"]) == {
+        "CVE-2024-1", "CVE-2024-2", "CVE-2024-3", "CVE-2024-4",
+    }
+    assert result.record_count == 4
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +334,7 @@ _EDB_CSV = (
 
 def test_build_exploitdb_extracts_cve_to_edb_id_mapping(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     result = _build_exploitdb(tmp_path, http)
@@ -285,7 +356,7 @@ def test_build_exploitdb_no_exploit_content_emitted(tmp_path: Path) -> None:
     """The output must NOT contain any of the forbidden field
     names that would indicate exploit content."""
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     _build_exploitdb(tmp_path, http)
@@ -299,7 +370,7 @@ def test_build_exploitdb_no_exploit_content_emitted(tmp_path: Path) -> None:
 
 def test_build_exploitdb_idempotent(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     r1 = _build_exploitdb(tmp_path, http)
@@ -340,7 +411,7 @@ _MSF_INDEX = {
 def test_build_metasploit_extracts_cve_to_module_mapping(tmp_path: Path) -> None:
     http = _StubHttp({
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"
-        "master/db/modules_metadata_base.json": _MSF_INDEX,
+        "HEAD/db/modules_metadata_base.json": _MSF_INDEX,
     })
     result = _build_metasploit(tmp_path, http)
     assert result.source == "metasploit"
@@ -366,7 +437,7 @@ def test_build_metasploit_no_module_code_emitted(tmp_path: Path) -> None:
     """Output is paths + booleans only — no module code / payload."""
     http = _StubHttp({
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"
-        "master/db/modules_metadata_base.json": _MSF_INDEX,
+        "HEAD/db/modules_metadata_base.json": _MSF_INDEX,
     })
     _build_metasploit(tmp_path, http)
     text = (tmp_path / "metasploit_signals.json").read_text().lower()
@@ -559,3 +630,85 @@ def test_build_osv_evidence_swallows_per_cve_404s(
     assert "CVE-2024-A" not in data["signals"]
     assert "CVE-2024-B" in data["signals"]
     assert result.record_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Vulnrichment builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_vulnrichment_extracts_poc_and_active_skips_none(
+    tmp_path: Path,
+) -> None:
+    tarball = _make_targz({
+        "vulnrichment/2024/0xxx/CVE-2024-0001.json": _ssvc_record(
+            "CVE-2024-0001", "poc",
+        ),
+        "vulnrichment/2024/0xxx/CVE-2024-0002.json": _ssvc_record(
+            "CVE-2024-0002", "active",
+        ),
+        # ``none`` carries no exploit signal — must be dropped.
+        "vulnrichment/2024/0xxx/CVE-2024-0003.json": _ssvc_record(
+            "CVE-2024-0003", "none",
+        ),
+        # Non-CVE / non-JSON members must be ignored by the filters.
+        "vulnrichment/README.md": b"not a record",
+    })
+    result = _build_vulnrichment(tmp_path, _StubHttp({
+        _VULNRICHMENT_URL: tarball,
+    }))
+    data = json.loads(
+        (tmp_path / "vulnrichment_signals.json").read_text(),
+    )
+    assert set(data["signals"]) == {"CVE-2024-0001", "CVE-2024-0002"}
+    assert data["signals"]["CVE-2024-0001"]["ssvc_exploitation"] == "poc"
+    assert result.record_count == 2
+
+
+def test_build_vulnrichment_trips_on_decompression_bomb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A highly compressible member in a member we *filter out* (not a
+    # CVE .json) — proving the stream-level guard catches a bomb hidden
+    # anywhere, not just in extracted records. Lower the threshold so we
+    # trip the mechanism without materialising a 64 MB fixture.
+    monkeypatch.setattr(build, "_DECOMP_FLOOR", 0)
+    monkeypatch.setattr(build, "_DECOMP_RATIO", 1)
+    tarball = _make_targz({"junk.bin": b"\x00" * (256 * 1024)})
+    # Sanity: the fixture really is high-ratio (decompresses to >> its
+    # compressed size), so cap = len(raw) * 1 is far below it.
+    assert len(tarball) * 1 < 256 * 1024
+    with pytest.raises(RuntimeError, match="decompression bomb"):
+        _build_vulnrichment(tmp_path, _StubHttp({
+            _VULNRICHMENT_URL: tarball,
+        }))
+
+
+def test_build_vulnrichment_skips_oversized_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Per-member read cap: a CVE-named .json whose body exceeds the cap
+    # is skipped (not parsed), while a normal-sized record survives.
+    monkeypatch.setattr(build, "_PER_RECORD_CAP", 2000)
+    tarball = _make_targz({
+        "vulnrichment/2024/0xxx/CVE-2024-0001.json": _ssvc_record(
+            "CVE-2024-0001", "poc",
+        ),
+        # Oversized member sits BETWEEN two valid ones: proves the
+        # stream recovers from the bounded partial read and still
+        # parses the member that follows it.
+        "vulnrichment/2024/0xxx/CVE-2024-9999.json": _ssvc_record(
+            "CVE-2024-9999", "poc", _pad="x" * 8000,
+        ),
+        "vulnrichment/2024/0xxx/CVE-2024-0002.json": _ssvc_record(
+            "CVE-2024-0002", "active",
+        ),
+    })
+    result = _build_vulnrichment(tmp_path, _StubHttp({
+        _VULNRICHMENT_URL: tarball,
+    }))
+    data = json.loads(
+        (tmp_path / "vulnrichment_signals.json").read_text(),
+    )
+    assert set(data["signals"]) == {"CVE-2024-0001", "CVE-2024-0002"}
+    assert result.record_count == 2

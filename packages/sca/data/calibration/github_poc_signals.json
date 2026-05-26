@@ -1,10 +1,10 @@
 {
   "_source": {
-    "fetched_at": "2026-05-08T18:44:27Z",
+    "fetched_at": "2026-05-26T17:00:37Z",
     "license": "Derived signal: presence + public URL only. Source URLs are public observable facts; the PoC code itself is NOT fetched or stored.",
     "name": "GitHub PoC URLs (derived from Exploit-DB index)",
     "provenance": "Parses the Exploit-Database files_exploits.csv ``source_url`` / ``application_url`` columns for github.com URLs. Same network fetch as the EDB build.",
-    "rows_scanned": 47037,
+    "rows_scanned": 47053,
     "url": "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
   },
   "signals": {

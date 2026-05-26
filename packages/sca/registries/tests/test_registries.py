@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from packages.sca.registries.crates import CratesClient
-from packages.sca.registries.debian import DebianClient
+from packages.sca.registries.debian import DebianClient, _extract_versions
 from packages.sca.registries.golang import GoClient
 from packages.sca.registries.homebrew import HomebrewClient
 from packages.sca.registries.maven import MavenClient
@@ -269,30 +269,116 @@ def test_golang_offline_skips_http() -> None:
 # Debian
 # ---------------------------------------------------------------------------
 
-def test_debian_extracts_versions() -> None:
-    http = _FakeHttp(json_payload={
-        "package": "nginx",
-        "versions": [
-            {"version": "1.22.1-9", "suites": ["bookworm"]},
-            {"version": "1.18.0-6.1", "suites": ["bullseye"]},
-            {"version": "1.22.1-9", "suites": ["unstable"]},   # dup
-        ]
-    })
+# Shape mirrors madison ``?f=json``: a one-element list keyed by package
+# name, then suite, then version. The same version recurs across suites
+# (incl. the -debug shadow) and must be deduped; output is newest-first by
+# dpkg ordering (epoch dominance, ``+debNuM`` security bumps, etc.).
+def _madison(pkg: str, by_suite: Dict[str, List[str]]) -> List[dict]:
+    return [{pkg: {
+        suite: {ver: {"component": "main", "source": pkg} for ver in vers}
+        for suite, vers in by_suite.items()
+    }}]
+
+
+def test_debian_extracts_versions_newest_first_deduped() -> None:
+    http = _FakeHttp(json_payload=_madison("nginx", {
+        "oldoldstable": ["1.18.0-6.1+deb11u3"],
+        "oldoldstable-debug": ["1.18.0-6.1+deb11u3"],            # dup shadow
+        "oldstable": ["1.22.1-9+deb12u6"],
+        "oldstable-proposed-updates": ["1.22.1-9+deb12u7"],
+        "stable": ["1.26.0-1"],
+    }))
     client = DebianClient(http)
-    assert client.list_versions("nginx") == ["1.22.1-9", "1.18.0-6.1"]
+    assert client.list_versions("nginx") == [
+        "1.26.0-1",
+        "1.22.1-9+deb12u7",
+        "1.22.1-9+deb12u6",
+        "1.18.0-6.1+deb11u3",
+    ]
+
+
+def test_debian_epoch_sorts_above_higher_upstream() -> None:
+    """An epoch must dominate: the gcc shape that motivated this fix."""
+    http = _FakeHttp(json_payload=_madison("gcc", {
+        "stable": ["4:14.2.0-1"],
+        "experimental": ["4:16-20251130-1"],
+        # A bogus no-epoch entry must still sort *below* the epoch-4 ones.
+        "ancient": ["2.95.2-20"],
+    }))
+    client = DebianClient(http)
+    assert client.list_versions("gcc") == [
+        "4:16-20251130-1", "4:14.2.0-1", "2.95.2-20",
+    ]
+
+
+def test_debian_binary_name_is_url_encoded() -> None:
+    """``g++`` must be percent-encoded — a raw ``+`` is a space to madison
+    (and unencoded names from manifests are a query-injection vector)."""
+    http = _FakeHttp(json_payload=_madison("g++", {"stable": ["4:14.2.0-1"]}))
+    client = DebianClient(http)
+    assert client.list_versions("g++") == ["4:14.2.0-1"]
+    assert "api.ftp-master.debian.org/madison" in http.calls[0]
+    assert "package=g%2B%2B" in http.calls[0]
+    assert "f=json" in http.calls[0]
 
 
 def test_debian_unknown_package_returns_empty() -> None:
-    """API may return ``{"error": "..."}`` for unknown pkgs."""
-    client = DebianClient(_FakeHttp(json_payload={"error": "nope"}))
+    """madison returns ``[]`` for an unknown package (and the parser also
+    tolerates the no-suites and non-list shapes without raising)."""
+    assert _extract_versions([]) == []
+    assert _extract_versions([{"nope": {}}]) == []          # known pkg, no suites
+    assert _extract_versions({"error": "x"}) == []           # not a list
+    client = DebianClient(_FakeHttp(json_payload=[{"nope": {}}]))
     assert client.list_versions("nonexistent-pkg") == []
 
 
 def test_debian_offline_skips_http() -> None:
-    http = _FakeHttp(json_payload={"versions": [{"version": "1.0"}]})
+    http = _FakeHttp(json_payload=_madison("nginx", {"stable": ["1.0"]}))
     client = DebianClient(http, offline=True)
     assert client.list_versions("nginx") == []
     assert http.calls == []
+
+
+def test_debian_versions_in_suite_adds_suite_filter() -> None:
+    """``versions_in_suite`` passes ``&s=<suite>`` so madison resolves the
+    codename server-side; result is still newest-first."""
+    # madison returns the codename query tagged with its current alias.
+    http = _FakeHttp(json_payload=_madison("nginx", {
+        "oldstable": ["1.22.1-9+deb12u6", "1.22.1-9+deb12u5"],
+    }))
+    client = DebianClient(http)
+    assert client.versions_in_suite("nginx", "bookworm") == [
+        "1.22.1-9+deb12u6", "1.22.1-9+deb12u5",
+    ]
+    assert "s=bookworm" in http.calls[0]
+    assert "f=json" in http.calls[0]
+
+
+def test_debian_suite_pocket_is_url_encoded() -> None:
+    """A pocket/alias is encoded too (defends against injection from a
+    manifest-derived FROM tag)."""
+    http = _FakeHttp(json_payload=_madison("nginx", {"stable": ["1.0"]}))
+    client = DebianClient(http)
+    client.versions_in_suite("nginx", "bookworm-security")
+    assert "s=bookworm-security" in http.calls[0]
+
+
+def test_debian_suite_query_cached_separately_from_all_suites() -> None:
+    """The all-suites list and a per-suite list use distinct cache keys."""
+    import tempfile
+    from pathlib import Path
+    from core.json import JsonCache
+    with tempfile.TemporaryDirectory() as d:
+        cache = JsonCache(root=Path(d))
+        http = _FakeHttp(json_payload=_madison("nginx", {
+            "stable": ["1.26.0-1"], "oldstable": ["1.22.1-9+deb12u6"],
+        }))
+        client = DebianClient(http, cache)
+        allv = client.list_versions("nginx")
+        client.versions_in_suite("nginx", "bookworm")
+        # Two distinct network calls (different cache keys), not one reused.
+        assert len(http.calls) == 2
+        assert "1.26.0-1" in allv and "1.22.1-9+deb12u6" in allv
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-05-08T16:40:38Z",
+    "fetched_at": "2026-05-26T17:00:37Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6626,
+    "modules_scanned": 6640,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json"
@@ -15846,6 +15846,12 @@
         "exploit_windows/http/manageengine_adaudit_plus_cve_2022_28219"
       ]
     },
+    "CVE-2022-28368": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/dompdf_rce_cve_2022_28368"
+      ]
+    },
     "CVE-2022-28381": {
       "has_msf_module": true,
       "module_paths": [
@@ -16624,6 +16630,12 @@
         "exploit_linux/http/totolink_unauth_rce_cve_2023_30013"
       ]
     },
+    "CVE-2023-30253": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_unix/http/dolibarr_cms_rce_cve_2023_30253"
+      ]
+    },
     "CVE-2023-30258": {
       "has_msf_module": true,
       "module_paths": [
@@ -17126,6 +17138,18 @@
       "has_msf_module": true,
       "module_paths": [
         "auxiliary_admin/http/gitlab_password_reset_account_takeover"
+      ]
+    },
+    "CVE-2023-7101": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/smtp/barracuda_esg_spreadsheet_rce"
+      ]
+    },
+    "CVE-2023-7102": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/smtp/barracuda_esg_spreadsheet_rce"
       ]
     },
     "CVE-2024-0012": {
@@ -17697,6 +17721,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/http/prison_management_rce"
+      ]
+    },
+    "CVE-2024-48760": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/gestioip_rce"
       ]
     },
     "CVE-2024-48766": {
@@ -18784,6 +18814,12 @@
         "exploit_linux/http/control_web_panel_api_cmd_exec"
       ]
     },
+    "CVE-2025-6793": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/qconvergeconsole_traversal"
+      ]
+    },
     "CVE-2025-68109": {
       "has_msf_module": true,
       "module_paths": [
@@ -18862,6 +18898,12 @@
         "auxiliary_admin/networking/cisco_sdwan_auth_bypass"
       ]
     },
+    "CVE-2026-20182": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_admin/networking/cisco_sdwan_vhub_auth_bypass"
+      ]
+    },
     "CVE-2026-22200": {
       "has_msf_module": true,
       "module_paths": [
@@ -18878,6 +18920,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/telnet/gnu_inetutils_auth_bypass"
+      ]
+    },
+    "CVE-2026-24479": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/hustoj_problem_import_rce"
       ]
     },
     "CVE-2026-27174": {
@@ -18946,10 +18994,40 @@
         "exploit_linux/http/avideo_encoder_getimage_cmd_injection"
       ]
     },
+    "CVE-2026-3055": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/citrix_netscaler_cve_2026_3055"
+      ]
+    },
     "CVE-2026-31431": {
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/local/cve_2026_31431_copy_fail"
+      ]
+    },
+    "CVE-2026-41940": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/cpanel_whm_auth_bypass_rce"
+      ]
+    },
+    "CVE-2026-4257": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/wp_plugin_supsystic_contact_form_rce"
+      ]
+    },
+    "CVE-2026-43284": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/cve_2026_43284_dirty_frag"
+      ]
+    },
+    "CVE-2026-43500": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/local/cve_2026_43500_dirty_frag"
       ]
     }
   }

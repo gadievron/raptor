@@ -676,11 +676,12 @@ def _process_single_file(
         # whichever languages have a walker.
         if language == 'python':
             record['call_graph'] = extract_call_graph_python(parse_text).to_dict()
-        elif language in ('javascript', 'typescript'):
+        elif language in ('javascript', 'typescript', 'tsx'):
             # Tree-sitter-driven; gracefully empty when the grammar
-            # isn't installed.
+            # isn't installed. TS/TSX use the typescript grammar so typed
+            # source (annotations, decorators, interfaces) parses.
             record['call_graph'] = extract_call_graph_javascript(
-                parse_text,
+                parse_text, language=language,
             ).to_dict()
         elif language == 'go':
             record['call_graph'] = extract_call_graph_go(

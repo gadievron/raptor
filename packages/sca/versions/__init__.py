@@ -177,6 +177,9 @@ _ECOSYSTEM_ALIASES = {
     "packagist": "Packagist",
     "composer": "Packagist",
     "php": "Packagist",
+    "debian": "Debian",
+    "apt": "Debian",
+    "deb": "Debian",
 }
 
 
@@ -195,6 +198,7 @@ from .maven import compare as _maven_compare          # noqa: E402
 from .gem import compare as _gem_compare              # noqa: E402
 from .nuget import compare as _nuget_compare          # noqa: E402
 from .composer import compare as _composer_compare    # noqa: E402
+from .debian import compare as _debian_compare        # noqa: E402
 
 _register("npm", _semver_compare)
 _register("Cargo", _semver_compare)        # mostly semver
@@ -204,5 +208,6 @@ _register("Maven", _maven_compare)
 _register("RubyGems", _gem_compare)
 _register("NuGet", _nuget_compare)
 _register("Packagist", _composer_compare)
+_register("Debian", _debian_compare)
 
 __all__ = ["compare", "in_range", "VersionError"]

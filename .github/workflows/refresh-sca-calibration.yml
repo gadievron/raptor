@@ -49,17 +49,26 @@ jobs:
       - name: Install minimal deps
         run: |
           python -m pip install --upgrade pip==26.1.1
-          # The build script needs urllib3 (core.http dependency)
-          # plus pytest for the validation step. No other
-          # requirements-dev — keep this fast.
+          # The build script needs only urllib3 (the core.http
+          # backend). The validate step runs on the stdlib + the
+          # bundled corpus — no pytest required. Keep this fast.
           pip install 'urllib3==2.7.0,<3.0'
 
       - name: Refresh corpus
-        # ``-v`` emits per-source ``updated/unchanged`` lines so the
-        # PR body can quote them. Exit 0 = at least one source
-        # succeeded; exit 1 = every source failed (transient global
-        # event, retried at next schedule).
-        run: packages/sca/scripts/raptor-sca-build-corpus -v
+        # ``-v`` emits per-source ``updated/unchanged`` (and
+        # ``FAILED``) lines; we capture them to refresh.log and embed
+        # them in the PR body so a drifted source shows up in review.
+        # Exit 0 = at least one source produced output; exit 1 = every
+        # source failed (a global outage, retried next schedule). A
+        # single source drifting does NOT fail the run or discard the
+        # rest. (GHA's default shell sets pipefail, so the script's
+        # exit code propagates through the ``tee``.)
+        run: |
+          # Log to $RUNNER_TEMP (persists across steps, outside the
+          # worktree) so it can't be swept into the commit if the scoped
+          # ``git add`` below is ever broadened, and never dirties the tree.
+          packages/sca/scripts/raptor-sca-build-corpus -v 2>&1 \
+            | tee "$RUNNER_TEMP/refresh.log"
 
       - name: License-compliance check
         # Defence in depth: enforces the ATTRIBUTION.md cross-
@@ -132,7 +141,12 @@ jobs:
           # Force-push so weekly re-runs update the same branch (and
           # therefore the same open PR). Safe: branch is namespaced
           # ``auto/`` and never touched by humans.
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'
@@ -145,41 +159,51 @@ jobs:
         run: |
           set -eu
           BRANCH="auto/sca-calibration-refresh"
-          BODY=$(cat <<'EOF'
+          # Build the PR body, embedding the captured per-source
+          # status (incl. any FAILED sources) so a drifted upstream
+          # shows up in review rather than only in the run log.
+          {
+            cat <<'EOF'
           Auto-PR from `.github/workflows/refresh-sca-calibration.yml`.
 
-          Refreshes the bundled `packages/sca/data/calibration/`
-          ground-truth signals used to validate the
-          `raptor_risk_estimate` weights in `packages/sca/risk.py`.
+          Refreshes the bundled `packages/sca/data/calibration/` ground-truth signals used to validate the `raptor_risk_estimate` weights in `packages/sca/risk.py`.
 
           ## Per-source status
 
-          See the workflow run log for the per-source
-          `raptor-sca-build-corpus: <source> updated/unchanged
-          (N records)` output.
+          EOF
+            echo '```'
+            cat "$RUNNER_TEMP/refresh.log" 2>/dev/null || echo '(per-source status unavailable)'
+            echo '```'
+            cat <<'EOF'
 
           ## License compliance
 
-          All Tier 1 sources (KEV, EPSS) are MIT-redistribution
-          compatible and ship verbatim with per-file `_source`
-          attribution blocks. The license-compliance check runs
-          in CI and rejects any forbidden field names that would
-          indicate license-restricted content.
+          All Tier 1 sources (KEV, EPSS) are MIT-redistribution compatible and ship verbatim with per-file `_source` attribution blocks. The license-compliance check runs in CI and rejects any forbidden field names that would indicate license-restricted content.
 
           ## Review checklist
 
           - [ ] Per-source counts look reasonable (≥ prior run)
+          - [ ] No source shows FAILED above (or it's a known transient)
           - [ ] No license-restricted content in the diff
           - [ ] `ATTRIBUTION.md` still covers every JSON file
           EOF
-          )
-          # Idempotent create-or-update: ``gh pr create`` exits 1
-          # when a PR for the branch already exists — in that case
-          # we update the body so it always reflects the latest run.
+          } > "$RUNNER_TEMP/pr-body.md"
+          # Idempotent create-or-update: ``gh pr create`` exits non-zero
+          # when a PR for the branch already exists — fall through to
+          # ``gh pr edit`` to refresh the body. (Labels applied below.)
           if ! gh pr create \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration corpus" \
-                --body "$BODY" 2>/dev/null; then
-            gh pr edit "$BRANCH" --body "$BODY"
+                --body-file "$RUNNER_TEMP/pr-body.md" 2>/dev/null; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
           fi
+          # Labels best-effort (see sca-self-bump): pull-requests:write
+          # applies EXISTING labels but can't create them, and
+          # ``gh pr create --label`` hard-errors on an unknown label
+          # (which killed this step in run #3). Create the canonical
+          # labels once under Settings → Labels to auto-apply them.
+          for lbl in automated sca data-refresh; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done
