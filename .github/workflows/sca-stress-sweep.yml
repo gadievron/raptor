@@ -55,6 +55,7 @@ jobs:
         # ``raptor-sca`` needs the full runtime requirements; the
         # sweep then drives the actual scanner against each sample.
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip==26.1.1
           pip install -r requirements.txt
 
@@ -70,6 +71,7 @@ jobs:
         # error). The non-zero exit fails the workflow check, which
         # is what we want for a regression gate.
         run: |
+          set -euo pipefail
           python - <<'PY'
           import sys
           sys.path.insert(0, '.')

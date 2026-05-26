@@ -173,7 +173,12 @@ jobs:
           if joint top-20 precision improvement clears 5 percentage
           points. See packages/sca/data/calibration/refit/<date>.json
           for per-constant deltas."
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'

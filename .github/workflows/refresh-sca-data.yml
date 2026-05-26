@@ -103,7 +103,12 @@ jobs:
           # Force-push so weekly re-runs update the same branch (and
           # therefore the same open PR). Safe: branch is namespaced
           # ``auto/`` and never touched by humans.
-          git push --force origin "$BRANCH"
+          # --force-with-lease (not --force): refuses the push if the
+          # remote branch moved since our fetch — e.g. an operator amended
+          # the open auto-PR — rather than clobbering it. Fetch first to
+          # seed the lease baseline; || true for the first run (no branch).
+          git fetch origin "$BRANCH" || true
+          git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR
         if: steps.diff.outputs.changed == 'true'

@@ -32,6 +32,27 @@ def test_load_no_file_returns_default_policy(tmp_path: Path) -> None:
     assert policy.thresholds.block_on_major is False
 
 
+def test_load_from_github_subdir(tmp_path: Path) -> None:
+    """Discovered at .github/sca/raptor-sca-bump-policy.yml when there's no
+    root dotfile (the per-tool .github convention, cf. .github/codeql/)."""
+    gh = tmp_path / ".github" / "sca"
+    gh.mkdir(parents=True)
+    (gh / "raptor-sca-bump-policy.yml").write_text(
+        "thresholds:\n  block_on_major: true\n")
+    policy = load_policy(tmp_path)
+    assert policy.thresholds.block_on_major is True
+
+
+def test_root_dotfile_wins_over_github_subdir(tmp_path: Path) -> None:
+    """Both locations present → the root dotfile takes precedence."""
+    _write_policy(tmp_path, "thresholds:\n  rapid_release_days: 7\n")
+    gh = tmp_path / ".github" / "sca"
+    gh.mkdir(parents=True)
+    (gh / "raptor-sca-bump-policy.yml").write_text(
+        "thresholds:\n  rapid_release_days: 99\n")
+    assert load_policy(tmp_path).thresholds.rapid_release_days == 7
+
+
 def test_load_skip_by_locator(tmp_path: Path) -> None:
     """``skip:`` rule with a locator matches that locator
     exactly."""
@@ -88,6 +109,51 @@ skip:
                          candidate_locator="actions/setup-python")
     assert not rule.matches(candidate_kind="gha_uses",
                              candidate_locator="astral-sh/setup-uv")
+
+
+def test_load_skip_by_path(tmp_path: Path) -> None:
+    """``skip: - path:`` loads a path glob; ``*`` spans ``/`` so a
+    ``test/data/**`` rule matches a fixture at any depth (and not files
+    outside it)."""
+    _write_policy(tmp_path, """
+skip:
+  - path: "test/data/**"
+    reason: test fixtures are pinned deliberately
+""")
+    policy = load_policy(tmp_path)
+    rule = policy.skip[0]
+    assert rule.path == "test/data/**"
+    assert rule.matches(
+        candidate_kind="from_image", candidate_locator="docker.io/library/node",
+        candidate_path="test/data/sca-e2e/node-app/fixture/Dockerfile")
+    # A real (non-fixture) Dockerfile of the same locator is NOT skipped.
+    assert not rule.matches(
+        candidate_kind="from_image", candidate_locator="docker.io/library/node",
+        candidate_path=".devcontainer/Dockerfile")
+
+
+def test_load_kind_and_path_both_must_match(tmp_path: Path) -> None:
+    """``kind`` + ``path`` set → both must match (AND)."""
+    rule = SkipRule(kind="from_image", path="test/**", reason="x")
+    assert rule.matches(candidate_kind="from_image", candidate_locator="img",
+                        candidate_path="test/a/Dockerfile")
+    assert not rule.matches(candidate_kind="arg", candidate_locator="img",
+                            candidate_path="test/a/Dockerfile")
+    assert not rule.matches(candidate_kind="from_image", candidate_locator="img",
+                            candidate_path="src/Dockerfile")
+
+
+def test_path_only_rule_is_kept(tmp_path: Path) -> None:
+    """A rule with only ``path`` (no kind/locator) is valid — not treated
+    as the skip-everything empty rule."""
+    _write_policy(tmp_path, """
+skip:
+  - path: "test/data/**"
+""")
+    policy = load_policy(tmp_path)
+    assert len(policy.skip) == 1
+    assert policy.skip[0].path == "test/data/**"
+    assert policy.skip[0].kind is None and policy.skip[0].locator is None
 
 
 def test_load_thresholds(tmp_path: Path) -> None:
@@ -236,6 +302,47 @@ skip:
     ]
     assert len(semgrep_skip) == 1
     assert "pinned for compat" in semgrep_skip[0][2]
+
+
+def test_orchestrator_honours_path_skip(tmp_path: Path) -> None:
+    """A ``skip: - path:`` rule drops candidates whose source file is under
+    that path — e.g. test fixtures — while a real Dockerfile of the same
+    kind is still a candidate. Mirrors the #668 ``test/data/**`` bug."""
+    pytest.importorskip("yaml")
+    (tmp_path / "Dockerfile").write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    fixture = tmp_path / "test" / "data" / "corpus"
+    fixture.mkdir(parents=True)
+    (fixture / "Dockerfile").write_text("ARG BLACK_VERSION=20.0\n")
+    _write_policy(tmp_path, """
+skip:
+  - path: "test/data/**"
+    reason: fixtures pinned deliberately
+""")
+    from packages.sca.bump.tests.test_pr_comment import (
+        _StubHttp, _StubPyPI,
+    )
+    from packages.sca.bump.orchestrator import run_bump
+    http = _StubHttp({
+        "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+            {"tag_name": "v1.119.0"},
+        "https://api.github.com/repos/psf/black/releases/latest":
+            {"tag_name": "25.0"},
+    })
+    pypi = _StubPyPI({
+        "semgrep": {"releases": {
+            "1.119.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+        }},
+        "black": {"releases": {
+            "25.0": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+        }},
+    })
+    report = run_bump(tmp_path, http=http, pypi_client=pypi)
+    # Root Dockerfile's ARG is a candidate; the test/data one is skipped.
+    assert [c.locator for c in report.candidates if c.kind == "arg"] == [
+        "SEMGREP_VERSION"]
+    fixture_skip = [s for s in report.skipped if s[0] == "BLACK_VERSION"]
+    assert len(fixture_skip) == 1
+    assert "fixtures pinned" in fixture_skip[0][2]
 
 
 def test_orchestrator_block_on_major_forces_review_to_block(

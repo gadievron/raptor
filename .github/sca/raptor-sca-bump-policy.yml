@@ -1,0 +1,30 @@
+# raptor-sca bump policy for this repo.
+#
+# Consumed by `raptor-sca bump` — Phase 2 of
+# .github/workflows/sca-self-bump.yml, and any local `raptor-sca bump .`
+# run. Tightens the permissive defaults so the weekly, auto-applying
+# self-bump never lands a high-blast-radius change as an unreviewed
+# "Clean" verdict. See packages/sca/bump/policy.py for the full schema.
+
+thresholds:
+  # Major-version jumps are almost always breaking. Force them to a
+  # review-tier verdict instead of auto-applying. Catches e.g.
+  # eclipse-temurin 11->26, node 18->20, ghcr.io/.../sage 6->8, and
+  # actions/upload-artifact v4->v7 (the pre-1.0 rule also flags
+  # ollama 0.21->0.24). `_is_major_bump` strips -jdk/-slim/-alpine.
+  block_on_major: true
+
+  # Same-major jumps of >= 2 minors are operationally large (removed
+  # APIs) even though strict semver calls them "same major". Catches
+  # python 3.12->3.14 and 3.9->3.14 — the latter also desyncs the CI
+  # image from tests.yml's pinned interpreter, so it must be reviewed,
+  # not auto-applied.
+  block_on_minor_skew: 2
+
+skip:
+  # Test fixtures / corpora pin versions deliberately (often old or
+  # specific) as part of the test contract — auto-bumping them corrupts
+  # the suite (e.g. test/data/sca-e2e/*/fixture/Dockerfile). Never bump
+  # anything under test data. `*` spans `/`, so this covers all depths.
+  - path: "test/data/**"
+    reason: "test fixtures: pinned versions are part of the test contract"
