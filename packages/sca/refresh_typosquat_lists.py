@@ -71,6 +71,36 @@ _DEFAULT_TOP_N = 5000
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
+def _load_known_typosquats(data_dir: Path, fname: str) -> set:
+    """Return the per-ecosystem known-typosquat denylist (lowercased).
+
+    Popularity feeds rank by raw download / depended-upon counts; both
+    metrics include people who *meant* to install the legitimate
+    package but typed wrong (or were tricked by squatters). That makes
+    a real-world typosquat occasionally bubble into the top-N — at
+    which point the typosquat detector silently disarms (a name in
+    the popular list is by definition not a typosquat candidate).
+
+    The denylist at ``data/known_typosquats/<ecosystem>.json`` is the
+    structural fix: hand-curated, ecosystem-scoped names dropped from
+    every refreshed popular list. Missing file → empty set (denylist
+    is opt-in, no behaviour change for ecosystems without one).
+    """
+    path = data_dir / "known_typosquats" / fname
+    if not path.is_file():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(
+            "known_typosquats: failed to load %s: %s", path, e,
+        )
+        return set()
+    if not isinstance(data, list):
+        return set()
+    return {n.lower() for n in data if isinstance(n, str) and n}
+
+
 # ---------------------------------------------------------------------------
 # Per-ecosystem fetchers
 # ---------------------------------------------------------------------------
@@ -278,6 +308,17 @@ def refresh_all(
         if not names:
             out[fname] = "failed: empty result"
             continue
+        # Apply the per-ecosystem known-typosquat denylist. Popularity
+        # feeds occasionally rank a real-world typosquat (e.g. ``loadash``
+        # on npm) into the top-N; landing it in popular/<eco>.json
+        # silently disarms the typosquat detector for that name. The
+        # denylist filters those out before persistence.
+        denylist = _load_known_typosquats(data_dir, fname)
+        if denylist:
+            names = [n for n in names if n.lower() not in denylist]
+            if not names:
+                out[fname] = "failed: empty result after denylist"
+                continue
         target = popular_dir / fname
         new_blob = json.dumps(names, indent=2) + "\n"
         try:

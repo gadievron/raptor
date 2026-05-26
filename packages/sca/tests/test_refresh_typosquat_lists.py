@@ -240,6 +240,54 @@ def test_refresh_all_empty_response_treated_as_failure(tmp_path: Path):
     assert not (tmp_path / "popular" / "PyPI.json").exists()
 
 
+def test_refresh_all_applies_known_typosquats_denylist(tmp_path: Path):
+    """Popularity feeds occasionally rank a real-world typosquat
+    (e.g. ``loadash`` on npm) into the top-N. The per-ecosystem
+    denylist at ``data/known_typosquats/<eco>.json`` filters those
+    out before persistence so the typosquat detector doesn't get
+    silently disarmed."""
+    (tmp_path / "known_typosquats").mkdir()
+    (tmp_path / "known_typosquats" / "npm.json").write_text(
+        json.dumps(["loadash"]), encoding="utf-8",
+    )
+
+    http = _StubHttp({
+        # Upstream ranks both the real package and the typosquat.
+        _ANVAKA_NPM_RANK: {"rank": {"lodash": "9.0", "loadash": "8.5"}},
+        # Minimum for the other fetchers so the orchestrator runs cleanly.
+        _HUGOVK_TOP_PYPI: {"rows": [{"project": "requests"}]},
+        _CRATES_API: [{"crates": [{"name": "serde"}]}, {"crates": []}],
+        _PACKAGIST_POPULAR: {"packages": [{"name": "m/m"}]},
+    })
+    refresh_all(http, top_n=10, data_dir=tmp_path)
+
+    npm_out = json.loads(
+        (tmp_path / "popular" / "npm.json").read_text(encoding="utf-8")
+    )
+    assert "lodash" in npm_out, "legitimate package must survive"
+    assert "loadash" not in npm_out, "denylisted typosquat must be filtered"
+
+
+def test_refresh_all_denylist_emptying_marked_distinctly(tmp_path: Path):
+    """When the denylist filters out EVERY fetched name (degenerate
+    case — every popular result was a typosquat?), refuse to write
+    an empty list rather than silently disarm the detector. Mirrors
+    the empty-upstream-response handling."""
+    (tmp_path / "known_typosquats").mkdir()
+    (tmp_path / "known_typosquats" / "npm.json").write_text(
+        json.dumps(["loadash"]), encoding="utf-8",
+    )
+    http = _StubHttp({
+        _ANVAKA_NPM_RANK: {"rank": {"loadash": "8.5"}},
+        _HUGOVK_TOP_PYPI: {"rows": [{"project": "requests"}]},
+        _CRATES_API: [{"crates": [{"name": "serde"}]}, {"crates": []}],
+        _PACKAGIST_POPULAR: {"packages": [{"name": "m/m"}]},
+    })
+    results = refresh_all(http, top_n=10, data_dir=tmp_path)
+    assert results["npm.json"] == "failed: empty result after denylist"
+    assert not (tmp_path / "popular" / "npm.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # Transient-failure retry + size cap (_get_json)
 # ---------------------------------------------------------------------------
