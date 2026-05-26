@@ -770,8 +770,20 @@ def _ts_language(lang: str):
             import tree_sitter_python as ts
         elif lang == "java":
             import tree_sitter_java as ts
-        elif lang in ("javascript", "typescript"):
+        elif lang == "javascript":
             import tree_sitter_javascript as ts
+        elif lang in ("typescript", "tsx"):
+            # Pre-2026-05-26 this branch loaded ``tree_sitter_javascript``,
+            # which can't parse TS type annotations / interfaces / enums /
+            # access modifiers / decorators — a typed file produced ERROR
+            # nodes and extracted ZERO functions (the same class of bug the
+            # cpp branch had with tree_sitter_c). ``.ts`` and ``.tsx`` need
+            # DIFFERENT grammars: ``language_typescript`` parses ``<T>x`` casts
+            # but errors on JSX; ``language_tsx`` parses JSX but errors on the
+            # cast syntax. Pick by the language (``.tsx`` → ``tsx``).
+            import tree_sitter_typescript as ts
+            ts_fn = ts.language_tsx if lang == "tsx" else ts.language_typescript
+            return Language(ts_fn())
         elif lang == "c":
             import tree_sitter_c as ts
         elif lang == "cpp":
@@ -823,6 +835,7 @@ class TreeSitterExtractor:
         "java": ("method_declaration", "constructor_declaration"),
         "javascript": ("function_declaration", "method_definition", "arrow_function"),
         "typescript": ("function_declaration", "method_definition", "arrow_function"),
+        "tsx": ("function_declaration", "method_definition", "arrow_function"),
         "c": ("function_definition",),
         "cpp": ("function_definition",),
         "go": ("function_declaration", "method_declaration"),
@@ -832,7 +845,8 @@ class TreeSitterExtractor:
         "python": ("class_definition",),
         "java": ("class_declaration", "interface_declaration"),
         "javascript": ("class_declaration",),
-        "typescript": ("class_declaration",),
+        "typescript": ("class_declaration", "abstract_class_declaration"),
+        "tsx": ("class_declaration", "abstract_class_declaration"),
         "c": (),
         "cpp": ("class_specifier", "struct_specifier"),
         "go": (),
@@ -873,13 +887,71 @@ class TreeSitterExtractor:
                         out.append(mod.text.decode().lstrip("@"))
         return out
 
+    # Sibling node types allowed between a TS/JS decorator and the
+    # declaration it decorates (keywords / modifiers / punctuation).
+    _TS_DECORATOR_SKIP = frozenset({
+        "export", "default", "abstract", "async", "static", "readonly",
+        "accessibility_modifier", "comment", "override",
+    })
+
+    def _ts_decorators(self, node) -> List[str]:
+        """Decorators on a JS/TS class or method. tree-sitter-typescript
+        places ``@Foo(...)`` as a preceding SIBLING of the decorated node
+        (inside class_body / export_statement), not a wrapper as Python does.
+        Walk back over decorators + intervening keywords, stopping at the
+        first real node. Stored ``@``-stripped (e.g. ``Controller('x')``),
+        like Java annotations, so reachability tail-matching works uniformly.
+        Gated to JS-family languages so Python's decorated_definition path
+        (handled separately) isn't double-counted.
+        """
+        if self.language not in ("javascript", "typescript", "tsx"):
+            return []
+        out: List[str] = []
+        sib = node.prev_sibling
+        while sib is not None:
+            if sib.type == "decorator":
+                out.append(sib.text.decode().lstrip("@").strip())
+            elif sib.is_named and sib.type not in self._TS_DECORATOR_SKIP:
+                break  # a real declaration / statement — decorators stop here
+            sib = sib.prev_sibling
+        out.reverse()
+        return out
+
     def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str],
               class_attributes: Sequence[str] = ()) -> None:
         for child in node.children:
             if child.type in self.class_types:
                 cname = self._get_name(child)
+                # Class-level stereotype signal: Java modifier annotations
+                # OR JS/TS class decorators (@Controller / @Injectable /
+                # @Entity / @Component …) attached as preceding siblings.
+                cattrs = self._ts_decorators(child) + self._class_annotations(child)
                 self._walk(child, functions, class_name=cname,
-                           class_attributes=self._class_annotations(child))
+                           class_attributes=cattrs)
+            elif child.type == "public_field_definition":
+                # TS class property holding an arrow / function expression —
+                # ``handler = (x) => {...}`` (Angular/NestJS/event handlers).
+                # A real function the inventory must see; not a method_definition.
+                arrow = self._find_child(child, ("arrow_function", "function"))
+                name = self._get_name(child)
+                if arrow and name:
+                    fattrs = self._ts_decorators(child)
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=child.start_point[0] + 1,
+                        line_end=child.end_point[0] + 1,
+                        signature=child.text.decode()[:200].split("{")[0].strip(),
+                        metadata=FunctionMetadata(
+                            class_name=class_name,
+                            visibility=self._ts_member_visibility(child),
+                            attributes=fattrs,
+                            parameters=self._extract_parameters(arrow),
+                            class_attributes=list(class_attributes),
+                        ),
+                    ))
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
+                continue
             elif child.type in ("lexical_declaration", "variable_declaration"):
                 # JS/TS: const foo = () => {} — arrow function inside variable declaration
                 self._walk(child, functions, class_name=class_name,
@@ -910,8 +982,9 @@ class TreeSitterExtractor:
                            class_attributes=class_attributes)
                 continue
             elif child.type in self.func_types:
-                # Check for decorated_definition wrapper (Python)
-                attrs = []
+                # JS/TS: method/function decorators are preceding siblings
+                # (@Get() / @Cron() …). Python: a decorated_definition wrapper.
+                attrs = self._ts_decorators(child)
                 parent = child.parent
                 if parent and parent.type == "decorated_definition":
                     for sib in parent.children:
@@ -966,10 +1039,27 @@ class TreeSitterExtractor:
             ),
         )
 
+    def _ts_member_visibility(self, node) -> Optional[str]:
+        """TS/JS class-member visibility from an ``accessibility_modifier``
+        child (``private`` / ``protected`` / ``public``). TS members are
+        PUBLIC by default, so absence ⇒ ``public`` — which is what the
+        framework-entry stereotype rule keys on (public methods of a
+        container-managed / serialised class are reachable)."""
+        if self.language not in ("javascript", "typescript", "tsx"):
+            return None
+        for child in node.children:
+            if child.type == "accessibility_modifier":
+                return child.text.decode().strip()
+        return "public"
+
     def _extract_visibility(self, node, name: str, class_name: Optional[str],
                             attrs: List[str]) -> Tuple[Optional[str], Optional[str]]:
         """Extract visibility and update class_name. Returns (visibility, class_name)."""
         visibility = None
+
+        # TS/JS class members: accessibility_modifier (default public).
+        if node.type == "method_definition":
+            visibility = self._ts_member_visibility(node)
 
         # Java: modifiers block contains annotations and access keywords
         for child in node.children:
@@ -1025,8 +1115,22 @@ class TreeSitterExtractor:
         return visibility, class_name
 
     def _get_name(self, node) -> Optional[str]:
+        # ``type_identifier`` names a TS class/interface — but in a Java/TS
+        # method it's the RETURN TYPE (``public String handle()``), which
+        # precedes the method name, so only accept it on a class declaration.
+        is_class_decl = node.type in (
+            "class_declaration", "abstract_class_declaration",
+            "interface_declaration",
+        )
         for child in node.children:
             if child.type in ("identifier", "name"):
+                return child.text.decode()
+            # JS/TS class method names are ``property_identifier`` (safe in any
+            # node — no language puts a return type there). Without this, every
+            # JS/TS class METHOD was silently dropped from the inventory.
+            if child.type == "property_identifier":
+                return child.text.decode()
+            if child.type == "type_identifier" and is_class_decl:
                 return child.text.decode()
             # C/C++: name is inside function_declarator
             if child.type == "function_declarator":
@@ -1203,6 +1307,7 @@ _REGEX_EXTRACTORS = {
     'python': PythonExtractor(),
     'javascript': JavaScriptExtractor(),
     'typescript': JavaScriptExtractor(),
+    'tsx': JavaScriptExtractor(),
     'c': CExtractor(),
     'cpp': CExtractor(),
     'java': JavaExtractor(),
@@ -1303,6 +1408,7 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
         "python": ("expression_statement", "assignment"),
         "javascript": ("lexical_declaration", "variable_declaration"),
         "typescript": ("lexical_declaration", "variable_declaration"),
+        "tsx": ("lexical_declaration", "variable_declaration"),
         "c": ("declaration",),
         "cpp": ("declaration",),
         "java": ("field_declaration",),
@@ -1449,7 +1555,7 @@ def _global_name(node, language: str) -> Optional[str]:
                     return name
         return None
 
-    if language in ("javascript", "typescript"):
+    if language in ("javascript", "typescript", "tsx"):
         for child in node.children:
             if child.type == "variable_declarator":
                 for sub in child.children:
@@ -1607,7 +1713,7 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
         if language == "python":
             if stripped.startswith("#"):
                 count += 1
-        elif language in ("c", "cpp", "java", "javascript", "typescript", "go"):
+        elif language in ("c", "cpp", "java", "javascript", "typescript", "tsx", "go"):
             # State-machine comment-walk per line so the in_block
             # state tracks every `/*` open and `*/` close on the
             # line, including the `*/ /* still open` shape where a

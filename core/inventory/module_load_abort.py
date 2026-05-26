@@ -80,7 +80,7 @@ def detect_module_load_abort(
     try:
         if language == "python":
             return _detect_python(content)
-        if language in ("javascript", "typescript"):
+        if language in ("javascript", "typescript", "tsx"):
             return _detect_javascript(content)
         if language == "go":
             return _detect_go(content)

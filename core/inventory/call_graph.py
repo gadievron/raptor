@@ -642,15 +642,25 @@ def _attribute_chain(node: ast.AST) -> Optional[List[str]]:
 # ---------------------------------------------------------------------------
 
 
-def extract_call_graph_javascript(content: str) -> FileCallGraph:
-    """Walk a JavaScript / TypeScript source string via tree-sitter
-    and return its :class:`FileCallGraph`.
+def extract_call_graph_javascript(
+    content: str, language: str = "javascript",
+) -> FileCallGraph:
+    """Walk a JavaScript / TypeScript / TSX source string via
+    tree-sitter and return its :class:`FileCallGraph`.
+
+    ``language`` selects the grammar: ``javascript`` →
+    tree-sitter-javascript; ``typescript`` / ``tsx`` →
+    tree-sitter-typescript (``language_typescript`` / ``language_tsx``).
+    Using the JS grammar on typed TS produced ERROR nodes and an empty
+    graph (no edges), so TS reachability was blind — pick the matching
+    grammar. The node types the walker keys on (``call_expression``,
+    ``method_definition``, ``import_statement`` …) are shared across
+    both grammars.
 
     Returns an empty graph when:
 
-      * tree-sitter or ``tree_sitter_javascript`` isn't installed
-        (the inventory builder degrades; resolver treats absence
-        as no-evidence)
+      * the matching grammar isn't installed (the inventory builder
+        degrades; resolver treats absence as no-evidence)
       * The file is unparseable
 
     Captures both ES-module imports and CommonJS requires; both
@@ -661,19 +671,27 @@ def extract_call_graph_javascript(content: str) -> FileCallGraph:
     resolver's chain semantics work unchanged.
     """
     try:
-        import tree_sitter_javascript as ts_js
+        if language == "typescript":
+            import tree_sitter_typescript as ts_ts
+            language_fn = ts_ts.language_typescript
+        elif language == "tsx":
+            import tree_sitter_typescript as ts_ts
+            language_fn = ts_ts.language_tsx
+        else:
+            import tree_sitter_javascript as ts_js
+            language_fn = ts_js.language
     except ImportError:
         logger.debug(
-            "call_graph: tree-sitter JavaScript grammar not "
-            "installed; returning empty graph",
+            "call_graph: tree-sitter grammar for %s not installed; "
+            "returning empty graph", language,
         )
         return FileCallGraph()
 
     try:
-        parser = _get_ts_parser(ts_js.language)
+        parser = _get_ts_parser(language_fn)
         tree = parser.parse(content.encode("utf-8", errors="replace"))
     except Exception as e:                          # noqa: BLE001
-        logger.debug("call_graph: JS parse failed (%s)", e)
+        logger.debug("call_graph: %s parse failed (%s)", language, e)
         return FileCallGraph()
 
     walker = _JsCallGraph()
@@ -726,8 +744,15 @@ class _JsCallGraph:
         is the innermost NAMED enclosing function — anonymous
         functions / arrows are walked-through without affecting
         the caller attribution."""
-        if node.type == self._CLASS_DECL:
-            name_node = self._first_child_of_type(node, (self._IDENT_NODE,))
+        if node.type in (self._CLASS_DECL, "abstract_class_declaration"):
+            # TS class names are ``type_identifier`` (JS uses ``identifier``).
+            # Without type_identifier the class was never pushed onto the
+            # class stack, so ``this.method()`` calls got no receiver_class and
+            # intra-class edges (a reachable method calling a private helper)
+            # were lost — every such helper read not_called.
+            name_node = self._first_child_of_type(
+                node, (self._IDENT_NODE, "type_identifier"),
+            )
             if name_node is not None:
                 bases: List[str] = []
                 heritage = self._first_child_of_type(node, (

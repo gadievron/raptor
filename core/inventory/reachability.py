@@ -2338,6 +2338,7 @@ class ReachabilityProfile:
     visibility_entry: str = ""
     has_go_init: bool = False
     has_java_web: bool = False
+    has_ts_framework: bool = False
 
 
 PROFILES: Dict[str, ReachabilityProfile] = {
@@ -2348,7 +2349,8 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "java": ReachabilityProfile("java", "none", has_java_web=True),
     "python":     ReachabilityProfile("python", "none"),
     "javascript": ReachabilityProfile("javascript", "none"),
-    "typescript": ReachabilityProfile("typescript", "none"),
+    "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
+    "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
     "ruby":       ReachabilityProfile("ruby", "none"),
     "csharp":     ReachabilityProfile("csharp", "none"),
     "php":        ReachabilityProfile("php", "none"),
@@ -2455,6 +2457,50 @@ def _java_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     return False
 
 
+# Method-level TS/JS decorators whose presence marks the method as
+# framework-dispatched (the framework invokes it with no in-project caller):
+# NestJS HTTP routes / microservice + websocket handlers / schedulers, and
+# GraphQL resolvers (NestJS @nestjs/graphql + TypeGraphQL).
+_TS_METHOD_DISPATCH_DECORATORS = frozenset({
+    "Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All", "Search",
+    "MessagePattern", "EventPattern", "SubscribeMessage",
+    "Cron", "Interval", "Timeout",
+    "Query", "Mutation", "Subscription",
+    "ResolveField", "ResolveProperty", "FieldResolver",
+})
+# Class-level TS/JS stereotype decorators. The framework instantiates the class
+# and reaches its PUBLIC methods with no in-project caller — DI container
+# (NestJS / Angular providers + controllers), template binding + lifecycle
+# (Angular components), or reflective property access (TypeORM entities).
+_TS_CLASS_STEREOTYPE_DECORATORS = frozenset({
+    # NestJS
+    "Controller", "Injectable", "Module", "Resolver", "Catch",
+    "WebSocketGateway", "Gateway",
+    # Angular
+    "Component", "Directive", "Pipe", "NgModule",
+    # TypeORM / MikroORM entities (reflective accessor access)
+    "Entity", "ViewEntity", "ChildEntity",
+})
+
+
+def _ts_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A TS/JS method dispatched by a framework / DI container with no
+    in-project caller — a method-level route/handler/resolver decorator, or a
+    PUBLIC method of a stereotyped (container-managed / template-bound /
+    reflectively-serialised) class. Adding an entry only grows the reachable
+    set, so this can't suppress real code; worst case is failing to demote a
+    genuinely-dead decorated method (the safe direction)."""
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _TS_METHOD_DISPATCH_DECORATORS:
+            return True
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _TS_CLASS_STEREOTYPE_DECORATORS:
+                return True
+    return False
+
+
 def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
@@ -2484,6 +2530,11 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # container-managed handlers (doPost, @EventListener, @Service methods)
     # read not_called and get surface-demoted.
     if p.has_java_web and _java_framework_entry(name, item):
+        return True
+    # TS/JS framework-dispatched entries with no in-project caller: NestJS /
+    # Angular / TypeORM method route/handler/resolver decorators and public
+    # methods of stereotyped (DI-managed / template-bound / entity) classes.
+    if p.has_ts_framework and _ts_framework_entry(name, item):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those

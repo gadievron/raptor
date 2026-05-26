@@ -793,3 +793,39 @@ def test_java_framework_entry_degrades_gracefully_on_stale_metadata():
     # ``attributes`` field predates this feature), so Tier-1 dispatch is robust.
     assert _java_framework_entry(
         "on", {"name": "on", "metadata": {"attributes": ["EventListener"]}})
+
+
+# ---------------------------------------------------------------------------
+# TS/JS framework-dispatch entries (_ts_framework_entry). Path-independent:
+# operate on synthetic item dicts (decorators stored @-stripped, e.g.
+# ``Get()`` / ``Controller('x')``), so they run on CI without
+# tree-sitter-typescript. The key guarantees are the negatives — a plain
+# method and a private stereotype method must NOT be promoted.
+# ---------------------------------------------------------------------------
+
+
+def test_ts_method_dispatch_decorators_are_entries():
+    from core.inventory.reachability import _ts_framework_entry
+    for dec in ("Get()", "Post('x')", "MessagePattern('cmd')",
+                "Cron('* * * * *')", "Query()", "SubscribeMessage('ev')"):
+        assert _ts_framework_entry(
+            "h", _java_item("h", attrs=[dec], visibility="public")), dec
+
+
+def test_ts_class_stereotype_promotes_public_methods_only():
+    from core.inventory.reachability import _ts_framework_entry
+    for st in ("Controller('u')", "Injectable()", "Component({})",
+               "Resolver()", "Entity()", "Directive()"):
+        assert _ts_framework_entry(
+            "m", _java_item("m", class_attrs=[st], visibility="public")), st
+    # TS members default to public; a private member is not container-dispatched.
+    assert not _ts_framework_entry(
+        "helper", _java_item("helper", class_attrs=["Injectable()"], visibility="private"))
+
+
+def test_ts_plain_method_and_stale_metadata_not_entries():
+    from core.inventory.reachability import _ts_framework_entry
+    # plain public method of a non-stereotype class → not an entry.
+    assert not _ts_framework_entry("dead", _java_item("dead", visibility="public"))
+    # graceful on missing metadata (degrade to 1-hop, no crash).
+    assert _ts_framework_entry("x", {"name": "x", "kind": "function"}) is False

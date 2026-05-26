@@ -51,7 +51,9 @@ class TestLanguageDetection:
 
     def test_typescript(self):
         assert detect_language("baz.ts") == "typescript"
-        assert detect_language("baz.tsx") == "typescript"
+        # .tsx is its own language (needs tree-sitter-typescript's tsx grammar,
+        # which parses JSX; the plain typescript grammar errors on JSX).
+        assert detect_language("baz.tsx") == "tsx"
 
     def test_c(self):
         assert detect_language("main.c") == "c"
@@ -1178,3 +1180,108 @@ class TestJavaFrameworkEntries:
         assert verdict("Ctl.java", "bg") == "not_called"       # @Async is not an entry
         assert verdict("Ctl.java", "wr") == "not_called"       # @Transactional is not an entry
         assert verdict("Ctl.java", "dead") == "not_called"     # plain uncalled
+
+
+class TestTypeScriptCoverage:
+    """End-to-end TypeScript coverage. Typed TS was parsed with the JS grammar,
+    which errors on type annotations / decorators → ZERO functions extracted
+    (the whole TS ecosystem was invisible to the inventory + reachability).
+    Switching to tree-sitter-typescript fixes extraction; class methods extract
+    (property_identifier / type_identifier names); decorators are captured; and
+    NestJS / Angular / TypeORM dispatch decorators + class stereotypes promote
+    methods to framework entries. All needs tree-sitter-typescript and skips
+    without it."""
+
+    _FILES = {
+        "users.controller.ts": (
+            "import { Controller, Get, Post } from '@nestjs/common';\n"
+            "@Controller('users')\nexport class UsersController {\n"
+            "  @Get() findAll(): string { return 'all'; }\n"
+            "  @Post() create(): void {}\n"
+            "  private deadHelper(): void {}\n}\n"),
+        "users.service.ts": (
+            "import { Injectable } from '@nestjs/common';\n"
+            "@Injectable()\nexport class UsersService {\n"
+            "  findOne(): string { return 'one'; }\n}\n"),
+        "user.entity.ts": (
+            "import { Entity, Column } from 'typeorm';\n"
+            "@Entity()\nexport class User {\n"
+            "  getName(): string { return this.name; }\n}\n"),
+        "orphan.ts": "function reallyDead(): number { return 9; }\n",
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_typed_ts_extracts_functions(self, tmp_path):
+        pytest.importorskip("tree_sitter_typescript")
+        inv = self._build(tmp_path)
+        names = {it["name"] for f in inv["files"] for it in f["items"]}
+        # class methods + top-level fn extracted (was 0 under the JS grammar).
+        assert {"findAll", "create", "findOne", "getName", "reallyDead"} <= names
+
+    def test_ts_decorators_captured(self, tmp_path):
+        pytest.importorskip("tree_sitter_typescript")
+        inv = self._build(tmp_path)
+        meta = {}
+        for f in inv["files"]:
+            for it in f["items"]:
+                meta[it["name"]] = it.get("metadata") or {}
+        # method decorator on attributes, class decorator on class_attributes.
+        assert any(a.startswith("Get") for a in meta["findAll"]["attributes"])
+        assert any(a.startswith("Controller") for a in meta["findAll"]["class_attributes"])
+        assert any(a.startswith("Injectable") for a in meta["findOne"]["class_attributes"])
+
+    def test_ts_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_typescript")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                if f["path"] != rel:
+                    continue
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        m = rel.rsplit(".", 1)[0]
+                        return classify_reachability(
+                            inv, rel, name, int(it.get("line_start") or 0), m)
+            return None
+
+        assert verdict("users.controller.ts", "findAll") == "reachable"   # @Get
+        assert verdict("users.controller.ts", "create") == "reachable"    # @Post
+        assert verdict("users.service.ts", "findOne") == "reachable"      # @Injectable bean
+        assert verdict("user.entity.ts", "getName") == "reachable"        # @Entity accessor
+        # over-fire controls — entries only grow the set:
+        assert verdict("users.controller.ts", "deadHelper") == "not_called"  # private
+        assert verdict("orphan.ts", "reallyDead") == "not_called"            # uncalled
+
+    def test_ts_intra_class_this_method_resolves(self, tmp_path):
+        # A private helper reached only via this.helper() from a framework
+        # entry must resolve (class-qualified 1-hop), not read not_called.
+        pytest.importorskip("tree_sitter_typescript")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "svc.ts").write_text(
+            "@Injectable()\nexport class Svc {\n"
+            "  handle() { return this.step(); }\n"        # public bean entry
+            "  private step() { return this.deep(); }\n"  # via this.
+            "  private deep() { return 1; }\n"            # via this. (transitive)
+            "  private orphan() { return 2; }\n}\n",       # genuinely uncalled
+            encoding="utf-8")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "svc")
+            return None
+
+        assert verdict("handle") == "reachable"   # @Injectable public method
+        assert verdict("step") == "called"        # via this.step()
+        assert verdict("deep") == "called"        # via this.deep() (transitive)
+        assert verdict("orphan") == "not_called"  # genuinely uncalled control
