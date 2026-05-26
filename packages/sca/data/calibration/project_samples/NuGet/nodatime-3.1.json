@@ -1,0 +1,79 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-26T18:55:20Z",
+    "git_ref": "3.1.9",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of nodatime-3.1",
+    "project_license": "Apache-2.0",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/nodatime/nodatime.git@3.1.9. Project source not redistributed.",
+    "url": "https://github.com/nodatime/nodatime.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44788"
+        ],
+        "fixed_versions": [],
+        "id": "GHSA-6c8g-7p36-r338",
+        "modified": "2026-05-09T00:01:26.723108+00:00",
+        "published": "2026-05-08T23:50:40+00:00",
+        "references": [
+          "https://github.com/adamhathcock/sharpcompress/security/advisories/GHSA-6c8g-7p36-r338",
+          "https://github.com/adamhathcock/sharpcompress"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:L"
+        },
+        "summary": "SharpCompress has directory traversal via directory entries in WriteToDirectory (zip slip variant)"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "SharpCompress",
+      "dep_version": "0.29.0",
+      "ecosystem": "NuGet",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:SharpCompress:0.29.0:GHSA-6c8g-7p36-r338",
+      "in_kev": false,
+      "purl": "pkg:nuget/SharpCompress@0.29.0",
+      "raptor_risk_estimate": 17.423913187500002,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/NodaTime.TzdbCompiler/Tzdb/FileSource.cs:4"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 17.423913187500002,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    }
+  ]
+}

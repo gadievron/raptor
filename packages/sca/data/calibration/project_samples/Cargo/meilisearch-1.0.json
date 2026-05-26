@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-22T13:10:00Z",
+    "fetched_at": "2026-05-26T18:54:04Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -42,7 +42,7 @@
       "finding_id": "sca:vuln:Cargo:actix-http:3.2.2:GHSA-xhj4-vrgc-hr34",
       "in_kev": false,
       "purl": "pkg:cargo/actix-http@3.2.2",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -52,7 +52,9 @@
         "evidence": [
           "meilisearch/src/lib.rs:24",
           "meilisearch/src/extractors/query_parameters.rs:5",
-          "meilisearch/src/extractors/payload.rs:3"
+          "meilisearch/src/extractors/payload.rs:3",
+          "meilisearch/tests/common/encoder.rs:2",
+          "meilisearch/tests/common/server.rs:5"
         ],
         "verdict": "imported"
       },
@@ -61,10 +63,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -106,7 +108,7 @@
       "finding_id": "sca:vuln:Cargo:adler:1.0.2:RUSTSEC-2025-0056",
       "in_kev": false,
       "purl": "pkg:cargo/adler@1.0.2",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -121,13 +123,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -166,7 +168,7 @@
       "finding_id": "sca:vuln:Cargo:atomic-polyfill:0.1.11:RUSTSEC-2023-0089",
       "in_kev": false,
       "purl": "pkg:cargo/atomic-polyfill@0.1.11",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -181,13 +183,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -228,7 +230,7 @@
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:GHSA-g98v-hv3f-hcfr",
       "in_kev": false,
       "purl": "pkg:cargo/atty@0.2.14",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -243,13 +245,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -292,7 +294,7 @@
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2021-0145",
       "in_kev": false,
       "purl": "pkg:cargo/atty@0.2.14",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -307,13 +309,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -352,7 +354,7 @@
       "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2024-0375",
       "in_kev": false,
       "purl": "pkg:cargo/atty@0.2.14",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -367,13 +369,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -412,7 +414,7 @@
       "finding_id": "sca:vuln:Cargo:bincode:1.3.3:RUSTSEC-2025-0141",
       "in_kev": false,
       "purl": "pkg:cargo/bincode@1.3.3",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -427,13 +429,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -478,36 +480,37 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.3.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.3.0",
-      "raptor_risk_estimate": 11.010087578597243,
+      "raptor_risk_estimate": 14.507134721023911,
       "reachability": {
         "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "crate referenced only by test/example/bench code"
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
           "meilisearch/tests/common/encoder.rs:4"
         ],
-        "verdict": "not_reachable"
+        "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36310772999999996,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9490344944822535,
+        "final": 14.507134721023911,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": "no",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -540,7 +543,7 @@
       "finding_id": "sca:vuln:Cargo:encoding:0.2.33:RUSTSEC-2021-0153",
       "in_kev": false,
       "purl": "pkg:cargo/encoding@0.2.33",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -555,13 +558,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -600,7 +603,7 @@
       "finding_id": "sca:vuln:Cargo:fxhash:0.2.1:RUSTSEC-2025-0057",
       "in_kev": false,
       "purl": "pkg:cargo/fxhash@0.2.1",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -615,13 +618,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -665,7 +668,7 @@
       "finding_id": "sca:vuln:Cargo:git2:0.15.0:GHSA-j39j-6gw9-jw6h",
       "in_kev": false,
       "purl": "pkg:cargo/git2@0.15.0",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -680,13 +683,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -727,7 +730,7 @@
       "dep_name": "git2",
       "dep_version": "0.15.0",
       "ecosystem": "Cargo",
-      "epss": 0.00121,
+      "epss": 0.00128,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -738,7 +741,7 @@
       "finding_id": "sca:vuln:Cargo:git2:0.15.0:GHSA-m4ch-rfv5-x5g3",
       "in_kev": false,
       "purl": "pkg:cargo/git2@0.15.0",
-      "raptor_risk_estimate": 7.1733480997796795,
+      "raptor_risk_estimate": 5.828768103127289,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -753,13 +756,13 @@
         "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36368607,
+        "epss_multiplier": 0.39995318399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.021343669845775,
+        "final": 5.828768103127289,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -802,7 +805,7 @@
       "finding_id": "sca:vuln:Cargo:git2:0.15.0:RUSTSEC-2026-0008",
       "in_kev": false,
       "purl": "pkg:cargo/git2@0.15.0",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -817,13 +820,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -868,7 +871,7 @@
       "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-8r5v-vm4m-4g25",
       "in_kev": false,
       "purl": "pkg:cargo/h2@0.3.15",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -883,13 +886,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -934,7 +937,7 @@
       "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-f8vr-r385-rh5r",
       "in_kev": false,
       "purl": "pkg:cargo/h2@0.3.15",
-      "raptor_risk_estimate": 13.384406616305636,
+      "raptor_risk_estimate": 13.15100988020489,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -949,19 +952,20 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36480306,
+        "epss_multiplier": 0.400922754,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9628033741740483,
+        "final": 13.15100988020489,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
-        "ssvc_automatable_multiplier": 1.0,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": "yes",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1003,7 +1007,7 @@
       "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-q6cp-qfwq-4gcv",
       "in_kev": false,
       "purl": "pkg:cargo/h2@0.3.15",
-      "raptor_risk_estimate": 9.938726177193747,
+      "raptor_risk_estimate": 7.433802997518186,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1018,13 +1022,13 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.957108324035622,
+        "final": 7.433802997518186,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1067,7 +1071,7 @@
       "finding_id": "sca:vuln:Cargo:h2:0.3.15:RUSTSEC-2024-0003",
       "in_kev": false,
       "purl": "pkg:cargo/h2@0.3.15",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1082,13 +1086,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1131,7 +1135,7 @@
       "finding_id": "sca:vuln:Cargo:h2:0.3.15:RUSTSEC-2024-0332",
       "in_kev": false,
       "purl": "pkg:cargo/h2@0.3.15",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1146,13 +1150,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1196,7 +1200,7 @@
       "finding_id": "sca:vuln:Cargo:idna:0.3.0:GHSA-h97m-ww89-6jmq",
       "in_kev": false,
       "purl": "pkg:cargo/idna@0.3.0",
-      "raptor_risk_estimate": 11.032781642277257,
+      "raptor_risk_estimate": 9.85954628618924,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1211,19 +1215,20 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36385617,
+        "epss_multiplier": 0.400070553,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9551130634431795,
+        "final": 9.85954628618924,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": "no",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1257,7 +1262,7 @@
       "finding_id": "sca:vuln:Cargo:instant:0.1.12:RUSTSEC-2024-0384",
       "in_kev": false,
       "purl": "pkg:cargo/instant@0.1.12",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1272,13 +1277,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1321,7 +1326,7 @@
       "finding_id": "sca:vuln:Cargo:jsonwebtoken:8.2.0:GHSA-h395-gr6q-cpjc",
       "in_kev": false,
       "purl": "pkg:cargo/jsonwebtoken@8.2.0",
-      "raptor_risk_estimate": 20.732392503556472,
+      "raptor_risk_estimate": 19.314177149279327,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1329,7 +1334,8 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/src/extractors/authentication/mod.rs:129"
+          "meilisearch/src/extractors/authentication/mod.rs:129",
+          "meilisearch/tests/auth/tenant_token.rs:17"
         ],
         "verdict": "imported"
       },
@@ -1338,19 +1344,20 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.3632268,
+        "epss_multiplier": 0.39950411999999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.589370618,
+        "final": 19.314177149279327,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": "yes",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1391,7 +1398,7 @@
       "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:GHSA-22q8-ghmq-63vf",
       "in_kev": false,
       "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
-      "raptor_risk_estimate": 16.126989646012497,
+      "raptor_risk_estimate": 12.062397316727623,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1406,13 +1413,13 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.288892752208747,
+        "final": 12.062397316727623,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1453,7 +1460,7 @@
       "dep_name": "libgit2-sys",
       "dep_version": "0.14.1+1.5.0",
       "ecosystem": "Cargo",
-      "epss": 0.00121,
+      "epss": 0.00128,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1464,7 +1471,7 @@
       "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:GHSA-m4ch-rfv5-x5g3",
       "in_kev": false,
       "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
-      "raptor_risk_estimate": 7.1733480997796795,
+      "raptor_risk_estimate": 5.828768103127289,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1479,13 +1486,13 @@
         "cvss_base": 68.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36368607,
+        "epss_multiplier": 0.39995318399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.021343669845775,
+        "final": 5.828768103127289,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1532,7 +1539,7 @@
       "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:RUSTSEC-2024-0013",
       "in_kev": false,
       "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
-      "raptor_risk_estimate": 16.126989646012497,
+      "raptor_risk_estimate": 12.062397316727623,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1547,13 +1554,13 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.288892752208747,
+        "final": 12.062397316727623,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1595,7 +1602,7 @@
       "finding_id": "sca:vuln:Cargo:mimalloc:0.1.34:GHSA-g23h-7vf9-xc25",
       "in_kev": false,
       "purl": "pkg:cargo/mimalloc@0.1.34",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1610,13 +1617,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1659,7 +1666,7 @@
       "finding_id": "sca:vuln:Cargo:mimalloc:0.1.34:RUSTSEC-2022-0094",
       "in_kev": false,
       "purl": "pkg:cargo/mimalloc@0.1.34",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1674,13 +1681,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1729,7 +1736,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.5:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.5",
-      "raptor_risk_estimate": 13.959893095010312,
+      "raptor_risk_estimate": 13.254622968017229,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1744,19 +1751,20 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36831279,
+        "epss_multiplier": 0.404081511,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.608702834911757,
+        "final": 13.254622968017229,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
-        "ssvc_automatable_multiplier": 1.0,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": "yes",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1789,7 +1797,7 @@
       "finding_id": "sca:vuln:Cargo:paste:1.0.11:RUSTSEC-2024-0436",
       "in_kev": false,
       "purl": "pkg:cargo/paste@1.0.11",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1804,13 +1812,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1849,7 +1857,7 @@
       "finding_id": "sca:vuln:Cargo:proc-macro-error:1.0.4:RUSTSEC-2024-0370",
       "in_kev": false,
       "purl": "pkg:cargo/proc-macro-error@1.0.4",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1864,13 +1872,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1915,7 +1923,7 @@
       "finding_id": "sca:vuln:Cargo:protobuf:2.28.0:GHSA-2gh3-rmm4-6rq5",
       "in_kev": false,
       "purl": "pkg:cargo/protobuf@2.28.0",
-      "raptor_risk_estimate": 4.223168939713874,
+      "raptor_risk_estimate": 3.4307432094999784,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1930,13 +1938,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36399224999999996,
+        "epss_multiplier": 0.400193025,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9562182577997116,
+        "final": 3.4307432094999784,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1980,7 +1988,7 @@
       "finding_id": "sca:vuln:Cargo:rand:0.8.5:GHSA-cq8v-f236-94qc",
       "in_kev": false,
       "purl": "pkg:cargo/rand@0.8.5",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1998,10 +2006,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2049,7 +2057,7 @@
       "finding_id": "sca:vuln:Cargo:rand:0.8.5:RUSTSEC-2026-0097",
       "in_kev": false,
       "purl": "pkg:cargo/rand@0.8.5",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2067,10 +2075,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2116,7 +2124,7 @@
       "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:GHSA-mc8h-8q98-g5hr",
       "in_kev": false,
       "purl": "pkg:cargo/remove_dir_all@0.5.3",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2131,13 +2139,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2180,7 +2188,7 @@
       "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:RUSTSEC-2023-0018",
       "in_kev": false,
       "purl": "pkg:cargo/remove_dir_all@0.5.3",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2195,13 +2203,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2248,7 +2256,7 @@
       "finding_id": "sca:vuln:Cargo:ring:0.16.20:GHSA-4p46-pwfr-66x6",
       "in_kev": false,
       "purl": "pkg:cargo/ring@0.16.20",
-      "raptor_risk_estimate": 4.228958053009994,
+      "raptor_risk_estimate": 3.4345929099504815,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2263,13 +2271,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36449121,
+        "epss_multiplier": 0.400642089,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.9602706371069956,
+        "final": 3.4345929099504815,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2310,7 +2318,7 @@
       "finding_id": "sca:vuln:Cargo:ring:0.16.20:RUSTSEC-2025-0010",
       "in_kev": false,
       "purl": "pkg:cargo/ring@0.16.20",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2325,13 +2333,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2382,7 +2390,7 @@
       "finding_id": "sca:vuln:Cargo:rustix:0.36.6:GHSA-c827-hfw6-qwvm",
       "in_kev": false,
       "purl": "pkg:cargo/rustix@0.36.6",
-      "raptor_risk_estimate": 11.021090760987551,
+      "raptor_risk_estimate": 9.850994539568957,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2397,19 +2405,20 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36347060999999997,
+        "epss_multiplier": 0.399723549,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.796970229078634,
+        "final": 9.850994539568957,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": "no",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -2452,7 +2461,7 @@
       "finding_id": "sca:vuln:Cargo:rustls:0.20.7:RUSTSEC-2024-0336",
       "in_kev": false,
       "purl": "pkg:cargo/rustls@0.20.7",
-      "raptor_risk_estimate": 12.295643529374997,
+      "raptor_risk_estimate": 9.466194798506248,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2470,10 +2479,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36330618,
+        "epss_multiplier": 0.399575562,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.606950470562497,
+        "final": 9.466194798506248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2515,7 +2524,7 @@
       "finding_id": "sca:vuln:Cargo:rustls-pemfile:1.0.2:RUSTSEC-2025-0134",
       "in_kev": false,
       "purl": "pkg:cargo/rustls-pemfile@1.0.2",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2532,10 +2541,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2580,7 +2589,7 @@
       "finding_id": "sca:vuln:Cargo:spin:0.9.4:GHSA-2qv5-7mw5-j3cg",
       "in_kev": false,
       "purl": "pkg:cargo/spin@0.9.4",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2595,13 +2604,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2644,7 +2653,7 @@
       "finding_id": "sca:vuln:Cargo:spin:0.9.4:RUSTSEC-2023-0031",
       "in_kev": false,
       "purl": "pkg:cargo/spin@0.9.4",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2659,13 +2668,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2714,7 +2723,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-gchp-q4r4-x4ff",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 23.12287688724029,
+      "raptor_risk_estimate": 19.58413141700824,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2731,19 +2740,20 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36309639,
+        "epss_multiplier": 0.399386751,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.29013884749125,
+        "final": 19.58413141700824,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": "yes",
-      "ssvc_exploitation": "poc"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -2786,7 +2796,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-j4xf-2g29-59ph",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 10.6500709891875,
+      "raptor_risk_estimate": 8.200158848188124,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2803,10 +2813,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36309639,
+        "epss_multiplier": 0.399386751,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.455049692431248,
+        "final": 8.200158848188124,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2854,7 +2864,7 @@
       "finding_id": "sca:vuln:Cargo:time:0.3.17:GHSA-r6v5-fh4h-64xc",
       "in_kev": false,
       "purl": "pkg:cargo/time@0.3.17",
-      "raptor_risk_estimate": 6.553787495999999,
+      "raptor_risk_estimate": 5.046187122479998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2862,12 +2872,12 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch/src/routes/tasks.rs:17",
-          "meilisearch/src/routes/tasks.rs:18",
-          "meilisearch/src/routes/tasks.rs:19",
-          "meilisearch/src/routes/mod.rs:13",
-          "meilisearch/src/routes/api_key.rs:13",
-          "... (+32 more)"
+          "meilisearch-auth/src/lib.rs:16",
+          "meilisearch-auth/src/store.rs:17",
+          "dump/src/lib.rs:12",
+          "dump/src/lib.rs:214",
+          "dump/src/writer.rs:11",
+          "... (+42 more)"
         ],
         "verdict": "imported"
       },
@@ -2876,10 +2886,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.36309072,
+        "epss_multiplier": 0.399381648,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.587651247199999,
+        "final": 5.046187122479998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2926,7 +2936,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.1:GHSA-4q83-7cq4-p6wg",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.1",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2939,7 +2949,7 @@
           "meilisearch/src/routes/indexes/documents.rs:27",
           "meilisearch/src/routes/indexes/documents.rs:28",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "... (+1 more)"
+          "... (+4 more)"
         ],
         "verdict": "imported"
       },
@@ -2948,10 +2958,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2998,7 +3008,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.1:GHSA-rr8g-9fpq-6wmg",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.1",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3011,7 +3021,7 @@
           "meilisearch/src/routes/indexes/documents.rs:27",
           "meilisearch/src/routes/indexes/documents.rs:28",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "... (+1 more)"
+          "... (+4 more)"
         ],
         "verdict": "imported"
       },
@@ -3020,10 +3030,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3071,7 +3081,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.1:RUSTSEC-2023-0005",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.1",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3084,7 +3094,7 @@
           "meilisearch/src/routes/indexes/documents.rs:27",
           "meilisearch/src/routes/indexes/documents.rs:28",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "... (+1 more)"
+          "... (+4 more)"
         ],
         "verdict": "imported"
       },
@@ -3093,10 +3103,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3145,7 +3155,7 @@
       "finding_id": "sca:vuln:Cargo:tokio:1.24.1:RUSTSEC-2025-0023",
       "in_kev": false,
       "purl": "pkg:cargo/tokio@1.24.1",
-      "raptor_risk_estimate": 11.669324999999997,
+      "raptor_risk_estimate": 8.268975749999997,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3158,7 +3168,7 @@
           "meilisearch/src/routes/indexes/documents.rs:27",
           "meilisearch/src/routes/indexes/documents.rs:28",
           "meilisearch/src/analytics/segment_analytics.rs:22",
-          "... (+1 more)"
+          "... (+4 more)"
         ],
         "verdict": "imported"
       },
@@ -3167,10 +3177,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.168527499999998,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3221,7 +3231,7 @@
       "finding_id": "sca:vuln:Cargo:webpki:0.22.0:GHSA-8qv2-5vq6-g2g7",
       "in_kev": false,
       "purl": "pkg:cargo/webpki@0.22.0",
-      "raptor_risk_estimate": 14.064235156406248,
+      "raptor_risk_estimate": 10.51953254365781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3236,13 +3246,13 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.844964609484371,
+        "final": 10.51953254365781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -3287,7 +3297,7 @@
       "finding_id": "sca:vuln:Cargo:webpki:0.22.0:RUSTSEC-2023-0052",
       "in_kev": false,
       "purl": "pkg:cargo/webpki@0.22.0",
-      "raptor_risk_estimate": 14.064235156406248,
+      "raptor_risk_estimate": 10.51953254365781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3302,13 +3312,13 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.844964609484371,
+        "final": 10.51953254365781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -3347,7 +3357,7 @@
       "finding_id": "sca:vuln:Cargo:yaml-rust:0.4.5:RUSTSEC-2024-0320",
       "in_kev": false,
       "purl": "pkg:cargo/yaml-rust@0.4.5",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3362,13 +3372,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -3418,7 +3428,7 @@
       "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:GHSA-3mv5-343c-w2qg",
       "in_kev": false,
       "purl": "pkg:cargo/zerocopy@0.3.0",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3433,13 +3443,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -3489,7 +3499,7 @@
       "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:GHSA-rjhf-4mh8-9xjq",
       "in_kev": false,
       "purl": "pkg:cargo/zerocopy@0.3.0",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3504,13 +3514,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -3558,7 +3568,7 @@
       "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:RUSTSEC-2023-0074",
       "in_kev": false,
       "purl": "pkg:cargo/zerocopy@0.3.0",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3573,13 +3583,13 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6465,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.250647791724999,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.64279,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },

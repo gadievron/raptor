@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T21:10:57Z",
+    "fetched_at": "2026-05-26T18:50:20Z",
     "git_ref": "v0.13.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.13",
@@ -14,6 +14,7 @@
         "aliases": [],
         "fixed_versions": [],
         "id": "RUSTSEC-2025-0056",
+        "informational": "unmaintained",
         "modified": "2025-09-05T09:05:48+00:00",
         "published": "2025-09-05T12:00:00+00:00",
         "references": [
@@ -22,8 +23,7 @@
           "https://github.com/jonas-schievink/adler"
         ],
         "severity": null,
-        "summary": "adler crate is unmaintained, use adler2 instead",
-        "informational": "unmaintained"
+        "summary": "adler crate is unmaintained, use adler2 instead"
       },
       "cvss_score": null,
       "dep_name": "adler",
@@ -40,7 +40,7 @@
       "finding_id": "sca:vuln:Cargo:adler:1.0.2:RUSTSEC-2025-0056",
       "in_kev": false,
       "purl": "pkg:cargo/adler@1.0.2",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -52,18 +52,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6499999999999999,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.738659062499998,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -99,7 +103,7 @@
       "finding_id": "sca:vuln:Cargo:anstream:0.6.5:GHSA-2rxc-gjrp-vjhx",
       "in_kev": false,
       "purl": "pkg:cargo/anstream@0.6.5",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -111,18 +115,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6499999999999999,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.738659062499998,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -133,6 +141,7 @@
           "0.6.8"
         ],
         "id": "RUSTSEC-2024-0404",
+        "informational": "unsound",
         "modified": "2025-10-28T06:29:22.585074+00:00",
         "published": "2024-09-08T12:00:00+00:00",
         "references": [
@@ -141,8 +150,7 @@
           "https://github.com/rust-cli/anstyle/issues/156"
         ],
         "severity": null,
-        "summary": "Unsoundness in anstream",
-        "informational": "unsound"
+        "summary": "Unsoundness in anstream"
       },
       "cvss_score": null,
       "dep_name": "anstream",
@@ -159,7 +167,7 @@
       "finding_id": "sca:vuln:Cargo:anstream:0.6.5:RUSTSEC-2024-0404",
       "in_kev": false,
       "purl": "pkg:cargo/anstream@0.6.5",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -171,18 +179,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6499999999999999,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.738659062499998,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -221,7 +233,7 @@
       "finding_id": "sca:vuln:Cargo:bytes:1.5.0:GHSA-434x-w66g-qw3r",
       "in_kev": false,
       "purl": "pkg:cargo/bytes@1.5.0",
-      "raptor_risk_estimate": 11.010087578597243,
+      "raptor_risk_estimate": 9.842945836867514,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -233,20 +245,23 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.300133,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.6497860929312496,
+        "final": 9.842945836867514,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_exploitation": "poc",
-      "ssvc_automatable": "no"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -289,7 +304,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.10:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.10",
-      "raptor_risk_estimate": 13.959893095010312,
+      "raptor_risk_estimate": 13.254622968017229,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -302,25 +317,29 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.30655899999999997,
+        "epss_multiplier": 0.404081511,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.059779038940624,
+        "final": 13.254622968017229,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_exploitation": "poc",
-      "ssvc_automatable": "yes"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
         "aliases": [],
         "fixed_versions": [],
         "id": "RUSTSEC-2025-0059",
+        "informational": "unmaintained",
         "modified": "2025-09-08T09:09:54+00:00",
         "published": "2025-09-08T12:00:00+00:00",
         "references": [
@@ -329,8 +348,7 @@
           "https://github.com/rustsec/advisory-db/issues/1998"
         ],
         "severity": null,
-        "summary": "servo-fontconfig crate is unmaintained",
-        "informational": "unmaintained"
+        "summary": "servo-fontconfig crate is unmaintained"
       },
       "cvss_score": null,
       "dep_name": "servo-fontconfig",
@@ -347,7 +365,7 @@
       "finding_id": "sca:vuln:Cargo:servo-fontconfig:0.5.1:RUSTSEC-2025-0059",
       "in_kev": false,
       "purl": "pkg:cargo/servo-fontconfig@0.5.1",
-      "raptor_risk_estimate": 7.5009254167499995,
+      "raptor_risk_estimate": 5.610417356617499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -359,18 +377,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.6499999999999999,
+        "epss_multiplier": 0.65445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.738659062499998,
+        "final": 5.610417356617499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

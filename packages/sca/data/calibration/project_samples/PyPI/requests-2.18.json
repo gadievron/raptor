@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T19:54:43Z",
+    "fetched_at": "2026-05-26T18:41:21Z",
     "git_ref": "v2.18.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests-2.18",
@@ -38,7 +38,7 @@
       "dep_name": "pytest",
       "dep_version": "2.8.0",
       "ecosystem": "PyPI",
-      "epss": 6e-05,
+      "epss": 9e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -49,7 +49,7 @@
       "finding_id": "sca:vuln:PyPI:pytest:2.8.0:GHSA-6w46-j5rx-g56g",
       "in_kev": false,
       "purl": "pkg:pypi/pytest@2.8.0",
-      "raptor_risk_estimate": 11.1396989037,
+      "raptor_risk_estimate": 12.253929769994999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -64,31 +64,34 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 68.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300042,
+        "epss_multiplier": 0.399345927,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.20678877,
+        "final": 12.253929769994999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
         "aliases": [
           "BIT-setuptools-2025-47273",
           "CVE-2025-47273",
-          "ECHO-2d75-a206-3684",
           "PYSEC-2025-49"
         ],
         "fixed_versions": [
           "78.1.1"
         ],
         "id": "GHSA-5rjg-fvgr-3xxf",
-        "modified": "2026-05-07T12:11:19.939111+00:00",
+        "modified": "2026-05-11T00:26:34.671259+00:00",
         "published": "2025-05-19T16:52:43+00:00",
         "references": [
           "https://github.com/pypa/setuptools/security/advisories/GHSA-5rjg-fvgr-3xxf",
@@ -104,7 +107,7 @@
       "dep_name": "setuptools",
       "dep_version": "18.5",
       "ecosystem": "PyPI",
-      "epss": 0.00487,
+      "epss": 0.0012,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -115,7 +118,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@18.5",
-      "raptor_risk_estimate": 20.877057053298785,
+      "raptor_risk_estimate": 27.61987666548209,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -132,20 +135,23 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.303409,
+        "epss_multiplier": 0.39991235999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.845665562499999,
+        "final": 27.61987666548209,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_exploitation": "poc",
-      "ssvc_automatable": "yes"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -177,7 +183,7 @@
       "dep_name": "setuptools",
       "dep_version": "18.5",
       "ecosystem": "PyPI",
-      "epss": 0.07336,
+      "epss": 0.07521,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -188,7 +194,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-cx63-2mw6-8hw5",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@18.5",
-      "raptor_risk_estimate": 23.13411334266648,
+      "raptor_risk_estimate": 25.02583553558943,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -206,19 +212,22 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 88.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.351352,
+        "epss_multiplier": 0.437679663,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.95218792,
+        "final": 25.02583553558943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_exploitation": "poc",
-      "ssvc_automatable": "no"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -262,7 +271,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:18.5:GHSA-r9hx-vwmv-q579",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@18.5",
-      "raptor_risk_estimate": 12.383722904062498,
+      "raptor_risk_estimate": 13.602406863656247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -280,17 +289,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.303591,
+        "epss_multiplier": 0.401917839,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.274657906249999,
+        "final": 13.602406863656247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

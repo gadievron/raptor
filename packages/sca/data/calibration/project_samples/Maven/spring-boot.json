@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T19:53:40Z",
+    "fetched_at": "2026-05-26T18:37:55Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -48,7 +48,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-cm59-pr5q-cw85",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 12.86490236265,
+      "raptor_risk_estimate": 14.133750626384998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -56,26 +56,30 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "SpringBootApplication.java:27",
+          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 78.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.303094,
+        "epss_multiplier": 0.401555526,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.668151064999998,
+        "final": 14.133750626384998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -117,7 +121,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-rc42-6c7j-7h5r",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 12.030516736125,
+      "raptor_risk_estimate": 13.2189998125125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -125,26 +129,30 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "SpringBootApplication.java:27",
+          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 73.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.30273,
+        "epss_multiplier": 0.40129017,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.972304612499999,
+        "final": 13.2189998125125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -174,7 +182,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 0.00016,
+      "epss": 7e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -185,7 +193,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-wwpq-f5c3-7hvx",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 11.469128117999999,
+      "raptor_risk_estimate": 12.614017087087499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -193,26 +201,30 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "SpringBootApplication.java:27",
+          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 70.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300112,
+        "epss_multiplier": 0.399335721,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.479787799999997,
+        "final": 12.614017087087499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -254,7 +266,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4gc7-5j7h-4qph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 8.886904928174998,
+      "raptor_risk_estimate": 9.734534185357498,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -262,26 +274,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 53.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.310598,
+        "epss_multiplier": 0.407025942,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.428339417499998,
+        "final": 9.734534185357498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -324,7 +340,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4wp7-92pw-q264",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 5.084499495637499,
+      "raptor_risk_estimate": 5.59163279607375,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -332,26 +348,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 31.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300581,
+        "epss_multiplier": 0.399723549,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.204752463749999,
+        "final": 5.59163279607375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "low"
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -383,7 +403,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.2051,
+      "epss": 0.20519,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -394,7 +414,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-g5mm-vmx4-3rg7",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 16.221028471874998,
+      "raptor_risk_estimate": 17.05753621659375,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -402,26 +422,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44357,
+        "epss_multiplier": 0.504008457,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.012072187499998,
+        "final": 17.05753621659375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -454,7 +478,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00104,
+      "epss": 0.00141,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -465,7 +489,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-4h8f-2wvx-gg5w",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.6801207429,
+      "raptor_risk_estimate": 10.65001977547125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -480,17 +504,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300728,
+        "epss_multiplier": 0.400019523,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.00650709,
+        "final": 10.65001977547125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -530,7 +558,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-67mf-3cr5-8w23",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 6.563612471999999,
+      "raptor_risk_estimate": 7.2176812248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -544,18 +572,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300784,
+        "epss_multiplier": 0.39987153599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.786438999999999,
+        "final": 7.2176812248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -599,7 +631,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-8xfc-gm6g-vgpv",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 8.707499331262499,
+      "raptor_risk_estimate": 9.573069148136248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -614,17 +646,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 53.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.30133699999999997,
+        "epss_multiplier": 0.40027467299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.206851026249998,
+        "final": 9.573069148136248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -650,7 +686,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00062,
+      "epss": 0.00022,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -661,7 +697,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-c3fc-8qff-9hwx",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 6.5584952969999994,
+      "raptor_risk_estimate": 7.2093914013,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -675,18 +711,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300434,
+        "epss_multiplier": 0.399412266,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.7785421249999995,
+        "final": 7.2093914013,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -718,7 +758,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00075,
+      "epss": 0.00077,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -729,7 +769,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-m44j-cfrm-g8qc",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 8.691769135312498,
+      "raptor_risk_estimate": 9.559156061028748,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -744,17 +784,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 53.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300525,
+        "epss_multiplier": 0.399692931,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.187431031249998,
+        "final": 9.559156061028748,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -781,7 +825,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00018,
+      "epss": 0.00022,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -792,7 +836,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-p93r-85wp-75v3",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 6.553992183,
+      "raptor_risk_estimate": 7.2093914013,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -806,18 +850,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300126,
+        "epss_multiplier": 0.399412266,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.771592875,
+        "final": 7.2093914013,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -850,7 +898,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00102,
+      "epss": 0.00105,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -861,7 +909,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-v435-xc8x-wvr9",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.679818829575002,
+      "raptor_risk_estimate": 10.64512877960625,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -876,17 +924,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300714,
+        "epss_multiplier": 0.399835815,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.0061343575,
+        "final": 10.64512877960625,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -929,7 +981,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-4487-x383-qpph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 12.700923789374997,
+      "raptor_risk_estimate": 13.887887660437498,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -937,26 +989,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.315162,
+        "epss_multiplier": 0.41035309799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.666263937499998,
+        "final": 13.887887660437498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -999,7 +1055,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-8crv-49fr-2h6j",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 12.315024829687498,
+      "raptor_risk_estimate": 13.540578596718749,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1007,26 +1063,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.301085,
+        "epss_multiplier": 0.40009096499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.189845468749997,
+        "final": 13.540578596718749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1069,7 +1129,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-g8hw-794c-4j9g",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 23.40087371085,
+      "raptor_risk_estimate": 22.993670589764996,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1077,26 +1137,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.9369719999999999,
+        "epss_multiplier": 0.8636525879999999,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 24.945708285,
+        "final": 22.993670589764996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1140,7 +1204,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-pgf9-h69p-pcgf",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 14.50915639095,
+      "raptor_risk_estimate": 15.875665251854995,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1148,26 +1212,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 86.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.313426,
+        "epss_multiplier": 0.40908755399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.163279494999998,
+        "final": 15.875665251854995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1210,7 +1278,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-rcpf-vj53-7h2m",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 10.8428221785,
+      "raptor_risk_estimate": 11.88798871065,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1218,26 +1286,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 65.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.308232,
+        "epss_multiplier": 0.405301128,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.04082985,
+        "final": 11.88798871065,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -1277,7 +1349,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-wv88-pf73-x22p",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 11.291268110999999,
+      "raptor_risk_estimate": 11.4725712999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1285,26 +1357,30 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleSpringXmlApplication.java:24",
-          "SampleSimpleApplication.java:22",
-          "SampleSecureApplication.java:20"
+          "AutoConfigurations.java:25",
+          "AutoConfigurations.java:27",
+          "AutoConfigurationImportSelector.java:49"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.624142,
+        "epss_multiplier": 0.635599518,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.082203874999998,
+        "final": 11.4725712999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

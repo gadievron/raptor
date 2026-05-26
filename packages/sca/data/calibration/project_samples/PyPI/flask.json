@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T19:52:55Z",
+    "fetched_at": "2026-05-26T18:36:35Z",
     "git_ref": "3.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of flask",
@@ -9,6 +9,292 @@
     "url": "https://github.com/pallets/flask.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-32274"
+        ],
+        "fixed_versions": [
+          "26.3.1"
+        ],
+        "id": "GHSA-3936-cmfr-pm3m",
+        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "published": "2026-03-12T18:33:10+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-32274",
+          "https://github.com/psf/black/pull/5038",
+          "https://github.com/psf/black/commit/4937fe6cf241139ddbfc16b0bdbb5b422798909d",
+          "https://github.com/psf/black"
+        ],
+        "severity": null,
+        "summary": "Black: Arbitrary file writes from unsanitized user input in cache file name"
+      },
+      "cvss_score": null,
+      "dep_name": "black",
+      "dep_version": "23.7.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00023,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.7.0:GHSA-3936-cmfr-pm3m",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.7.0",
+      "raptor_risk_estimate": 4.914704909073764,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39941736899999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.914704909073764,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21503",
+          "PYSEC-2024-48"
+        ],
+        "fixed_versions": [
+          "24.3.0"
+        ],
+        "id": "GHSA-fj7x-q9j7-g6q6",
+        "modified": "2026-02-04T03:39:28.463485+00:00",
+        "published": "2024-03-19T06:30:52+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
+          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
+          "https://github.com/psf/black",
+          "https://github.com/psf/black/releases/tag/24.3.0",
+          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "black",
+      "dep_version": "23.7.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00081,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.7.0:GHSA-fj7x-q9j7-g6q6",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.7.0",
+      "raptor_risk_estimate": 18.81909990589183,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.7.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399713343,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 18.81909990589183,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-27205"
+        ],
+        "fixed_versions": [
+          "3.1.3"
+        ],
+        "id": "GHSA-68rp-wp8r-4726",
+        "modified": "2026-02-23T23:43:45.778179+00:00",
+        "published": "2026-02-19T20:45:41+00:00",
+        "references": [
+          "https://github.com/pallets/flask/security/advisories/GHSA-68rp-wp8r-4726",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-27205",
+          "https://github.com/pallets/flask/commit/089cb86dd22bff589a4eafb7ab8e42dc357623b4",
+          "https://github.com/pallets/flask",
+          "https://github.com/pallets/flask/releases/tag/3.1.3"
+        ],
+        "severity": null,
+        "summary": "Flask session does not add `Vary: Cookie` header when accessed in some ways"
+      },
+      "cvss_score": null,
+      "dep_name": "flask",
+      "dep_version": "2.2.2",
+      "ecosystem": "PyPI",
+      "epss": 0.00018,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:flask:2.2.2:GHSA-68rp-wp8r-4726",
+      "in_kev": false,
+      "purl": "pkg:pypi/flask@2.2.2",
+      "raptor_risk_estimate": 7.2090229647,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "examples/javascript/js_example/__init__.py:1",
+          "examples/javascript/js_example/views.py:1",
+          "examples/javascript/js_example/views.py:2",
+          "examples/javascript/js_example/views.py:3",
+          "examples/celery/src/task_app/__init__.py:3",
+          "... and 21 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399391854,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.2090229647,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-30861",
+          "PYSEC-2023-62"
+        ],
+        "fixed_versions": [
+          "2.3.2",
+          "2.2.5"
+        ],
+        "id": "GHSA-m2qf-hxjv-5gpq",
+        "modified": "2025-02-21T05:42:17.337040+00:00",
+        "published": "2023-05-01T19:22:20+00:00",
+        "references": [
+          "https://github.com/pallets/flask/security/advisories/GHSA-m2qf-hxjv-5gpq",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-30861",
+          "https://github.com/pallets/flask/commit/70f906c51ce49c485f1d355703e9cc3386b1cc2b",
+          "https://github.com/pallets/flask/commit/afd63b16170b7c047f5758eb910c416511e9c965",
+          "https://github.com/pallets/flask"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Flask vulnerable to possible disclosure of permanent session cookie due to missing Vary: Cookie header"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "flask",
+      "dep_version": "2.2.2",
+      "ecosystem": "PyPI",
+      "epss": 0.00185,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:flask:2.2.2:GHSA-m2qf-hxjv-5gpq",
+      "in_kev": false,
+      "purl": "pkg:pypi/flask@2.2.2",
+      "raptor_risk_estimate": 13.545759736406248,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "examples/javascript/js_example/__init__.py:1",
+          "examples/javascript/js_example/views.py:1",
+          "examples/javascript/js_example/views.py:2",
+          "examples/javascript/js_example/views.py:3",
+          "examples/celery/src/task_app/__init__.py:3",
+          "... and 21 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400244055,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.545759736406248,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -45,7 +331,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-cpwx-vrp4-4pq7",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 6.5645335634999995,
+      "raptor_risk_estimate": 7.218510207149999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -63,18 +349,22 @@
       },
       "risk_components": {
         "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300847,
+        "epss_multiplier": 0.399917463,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.787860437499999,
+        "final": 7.218510207149999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -105,7 +395,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.00423,
+      "epss": 0.00589,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -116,7 +406,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-gmj6-6f8f-6699",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 14.509970861100001,
+      "raptor_risk_estimate": 15.97555803657,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -135,17 +425,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 88.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.302961,
+        "epss_multiplier": 0.402305667,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.03058131,
+        "final": 15.97555803657,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -187,7 +481,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-h5c8-rqwp-cp95",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 8.866265222474999,
+      "raptor_risk_estimate": 9.748719200227498,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -206,17 +500,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 54.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.30105699999999996,
+        "epss_multiplier": 0.400070553,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.336006447499998,
+        "final": 9.748719200227498,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -247,7 +545,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.01147,
+      "epss": 0.0123,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -258,7 +556,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-h75v-3vvj-5mfj",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 9.003876292574999,
+      "raptor_risk_estimate": 9.882889993574999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -277,17 +575,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 54.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.308029,
+        "epss_multiplier": 0.40557668999999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.505896657499999,
+        "final": 9.882889993574999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -318,7 +620,7 @@
       "dep_name": "jinja2",
       "dep_version": "3.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.0042,
+      "epss": 0.00586,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -329,7 +631,7 @@
       "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-q2x7-8rv6-6q7h",
       "in_kev": false,
       "purl": "pkg:pypi/jinja2@3.1.2",
-      "raptor_risk_estimate": 12.860511826499998,
+      "raptor_risk_estimate": 14.159614875705,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -348,17 +650,545 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 78.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.30294,
+        "epss_multiplier": 0.402290358,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.662730649999999,
+        "final": 14.159614875705,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-27199"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-29vq-49wr-vm6x",
+        "modified": "2026-02-23T23:43:27.690386+00:00",
+        "published": "2026-02-19T20:32:45+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-29vq-49wr-vm6x",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-27199",
+          "https://github.com/pallets/werkzeug/commit/f407712fdc60a09c2b3f4fe7db557703e5d9338d",
+          "https://github.com/pallets/werkzeug",
+          "https://github.com/pallets/werkzeug/releases/tag/3.1.6"
+        ],
+        "severity": null,
+        "summary": " Werkzeug safe_join() allows Windows special device names"
+      },
+      "cvss_score": null,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.00027,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-29vq-49wr-vm6x",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 7.209851947049999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399437781,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.209851947049999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-34069"
+        ],
+        "fixed_versions": [
+          "3.0.3"
+        ],
+        "id": "GHSA-2g68-c3qc-8985",
+        "modified": "2026-02-04T04:19:36.666836+00:00",
+        "published": "2024-05-06T14:21:27+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-2g68-c3qc-8985",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-34069",
+          "https://github.com/pallets/werkzeug/commit/3386395b24c7371db11a5b8eaac0c91da5362692",
+          "https://github.com/pallets/werkzeug",
+          "https://lists.debian.org/debian-lts-announce/2025/02/msg00026.html"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.4365,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": [
+          "exploit_multi/http/werkzeug_debug_rce"
+        ]
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-2g68-c3qc-8985",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 35.505591034596044,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.62204595,
+        "exploit_evidence_multiplier": 1.5839,
+        "exposure_multiplier": 0.5,
+        "final": 35.505591034596044,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-21860"
+        ],
+        "fixed_versions": [
+          "3.1.5"
+        ],
+        "id": "GHSA-87hc-h4r5-73f7",
+        "modified": "2026-02-04T03:18:07.993642+00:00",
+        "published": "2026-01-08T19:51:21+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-87hc-h4r5-73f7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-21860",
+          "https://github.com/pallets/werkzeug/commit/7ae1d254e04a0c33e241ac1cca4783ce6c875ca3",
+          "https://github.com/pallets/werkzeug"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": " Werkzeug safe_join() allows Windows special device names with compound extensions"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.00034,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-87hc-h4r5-73f7",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 9.553908142207499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399473502,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.553908142207499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-49766"
+        ],
+        "fixed_versions": [
+          "3.0.6"
+        ],
+        "id": "GHSA-f9vj-2wh5-fj8j",
+        "modified": "2026-02-04T03:19:55.895802+00:00",
+        "published": "2024-10-25T19:43:41+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-f9vj-2wh5-fj8j",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-49766",
+          "https://github.com/pallets/werkzeug/commit/2767bcb10a7dd1c297d812cc5e6d11a474c1f092",
+          "https://github.com/pallets/werkzeug",
+          "https://github.com/pallets/werkzeug/releases/tag/3.0.6"
+        ],
+        "severity": null,
+        "summary": "Werkzeug safe_join not safe on Windows"
+      },
+      "cvss_score": null,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.01392,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-f9vj-2wh5-fj8j",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 7.3355809368,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.406403376,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.3355809368,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-66221"
+        ],
+        "fixed_versions": [
+          "3.1.4"
+        ],
+        "id": "GHSA-hgf8-39gv-g3f2",
+        "modified": "2026-02-04T02:33:10.151277+00:00",
+        "published": "2025-12-02T00:27:38+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hgf8-39gv-g3f2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-66221",
+          "https://github.com/pallets/werkzeug/commit/4b833376a45c323a189cd11d2362bcffdb1c0c13",
+          "https://github.com/pallets/werkzeug",
+          "https://github.com/pallets/werkzeug/releases/tag/3.1.4"
+        ],
+        "severity": null,
+        "summary": "Werkzeug safe_join() allows Windows special device names"
+      },
+      "cvss_score": null,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.00032,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-hgf8-39gv-g3f2",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 7.210312492799999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39946329599999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.210312492799999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-46136",
+          "PYSEC-2023-221"
+        ],
+        "fixed_versions": [
+          "3.0.1",
+          "2.3.8"
+        ],
+        "id": "GHSA-hrfv-mqp8-q5rw",
+        "modified": "2026-05-20T22:30:15.619134+00:00",
+        "published": "2023-10-25T14:22:59+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-hrfv-mqp8-q5rw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-46136",
+          "https://github.com/pallets/werkzeug/commit/b1916c0c083e0be1c9d887ee2f3d696922bfc5c1",
+          "https://github.com/pallets/werkzeug/commit/cbb446fdcada7685fce936ded01b76c08dbd6eb5",
+          "https://github.com/pallets/werkzeug/commit/f2300208d5e2a5076cbbb4c2aad71096fd040ef9"
+        ],
+        "severity": {
+          "score": 5.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:A/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Werkzeug DoS: High resource usage when parsing multipart/form-data containing a large part with CR/LF character at the beginning"
+      },
+      "cvss_score": 5.7,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.01065,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-hrfv-mqp8-q5rw",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 10.41028227376875,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 57.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.404734695,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.41028227376875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-49767"
+        ],
+        "fixed_versions": [
+          "3.0.6",
+          "0.20.0"
+        ],
+        "id": "GHSA-q34m-jh98-gwm2",
+        "modified": "2026-05-20T22:30:15.624255+00:00",
+        "published": "2024-10-25T19:44:43+00:00",
+        "references": [
+          "https://github.com/pallets/werkzeug/security/advisories/GHSA-q34m-jh98-gwm2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-49767",
+          "https://github.com/pallets/quart/commit/5e78c4169b8eb66b91ead3e62d44721b9e1644ee",
+          "https://github.com/pallets/quart/commit/abb04a512496206de279225340ed022852fbf51f",
+          "https://github.com/pallets/werkzeug/commit/50cfeebcb0727e18cc52ffbeb125f4a66551179b"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Werkzeug possible resource exhaustion when parsing file data in forms"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "werkzeug",
+      "dep_version": "2.3.3",
+      "ecosystem": "PyPI",
+      "epss": 0.00964,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:werkzeug:2.3.3:GHSA-q34m-jh98-gwm2",
+      "in_kev": false,
+      "purl": "pkg:pypi/werkzeug@2.3.3",
+      "raptor_risk_estimate": 13.680296663624999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/app.py:15",
+          "src/flask/app.py:16",
+          "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
+          "... and 104 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.404219292,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.680296663624999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

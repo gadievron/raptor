@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T19:54:41Z",
+    "fetched_at": "2026-05-26T18:41:19Z",
     "git_ref": "1.11.29",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django-1.11",
@@ -38,7 +38,7 @@
       "dep_name": "grunt",
       "dep_version": "1.0.1",
       "ecosystem": "npm",
-      "epss": 0.00091,
+      "epss": 0.00099,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -49,7 +49,7 @@
       "finding_id": "sca:vuln:npm:grunt:1.0.1:GHSA-j383-35pm-c5h4",
       "in_kev": false,
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 5.79925908090542,
+      "raptor_risk_estimate": 6.732429133967855,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -62,17 +62,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300637,
+        "epss_multiplier": 0.399805197,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.170941909956251,
+        "final": 6.732429133967855,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -114,7 +118,7 @@
       "finding_id": "sca:vuln:npm:grunt:1.0.1:GHSA-m5pj-vjjf-4m3h",
       "in_kev": false,
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 7.758154608557757,
+      "raptor_risk_estimate": 8.948308947861973,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -127,17 +131,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 71.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.31693299999999996,
+        "epss_multiplier": 0.411644157,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.676162668946249,
+        "final": 8.948308947861973,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -179,7 +187,7 @@
       "finding_id": "sca:vuln:npm:grunt:1.0.1:GHSA-rm36-94g8-835r",
       "in_kev": false,
       "purl": "pkg:npm/grunt@1.0.1",
-      "raptor_risk_estimate": 7.398719477761132,
+      "raptor_risk_estimate": 8.584623044544996,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -192,17 +200,21 @@
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 70.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.301722,
+        "epss_multiplier": 0.400555338,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.327629814325,
+        "final": 8.584623044544996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "high"
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

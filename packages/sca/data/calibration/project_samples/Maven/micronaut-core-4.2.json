@@ -1,0 +1,12 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-26T18:55:28Z",
+    "git_ref": "v4.2.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of micronaut-core-4.2",
+    "project_license": "Apache-2.0",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/micronaut-projects/micronaut-core.git@v4.2.0. Project source not redistributed.",
+    "url": "https://github.com/micronaut-projects/micronaut-core.git"
+  },
+  "findings": []
+}
