@@ -18,18 +18,18 @@ from pathlib import Path
 
 import pytest
 
+from packages.zkpox import proving_stack_available
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ZKPOX_TEST_DIR = REPO_ROOT / "core" / "zkpox" / "test"
 PROVE_BIN = REPO_ROOT / "core" / "zkpox" / "target" / "release" / "zkpox-prove"
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
-    os.environ.get("RAPTOR_SLOW_TESTS") != "1",
-    reason=(
-        "slow integration test (~10 min, SP1 SDK spin-up × 25 witnesses); "
-        "set RAPTOR_SLOW_TESTS=1 to run"
-    ),
+    not proving_stack_available(),
+    reason="SP1/RISC-V proving stack not installed",
 )
 @pytest.mark.skipif(
     not PROVE_BIN.exists(),
