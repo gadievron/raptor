@@ -800,3 +800,29 @@ def test_pypi_corridor_ceiling_respected_in_selection() -> None:
     )
     assert cand.status == "promoted", cand.status
     assert cand.to_version == "2.8"     # 3.5 excluded by the <3.0 ceiling
+
+
+def test_bounded_downgrade_generalises_to_non_pypi() -> None:
+    """The bounded downgrade is ecosystem-agnostic: given any dep with a
+    recorded floor and a concrete installed pin above it, harden downgrades
+    to the highest clean version >= floor using the ecosystem's comparator.
+    Dormant for npm's own pin styles today (none yield floor + concrete
+    installed-above-floor), but the logic must be correct for whatever
+    produces that shape — verified here with a synthetic npm dep."""
+    dep = replace(_dep(ecosystem="npm", name="x", version="2.7.0",
+                       pin_style=PinStyle.EXACT),
+                  declared_in=Path("/x/package.json"),
+                  version_floor="2.0.0")
+    osv = _FakeOsv({
+        "2.9.0": [_adv("CVE-A")], "2.8.0": [_adv("CVE-B")],
+        "2.7.0": [_adv("CVE-C")], "2.0.0": [_adv("CVE-D")],
+        # 2.5.0 absent => clean
+    })
+    cand = _plan_one(
+        dep,
+        registries={"npm": _FakeRegistry(   # newest-first
+            ["2.9.0", "2.8.0", "2.7.0", "2.5.0", "2.0.0"], ecosystem="npm")},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "downgraded_safety", cand.status
+    assert cand.to_version == "2.5.0"   # highest clean in [2.0.0, 2.7.0)

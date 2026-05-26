@@ -43,7 +43,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .versions import pep440
 from .versions import compare as version_compare
 from core.json import JsonCache
 from . import SCA_CACHE_ROOT
@@ -633,34 +632,42 @@ def _bounded_downgrade(
     only safe remediation is to move *down* to the highest version that
     is (a) ``>=`` the recorded corridor floor, (b) ``<`` the installed
     pin, and (c) carries no advisories. The floor caps how far down we go
-    — without it a downgrade could reintroduce other problems. PyPI only
-    (uses pep440 comparison); returns None for other ecosystems or when
-    the corridor floor / installed version is unknown.
+    — without it a downgrade could reintroduce other problems.
+
+    Ecosystem-agnostic: uses the per-ecosystem comparator. Returns None
+    when the floor / installed version is unknown, the ecosystem has no
+    comparator, or ``installed`` isn't a comparable version (a RANGE dep
+    records its spec string, not a version). In practice only an exact /
+    corridor pin sitting above a recorded floor triggers a downgrade —
+    today that's the PyPI corridor — but the logic is general so any
+    future ecosystem producing that shape works too.
     """
     floor = dep.version_floor
     installed = dep.version
-    if floor is None or installed is None or dep.ecosystem != "PyPI":
+    if floor is None or installed is None:
         return None
+    eco = dep.ecosystem
     pool: List[str] = []
     for v in versions:
         try:
-            if (pep440.compare(v, floor) >= 0
-                    and pep440.compare(v, installed) < 0):
+            if (version_compare(eco, v, floor) >= 0
+                    and version_compare(eco, v, installed) < 0):
                 pool.append(v)
         except Exception:                   # noqa: BLE001
             continue
     if not pool:
         return None
     ranked = _rank_candidates_by_safety(
-        ecosystem=dep.ecosystem, name=dep.name,
+        ecosystem=eco, name=dep.name,
         candidates=pool, osv=osv, kev=kev, epss=epss,
     )
     clean = [r.version for r in ranked if not r.advisory_ids]
     if not clean:
         return None
     import functools
-    # Highest clean version (pep440 descending).
-    return max(clean, key=functools.cmp_to_key(pep440.compare))
+    # Highest clean version (descending per the ecosystem's comparator).
+    return max(clean, key=functools.cmp_to_key(
+        lambda a, b: version_compare(eco, a, b)))
 
 
 # Severity ordinal: lower is less bad. ``None`` (advisory has no scored
