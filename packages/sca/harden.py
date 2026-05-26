@@ -43,7 +43,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .versions import pep440
 from .versions import compare as version_compare
 from core.json import JsonCache
 from . import SCA_CACHE_ROOT
@@ -422,10 +421,33 @@ def _plan_one(
 
     cand.candidates_considered = len(versions)
 
-    # Filter: drop versions <= installed (no point downgrading or
-    # picking the same version).
-    filtered = _versions_above_installed(
-        versions, dep.version, dep.ecosystem)
+    # Filter: drop versions <= the comparison baseline (no point
+    # downgrading or picking the same version). The baseline is the dep's
+    # recorded version; but a RANGE dep records the whole spec string
+    # (e.g. ``>=2.0.0 <3.0.0``), which isn't a comparable version — fall
+    # back to the recorded floor for those, so an explicit-range non-PyPI
+    # dep can be placed (and bumped) at all. EXACT / corridor-pinned deps
+    # keep their concrete version as the baseline: overriding it with the
+    # floor would re-surface every version between the floor and the pin
+    # as a bogus "upgrade".
+    baseline = dep.version
+    if dep.pin_style is PinStyle.RANGE and dep.version_floor:
+        baseline = dep.version_floor
+    filtered = _versions_above_installed(versions, baseline, dep.ecosystem)
+    # Respect a recorded ceiling: never propose at/above it. Keeps the
+    # bump inside the operator's declared corridor, catches sub-major
+    # ceilings the leading-int major-gate would miss, and avoids selecting
+    # a target that would produce an out-of-range corridor on rewrite
+    # (e.g. ``>=2.0,==4.0,<3.0``).
+    if dep.version_ceiling:
+        bounded = []
+        for v in filtered:
+            try:
+                if version_compare(dep.ecosystem, v, dep.version_ceiling) < 0:
+                    bounded.append(v)
+            except Exception:                   # noqa: BLE001
+                continue
+        filtered = bounded
     if not filtered:
         cand.status = "up_to_date"
         return cand
@@ -610,34 +632,42 @@ def _bounded_downgrade(
     only safe remediation is to move *down* to the highest version that
     is (a) ``>=`` the recorded corridor floor, (b) ``<`` the installed
     pin, and (c) carries no advisories. The floor caps how far down we go
-    — without it a downgrade could reintroduce other problems. PyPI only
-    (uses pep440 comparison); returns None for other ecosystems or when
-    the corridor floor / installed version is unknown.
+    — without it a downgrade could reintroduce other problems.
+
+    Ecosystem-agnostic: uses the per-ecosystem comparator. Returns None
+    when the floor / installed version is unknown, the ecosystem has no
+    comparator, or ``installed`` isn't a comparable version (a RANGE dep
+    records its spec string, not a version). In practice only an exact /
+    corridor pin sitting above a recorded floor triggers a downgrade —
+    today that's the PyPI corridor — but the logic is general so any
+    future ecosystem producing that shape works too.
     """
     floor = dep.version_floor
     installed = dep.version
-    if floor is None or installed is None or dep.ecosystem != "PyPI":
+    if floor is None or installed is None:
         return None
+    eco = dep.ecosystem
     pool: List[str] = []
     for v in versions:
         try:
-            if (pep440.compare(v, floor) >= 0
-                    and pep440.compare(v, installed) < 0):
+            if (version_compare(eco, v, floor) >= 0
+                    and version_compare(eco, v, installed) < 0):
                 pool.append(v)
         except Exception:                   # noqa: BLE001
             continue
     if not pool:
         return None
     ranked = _rank_candidates_by_safety(
-        ecosystem=dep.ecosystem, name=dep.name,
+        ecosystem=eco, name=dep.name,
         candidates=pool, osv=osv, kev=kev, epss=epss,
     )
     clean = [r.version for r in ranked if not r.advisory_ids]
     if not clean:
         return None
     import functools
-    # Highest clean version (pep440 descending).
-    return max(clean, key=functools.cmp_to_key(pep440.compare))
+    # Highest clean version (descending per the ecosystem's comparator).
+    return max(clean, key=functools.cmp_to_key(
+        lambda a, b: version_compare(eco, a, b)))
 
 
 # Severity ordinal: lower is less bad. ``None`` (advisory has no scored

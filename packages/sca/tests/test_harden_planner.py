@@ -757,3 +757,72 @@ def test_npm_range_spec_still_up_to_date() -> None:
         osv=_FakeOsv(), offline=False, allow_major=False,
     )
     assert cand.status == "up_to_date", cand.status
+
+
+# ---------------------------------------------------------------------------
+# Range/corridor selection: use the recorded floor as the comparison
+# baseline (so explicit-range deps bump) and the ceiling as a filter (stay
+# inside the declared corridor; also fixes a PyPI corridor that could
+# select a target past its own ceiling).
+# ---------------------------------------------------------------------------
+
+def test_npm_range_with_floor_promotes_within_ceiling() -> None:
+    """An explicit-range npm dep with a recorded corridor bumps to the
+    newest clean version *inside* the corridor — the floor makes it
+    comparable, the ceiling caps it."""
+    dep = replace(_dep(ecosystem="npm", name="x", version=">=4.0.0 <5.0.0",
+                       pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/package.json"),
+                  version_floor="4.0.0", version_ceiling="5.0.0")
+    cand = _plan_one(
+        dep,
+        registries={"npm": _FakeRegistry(  # registries list newest-first
+            ["5.2.0", "4.9.0", "4.5.0"], ecosystem="npm")},
+        osv=_FakeOsv({"4.9.0": [], "4.5.0": []}),
+        offline=False, allow_major=False,
+    )
+    assert cand.status == "promoted", cand.status
+    assert cand.to_version == "4.9.0"   # 5.2.0 excluded by the <5.0.0 ceiling
+
+
+def test_pypi_corridor_ceiling_respected_in_selection() -> None:
+    """Regression: harden must not select a target past a PyPI range's own
+    ceiling (which would rewrite to an invalid corridor like
+    ``>=2.0,==3.5,<3.0``)."""
+    dep = replace(_dep(ecosystem="PyPI", name="x", version=None,
+                       pin_style=PinStyle.RANGE),
+                  version_floor="2.0", version_ceiling="3.0")
+    cand = _plan_one(
+        dep,
+        registries={"PyPI": _FakeRegistry(["3.5", "2.8", "2.5"])},  # newest-first
+        osv=_FakeOsv({"2.8": [], "2.5": []}),
+        offline=False, allow_major=False,
+    )
+    assert cand.status == "promoted", cand.status
+    assert cand.to_version == "2.8"     # 3.5 excluded by the <3.0 ceiling
+
+
+def test_bounded_downgrade_generalises_to_non_pypi() -> None:
+    """The bounded downgrade is ecosystem-agnostic: given any dep with a
+    recorded floor and a concrete installed pin above it, harden downgrades
+    to the highest clean version >= floor using the ecosystem's comparator.
+    Dormant for npm's own pin styles today (none yield floor + concrete
+    installed-above-floor), but the logic must be correct for whatever
+    produces that shape — verified here with a synthetic npm dep."""
+    dep = replace(_dep(ecosystem="npm", name="x", version="2.7.0",
+                       pin_style=PinStyle.EXACT),
+                  declared_in=Path("/x/package.json"),
+                  version_floor="2.0.0")
+    osv = _FakeOsv({
+        "2.9.0": [_adv("CVE-A")], "2.8.0": [_adv("CVE-B")],
+        "2.7.0": [_adv("CVE-C")], "2.0.0": [_adv("CVE-D")],
+        # 2.5.0 absent => clean
+    })
+    cand = _plan_one(
+        dep,
+        registries={"npm": _FakeRegistry(   # newest-first
+            ["2.9.0", "2.8.0", "2.7.0", "2.5.0", "2.0.0"], ecosystem="npm")},
+        osv=osv, offline=False, allow_major=False,
+    )
+    assert cand.status == "downgraded_safety", cand.status
+    assert cand.to_version == "2.5.0"   # highest clean in [2.0.0, 2.7.0)
