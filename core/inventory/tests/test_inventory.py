@@ -125,6 +125,71 @@ class TestExclusions:
         assert excluded is False
         assert reason is None
 
+    def test_root_anchored_nested_not_excluded(self):
+        # First-party source under a package/dir segment named like an anchored
+        # exclude (samples/examples/demo/doc) must NOT be excluded — it's the
+        # silent-FN bug. Anchored names only match at the scan-root top level.
+        for p in (
+            "src/main/java/org/springframework/samples/petclinic/Owner.java",
+            "src/main/java/com/app/examples/PaymentExample.java",
+            "app/demo/widget.py",
+            "lib/doc/Renderer.java",
+        ):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is False, p
+            assert match_exclusion_reason(p, DEFAULT_EXCLUDES)[0] is False, p
+
+    def test_root_anchored_top_level_still_excluded(self):
+        # Intent preserved: a TOP-LEVEL examples/ samples/ docs/ dir is still a
+        # throwaway demo/docs dir and stays excluded.
+        for p in ("examples/Demo.java", "samples/app.py", "docs/conf.py"):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is True, p
+
+    def test_non_anchored_excluded_at_any_depth(self):
+        # Unambiguous non-source dirs keep pruning anywhere (NOT anchored).
+        for p in (
+            "src/node_modules/pkg/index.js",
+            "module/target/classes/Gen.java",
+            "a/b/.git/config",
+            "pkg/tests/test_x.py",
+            "x/build/out.js",
+        ):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is True, p
+
+
+class TestRootAnchoredDirExclusionWalk:
+    """build_inventory must not silently drop first-party source nested under a
+    package/dir segment named like an anchored exclude (samples/examples/…),
+    while still pruning a genuine TOP-LEVEL demo dir and all non-anchored
+    dependency/build dirs at any depth."""
+
+    def _tree(self, root: Path):
+        # nested 'samples' package — first-party, MUST be inventoried
+        f1 = root / "src/main/java/com/app/samples/Bean.java"
+        # normal source — control
+        f2 = root / "src/main/java/com/app/Main.java"
+        # TOP-LEVEL examples dir — throwaway, stays pruned (+ warning)
+        f3 = root / "examples/Demo.java"
+        # non-anchored dependency dir — pruned at any depth
+        f4 = root / "src/node_modules/pkg/index.js"
+        for f in (f1, f2, f3, f4):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("class X { public void m() {} }\n")
+        return f1, f2, f3, f4
+
+    def test_nested_anchored_included_top_level_pruned(self, tmp_path, caplog):
+        import logging
+        self._tree(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        paths = {f["path"] for f in inv["files"] if not f.get("_excluded")}
+        assert "src/main/java/com/app/samples/Bean.java" in paths   # FN bug fixed
+        assert "src/main/java/com/app/Main.java" in paths           # control
+        assert "examples/Demo.java" not in paths                    # top-level pruned
+        assert not any("node_modules" in p for p in paths)          # dep pruned anywhere
+        # never SILENTLY drop source: top-level examples/ holding source warns.
+        assert any("examples" in r.message and "source file" in r.message
+                   for r in caplog.records)
+
 
 # ── Extractors ──────────────────────────────────────────────────────
 

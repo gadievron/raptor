@@ -21,6 +21,7 @@ from core.json import load_json
 from .languages import LANGUAGE_MAP, detect_language
 from .exclusions import (
     DEFAULT_EXCLUDES,
+    ROOT_ANCHORED_EXCLUDE_DIRS,
     is_binary_file,
     is_generated_file,
     match_exclusion_reason,
@@ -388,6 +389,21 @@ def _carry_forward_coverage(
                 item['checked_by'] = list(old_coverage[key])
 
 
+def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) -> int:
+    """Count files under ``dirpath`` whose extension is a recognised source
+    extension, bounded at ``cap`` (we only need "holds source? roughly how
+    many" for an operator warning — not an exact census of a huge tree).
+    """
+    n = 0
+    for _root, _dirs, files in os.walk(dirpath):
+        for f in files:
+            if Path(f).suffix.lower() in extensions:
+                n += 1
+                if n >= cap:
+                    return n
+    return n
+
+
 def _collect_source_files(
     target: Path, extensions: Set[str],
 ) -> tuple[List[Path], List[Dict[str, Any]]]:
@@ -460,7 +476,27 @@ def _collect_source_files(
             if (Path(root) / d).is_symlink():
                 continue
             if d in exact_dir_names:
+                # Root-anchored names (examples/ samples/ demo/ docs/ …) also
+                # name first-party package/source segments, so pruning them by
+                # basename at any depth silently drops first-party source — a
+                # scanner-wide false negative. Prune them ONLY at the scan-root
+                # top level; keep + analyse nested occurrences.
+                if d in ROOT_ANCHORED_EXCLUDE_DIRS and Path(root) != target:
+                    kept_dirs.append(d)
+                    continue
                 rel = str((Path(root) / d).relative_to(target))
+                # Never SILENTLY drop source: if a pruned top-level anchored dir
+                # holds source files, warn with a count so the exclusion is
+                # visible and the operator can scan it directly if first-party.
+                if d in ROOT_ANCHORED_EXCLUDE_DIRS:
+                    n = _count_source_files(Path(root) / d, extensions)
+                    if n:
+                        logger.warning(
+                            "inventory: pruned top-level '%s/' (matches default "
+                            "exclude '%s/') holding %d source file(s); scan it "
+                            "directly if it is first-party code",
+                            rel, d, n,
+                        )
                 pruned_dirs.append({
                     "path": rel + "/",
                     "reason": "excluded_directory_pruned",
