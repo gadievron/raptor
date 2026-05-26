@@ -242,9 +242,12 @@ FILTERS: dict[str, list[str]] = {
         "packages/zkpox/**",
         "core/config.py",
         "core/config/**",
-        ".github/workflows/tests.yml",
+        "core/hash/**",
         "core/http/**",
         "core/sandbox/**",
+        "core/witness/**",
+        "packages/llm_analysis/exploit_verify.py",
+        ".github/workflows/tests.yml",
     ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
     # gates on the corresponding filter, so a python-only PR skips the
