@@ -57,7 +57,8 @@ def main() -> int:
     parser.add_argument(
         "--sources", type=str, default=None,
         help="comma-separated subset of sources to refresh "
-             "(default: all). Available: kev, epss",
+             "(default: all). Available: kev, epss, exploitdb, "
+             "metasploit, github_poc, osv_evidence, vulnrichment",
     )
     parser.add_argument(
         "--offline", action="store_true",

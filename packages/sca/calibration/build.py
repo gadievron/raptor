@@ -165,6 +165,16 @@ def _build_kev(out_dir: Path, http: Any) -> BuildResult:
     )
 
 
+# Exploit-DB index CSV. Fetched by BOTH _build_exploitdb and
+# _build_github_poc (the latter re-parses it for github.com PoC URLs),
+# so it lives here as a single source of truth — a branch/path rename
+# upstream is then a one-line fix, not a fix-one-miss-the-other trap.
+_EDB_CSV_URL = (
+    "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+    "files_exploits.csv"
+)
+
+
 def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     """Fetch the Exploit-DB index CSV and emit a CVE-keyed
     boolean-signal file.
@@ -190,11 +200,7 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     import csv
     import io
 
-    EDB_CSV_URL = (
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
-        "files_exploits.csv"
-    )
-    raw = http.get_bytes(EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
+    raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     cve_to_ids: Dict[str, List[int]] = {}
@@ -226,7 +232,7 @@ def _build_exploitdb(out_dir: Path, http: Any) -> BuildResult:
     output = {
         "_source": {
             "name": "Exploit-DB index",
-            "url": EDB_CSV_URL,
+            "url": _EDB_CSV_URL,
             "license": (
                 "Exploit-DB content is research/personal-use only. "
                 "We embed ONLY boolean signals + entry-ID references "
@@ -342,11 +348,7 @@ def _build_github_poc(out_dir: Path, http: Any) -> BuildResult:
     import csv
     import io
 
-    EDB_CSV_URL = (
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
-        "files_exploits.csv"
-    )
-    raw = http.get_bytes(EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
+    raw = http.get_bytes(_EDB_CSV_URL, max_bytes=64 * 1024 * 1024)
     text = raw.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     cve_to_urls: Dict[str, List[str]] = {}
@@ -379,7 +381,7 @@ def _build_github_poc(out_dir: Path, http: Any) -> BuildResult:
     output = {
         "_source": {
             "name": "GitHub PoC URLs (derived from Exploit-DB index)",
-            "url": EDB_CSV_URL,
+            "url": _EDB_CSV_URL,
             "license": (
                 "Derived signal: presence + public URL only. "
                 "Source URLs are public observable facts; the "
@@ -435,40 +437,70 @@ def _msf_ref_to_cve(ref: Any) -> Optional[str]:
     return None
 
 
+# EPSS feed (FIRST.org). We page to completeness rather than capping
+# at a single response: ``_EPSS_PAGE_SIZE`` rows per call, following
+# the API's ``offset``/``total`` envelope. ``_EPSS_MAX_PAGES`` is a
+# defensive ceiling so a misbehaving API can't loop forever.
+_EPSS_BASE_URL = "https://api.first.org/data/v1/epss?epss-gt=0.05"
+_EPSS_PAGE_SIZE = 10000
+_EPSS_MAX_PAGES = 100
+
+
 def _build_epss(out_dir: Path, http: Any) -> BuildResult:
     """Fetch the daily EPSS scores CSV and emit a sorted JSON of
     ``{cve_id: {epss, percentile, fetched_date}}``.
 
-    EPSS is FIRST.org's free-for-any-use feed. Bulk daily CSV at
-    epss.cyentia.com / api.first.org. We use the FIRST API for
-    a manageable size (top-N by score) — full bulk is ~30 MB.
+    EPSS is FIRST.org's free-for-any-use feed. We page through the
+    FIRST API for every CVE with EPSS ≥ 0.05, following the
+    ``offset``/``total`` envelope to completeness — a single capped
+    ``limit`` silently dropped the tail once the matching set grew
+    past one page.
     """
-    # FIRST API supports filtering by score threshold. Pull
-    # everything ≥ 0.05 (5% probability) to keep the file
-    # manageable while covering all CVEs that might matter for
-    # calibration.
-    EPSS_URL = "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000"
-    data = http.get_json(EPSS_URL)
     signals: Dict[str, Dict[str, Any]] = {}
-    for entry in data.get("data", []):
-        cve = entry.get("cve")
-        if not cve:
-            continue
-        # Reject entries missing epss / percentile entirely — coercing
-        # missing-fields to 0.0 would silently inflate the corpus
-        # with no-data rows that look like "this CVE has 0% EPSS".
-        if entry.get("epss") is None or entry.get("percentile") is None:
-            continue
-        try:
-            score = float(entry["epss"])
-            percentile = float(entry["percentile"])
-        except (TypeError, ValueError):
-            continue
-        signals[cve] = {
-            "epss": score,
-            "percentile": percentile,
-            "as_of": entry.get("date"),
-        }
+    offset = 0
+    total: Optional[int] = None
+    pages = 0
+    while pages < _EPSS_MAX_PAGES:
+        pages += 1
+        url = f"{_EPSS_BASE_URL}&limit={_EPSS_PAGE_SIZE}&offset={offset}"
+        data = http.get_json(url)
+        rows = data.get("data") or []
+        for entry in rows:
+            cve = entry.get("cve")
+            if not cve:
+                continue
+            # Reject entries missing epss / percentile entirely —
+            # coercing missing fields to 0.0 would silently inflate
+            # the corpus with no-data rows that look like "0% EPSS".
+            if entry.get("epss") is None or entry.get("percentile") is None:
+                continue
+            try:
+                score = float(entry["epss"])
+                percentile = float(entry["percentile"])
+            except (TypeError, ValueError):
+                continue
+            signals[cve] = {
+                "epss": score,
+                "percentile": percentile,
+                "as_of": entry.get("date"),
+            }
+        if total is None:
+            total = data.get("total")
+        offset += len(rows)
+        # Last page: a short/empty page, or we've covered the
+        # server-reported total.
+        if len(rows) < _EPSS_PAGE_SIZE:
+            break
+        if total is not None and offset >= total:
+            break
+    else:
+        # Page ceiling hit without a natural stop — surface it rather
+        # than silently truncating the corpus.
+        logger.warning(
+            "sca.calibration: EPSS fetch hit the %d-page ceiling "
+            "(offset=%d, total=%s) — corpus may be truncated",
+            _EPSS_MAX_PAGES, offset, total,
+        )
     output = {
         "_source": {
             "name": "FIRST.org EPSS",

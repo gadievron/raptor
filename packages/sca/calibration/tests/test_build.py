@@ -177,7 +177,7 @@ def test_build_kev_idempotent_on_second_run(tmp_path: Path) -> None:
 
 def test_build_epss_writes_signal_file(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000": {
+        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000&offset=0": {
             "data": [
                 {"cve": "CVE-2024-1", "epss": "0.85",
                  "percentile": "0.99", "date": "2024-09-01"},
@@ -195,7 +195,7 @@ def test_build_epss_writes_signal_file(tmp_path: Path) -> None:
 
 def test_build_epss_skips_malformed_scores(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000": {
+        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000&offset=0": {
             "data": [
                 {"cve": "CVE-2024-OK", "epss": "0.5", "percentile": "0.9"},
                 {"cve": "CVE-2024-BAD", "epss": "not-a-number"},
@@ -205,6 +205,33 @@ def test_build_epss_skips_malformed_scores(tmp_path: Path) -> None:
     })
     result = _build_epss(tmp_path, http)
     assert result.record_count == 1
+
+
+def test_build_epss_paginates_to_completeness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Small page size so two staged pages exercise the offset/total
+    # loop. Only offset=0 and offset=2 are staged — if the loop made a
+    # wasteful third fetch (offset=4) the stub would raise on the
+    # unexpected URL, so a passing test also proves it stops at total.
+    monkeypatch.setattr(build, "_EPSS_PAGE_SIZE", 2)
+    base = "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=2"
+    http = _StubHttp({
+        f"{base}&offset=0": {"total": 4, "data": [
+            {"cve": "CVE-2024-1", "epss": "0.9", "percentile": "0.99"},
+            {"cve": "CVE-2024-2", "epss": "0.8", "percentile": "0.98"},
+        ]},
+        f"{base}&offset=2": {"total": 4, "data": [
+            {"cve": "CVE-2024-3", "epss": "0.7", "percentile": "0.97"},
+            {"cve": "CVE-2024-4", "epss": "0.6", "percentile": "0.96"},
+        ]},
+    })
+    result = _build_epss(tmp_path, http)
+    data = json.loads((tmp_path / "epss_signals.json").read_text())
+    assert set(data["signals"]) == {
+        "CVE-2024-1", "CVE-2024-2", "CVE-2024-3", "CVE-2024-4",
+    }
+    assert result.record_count == 4
 
 
 # ---------------------------------------------------------------------------
