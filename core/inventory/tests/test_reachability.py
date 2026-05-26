@@ -737,6 +737,38 @@ def test_java_class_stereotype_promotes_public_methods_only():
         "pp", _java_item("pp", class_attrs=["Component"], visibility=None))
 
 
+def test_java_jpa_entity_stereotype_promotes_public_methods():
+    from core.inventory.reachability import _java_framework_entry
+    # @Entity / @Embeddable / @MappedSuperclass public accessors are reached
+    # reflectively by the JPA provider / serializer, not via static calls.
+    assert _java_framework_entry(
+        "getName", _java_item("getName", class_attrs=["Entity"], visibility="public"))
+    assert _java_framework_entry(
+        "getId", _java_item("getId", class_attrs=["MappedSuperclass"], visibility="public"))
+    assert _java_framework_entry(
+        "getStreet",
+        _java_item("getStreet",
+                   class_attrs=["jakarta.persistence.Embeddable"], visibility="public"))
+    # a private entity method is not reflectively dispatched → not promoted.
+    assert not _java_framework_entry(
+        "calcChecksum",
+        _java_item("calcChecksum", class_attrs=["Entity"], visibility="private"))
+
+
+def test_java_jaxb_reflective_serialization_entries():
+    from core.inventory.reachability import _java_framework_entry
+    # @XmlRootElement / @XmlType class → public accessors marshalled reflectively.
+    assert _java_framework_entry(
+        "getVetList",
+        _java_item("getVetList", class_attrs=["XmlRootElement"], visibility="public"))
+    # @XmlElement / @XmlAttribute on a getter → reflectively accessed property,
+    # even in a class that isn't itself a root element.
+    assert _java_framework_entry(
+        "getName", _java_item("getName", attrs=["XmlElement"], visibility="public"))
+    assert _java_framework_entry(
+        "getId", _java_item("getId", attrs=["XmlAttribute"], visibility="public"))
+
+
 def test_java_async_transactional_and_plain_are_not_entries():
     from core.inventory.reachability import _java_framework_entry
     # @Async / @Transactional only WRAP a normally-called method (it still has

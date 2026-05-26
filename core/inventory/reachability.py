@@ -2397,15 +2397,29 @@ _JAVA_METHOD_DISPATCH_ANNOTATIONS = frozenset({
     # JPA / Hibernate entity lifecycle callbacks (persistence-provider-invoked)
     "PrePersist", "PostPersist", "PreUpdate", "PostUpdate",
     "PreRemove", "PostRemove", "PostLoad",
+    # JAXB property bindings — the getter is accessed reflectively by the XML
+    # marshaller, not via a static call. (Jackson @JsonProperty/@JsonGetter is
+    # the same pattern for JSON; add when a consumer surfaces it.)
+    "XmlElement", "XmlAttribute", "XmlValue", "XmlElementWrapper",
 })
-# Class-level stereotype annotation tail-names. The DI container instantiates
-# the annotated class and dispatches into its PUBLIC methods (via injected
-# references / proxies) with no in-project caller. Private / protected /
-# package-private methods stay reachable only through the static closure from
-# those public entries, so they are NOT promoted here.
+# Class-level stereotype annotation tail-names. A framework instantiates the
+# annotated class and reaches its PUBLIC methods with no in-project caller —
+# either the DI container dispatching into bean methods (via injected
+# references / proxies), or a persistence provider / (de)serialiser accessing
+# the class's properties reflectively (Hibernate dirty-checking + hydration,
+# JAXB XML marshalling). Private / protected / package-private methods stay
+# reachable only through the static closure from those public entries, so they
+# are NOT promoted here. Tail-matched, so javax.* and jakarta.* both resolve.
 _JAVA_CLASS_STEREOTYPES = frozenset({
+    # Spring DI / web stereotypes
     "Component", "Service", "Repository", "Controller", "RestController",
     "Configuration", "ControllerAdvice", "RestControllerAdvice",
+    # JPA / Jakarta Persistence entity classes — getters/setters are accessed
+    # reflectively by the provider and by serializers, not via static calls.
+    "Entity", "Embeddable", "MappedSuperclass",
+    # JAXB-bound classes — properties accessed reflectively by the XML
+    # marshaller. (Jackson @JsonRootName etc. is the JSON analogue.)
+    "XmlRootElement", "XmlType",
 })
 
 
