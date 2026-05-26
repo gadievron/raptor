@@ -29,10 +29,16 @@ produces an unchanged output file (sorted, stable JSON shape). The
 auto-PR workflow only opens a PR when ``git status`` reports a
 diff after the run.
 
+A transient blip is retried: ``get_json`` parses the body *after* its
+network-retry loop, so a non-JSON 200 (an empty/HTML response from a
+CDN-hosted feed) escapes that retry — ``_get_json`` retries it here.
+
 Failure modes:
-  - Per-ecosystem source down → log warning, leave that file alone.
-  - All sources down → no file changes; the workflow's auto-PR step
-    detects no diff and exits cleanly.
+  - Per-ecosystem source down (after retries) → log warning, leave that
+    file alone, and keep going. Soft: a single source missing one run is
+    tolerated (exit 0) — the auto-PR just omits that ecosystem's update.
+  - All attempted sources down → systemic; exit 1 so the workflow
+    surfaces it.
   - Output target unwritable → log error, exit 1 so the workflow
     surfaces the failure.
 """
@@ -43,10 +49,16 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core.http import HttpClient
+from core.http import (
+    DEFAULT_MAX_BYTES,
+    HttpClient,
+    HttpError,
+    SizeLimitExceeded,
+)
 from core.http.urllib_backend import UrllibClient
 
 logger = logging.getLogger(__name__)
@@ -68,8 +80,19 @@ _DATA_DIR = Path(__file__).resolve().parent / "data"
 # successful return with an empty list means "source returned nothing
 # parseable" and is treated as a soft failure (existing list left alone).
 
+# hugovk's top-pypi-packages moved off github.io: the old hugovk.github.io URL
+# now 301-redirects cross-host to hugovk.dev (the owner-declared homepage), and
+# the egress client won't follow a cross-host redirect. Rather than chase the
+# redirect to a personal domain (which could lapse and be re-registered — a
+# real risk for a feed that SEEDS the typosquat allowlist), fetch the same file
+# straight from the repo via raw.githubusercontent.com: identical content,
+# anchored to the GitHub account `hugovk` rather than a domain registration,
+# and no redirect to follow. Use the ``HEAD`` ref, not a pinned branch — it
+# tracks the default branch (the repo currently carries both main and master),
+# so a future branch rename can't silently break the fetch.
 _HUGOVK_TOP_PYPI = (
-    "https://hugovk.github.io/top-pypi-packages/top-pypi-packages.json"
+    "https://raw.githubusercontent.com/hugovk/top-pypi-packages/HEAD/"
+    "top-pypi-packages.json"
 )
 _ANVAKA_NPM_RANK = (
     "https://anvaka.github.io/npmrank/online/npmrank.json"
@@ -77,9 +100,44 @@ _ANVAKA_NPM_RANK = (
 _CRATES_API = "https://crates.io/api/v1/crates"
 _PACKAGIST_POPULAR = "https://packagist.org/explore/popular.json"
 
+# anvaka's npmrank index is the whole npm dependency graph's rank table —
+# ~85 MB and growing, well over HttpClient's 50 MB DEFAULT_MAX_BYTES. Cap it
+# at 256 MB so the fetch doesn't trip SizeLimitExceeded as the feed grows.
+_NPM_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _get_json(
+    http: HttpClient,
+    url: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+    attempts: int = 3,
+) -> Any:
+    """``get_json`` with a retry that covers what the client's own retry does
+    not: a **non-JSON 200** (an empty/HTML blip from a CDN-hosted feed). The
+    client parses the body *after* its network-retry loop, so such a blip
+    surfaces as :class:`HttpError` and is never retried — exactly the failure
+    that reddened the weekly cron. We retry it here with a short backoff.
+
+    :class:`SizeLimitExceeded` is re-raised immediately (a too-large response
+    won't shrink on retry — the caller must raise ``max_bytes`` instead).
+    """
+    last: Optional[HttpError] = None
+    for i in range(attempts):
+        try:
+            return http.get_json(url, retries=2, max_bytes=max_bytes)
+        except SizeLimitExceeded:
+            raise
+        except HttpError as e:
+            last = e
+            if i + 1 < attempts:
+                time.sleep(0.5 * (i + 1))
+    assert last is not None
+    raise last
+
 
 def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
-    data = http.get_json(_HUGOVK_TOP_PYPI, retries=2)
+    data = _get_json(http, _HUGOVK_TOP_PYPI)
     rows = data.get("rows") or data.get("packages") or []
     names: List[str] = []
     for r in rows[:top_n]:
@@ -92,14 +150,25 @@ def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
 
 
 def fetch_npm(http: HttpClient, top_n: int) -> List[str]:
-    data = http.get_json(_ANVAKA_NPM_RANK, retries=2)
-    # The anvaka npmrank format is a dict: ``{name: rank, ...}`` where
-    # lower rank = more popular. Sort and take the top N.
-    if not isinstance(data, dict):
+    data = _get_json(http, _ANVAKA_NPM_RANK, max_bytes=_NPM_MAX_BYTES)
+    # The anvaka npmrank format is ``{"tags": {...}, "rank": {name: score}}``
+    # where ``score`` is a (stringified) pagerank-style weight over the
+    # dependency graph — HIGHER = more depended-upon = more attack-relevant.
+    # Take the top N by descending score. (The earlier code sorted the
+    # top-level ``{tags, rank}`` dict, which is not the package table.)
+    rank = data.get("rank") if isinstance(data, dict) else None
+    if not isinstance(rank, dict):
         return []
-    ranked = sorted(data.items(), key=lambda kv: kv[1])
-    return sorted({n for n, _ in ranked[:top_n]
-                    if isinstance(n, str) and n})
+    scored: List[Tuple[str, float]] = []
+    for name, score in rank.items():
+        if not (isinstance(name, str) and name):
+            continue
+        try:
+            scored.append((name.lower(), float(score)))
+        except (TypeError, ValueError):
+            continue
+    scored.sort(key=lambda ns: ns[1], reverse=True)
+    return sorted({n for n, _ in scored[:top_n]})
 
 
 def fetch_crates(
@@ -211,10 +280,18 @@ def refresh_all(
             continue
         target = popular_dir / fname
         new_blob = json.dumps(names, indent=2) + "\n"
-        if target.exists() and target.read_text(encoding="utf-8") == new_blob:
-            out[fname] = "unchanged"
+        try:
+            if (target.exists()
+                    and target.read_text(encoding="utf-8") == new_blob):
+                out[fname] = "unchanged"
+                continue
+            target.write_text(new_blob, encoding="utf-8")
+        except OSError as e:
+            # Output target unwritable: a hard failure (see ``main``), kept
+            # distinct from a soft per-source fetch failure above.
+            logger.error("writing %s failed: %s", target, e)
+            out[fname] = f"write-failed: {type(e).__name__}: {e}"
             continue
-        target.write_text(new_blob, encoding="utf-8")
         out[fname] = "updated"
         logger.info("refreshed %s (%d entries)", target, len(names))
     return out
@@ -263,8 +340,29 @@ def main(argv: Optional[List[str]] = None) -> int:
                            data_dir=args.data_dir)
     for fname, status in sorted(results.items()):
         print(f"  {fname:20s}  {status}")
-    failed = [k for k, v in results.items() if v.startswith("failed:")]
-    return 1 if failed else 0
+
+    attempted = {k: v for k, v in results.items() if v != "skipped"}
+    write_failures = [k for k, v in attempted.items()
+                      if v.startswith("write-failed:")]
+    fetch_failures = [k for k, v in attempted.items()
+                      if v.startswith("failed:")]
+    if fetch_failures:
+        logger.warning("%d of %d source(s) left unchanged this run: %s",
+                       len(fetch_failures), len(attempted),
+                       ", ".join(sorted(fetch_failures)))
+
+    # A single source failing to fetch is soft: the cron's auto-PR simply
+    # won't carry that ecosystem's update this run, and the existing bundled
+    # file is left intact (see module docstring). Hard failures — which redden
+    # the run so the workflow surfaces them — are an unwritable output target
+    # or a TOTAL fetch outage (every attempted source down, i.e. systemic).
+    if write_failures:
+        return 1
+    if attempted and len(fetch_failures) == len(attempted):
+        logger.error("all %d attempted source(s) failed to fetch",
+                     len(attempted))
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
