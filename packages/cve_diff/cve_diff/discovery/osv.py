@@ -50,7 +50,7 @@ from core.url_patterns import (
 
 DEFAULT_TIMEOUT_S = 10
 
-import re
+import re  # noqa: E402
 
 # `re.fullmatch` callers — `re.match` + `$` matches before final `\n`,
 # letting `"abc1234\n"` slip through and into `git fetch <sha>` argv.

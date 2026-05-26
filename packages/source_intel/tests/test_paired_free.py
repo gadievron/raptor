@@ -16,6 +16,7 @@ from packages.source_intel.analyze import (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -37,6 +38,7 @@ def test_e2e_paired_free_fires_on_kmalloc_kfree(tmp_path):
     assert ("kmalloc", "kfree") in pairs
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -58,6 +60,7 @@ def test_e2e_paired_free_fires_on_vmalloc_vfree(tmp_path):
     assert ("vmalloc", "vfree") in pairs
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

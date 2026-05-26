@@ -1,0 +1,17 @@
+# Per-mode expectations for node-app fixture.
+
+scan:
+  exit_code: 0
+  min_findings: 3
+  ecosystems_present:
+    - npm
+
+bump:
+  exit_code: 0
+  surfaces_present:
+    - from_image             # FROM node:${NODE_VERSION}-alpine
+
+fix:
+  exit_code: 0
+  emits_proposed_dir: true
+  source_tree_unchanged: true

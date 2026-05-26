@@ -114,18 +114,18 @@ class TestInferBVProfileInvalidHints:
 # ---------------------------------------------------------------------
 
 
-from pathlib import Path as _Path
-from unittest.mock import MagicMock
+from pathlib import Path as _Path  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
 
-from core.dataflow.sanitizer_evidence import (
+from core.dataflow.sanitizer_evidence import (  # noqa: E402
     PROVENANCE_LLM,
     SEMANTICS_SQL_ESCAPE,
     CandidateValidator,
     SanitizerEvidence,
     StepAnnotation,
 )
-from core.security.prompt_envelope import UntrustedBlock
-from packages.codeql.dataflow_validator import (
+from core.security.prompt_envelope import UntrustedBlock  # noqa: E402
+from packages.codeql.dataflow_validator import (  # noqa: E402
     DataflowPath,
     DataflowStep,
     SANITIZER_EVIDENCE_INSTRUCTIONS,
@@ -173,7 +173,7 @@ class TestBuildSanitizerEvidenceBlock:
 
     def test_no_collector_returns_none(self):
         result = _build_sanitizer_evidence_block(
-            None, _dp(), _Path("/tmp"), MagicMock()
+            None, _dp(), _Path("."), MagicMock()
         )
         assert result is None
 
@@ -182,7 +182,7 @@ class TestBuildSanitizerEvidenceBlock:
             return None
 
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), MagicMock()
+            _collector, _dp(), _Path("."), MagicMock()
         )
         assert result is None
 
@@ -191,7 +191,7 @@ class TestBuildSanitizerEvidenceBlock:
             return _evidence_with_one_candidate()
 
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), MagicMock()
+            _collector, _dp(), _Path("."), MagicMock()
         )
         assert isinstance(result, UntrustedBlock)
         assert result.kind == "sanitizer-evidence"
@@ -205,7 +205,7 @@ class TestBuildSanitizerEvidenceBlock:
 
         log = MagicMock()
         result = _build_sanitizer_evidence_block(
-            _collector, _dp(), _Path("/tmp"), log
+            _collector, _dp(), _Path("."), log
         )
         assert result is None
         assert log.warning.called

@@ -1,0 +1,26 @@
+{
+  "_comment": "Known-malicious or compromised package names. Matching any of these at exact name+ecosystem is an instant high-confidence supply-chain finding. Maintained manually; incidents sourced from public advisories. Keep sorted by ecosystem then name.",
+  "packages": [
+    {"ecosystem": "npm", "name": "event-stream", "versions": ["3.3.6"], "incident": "flatmap-stream backdoor (2018)", "ref": "CVE-2018-16492"},
+    {"ecosystem": "npm", "name": "flatmap-stream", "versions": ["*"], "incident": "event-stream supply-chain attack payload", "ref": "CVE-2018-16492"},
+    {"ecosystem": "npm", "name": "ua-parser-js", "versions": ["0.7.29", "0.8.0", "1.0.0"], "incident": "cryptominer + credential stealer (2021)", "ref": "CVE-2021-41266"},
+    {"ecosystem": "npm", "name": "coa", "versions": ["2.0.3", "2.0.4", "2.1.1", "2.1.3", "3.0.1", "3.1.3"], "incident": "hijacked maintainer account (2021)", "ref": "GHSA-73qr-pfmq-6rp8"},
+    {"ecosystem": "npm", "name": "rc", "versions": ["1.2.9", "1.3.9", "2.3.9"], "incident": "hijacked maintainer account (2021)", "ref": "GHSA-g2q5-5433-rhrf"},
+    {"ecosystem": "npm", "name": "colors", "versions": ["1.4.1", "1.4.2"], "incident": "maintainer sabotage — infinite loop (2022)", "ref": "CVE-2022-28948"},
+    {"ecosystem": "npm", "name": "faker", "versions": ["6.6.6"], "incident": "maintainer sabotage — emptied package (2022)", "ref": "CVE-2022-28948"},
+    {"ecosystem": "npm", "name": "peacenotwar", "versions": ["*"], "incident": "protestware — geo-targeted wiper (2022)", "ref": "SNYK-JS-PEACENOTWAR-2426724"},
+    {"ecosystem": "npm", "name": "node-ipc", "versions": ["10.1.1", "10.1.2", "10.1.3"], "incident": "peacenotwar wiper delivery vehicle (2022)", "ref": "CVE-2022-23812"},
+
+    {"ecosystem": "PyPI", "name": "ctx", "versions": ["*"], "incident": "name reuse — credential stealer (2022)", "ref": "PYSEC-2022-209"},
+    {"ecosystem": "PyPI", "name": "colourama", "versions": ["*"], "incident": "typosquat of colorama — credential stealer", "ref": "PYSEC-2019-165"},
+    {"ecosystem": "PyPI", "name": "python3-dateutil", "versions": ["*"], "incident": "typosquat of python-dateutil — credential stealer", "ref": "PYSEC-2019-160"},
+    {"ecosystem": "PyPI", "name": "jeIlyfish", "versions": ["*"], "incident": "typosquat of jellyfish (capital-I for l) — credential stealer", "ref": "PYSEC-2019-161"},
+    {"ecosystem": "PyPI", "name": "urllib", "versions": ["*"], "incident": "typosquat of urllib3 — exfiltration", "ref": "SNYK-PYTHON-URLLIB-72682"},
+
+    {"ecosystem": "RubyGems", "name": "rest-client", "versions": ["1.6.13"], "incident": "hijacked maintainer account — backdoor (2019)", "ref": "CVE-2019-15224"},
+    {"ecosystem": "RubyGems", "name": "strong_password", "versions": ["0.0.7"], "incident": "hijacked maintainer account — credential stealer (2019)", "ref": "CVE-2019-13354"},
+    {"ecosystem": "RubyGems", "name": "bootstrap-sass", "versions": ["3.2.0.3"], "incident": "hijacked — cookie exfiltration (2019)", "ref": "CVE-2019-10842"},
+
+    {"ecosystem": "Cargo", "name": "rustdecimal", "versions": ["*"], "incident": "typosquat of rust_decimal — Gitlab CI token stealer (2022)", "ref": "RUSTSEC-2022-0042"}
+  ]
+}

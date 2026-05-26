@@ -125,6 +125,71 @@ class TestExclusions:
         assert excluded is False
         assert reason is None
 
+    def test_root_anchored_nested_not_excluded(self):
+        # First-party source under a package/dir segment named like an anchored
+        # exclude (samples/examples/demo/doc) must NOT be excluded — it's the
+        # silent-FN bug. Anchored names only match at the scan-root top level.
+        for p in (
+            "src/main/java/org/springframework/samples/petclinic/Owner.java",
+            "src/main/java/com/app/examples/PaymentExample.java",
+            "app/demo/widget.py",
+            "lib/doc/Renderer.java",
+        ):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is False, p
+            assert match_exclusion_reason(p, DEFAULT_EXCLUDES)[0] is False, p
+
+    def test_root_anchored_top_level_still_excluded(self):
+        # Intent preserved: a TOP-LEVEL examples/ samples/ docs/ dir is still a
+        # throwaway demo/docs dir and stays excluded.
+        for p in ("examples/Demo.java", "samples/app.py", "docs/conf.py"):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is True, p
+
+    def test_non_anchored_excluded_at_any_depth(self):
+        # Unambiguous non-source dirs keep pruning anywhere (NOT anchored).
+        for p in (
+            "src/node_modules/pkg/index.js",
+            "module/target/classes/Gen.java",
+            "a/b/.git/config",
+            "pkg/tests/test_x.py",
+            "x/build/out.js",
+        ):
+            assert should_exclude(p, DEFAULT_EXCLUDES) is True, p
+
+
+class TestRootAnchoredDirExclusionWalk:
+    """build_inventory must not silently drop first-party source nested under a
+    package/dir segment named like an anchored exclude (samples/examples/…),
+    while still pruning a genuine TOP-LEVEL demo dir and all non-anchored
+    dependency/build dirs at any depth."""
+
+    def _tree(self, root: Path):
+        # nested 'samples' package — first-party, MUST be inventoried
+        f1 = root / "src/main/java/com/app/samples/Bean.java"
+        # normal source — control
+        f2 = root / "src/main/java/com/app/Main.java"
+        # TOP-LEVEL examples dir — throwaway, stays pruned (+ warning)
+        f3 = root / "examples/Demo.java"
+        # non-anchored dependency dir — pruned at any depth
+        f4 = root / "src/node_modules/pkg/index.js"
+        for f in (f1, f2, f3, f4):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("class X { public void m() {} }\n")
+        return f1, f2, f3, f4
+
+    def test_nested_anchored_included_top_level_pruned(self, tmp_path, caplog):
+        import logging
+        self._tree(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        paths = {f["path"] for f in inv["files"] if not f.get("_excluded")}
+        assert "src/main/java/com/app/samples/Bean.java" in paths   # FN bug fixed
+        assert "src/main/java/com/app/Main.java" in paths           # control
+        assert "examples/Demo.java" not in paths                    # top-level pruned
+        assert not any("node_modules" in p for p in paths)          # dep pruned anywhere
+        # never SILENTLY drop source: top-level examples/ holding source warns.
+        assert any("examples" in r.message and "source file" in r.message
+                   for r in caplog.records)
+
 
 # ── Extractors ──────────────────────────────────────────────────────
 
@@ -773,3 +838,343 @@ class TestDefaultCacheDir:
         inv = build_inventory(str(src), str(explicit))
         assert inv["total_files"] == 1
         assert (explicit / "checklist.json").is_file()
+
+
+class TestAllowUnreachableView:
+    """U5: allow_unreachable threads through build_inventory to the
+    TranslationView, so isolation mode keeps disabled C/C++ code for
+    review instead of blanking #if 0."""
+
+    def _c_names(self, tmp_path, allow_unreachable):
+        from core.inventory.builder import build_inventory
+        src = tmp_path / "src"
+        src.mkdir(exist_ok=True)
+        (src / "m.c").write_text(
+            "#if 0\n"
+            "void disabled_fn(void){ dangerous(); }\n"
+            "#endif\n"
+            "void live_fn(void){ ok(); }\n"
+        )
+        out = tmp_path / ("au" if allow_unreachable else "def")
+        inv = build_inventory(
+            str(src), str(out), allow_unreachable=allow_unreachable,
+        )
+        return {i["name"] for f in inv["files"] for i in f["items"]
+                if i.get("kind", "function") == "function"}
+
+    def test_default_blanks_if0(self, tmp_path):
+        assert self._c_names(tmp_path, False) == {"live_fn"}
+
+    def test_isolation_keeps_disabled_code(self, tmp_path):
+        assert self._c_names(tmp_path, True) == {"disabled_fn", "live_fn"}
+
+    def test_cache_dirs_isolated_by_mode(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        d_def = default_cache_dir(str(tmp_path))
+        d_iso = default_cache_dir(str(tmp_path), allow_unreachable=True)
+        assert d_def != d_iso
+        # Default mode must hash identically to the no-arg call so existing
+        # persistent caches are not invalidated when this lands.
+        assert default_cache_dir(str(tmp_path), allow_unreachable=False) == d_def
+
+
+class TestConfigAwareView:
+    """U12: a build macro config (compile_commands.json / .config) threads
+    through build_inventory so config-aware #ifdef arms are blanked, and a
+    config change invalidates the cache even when file contents are equal."""
+
+    _SRC = (
+        "#ifdef CONFIG_FEATURE\n"
+        "void feature_sink(char *q){ system(q); }\n"
+        "#endif\n"
+        "void always_live(void){ return; }\n"
+    )
+
+    def _names(self, inv):
+        return {i["name"] for f in inv["files"] for i in f["items"]
+                if i.get("kind", "function") == "function"}
+
+    def test_feature_off_blanks_guarded_sink(self, tmp_path):
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("# CONFIG_FEATURE is not set\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live"}
+
+    def test_feature_on_keeps_guarded_sink(self, tmp_path):
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("CONFIG_FEATURE=y\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live", "feature_sink"}
+
+    def test_no_config_is_conservative(self, tmp_path):
+        # No build artifacts → #ifdef untouched → sink kept (live in some
+        # build; blanking it would be a false negative).
+        (tmp_path / "m.c").write_text(self._SRC)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        assert self._names(inv) == {"always_live", "feature_sink"}
+
+    def test_config_change_invalidates_persistent_cache(self, tmp_path):
+        # The critical correctness check: same file content, default
+        # (persistent, config-keyed) cache. Flipping the config must NOT
+        # serve a stale blanked entry for the now-live arm.
+        (tmp_path / "m.c").write_text(self._SRC)
+        (tmp_path / ".config").write_text("# CONFIG_FEATURE is not set\n")
+        assert self._names(build_inventory(str(tmp_path))) == {"always_live"}
+        (tmp_path / ".config").write_text("CONFIG_FEATURE=y\n")
+        assert self._names(build_inventory(str(tmp_path))) == {
+            "always_live", "feature_sink"}
+
+    def test_cache_key_folds_config_fingerprint(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        d_plain = default_cache_dir(str(tmp_path))
+        d_cfg = default_cache_dir(str(tmp_path), config_fingerprint="abc123")
+        assert d_plain != d_cfg
+        # Empty fingerprint must hash identically to the no-arg call so
+        # non-C projects' existing caches are untouched.
+        assert default_cache_dir(str(tmp_path), config_fingerprint="") == d_plain
+
+
+class TestCppTuMembership:
+    """C/C++ build-membership: a source TU absent from compile_commands.json is
+    marked build_excluded (heuristic); headers are exempt; no manifest → never
+    fires. Asserts the file-level record (set pre-extraction) so it holds on
+    both extractor paths."""
+
+    def _be_map(self, tmp_path, with_manifest):
+        import json
+        (tmp_path / "built.c").write_text("int f(void){ return 0; }\n")
+        (tmp_path / "unbuilt.c").write_text("int g(void){ return 0; }\n")
+        (tmp_path / "util.h").write_text("static inline int h(void){ return 0; }\n")
+        if with_manifest:
+            (tmp_path / "compile_commands.json").write_text(json.dumps([
+                {"directory": str(tmp_path), "file": "built.c",
+                 "arguments": ["cc", "-c", "built.c"]},
+            ]))
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        return {f["path"]: ("build_excluded" in f) for f in inv["files"]}
+
+    def test_unbuilt_excluded_built_and_header_not(self, tmp_path):
+        be = self._be_map(tmp_path, with_manifest=True)
+        assert be.get("unbuilt.c") is True     # absent from manifest → excluded
+        assert be.get("built.c") is False      # in manifest → not excluded
+        assert be.get("util.h") is False       # header exempt — never a TU
+
+    def test_no_manifest_never_excludes(self, tmp_path):
+        be = self._be_map(tmp_path, with_manifest=False)
+        assert not any(be.values())            # membership unknown → never fire
+
+    def test_manifest_change_invalidates_persistent_cache(self, tmp_path):
+        # Same file content, default persistent (TU-fingerprint-keyed) cache:
+        # adding unbuilt.c to the manifest must drop its build_excluded mark.
+        (tmp_path / "built.c").write_text("int f(void){ return 0; }\n")
+        (tmp_path / "unbuilt.c").write_text("int g(void){ return 0; }\n")
+        cc = tmp_path / "compile_commands.json"
+        cc.write_text(json.dumps([{"directory": str(tmp_path), "file": "built.c",
+                                   "arguments": ["cc", "-c", "built.c"]}]))
+        inv1 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv1["files"]}.get("unbuilt.c") is True
+        cc.write_text(json.dumps([
+            {"directory": str(tmp_path), "file": "built.c",
+             "arguments": ["cc", "-c", "built.c"]},
+            {"directory": str(tmp_path), "file": "unbuilt.c",
+             "arguments": ["cc", "-c", "unbuilt.c"]},
+        ]))
+        inv2 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv2["files"]}.get("unbuilt.c") is False
+
+
+class TestRustCrateMembership:
+    """Rust crate-module membership: a .rs not reachable via the mod tree from
+    any crate root is marked build_excluded; no Cargo.toml → never fires.
+    Record-level (set pre-extraction) so it holds on both extractor paths."""
+
+    def _be_map(self, tmp_path, with_cargo):
+        (tmp_path / "src").mkdir()
+        if with_cargo:
+            (tmp_path / "Cargo.toml").write_text(
+                '[package]\nname = "x"\nversion = "0.1.0"\n')
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\npub fn api(){}\n")
+        (tmp_path / "src" / "util.rs").write_text("pub fn helper(){}\n")
+        (tmp_path / "src" / "orphan.rs").write_text("pub fn dead(){}\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        return {f["path"]: ("build_excluded" in f)
+                for f in inv["files"] if f["path"].endswith(".rs")}
+
+    def test_orphan_excluded_intree_not(self, tmp_path):
+        be = self._be_map(tmp_path, with_cargo=True)
+        assert be.get("src/orphan.rs") is True   # no mod path → excluded
+        assert be.get("src/lib.rs") is False      # crate root
+        assert be.get("src/util.rs") is False     # reached via `mod util;`
+
+    def test_no_cargo_never_excludes(self, tmp_path):
+        be = self._be_map(tmp_path, with_cargo=False)
+        assert not any(be.values())               # not a crate → unknown
+
+    def test_mod_tree_change_invalidates_persistent_cache(self, tmp_path):
+        # Same orphan.rs content, default persistent (mod-fingerprint-keyed)
+        # cache: adding `mod orphan;` to lib.rs must drop its build_excluded.
+        (tmp_path / "src").mkdir()
+        (tmp_path / "Cargo.toml").write_text(
+            '[package]\nname = "x"\nversion = "0.1.0"\n')
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\n")
+        (tmp_path / "src" / "util.rs").write_text("")
+        (tmp_path / "src" / "orphan.rs").write_text("pub fn d(){}\n")
+        inv1 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv1["files"]}.get("src/orphan.rs") is True
+        (tmp_path / "src" / "lib.rs").write_text("mod util;\nmod orphan;\n")
+        inv2 = build_inventory(str(tmp_path))
+        assert {f["path"]: ("build_excluded" in f)
+                for f in inv2["files"]}.get("src/orphan.rs") is False
+
+
+class TestGoReachability:
+    """End-to-end Go dead-code coverage. Go needed no new substrate (it was
+    already complete via //go:build ignore → build_excluded, init-panic →
+    module_aborts, dead-island → no_path_from_entry); this locks the composed
+    verdicts in as a regression guard, mirroring TestCppTuMembership /
+    TestRustCrateMembership. Record-level assertions run on both extractor
+    paths; verdict assertions need the Go call-graph extractor (tree-sitter-go)
+    and skip without it, per the stdlib-path convention."""
+
+    _FILES = {
+        "go.mod": "module x\ngo 1.21\n",
+        "ig.go": ("//go:build ignore\n\npackage main\n"
+                  "func orphan(q string){ _ = q }\nfunc main(){ orphan(\"x\") }\n"),
+        "abort.go": ("package m\nfunc init(){ panic(\"disabled\") }\n"
+                     "func sink(q string){ _ = q }\n"),
+        "live.go": "package m\nfunc Exported(){ helper() }\nfunc helper(){}\n",
+        "island.go": "package m\nfunc islA(){ islB() }\nfunc islB(){ islA() }\n",
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_go_dead_code_records_both_paths(self, tmp_path):
+        # Content-detected records (no extraction needed) — both paths.
+        by = {f["path"]: f for f in self._build(tmp_path)["files"]}
+        assert "build_excluded" in by["ig.go"]              # //go:build ignore
+        assert by["abort.go"].get("module_aborts_on_load")  # init(){ panic(...) }
+
+    def test_go_composed_verdicts(self, tmp_path):
+        # Verdicts compose over the Go call graph → need tree-sitter-go.
+        import pytest
+        pytest.importorskip("tree_sitter_go")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                if f["path"] != rel:
+                    continue
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        m = ".".join(rel.rsplit(".", 1)[0].split("/"))
+                        return classify_reachability(
+                            inv, rel, name, int(it.get("line_start") or 0), m)
+            return None
+
+        assert verdict("abort.go", "sink") == "module_aborts"
+        assert verdict("ig.go", "orphan") == "build_excluded"
+        assert verdict("island.go", "islA") == "no_path_from_entry"
+        assert verdict("live.go", "Exported") == "reachable"   # over-fire control
+
+
+class TestJavaFrameworkEntries:
+    """End-to-end Java framework-dispatch entry coverage. Spring / Jakarta
+    container-managed methods (routes, @EventListener / @Scheduled, @Bean
+    factories, JPA callbacks, and the public methods of @Service / @Component /
+    @RestController beans) have no in-project caller; without modelling them as
+    entries they read not_called and get surface-demoted. Verdicts need the
+    Java call-graph extractor (tree-sitter-java) and skip without it. Adding
+    entries only grows the reachable set, so the controls (a plain class, an
+    @Async / @Transactional method, a private bean method) must stay
+    not_called — that is the FP/FN-safety guard."""
+
+    _FILES = {
+        # @RestController stereotype: public route method = entry; the private
+        # helper is reachable only through the closure from it.
+        "Api.java": ("package x;\n@RestController\npublic class Api {\n"
+                     "  @GetMapping public String handle() { return fmt(); }\n"
+                     "  private String fmt() { return \"x\"; }\n}\n"),
+        # @Service stereotype: an uncalled PUBLIC method is still a bean entry;
+        # the private helper is not.
+        "Svc.java": ("package x;\n@Service\npublic class Svc {\n"
+                     "  public void process() {}\n"
+                     "  private void helper() {}\n}\n"),
+        # method-level dispatch annotations on a plain (non-stereotype) class.
+        "Ev.java": ("package x;\npublic class Ev {\n"
+                    "  @EventListener public void on() {}\n"
+                    "  @Scheduled public void tick() {}\n}\n"),
+        # nested: a @Service INNER class in a plain OUTER class. The inner
+        # public method is a bean entry; the outer plain method (declared after
+        # the inner class) must NOT inherit the inner stereotype.
+        "Nest.java": ("package x;\npublic class Nest {\n"
+                      "  @Service public static class Inner {\n"
+                      "    public void innerBean() {}\n  }\n"
+                      "  public void outerPlain() {}\n}\n"),
+        # controls — must stay not_called:
+        "Ctl.java": ("package x;\npublic class Ctl {\n"
+                     "  @Async public void bg() {}\n"
+                     "  @Transactional public void wr() {}\n"
+                     "  public void dead() {}\n}\n"),
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_java_stdlib_path_inert(self, tmp_path, monkeypatch):
+        # On the stdlib path (CI without tree-sitter-java) annotations are not
+        # captured, so the feature is inert: methods are still extracted and
+        # fall through to the existing 1-hop verdict — never a crash, never a
+        # hard suppression.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+        saw = False
+        for f in inv["files"]:
+            for it in f["items"]:
+                if it.get("name") == "process":
+                    saw = True
+                    v = classify_reachability(
+                        inv, f["path"], "process",
+                        int(it.get("line_start") or 0), "Svc")
+                    assert v != "reachable"   # not promoted without annotations
+        assert saw   # extraction still works on the stdlib path
+
+    def test_java_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                if f["path"] != rel:
+                    continue
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        m = rel.rsplit(".", 1)[0]
+                        return classify_reachability(
+                            inv, rel, name, int(it.get("line_start") or 0), m)
+            return None
+
+        # gains: framework-dispatched methods become reachable.
+        assert verdict("Api.java", "handle") == "reachable"    # @GetMapping + stereotype
+        assert verdict("Api.java", "fmt") == "reachable"       # reachable via closure
+        assert verdict("Svc.java", "process") == "reachable"   # public bean method
+        assert verdict("Ev.java", "on") == "reachable"         # @EventListener
+        assert verdict("Ev.java", "tick") == "reachable"       # @Scheduled
+        assert verdict("Nest.java", "innerBean") == "reachable"  # inner @Service bean
+        # controls: entries only grow the set, so these stay demoted.
+        assert verdict("Svc.java", "helper") == "not_called"   # private bean method
+        assert verdict("Nest.java", "outerPlain") == "not_called"  # no stereotype leak
+        assert verdict("Ctl.java", "bg") == "not_called"       # @Async is not an entry
+        assert verdict("Ctl.java", "wr") == "not_called"       # @Transactional is not an entry
+        assert verdict("Ctl.java", "dead") == "not_called"     # plain uncalled

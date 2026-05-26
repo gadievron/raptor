@@ -83,6 +83,25 @@ def main():
         help="Exit non-zero unless LLM item coverage is at least this percentage",
     )
 
+    # provenance
+    p_prov = sub.add_parser(
+        "provenance",
+        help="Show provenance rollup across all runs (SHAs, engines, models, reproducibility)",
+        usage="raptor project provenance [<name>]",
+        **_F,
+    )
+    p_prov.add_argument("name", nargs="?", help="Project name")
+
+    # show
+    p_show = sub.add_parser(
+        "show",
+        help="Show one run's provenance detail",
+        usage="raptor project show <run> [<name>]",
+        **_F,
+    )
+    p_show.add_argument("run", help="Run directory name (or unique substring)")
+    p_show.add_argument("name", nargs="?", help="Project name")
+
     # findings
     p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
                                 usage="raptor project findings [<name>] [--detailed]", **_F)
@@ -304,6 +323,28 @@ def main():
             if result is False:
                 sys.exit(1)
 
+        elif args.subcommand == "provenance":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_provenance(p)
+
+        elif args.subcommand == "show":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_run_provenance(p, args.run)
+
         elif args.subcommand == "findings":
             name = args.name or _get_active_project()
             if not name:
@@ -502,6 +543,11 @@ def main():
                     ) as tf:
                         tf_path = tf.name
                         tf.write(p.notes or "")
+                    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+                    # Operator-launched editor invocation. The
+                    # ``EDITOR`` env var is the operator's own
+                    # choice; if it's compromised they have bigger
+                    # problems than RAPTOR launching it.
                     result = subprocess.run(editor_argv + [tf_path])
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
@@ -612,6 +658,8 @@ def main():
             print(f"  Merged findings: {stats['findings']}")
             if stats.get("annotations") is not None:
                 print(f"  Annotations: {stats['annotations']}")
+            if stats.get("provenance_markdown"):
+                print(f"  Provenance: {stats['provenance_markdown']}")
 
         elif args.subcommand == "export":
             from .export import export_project
@@ -701,20 +749,32 @@ def _get_output_summary(run_dir, meta):
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
 
-    # Use cached summary if present
+    # Cache schema version — bump whenever the counting logic changes so
+    # stale cached strings are recomputed rather than silently served.
+    # v2: counts SCA findings (sca/ subdir) in addition to code findings;
+    # a v1 string (code-only) must NOT short-circuit or SCA-containing
+    # runs completed before this change would under-count forever.
+    summary_version = 2
+
+    # Use cached summary only if it was computed by the current logic.
     cached = (meta or {}).get("output_summary")
-    if cached:
+    if cached and (meta or {}).get("output_summary_v") == summary_version:
         return cached
 
-    # Compute from findings or SARIF
-    from .findings_utils import load_findings_from_dir, count_vulns
-    findings = load_findings_from_dir(run_dir)
+    # Compute from findings or SARIF. Code findings (top-level
+    # findings.json) + SCA dependency findings (sca/ subdir) both count,
+    # so the run-list total matches what `/project findings` shows.
+    from .findings_utils import (
+        count_vulns,
+        load_findings_from_dir,
+        load_sca_findings_from_dir,
+    )
+    findings = load_findings_from_dir(run_dir) + load_sca_findings_from_dir(run_dir)
     if findings:
-        vuln_count = count_vulns(findings)
-        if vuln_count != len(findings):
-            result = f"{vuln_count} findings"
-        else:
-            result = f"{len(findings)} findings"
+        # count_vulns groups by (file, function, vuln_type); the prior
+        # branch always displayed this value, so this is behaviour-
+        # preserving for code-only runs and additive for SCA.
+        result = f"{count_vulns(findings)} findings"
     else:
         sarif_count = _count_sarif_results(run_dir)
         result = f"{sarif_count} results" if sarif_count else ""
@@ -725,6 +785,7 @@ def _get_output_summary(run_dir, meta):
         meta_path = run_dir / RUN_METADATA_FILE
         if meta_path.exists() and meta:
             meta["output_summary"] = result
+            meta["output_summary_v"] = summary_version
             save_json(meta_path, meta)
 
     return result
@@ -760,7 +821,17 @@ def _print_status(project):
                 status_str = _yellow(status)
             else:
                 status_str = status
-            print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}")
+            # Compact provenance tag: "<sha7>[*] repro|llm" (* = modified tree;
+            # repro = deterministic/mechanical, llm = LLM-mediated). Empty for
+            # legacy/unavailable runs. Appended last so colour codes in
+            # status_str don't disturb column padding.
+            from core.run.provenance import format_repro_short, format_sha_short
+            _manifest = (meta or {}).get("manifest")
+            tag = " ".join(
+                t for t in (format_sha_short(_manifest), format_repro_short(_manifest)) if t
+            )
+            line = f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}"
+            print(f"{line}  {tag}" if tag else line)
         # Disk usage — use os.walk(followlinks=False) so we stay inside
         # the run dir even if a stray symlink points outside (or back into
         # the run, creating a loop). Path.rglob follows symlinked dirs on
@@ -791,6 +862,47 @@ def _print_status(project):
         print("\nNo runs.")
 
 
+def _print_provenance(project):
+    """Print the project-level provenance rollup across all runs."""
+    from core.run import load_run_metadata
+    from core.run.provenance import aggregate_provenance, format_provenance_rollup
+
+    runs = project.get_run_dirs(sweep=False)
+    metadatas = [load_run_metadata(d) for d in runs]
+    print(f"Project: {project.name}")
+    print(format_provenance_rollup(aggregate_provenance(metadatas)))
+
+
+def _print_run_provenance(project, run_query):
+    """Print one run's provenance detail. ``run_query`` matches a run dir by
+    exact name, else by unique substring."""
+    from core.run import load_run_metadata
+    from core.run.provenance import format_manifest_block
+
+    runs = project.get_run_dirs(sweep=False)
+    exact = [d for d in runs if d.name == run_query]
+    matches = exact or [d for d in runs if run_query in d.name]
+    if not matches:
+        print(f"No run matching '{run_query}' in project '{project.name}'.")
+        return
+    if len(matches) > 1:
+        print(f"Ambiguous '{run_query}' — matches {len(matches)} runs:")
+        for d in matches:
+            print(f"  {d.name}")
+        return
+
+    d = matches[0]
+    meta = load_run_metadata(d) or {}
+    print(f"Run: {d.name}")
+    print(f"  Command: {meta.get('command', '?')}")
+    ts = (meta.get("timestamp") or "")[:19]
+    if ts:
+        print(f"  When: {ts}")
+    print(f"  Status: {meta.get('status', '?')}")
+    block = format_manifest_block(meta.get("manifest"))
+    print(block or "  (no provenance manifest)")
+
+
 def _print_coverage(project, detailed=False, fail_under=None):
     """Print project coverage summary or detailed view."""
     from core.coverage.summary import (
@@ -816,18 +928,37 @@ def _print_coverage(project, detailed=False, fail_under=None):
 
 
 def _print_findings(project, detailed=False):
-    """Print merged findings across all runs, grouped by vuln."""
+    """Print merged findings across all runs.
+
+    Code findings (each run's ``findings.json``) render first; SCA /
+    dependency findings (each run's ``sca/findings.json``) render in
+    their own section below, so dependency-CVE volume doesn't swamp the
+    code-finding table.
+    """
     from .merge import merge_findings
-    from .findings_utils import count_vulns, group_findings
-    from core.reporting.findings import build_findings_summary, findings_summary_line
-    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
+    from .findings_utils import merge_sca_findings
 
     run_dirs = project.get_run_dirs(sweep=False)
     merged = merge_findings(run_dirs)
+    sca_findings = merge_sca_findings(run_dirs)
 
-    if not merged:
+    if not merged and not sca_findings:
         print("No findings.")
         return
+
+    if merged:
+        _print_code_findings(merged, detailed)
+    if sca_findings:
+        if merged:
+            print()
+        _print_sca_findings_section(sca_findings, detailed)
+
+
+def _print_code_findings(merged, detailed=False):
+    """Render code findings as a grouped table (the original view)."""
+    from .findings_utils import count_vulns, group_findings
+    from core.reporting.findings import build_findings_summary, findings_summary_line
+    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
 
     vuln_count = count_vulns(merged)
     counts = build_findings_summary(merged)
@@ -850,7 +981,7 @@ def _print_findings(project, detailed=False):
         if len(lines_in_group) == 1:
             loc = f"{fname}:{lines_in_group[0]}"
         else:
-            loc = f"{fname}:{','.join(str(l) for l in lines_in_group)}"
+            loc = f"{fname}:{','.join(str(line) for line in lines_in_group)}"
         loc = truncate_path(loc) if loc else "—"
 
         vtype = title_case_type(rep.get("vuln_type", ""))
@@ -912,6 +1043,98 @@ def _print_findings(project, detailed=False):
                 parts.append(f"sink: {proof_sink}")
             print(f"{indent}Proof: {', '.join(parts)}")
 
+        print()
+
+
+_SCA_SEVERITY_RANK = {
+    "critical": 0, "high": 1, "medium": 2, "low": 3,
+    "none": 4, "info": 5, "": 6,
+}
+
+
+def _sca_finding_kind(finding):
+    """Human label for an SCA finding's class/kind, from its
+    ``vuln_type`` tag (``sca:<class>:<kind>``)."""
+    vt = finding.get("vuln_type", "")
+    tag = vt[4:] if vt.startswith("sca:") else vt
+    return tag.replace("_", " ").replace(":", " · ").title() or "—"
+
+
+def _sca_finding_package(finding):
+    """``ecosystem:name`` for an SCA finding (falls back to the
+    ``function`` field, which carries the package name)."""
+    sca = finding.get("sca") or {}
+    name = sca.get("name") or finding.get("function", "") or "—"
+    eco = sca.get("ecosystem", "")
+    return f"{eco}:{name}" if eco else name
+
+
+def _sca_finding_escalations(finding):
+    """Cross-detector escalation rationale for an SCA finding, if any.
+
+    Set by SCA's ``supply_chain`` layer when a slopsquat-shaped name
+    co-occurs with recent_publish / low_bus_factor / maintainer change;
+    explains a bumped severity. Lands at
+    ``finding['sca']['evidence']['escalation_reasons']``.
+    """
+    sca = finding.get("sca") or {}
+    evidence = sca.get("evidence") or {}
+    reasons = evidence.get("escalation_reasons") or []
+    return [str(r) for r in reasons] if isinstance(reasons, list) else []
+
+
+def _print_sca_findings_section(sca_findings, detailed=False):
+    """Render SCA / dependency findings in their own section.
+
+    Discovered from each run's ``sca/findings.json`` (see
+    ``findings_utils.merge_sca_findings``). Sorted by severity so the
+    high-signal supply-chain hits (slopsquat / typosquat) surface above
+    dependency-CVE volume. Kept separate from the code-finding table
+    because these are dep-level (no source file:line).
+    """
+    def _sev_rank(finding):
+        return _SCA_SEVERITY_RANK.get((finding.get("severity") or "").lower(), 6)
+
+    ordered = sorted(sca_findings, key=lambda f: (_sev_rank(f), _sca_finding_package(f)))
+
+    print(f"Supply chain / dependencies (SCA) — {len(ordered)} findings")
+    print()
+
+    rows = []
+    for f in ordered:
+        sev = (f.get("severity") or "").strip()
+        rows.append((
+            _sca_finding_package(f),
+            _sca_finding_kind(f),
+            sev.title() if sev else "—",
+        ))
+
+    headers = ("Package", "Kind", "Severity")
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, cell in enumerate(r):
+            widths[i] = max(widths[i], len(cell))
+    fmt = f"  {{:<{widths[0]}s}}  {{:<{widths[1]}s}}  {{:<{widths[2]}s}}"
+    print(fmt.format(*headers))
+    print(f"  {'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}")
+    for r in rows:
+        print(fmt.format(*r))
+
+    if not detailed:
+        return
+
+    print()
+    pad = len(str(len(ordered)))
+    indent = " " * (pad + 5)
+    for i, f in enumerate(ordered, 1):
+        title = f.get("title") or _sca_finding_package(f)
+        print(f"  [{i:0{pad}d}] {title}")
+        desc = f.get("description")
+        if desc and isinstance(desc, str):
+            for ln in desc.strip().split("\n")[:2]:
+                print(f"{indent}{ln.strip()}")
+        for reason in _sca_finding_escalations(f):
+            print(f"{indent}escalated: {reason}")
         print()
 
 

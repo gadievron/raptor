@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Synthesize a sound CodeQL barrier for a flagged false positive.
+
+Usage:
+  core/dataflow/scripts/trust-synth <before_db> <after_db> \
+      --sink-class cmdi --finding-id F --sink "<snippet>" \
+      --source-file <path> [--search-path <codeql-queries>] [--max-attempts 3]
+
+An LLM proposes a CodeQL guard predicate for the project-specific sanitizer on
+the path; CodeQL adjudicates it (the barrier must suppress the FP on the
+post-fix DB while leaving the real finding on the pre-fix DB). Emits the
+synthesized query to stdout; exit 0 = sound, 2 = compiled but not sound,
+1 = no compilable barrier after retries. See ~/design/trust-witness.md.
+
+Needs CodeQL + an LLM client configured. Dev-tooling, co-located with
+``core/dataflow/`` rather than ``libexec/`` (operator-command surface). Sibling
+to ``trust-corpus`` / ``corpus-run``.
+"""
+import sys
+from pathlib import Path
+
+# Repo root: this script lives at core/dataflow/scripts/trust-synth,
+# three levels deep. parents[3] climbs:
+#   [0] core/dataflow/scripts/  (this file's directory)
+#   [1] core/dataflow/
+#   [2] core/
+#   [3] <repo root>
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.dataflow.barrier_synth import main
+
+sys.exit(main())

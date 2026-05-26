@@ -97,9 +97,9 @@ def test_probes_tuple_lists_dns_first() -> None:
 # never touch the network from these tests.
 # ---------------------------------------------------------------------------
 
-import json as _json
+import json as _json  # noqa: E402
 
-from core.http import HttpError, Response
+from core.http import HttpError, Response  # noqa: E402
 
 
 def _stub_client(monkeypatch, *, request_fn=None):
@@ -350,7 +350,7 @@ def test_probe_github_handles_gh_cli_timeout(monkeypatch) -> None:
 
 # --- probe_debian / probe_ubuntu / probe_redhat (parametrized — same shape) ---
 
-import pytest
+import pytest  # noqa: E402
 
 
 @pytest.mark.parametrize("probe", [

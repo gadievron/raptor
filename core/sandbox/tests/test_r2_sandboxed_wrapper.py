@@ -26,6 +26,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-r2-sandboxed"
 
+# A real, small ELF to use as the r2 target / symlink destination.
+# Resolve `ls` wherever it lives (/bin vs /usr/bin differ across distros
+# and the /usr-merge); fall back to the interpreter (always present) so
+# these tests never assume a hardcoded /bin/ls path exists.
+_REAL_BINARY = shutil.which("ls") or sys.executable
+
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -172,12 +178,12 @@ class TestSymlinkResolution:
     while r2 actually reads the symlink's target."""
 
     def test_symlink_resolved_before_validation(self, tmp_path):
-        """Create a symlink at /tmp/X/target → /bin/ls, invoke wrapper
-        with the symlink path. The wrapper should accept (resolved
-        path /bin/ls is a real file) and the sandbox-side path passed
-        to r2 reflects the realpath."""
+        """Create a symlink at /tmp/X/target → a real binary, invoke
+        the wrapper with the symlink path. The wrapper should accept
+        (the resolved path is a real file) and the sandbox-side path
+        passed to r2 reflects the realpath."""
         link = tmp_path / "target-symlink"
-        link.symlink_to("/bin/ls")
+        link.symlink_to(_REAL_BINARY)
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         # We don't actually wait for r2 to fully run — just confirm
         # the wrapper got past validation. Short timeout, ignore rc.
@@ -210,7 +216,7 @@ class TestR2Invocation:
         # dir doesn't fight the per-ns mount of /usr/bin.
         self.tmp = tempfile.mkdtemp(prefix="r2-wrapper-test-")
         self.binary = Path(self.tmp) / "target"
-        shutil.copy("/bin/ls", self.binary)
+        shutil.copy(_REAL_BINARY, self.binary)
         self.binary.chmod(0o755)
         self.output_dir = Path(self.tmp) / "output"
         self.output_dir.mkdir()
@@ -251,8 +257,8 @@ class TestR2Invocation:
         assert r.returncode == 0, r.stderr
         # Find a `{...}` JSON object in stdout.
         json_lines = [
-            l for l in r.stdout.splitlines()
-            if l.strip().startswith("{") and l.strip().endswith("}")
+            line for line in r.stdout.splitlines()
+            if line.strip().startswith("{") and line.strip().endswith("}")
         ]
         assert json_lines, (
             f"no JSON object in r2 ij output: stdout={r.stdout!r}"
@@ -283,7 +289,7 @@ class TestAdversarialIsolation:
     def setup_method(self):
         self.tmp = tempfile.mkdtemp(prefix="r2-adv-test-")
         self.binary = Path(self.tmp) / "target"
-        shutil.copy("/bin/ls", self.binary)
+        shutil.copy(_REAL_BINARY, self.binary)
         self.binary.chmod(0o755)
         self.output_dir = Path(self.tmp) / "output"
         self.output_dir.mkdir()
@@ -364,16 +370,16 @@ class TestAdversarialIsolation:
         # Strip r2 prompts and noise; look at the lines that look like
         # interface names.
         candidate_lines = [
-            l.strip() for l in net_iface_listing.splitlines()
-            if l.strip() and not l.startswith("[")
-            and ":" not in l
-            and " " not in l.strip()
-            and len(l.strip()) < 20
+            line.strip() for line in net_iface_listing.splitlines()
+            if line.strip() and not line.startswith("[")
+            and ":" not in line
+            and " " not in line.strip()
+            and len(line.strip()) < 20
         ]
         # Filter out r2 prompts (e.g. "[0x00000000]>")
         candidate_lines = [
-            l for l in candidate_lines
-            if not l.startswith(">") and not l.startswith("0x")
+            line for line in candidate_lines
+            if not line.startswith(">") and not line.startswith("0x")
         ]
         # We should see at most {lo} in a properly isolated sandbox.
         # Don't be too strict — r2's output is noisy. Just assert that

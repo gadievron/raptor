@@ -390,7 +390,8 @@ class TestSmtPreFlight:
         """Findings without path_conditions → no_check (gate doesn't
         opine, caller proceeds)."""
         agent = self._agent(tmp_path)
-        v = MagicMock(); v.analysis = {}
+        v = MagicMock()
+        v.analysis = {}
         assert agent._smt_pre_flight(v) == "no_check"
 
     def test_nested_dataflow_validation_block(self, tmp_path):

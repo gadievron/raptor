@@ -1,0 +1,113 @@
+{
+  "improvement": 0.0,
+  "improvement_threshold": 0.05,
+  "max_delta": 0.1,
+  "notes": [
+    "ecosystem_filter='PyPI': 4055 \u2192 170 samples",
+    "baseline top-20 precision = 0.100 on 170 samples",
+    "_KEV_MULTIPLIER=1.188 rejected: cross-constraint violated: exploit_evidence_strictly_below_kev",
+    "_REACH_NOT_EVALUATED_MULTIPLIER=1.029 rejected: _REACH_NOT_EVALUATED_MULTIPLIER=1.0285000000000002 outside bounds [0.0, 1.0]",
+    "joint improvement 0.000 below threshold 0.050; refit not shipped"
+  ],
+  "overall_baseline_precision": 0.1,
+  "overall_proposed_precision": 0.1,
+  "per_constant": [
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 88.0,
+      "name": "_KEV_FLOOR",
+      "proposed": 88.0,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 1.32,
+      "name": "_KEV_MULTIPLIER",
+      "proposed": 1.32,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 60.0,
+      "name": "_EXPLOIT_EVIDENCE_FLOOR",
+      "proposed": 60.0,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": true,
+      "current": 1.19,
+      "name": "_EXPLOIT_EVIDENCE_MULTIPLIER",
+      "proposed": 1.309,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": true,
+      "current": 0.3,
+      "name": "_EPSS_FLOOR_MULTIPLIER",
+      "proposed": 0.33,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": true,
+      "current": 0.7,
+      "name": "_EPSS_RANGE_MULTIPLIER",
+      "proposed": 0.63,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 0.63,
+      "name": "_REACH_NOT_REACHABLE_MAX_REDUCTION",
+      "proposed": 0.63,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": true,
+      "current": 0.935,
+      "name": "_REACH_NOT_EVALUATED_MULTIPLIER",
+      "proposed": 0.8415,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_FLOOR_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_RANGE_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 0.1
+    },
+    {
+      "baseline_precision": 0.1,
+      "changed": false,
+      "current": 0.7,
+      "name": "_DEPTH_DECAY_BASE",
+      "proposed": 0.7,
+      "proposed_precision": 0.1
+    }
+  ],
+  "proposed_values": {
+    "_EPSS_FLOOR_MULTIPLIER": 0.33,
+    "_EPSS_RANGE_MULTIPLIER": 0.63,
+    "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.309,
+    "_REACH_NOT_EVALUATED_MULTIPLIER": 0.8415
+  },
+  "sample_count": 170,
+  "snapshot_date": "2026-05-09",
+  "status": "rejected"
+}

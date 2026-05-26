@@ -12,16 +12,16 @@ from typing import Any, Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-from core.security.prompt_envelope import (
+from core.security.prompt_envelope import (  # noqa: E402
     ModelDefenseProfile,
     PromptBundle,
     TaintedString,
     UntrustedBlock,
     build_prompt,
 )
-from core.security.prompt_defense_profiles import CONSERVATIVE
+from core.security.prompt_defense_profiles import CONSERVATIVE  # noqa: E402
 
-from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS
+from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS  # noqa: E402
 
 ANALYSIS_SYSTEM_PROMPT = """You are a security vulnerability validator and analyst.
 
@@ -56,6 +56,18 @@ Does the code at the stated location match the finding description?
 Is the source-to-sink flow real, or did the scanner fabricate a connection?
 Is this code reachable from an entry point, or is it dead code?
 
+If the metadata block contains a "Reachability:" section, use it as evidence:
+- "Verdict: NOT_CALLED" — the static call-graph resolver found no callers in the project. Before marking exploitable, identify a plausible reach mechanism the substrate could miss (framework dispatch the resolver didn't recognise, dynamic dispatch via reflection/registry lookups, public API surface called by external consumers, plugin entry points). If no plausible mechanism exists, mark is_exploitable=False with ruling="unreachable" or "dead_code" — the vulnerability shape may still be a true positive (is_true_positive=True) but it isn't exploitable in this deployment.
+- "Verdict: REACHABLE via ..." — reachability is established via a runtime-dispatch mechanism (framework decorator or registration call); treat as live, focus on exploit feasibility.
+- "Verdict: MODULE_ABORTS_ON_LOAD" — the file's top-level execution unconditionally aborts (raise ImportError, throw new Error, init() panic, compile_error!) before this function's definition runs. The function is never importable/callable in this deployment, regardless of in-file call edges — peers that appear to call it are equally dead, since the file never finishes loading. This is a STRONGER signal than NOT_CALLED: there is no framework-dispatch escape hatch (registration code below the abort never executes). Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable in this deployment.
+- "Verdict: LEXICAL_DEAD" — this function is defined inside an always-false guard (if False:, if (false) {…}, #[cfg(any())]). The guard's body never executes or compiles, so the function never binds. Like MODULE_ABORTS_ON_LOAD this trumps in-scope call edges (two dead-scope functions calling each other read as mutually called, but the whole scope is dead) and any decorator inside the dead scope never registers anything. Mark is_exploitable=False with ruling="dead_code". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable.
+- "Verdict: NO_PATH_FROM_ENTRY" — this function has in-project callers, but no path from any entry point (main, framework dispatch, or an exported/public symbol) reaches it: the entire calling chain is an orphaned dead-island (e.g. a static helper called only by another unreachable static function, or a function referenced only from an unread function-pointer table). Stronger than a raw caller count — having a caller doesn't mean the caller itself ever runs. Before marking exploitable, identify a real invocation path from a deployment entry point; if none exists, mark is_exploitable=False with ruling="dead_code" or "unreachable". The vulnerability shape may still be a true positive (is_true_positive=True), but it is unreachable in this deployment.
+- "Verdict: BUILD_EXCLUDED" — this function's file is excluded from the build (e.g. Go //go:build ignore, a standalone `go run gen.go` codegen script), so it is never compiled or linked in the normal build. This is a CONFIG-DEPENDENT (heuristic) signal, weaker than the structural verdicts above: a non-default build (e.g. `go build -tags ignore`) or an alternate build system could include the file. Treat it as strong evidence of unreachability in the shipped configuration — confirm the deployment doesn't compile the file, then mark is_exploitable=False with ruling="dead_code" or "unreachable"; if you have reason to believe the build does include it, say so and analyse normally. The vulnerability shape may still be a true positive (is_true_positive=True).
+- "Caller graph: N direct, M transitive" with N=0 but uncertain > 0 — the substrate found indirection it cannot resolve (string-dispatch / reflect / plugin registries). Treat as potentially reachable; note the indirection class in your reasoning.
+- "Caller graph: N direct, M transitive" with N > 0 — reachability is established; focus on exploit feasibility.
+
+The absence of a "Reachability:" section means the substrate couldn't compute reachability for this function (non-Python/JS/TS/Go/Java file, inventory build failed, or the function wasn't found in the project). Reason from the source code in that case — don't infer reachability from the absence alone.
+
 **Stage D: Ruling**
 Is this test code, example code, or documentation?
 Does exploitation require another vulnerability as a prerequisite?
@@ -87,6 +99,26 @@ Be rigorous. False positives waste significant downstream effort (exploit genera
 patch creation, review). But do not dismiss real vulnerabilities — investigate first."""
 
 
+# Appended to the system prompt when the operator passes
+# --allow-unreachable. Switches the Stage C REACHABILITY ENGAGEMENT
+# guidance from "you must engage with reachability before marking
+# exploitable" to "reachability is informational only; evaluate the
+# inherent vulnerability shape". The addendum approach avoids
+# restructuring the multi-paragraph base prompt — the default
+# behaviour (which has been A/B validated to shift verdicts
+# correctly) stays unchanged for normal /agentic runs.
+_ALLOW_UNREACHABLE_ADDENDUM = """
+
+**ADDENDUM — IN-ISOLATION MODE (--allow-unreachable):**
+
+This analysis is running with reachability gating disabled. The operator has chosen to evaluate code in isolation (CTF challenge, vendor reference snippet, exploit-research target, or intentional dead-code review). The REACHABILITY ENGAGEMENT guidance in Stage C above is **suspended** for this run.
+
+- Reachability data shown in the metadata block (caller counts, caller names, REACHABLE-via verdicts) is INFORMATIONAL ONLY.
+- Do NOT defer based on "no callers" or "NOT_CALLED" — the operator wants the inherent vulnerability shape evaluated under plausible attacker-controllable inputs.
+- is_exploitable should reflect whether the code pattern is exploitable in isolation, NOT whether it is reachable from a project entry point.
+- The deferral rulings (unreachable, dead_code) should only be used if the FUNCTION BODY ITSELF (not its containing scope) is provably unreachable under all inputs."""
+
+
 def build_analysis_schema(has_dataflow: bool = False) -> Dict[str, str]:
     """Build the analysis schema, optionally including dataflow fields."""
     schema = dict(ANALYSIS_SCHEMA)
@@ -112,7 +144,101 @@ def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
     if metadata.get("priority") == "high":
         reason = metadata.get("priority_reason", "high-priority")
         parts.append(f"Architectural role: {reason} (from /understand --map)")
+    reach_block = _format_reachability_block(metadata)
+    if reach_block:
+        parts.append(reach_block)
     return "\n".join(parts)
+
+
+def _format_reachability_block(metadata: Dict[str, Any]) -> str:
+    """Render reachability evidence — fires whenever ANY reachability
+    signal is present on the function.
+
+    Surfaces data already computed by
+    :mod:`core.orchestration.reachability_enrichment` (the pre-pass
+    that marks ``priority="low"`` for NOT_CALLED functions and
+    populates per-function caller counts + direct caller names).
+    Pre-C1 the analysis prompt rendered only ``priority="high"`` —
+    the rest of the reachability picture was invisible to the LLM
+    even though it sat in the per-finding metadata. C1 surfaces it
+    so the LLM can integrate reachability into its is_exploitable
+    reasoning instead of guessing.
+
+    No verdict mutation; this is information-only. See the
+    ``REACHABILITY ENGAGEMENT`` section of the task prompt for how
+    the LLM should use the data.
+
+    Output shape (only emits the lines whose data is present):
+
+        Reachability:
+          Verdict: NOT_CALLED (reachability:not_called)
+          Caller graph: 3 direct, 12 transitive, 1 uncertain (indirection masking)
+          Direct callers: auth.py:handle_login, api/users.py:create_user
+    """
+    lines = []
+
+    priority = metadata.get("priority")
+    priority_reason = metadata.get("priority_reason") or ""
+    # Reachability verdict line. The structural dead verdicts (module_aborts /
+    # lexical_dead / build_excluded / no_path_from_entry) render a canonical
+    # "Verdict: …" line from the witness table — single source of truth, so a
+    # new dead witness surfaces here automatically. not_called falls to the
+    # low-priority catch-all; framework / registration render an affirmative
+    # "REACHABLE via …" line (annotated without demotion).
+    from core.inventory.reach_witness import prompt_verdict_for
+    verdict = (priority_reason.split("reachability:", 1)[1]
+               if priority_reason.startswith("reachability:") else "")
+    pv = prompt_verdict_for(verdict)
+    if pv:
+        lines.append(pv)
+    elif priority == "low":
+        lines.append(
+            f"Verdict: NOT_CALLED ({priority_reason or 'no callers in project'})"
+        )
+    elif priority_reason in (
+        "reachability:framework_callable",
+        "reachability:registered_via_call",
+    ):
+        mechanism = (
+            "framework decorator dispatch"
+            if priority_reason == "reachability:framework_callable"
+            else "framework registration call (handler passed as argument)"
+        )
+        lines.append(f"Verdict: REACHABLE via {mechanism}")
+
+    direct = metadata.get("caller_count_direct")
+    transitive = metadata.get("caller_count_transitive")
+    uncertain = metadata.get("caller_count_uncertain")
+    if direct is not None or transitive is not None or uncertain:
+        bits = []
+        if direct is not None:
+            bits.append(f"{direct} direct")
+        if transitive is not None and transitive != direct:
+            bits.append(f"{transitive} transitive")
+        if uncertain:
+            bits.append(
+                f"{uncertain} uncertain (indirection masking — "
+                f"getattr/reflect/dispatch)"
+            )
+        if bits:
+            lines.append(f"Caller graph: {', '.join(bits)}")
+
+    names = metadata.get("direct_caller_names") or []
+    if names:
+        # Cap at 10 so we don't blow the prompt budget on busy
+        # functions. The substrate's enricher already caps via
+        # max_direct_caller_names but defending here too.
+        shown = list(names[:10])
+        suffix = (
+            f" (+{len(names) - 10} more)"
+            if len(names) > 10
+            else ""
+        )
+        lines.append(f"Direct callers: {', '.join(shown)}{suffix}")
+
+    if not lines:
+        return ""
+    return "Reachability:\n  " + "\n  ".join(lines)
 
 
 def _build_strategy_block(
@@ -175,6 +301,38 @@ def _build_strategy_block(
     )
 
 
+def _build_verified_exemplar_block(
+    *,
+    rule_id: str,
+    cwe_id: Optional[str],
+    file_path: str,
+    verified_outcomes: Iterable[Any],
+) -> str:
+    """Render RAPTOR's own prior verified outcomes for this finding.
+
+    Tier-3 retrieval: the nearest previously-confirmed outcomes (witness /
+    CodeQL backends) primed as exemplars beside the curated CVE ones — RAPTOR's
+    own ground truth, so the set sharpens as it runs. Empty when nothing
+    matches or the substrate is absent. Best-effort: analysis continues
+    regardless. The caller places the returned text inside an
+    ``UntrustedBlock`` envelope (it carries scanned-repo-derived fields), not
+    the trusted system prompt.
+    """
+    outcomes = list(verified_outcomes)
+    if not outcomes:
+        return ""
+    try:
+        from core.verified_outcome import render_verified_exemplars
+    except Exception:
+        return ""  # substrate absent (older deployment) — skip silently
+    try:
+        finding = {"id": rule_id, "cwe_id": cwe_id, "file": file_path}
+        return render_verified_exemplars(finding, outcomes)
+    except Exception as e:
+        logger.debug(f"verified-exemplar block render failed: {e}", exc_info=True)
+        return ""
+
+
 def build_analysis_prompt_bundle(
     *,
     rule_id: str,
@@ -198,6 +356,8 @@ def build_analysis_prompt_bundle(
     file_includes: Iterable[str] = (),
     function_calls_made: Iterable[str] = (),
     ast_view: Optional[Dict[str, Any]] = None,
+    allow_unreachable: bool = False,
+    verified_outcomes: Iterable[Any] = (),
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -206,6 +366,12 @@ def build_analysis_prompt_bundle(
     envelope tags inside the user message. Identifiers (rule_id, file_path,
     line range, dataflow labels) are passed through named slots. Static
     instructions stay in the system message.
+
+    ``allow_unreachable=True`` appends an addendum that suspends the
+    Stage C REACHABILITY ENGAGEMENT guidance — for in-isolation
+    review where the operator wants the inherent vulnerability shape
+    evaluated regardless of static reachability. Default behaviour
+    (engagement required) is unchanged.
 
     Caller routes ``bundle.messages`` to ``LLMClient.generate_structured``
     by role (system message → ``system_prompt`` parameter; user message →
@@ -218,6 +384,8 @@ def build_analysis_prompt_bundle(
         + "\n\n"
         + ANALYSIS_TASK_INSTRUCTIONS
     )
+    if allow_unreachable:
+        system += _ALLOW_UNREACHABLE_ADDENDUM
 
     # Append CWE-specialised review strategies when context allows.
     # Each strategy contributes its key questions, prompt addendum,
@@ -235,6 +403,25 @@ def build_analysis_prompt_bundle(
         system += "\n\n" + strategy_block
 
     blocks: list[UntrustedBlock] = []
+
+    # RAPTOR's own prior verified outcomes for this finding (Tier-3
+    # retrieval). These carry scanned-repo-derived data (file paths), so —
+    # unlike the operator-curated strategy lenses above — they ride the
+    # untrusted-block envelope rather than the trusted system prompt. Empty
+    # unless the caller supplies a corpus and something ranks against this
+    # finding, so default behaviour is unchanged.
+    verified_block = _build_verified_exemplar_block(
+        rule_id=rule_id,
+        cwe_id=cwe_id,
+        file_path=file_path,
+        verified_outcomes=verified_outcomes,
+    )
+    if verified_block:
+        blocks.append(UntrustedBlock(
+            content=verified_block,
+            kind="verified-exemplars",
+            origin="raptor-verified-outcomes",
+        ))
 
     if message:
         blocks.append(UntrustedBlock(
@@ -487,8 +674,16 @@ def build_analysis_prompt_bundle_from_finding(
     *,
     profile: Optional[ModelDefenseProfile] = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
+    allow_unreachable: bool = False,
 ) -> PromptBundle:
-    """Bundle-shape equivalent of ``build_analysis_prompt_from_finding``."""
+    """Bundle-shape equivalent of ``build_analysis_prompt_from_finding``.
+
+    ``allow_unreachable`` threads through to
+    :func:`build_analysis_prompt_bundle` and switches the system
+    prompt's reachability-engagement text. See that function for
+    semantics. Task-level setting (the operator's --allow-unreachable
+    flag) — not a per-finding decision.
+    """
     dataflow = finding.get("dataflow", {})
     metadata = finding.get("metadata") or {}
     return build_analysis_prompt_bundle(
@@ -523,6 +718,7 @@ def build_analysis_prompt_bundle_from_finding(
         # when the function can't be located in the inventory or
         # the parser doesn't support the language.
         ast_view=finding.get("ast_view"),
+        allow_unreachable=allow_unreachable,
     )
 
 

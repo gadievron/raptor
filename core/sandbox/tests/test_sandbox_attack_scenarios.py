@@ -284,7 +284,7 @@ class TestAPIContract(unittest.TestCase):
         try:
             with self.assertRaises((TypeError, ValueError)):
                 with sandbox(
-                    target="/tmp", output=self.tmp.name,
+                    target=self.tmp.name, output=self.tmp.name,
                 ) as run:
                     run(["true"], pass_fds=[s1.fileno()], timeout=5)
         finally:
@@ -298,7 +298,7 @@ class TestAPIContract(unittest.TestCase):
         rfd, wfd = os.pipe()
         try:
             with sandbox(
-                target="/tmp", output=self.tmp.name,
+                target=self.tmp.name, output=self.tmp.name,
             ) as run:
                 # Pass the read end — the child won't read it, we only
                 # care that pass_fds doesn't reject valid pipes.
@@ -367,7 +367,7 @@ class TestFakeHomeXDGRedirection(unittest.TestCase):
              'for v in HOME XDG_CONFIG_HOME XDG_CACHE_HOME '
              'XDG_DATA_HOME XDG_STATE_HOME; do '
              'eval echo "$v=\\$$v"; done'],
-            target="/tmp", output=out,
+            target=out, output=out,
             capture_output=True, text=True, timeout=5,
         )
         self.assertEqual(r.returncode, 0)
@@ -494,7 +494,7 @@ class TestOOMScoreAdjWrite(unittest.TestCase):
         r = run_untrusted(
             ["sh", "-c", "echo -1000 > /proc/self/oom_score_adj 2>&1; "
                          "cat /proc/self/oom_score_adj 2>&1"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         out = (r.stdout or "") + (r.stderr or "")
@@ -599,7 +599,7 @@ class TestProcNetTCPLeak(unittest.TestCase):
     def test_net_ns_hides_host_tcp(self):
         r = run_untrusted(
             ["cat", "/proc/net/tcp"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         self.assertEqual(r.returncode, 0)
@@ -633,7 +633,7 @@ class TestSymlinkInReadablePaths(unittest.TestCase):
         from core.sandbox import run as sandbox_run
         r = sandbox_run(
             ["cat", str(symlink_dir / "secret.txt")],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             restrict_reads=True,
             readable_paths=[str(symlink_dir)],
             capture_output=True, text=True, timeout=5,
@@ -770,7 +770,7 @@ class TestPidNamespaceDefenses(unittest.TestCase):
         Any of these prove host pids are hidden."""
         r = run_untrusted(
             ["sh", "-c", "echo $$"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         self.assertEqual(r.returncode, 0)
@@ -782,7 +782,7 @@ class TestPidNamespaceDefenses(unittest.TestCase):
         host_pid = os.getpid()
         r = run_untrusted(
             ["sh", "-c", f"kill -0 {host_pid} 2>&1; echo rc=$?"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         out = r.stdout or ""
@@ -804,7 +804,7 @@ class TestForkBombBounded(unittest.TestCase):
     def test_fork_bomb_capped(self):
         r = run_untrusted(
             ["sh", "-c", "i=0; while [ $i -lt 5000 ]; do sleep 30 & i=$((i+1)); done; echo $i"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=10,
         )
         # Must not reach 5000 — should hit RLIMIT_NPROC first.
@@ -826,7 +826,7 @@ class TestRestrictReadsCredentialExfil(unittest.TestCase):
     def test_fake_home_hides_ssh_creds(self):
         r = run_untrusted(
             ["sh", "-c", "cat ~/.ssh/id_rsa 2>&1 || echo NOACCESS"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         out = (r.stdout or "") + (r.stderr or "")
@@ -841,7 +841,7 @@ class TestRestrictReadsCredentialExfil(unittest.TestCase):
         host_pid = os.getpid()
         r = run_untrusted(
             ["sh", "-c", f"cat /proc/{host_pid}/environ 2>&1 || echo BLOCKED"],
-            target="/tmp", output=self.tmp.name,
+            target=self.tmp.name, output=self.tmp.name,
             capture_output=True, text=True, timeout=5,
         )
         out = (r.stdout or "") + (r.stderr or "")
@@ -936,7 +936,7 @@ class TestCLIPrecedence(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             r = run_untrusted(
                 ["sh", "-c", "ls /proc/self/net/route >/dev/null && echo HAS_NET"],
-                target="/tmp", output=tmp,
+                target=tmp, output=tmp,
                 capture_output=True, text=True, timeout=5,
             )
         # Under --sandbox none, network is open and /proc net routing info is available

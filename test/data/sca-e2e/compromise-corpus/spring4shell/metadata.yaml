@@ -1,0 +1,17 @@
+incident: Spring4Shell (Spring Framework RCE via class loader)
+ecosystem: Maven
+package: org.springframework:spring-beans
+malicious_versions:
+  - "<=5.2.19"
+  - "5.3.0..5.3.17"
+disclosure_date: 2022-03-31
+classification: pre-existing vulnerability (KEV-listed within 4 days)
+references:
+  - CVE-2022-22965
+  - https://spring.io/security/cve-2022-22965
+  - https://www.cisa.gov/news-events/alerts/2022/04/04/cisa-adds-five-known-exploited-vulnerabilities-catalog
+expected_signal_summary: |
+  Property-binding bug that lets an attacker manipulate the Spring
+  ClassLoader and ultimately drop a webshell. KEV-listed within
+  four days. The standard "vuln_dep + KEV + high severity" smoke
+  test for the Maven OSV+KEV path.

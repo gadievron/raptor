@@ -1,0 +1,3591 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-22T13:10:00Z",
+    "git_ref": "v1.0.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of meilisearch-1.0",
+    "project_license": "MIT",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/meilisearch/meilisearch.git@v1.0.0. Project source not redistributed.",
+    "url": "https://github.com/meilisearch/meilisearch.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "3.12.1"
+        ],
+        "id": "GHSA-xhj4-vrgc-hr34",
+        "modified": "2026-04-23T22:14:14.585161+00:00",
+        "published": "2026-04-22T14:37:30+00:00",
+        "references": [
+          "https://github.com/actix/actix-web/security/advisories/GHSA-xhj4-vrgc-hr34",
+          "https://github.com/actix/actix-web",
+          "https://github.com/actix/actix-web/releases/tag/http-v3.12.1",
+          "https://www.rfc-editor.org/rfc/rfc9112.html#name-message-body-length"
+        ],
+        "severity": null,
+        "summary": "actix-http has HTTP/1.1 CL.TE Request Smuggling "
+      },
+      "cvss_score": null,
+      "dep_name": "actix-http",
+      "dep_version": "3.2.2",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:actix-http:3.2.2:GHSA-xhj4-vrgc-hr34",
+      "in_kev": false,
+      "purl": "pkg:cargo/actix-http@3.2.2",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/lib.rs:24",
+          "meilisearch/src/extractors/query_parameters.rs:5",
+          "meilisearch/src/extractors/payload.rs:3"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2025-0056",
+        "informational": "unmaintained",
+        "modified": "2025-09-05T09:05:48+00:00",
+        "published": "2025-09-05T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/adler",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0056.html",
+          "https://github.com/jonas-schievink/adler"
+        ],
+        "severity": null,
+        "summary": "adler crate is unmaintained, use adler2 instead"
+      },
+      "cvss_score": null,
+      "dep_name": "adler",
+      "dep_version": "1.0.2",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:adler:1.0.2:RUSTSEC-2025-0056",
+      "in_kev": false,
+      "purl": "pkg:cargo/adler@1.0.2",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use adler` / `extern crate adler` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2023-0089",
+        "informational": "unmaintained",
+        "modified": "2025-04-29T08:31:10+00:00",
+        "published": "2023-07-11T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/atomic-polyfill",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0089.html",
+          "https://github.com/embassy-rs/atomic-polyfill/commit/48e55c166684f37af0b00fbee5a0809b1a2bae8e"
+        ],
+        "severity": null,
+        "summary": "atomic-polyfill is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "atomic-polyfill",
+      "dep_version": "0.1.11",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:atomic-polyfill:0.1.11:RUSTSEC-2023-0089",
+      "in_kev": false,
+      "purl": "pkg:cargo/atomic-polyfill@0.1.11",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use atomic-polyfill` / `extern crate atomic-polyfill` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2021-0145"
+        ],
+        "fixed_versions": [],
+        "id": "GHSA-g98v-hv3f-hcfr",
+        "modified": "2026-02-04T02:17:03.508617+00:00",
+        "published": "2023-06-30T20:21:59+00:00",
+        "references": [
+          "https://github.com/softprops/atty/issues/50",
+          "https://github.com/softprops/atty/pull/51",
+          "https://github.com/softprops/atty",
+          "https://rustsec.org/advisories/RUSTSEC-2021-0145.html"
+        ],
+        "severity": null,
+        "summary": "atty potential unaligned read"
+      },
+      "cvss_score": null,
+      "dep_name": "atty",
+      "dep_version": "0.2.14",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:atty:0.2.14:GHSA-g98v-hv3f-hcfr",
+      "in_kev": false,
+      "purl": "pkg:cargo/atty@0.2.14",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use atty` / `extern crate atty` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-g98v-hv3f-hcfr"
+        ],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2021-0145",
+        "informational": "unsound",
+        "modified": "2023-11-08T04:19:25.814075+00:00",
+        "published": "2021-07-04T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/atty",
+          "https://rustsec.org/advisories/RUSTSEC-2021-0145.html",
+          "https://github.com/softprops/atty/issues/50",
+          "https://github.com/softprops/atty/pull/51",
+          "https://github.com/softprops/atty/issues/57"
+        ],
+        "severity": null,
+        "summary": "Potential unaligned read"
+      },
+      "cvss_score": null,
+      "dep_name": "atty",
+      "dep_version": "0.2.14",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2021-0145",
+      "in_kev": false,
+      "purl": "pkg:cargo/atty@0.2.14",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use atty` / `extern crate atty` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2024-0375",
+        "informational": "unmaintained",
+        "modified": "2024-09-26T12:26:22+00:00",
+        "published": "2024-09-25T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/atty",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0375.html",
+          "https://github.com/softprops/atty/issues/57"
+        ],
+        "severity": null,
+        "summary": "`atty` is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "atty",
+      "dep_version": "0.2.14",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:atty:0.2.14:RUSTSEC-2024-0375",
+      "in_kev": false,
+      "purl": "pkg:cargo/atty@0.2.14",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use atty` / `extern crate atty` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2025-0141",
+        "informational": "unmaintained",
+        "modified": "2026-01-16T11:07:28.867553+00:00",
+        "published": "2025-12-16T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/bincode",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0141.html",
+          "https://git.sr.ht/~stygianentity/bincode/tree/v3.0/item/README.md"
+        ],
+        "severity": null,
+        "summary": "Bincode is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "bincode",
+      "dep_version": "1.3.3",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:bincode:1.3.3:RUSTSEC-2025-0141",
+      "in_kev": false,
+      "purl": "pkg:cargo/bincode@1.3.3",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use bincode` / `extern crate bincode` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25541",
+          "RUSTSEC-2026-0007"
+        ],
+        "fixed_versions": [
+          "1.11.1"
+        ],
+        "id": "GHSA-434x-w66g-qw3r",
+        "modified": "2026-02-05T00:37:18+00:00",
+        "published": "2026-02-03T19:17:46+00:00",
+        "references": [
+          "https://github.com/tokio-rs/bytes/security/advisories/GHSA-434x-w66g-qw3r",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25541",
+          "https://github.com/tokio-rs/bytes/commit/d0293b0e35838123c51ca5dfdf468ecafee4398f",
+          "https://github.com/tokio-rs/bytes",
+          "https://github.com/tokio-rs/bytes/releases/tag/v1.11.1"
+        ],
+        "severity": null,
+        "summary": "bytes has integer overflow in BytesMut::reserve"
+      },
+      "cvss_score": null,
+      "dep_name": "bytes",
+      "dep_version": "1.3.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00019,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:bytes:1.3.0:GHSA-434x-w66g-qw3r",
+      "in_kev": false,
+      "purl": "pkg:cargo/bytes@1.3.0",
+      "raptor_risk_estimate": 11.010087578597243,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "crate referenced only by test/example/bench code"
+        },
+        "evidence": [
+          "meilisearch/tests/common/encoder.rs:4"
+        ],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36310772999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9490344944822535,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": "no",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2021-0153",
+        "informational": "unmaintained",
+        "modified": "2023-03-12T07:17:34+00:00",
+        "published": "2021-12-05T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/encoding",
+          "https://rustsec.org/advisories/RUSTSEC-2021-0153.html",
+          "https://github.com/lifthrasiir/rust-encoding/issues/127"
+        ],
+        "severity": null,
+        "summary": "`encoding` is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "encoding",
+      "dep_version": "0.2.33",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:encoding:0.2.33:RUSTSEC-2021-0153",
+      "in_kev": false,
+      "purl": "pkg:cargo/encoding@0.2.33",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use encoding` / `extern crate encoding` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2025-0057",
+        "informational": "unmaintained",
+        "modified": "2025-09-05T19:09:01+00:00",
+        "published": "2025-09-05T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/fxhash",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0057.html",
+          "https://github.com/cbreeden/fxhash/issues/20"
+        ],
+        "severity": null,
+        "summary": "fxhash - no longer maintained"
+      },
+      "cvss_score": null,
+      "dep_name": "fxhash",
+      "dep_version": "0.2.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:fxhash:0.2.1:RUSTSEC-2025-0057",
+      "in_kev": false,
+      "purl": "pkg:cargo/fxhash@0.2.1",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use fxhash` / `extern crate fxhash` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2026-0008"
+        ],
+        "fixed_versions": [
+          "0.20.4"
+        ],
+        "id": "GHSA-j39j-6gw9-jw6h",
+        "modified": "2026-02-05T14:43:45.219620+00:00",
+        "published": "2026-02-04T20:36:04+00:00",
+        "references": [
+          "https://github.com/rust-lang/git2-rs/issues/1211",
+          "https://github.com/rust-lang/git2-rs/pull/1213",
+          "https://github.com/rust-lang/git2-rs/commit/9e160f15bd056f82143109bb330573381e5de719",
+          "https://github.com/rust-lang/git2-rs",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0008.html"
+        ],
+        "severity": null,
+        "summary": "git2 has potential undefined behavior when dereferencing Buf struct "
+      },
+      "cvss_score": null,
+      "dep_name": "git2",
+      "dep_version": "0.15.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:git2:0.15.0:GHSA-j39j-6gw9-jw6h",
+      "in_kev": false,
+      "purl": "pkg:cargo/git2@0.15.0",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use git2` / `extern crate git2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-22742",
+          "GHSA-8643-3wh5-rmjq",
+          "RUSTSEC-2023-0003"
+        ],
+        "fixed_versions": [
+          "0.14.2",
+          "0.13.5",
+          "0.16.1"
+        ],
+        "id": "GHSA-m4ch-rfv5-x5g3",
+        "modified": "2023-11-08T04:11:38.429673+00:00",
+        "published": "2023-01-20T23:36:41+00:00",
+        "references": [
+          "https://github.com/libgit2/libgit2/security/advisories/GHSA-8643-3wh5-rmjq",
+          "https://github.com/rust-lang/git2-rs/security/advisories/GHSA-m4ch-rfv5-x5g3",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-22742",
+          "https://github.com/rust-lang/git2-rs/commit/87934f87d36753ed702792ec063be7246444a8e1",
+          "https://github.com/rust-lang/git2-rs"
+        ],
+        "severity": {
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+        },
+        "summary": "git2-rs fails to verify SSH keys by default"
+      },
+      "cvss_score": 6.8,
+      "dep_name": "git2",
+      "dep_version": "0.15.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00121,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:git2:0.15.0:GHSA-m4ch-rfv5-x5g3",
+      "in_kev": false,
+      "purl": "pkg:cargo/git2@0.15.0",
+      "raptor_risk_estimate": 7.1733480997796795,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use git2` / `extern crate git2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 68.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36368607,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.021343669845775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-j39j-6gw9-jw6h"
+        ],
+        "fixed_versions": [
+          "0.20.4"
+        ],
+        "id": "RUSTSEC-2026-0008",
+        "informational": "unsound",
+        "modified": "2026-02-05T06:56:18.869923+00:00",
+        "published": "2026-02-02T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/git2",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0008.html",
+          "https://github.com/rust-lang/git2-rs/pull/1213"
+        ],
+        "severity": null,
+        "summary": "Potential undefined behavior when dereferencing Buf struct"
+      },
+      "cvss_score": null,
+      "dep_name": "git2",
+      "dep_version": "0.15.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:git2:0.15.0:RUSTSEC-2026-0008",
+      "in_kev": false,
+      "purl": "pkg:cargo/git2@0.15.0",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use git2` / `extern crate git2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2024-0003"
+        ],
+        "fixed_versions": [
+          "0.3.24",
+          "0.4.2"
+        ],
+        "id": "GHSA-8r5v-vm4m-4g25",
+        "modified": "2026-02-04T03:48:19.910642+00:00",
+        "published": "2024-01-19T15:24:56+00:00",
+        "references": [
+          "https://github.com/hyperium/h2/pull/737",
+          "https://github.com/hyperium/h2/commit/59570e11ccddbec85f67a0c7aa353f7730c68854",
+          "https://github.com/hyperium/h2/commit/d919cd6fd8e0f4f5d1f6282fab0b38a1b4bf999c",
+          "https://github.com/hyperium/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0003.html"
+        ],
+        "severity": null,
+        "summary": "Resource exhaustion vulnerability in h2 may lead to Denial of Service (DoS)"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-8r5v-vm4m-4g25",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-26964",
+          "RUSTSEC-2023-0034"
+        ],
+        "fixed_versions": [
+          "0.3.17"
+        ],
+        "id": "GHSA-f8vr-r385-rh5r",
+        "modified": "2023-11-08T04:12:03.011700+00:00",
+        "published": "2023-04-11T15:30:30+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-26964",
+          "https://github.com/hyperium/h2/issues/621",
+          "https://github.com/hyperium/hyper/issues/2877",
+          "https://github.com/hyperium/h2/pull/668",
+          "https://github.com/hyperium/hyper"
+        ],
+        "severity": null,
+        "summary": "h2 vulnerable to denial of service"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": 0.00318,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-f8vr-r385-rh5r",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 13.384406616305636,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36480306,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9628033741740483,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": "yes",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2024-0332"
+        ],
+        "fixed_versions": [
+          "0.3.26",
+          "0.4.4"
+        ],
+        "id": "GHSA-q6cp-qfwq-4gcv",
+        "modified": "2026-02-04T03:52:13.377314+00:00",
+        "published": "2024-04-05T15:05:32+00:00",
+        "references": [
+          "https://github.com/hyperium/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0332.html",
+          "https://seanmonstar.com/blog/hyper-http2-continuation-flood",
+          "https://www.kb.cert.org/vuls/id/421644"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "h2 servers vulnerable to degradation of service with CONTINUATION Flood"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:GHSA-q6cp-qfwq-4gcv",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 9.938726177193747,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.957108324035622,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-8r5v-vm4m-4g25"
+        ],
+        "fixed_versions": [
+          "0.3.24",
+          "0.4.2"
+        ],
+        "id": "RUSTSEC-2024-0003",
+        "modified": "2026-02-04T03:15:37.377206+00:00",
+        "published": "2024-01-17T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0003.html",
+          "https://github.com/Netflix/security-bulletins/blob/master/advisories/third-party/2019-002.md"
+        ],
+        "severity": null,
+        "summary": "Resource exhaustion vulnerability in h2 may lead to Denial of Service (DoS)"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:RUSTSEC-2024-0003",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-q6cp-qfwq-4gcv"
+        ],
+        "fixed_versions": [
+          "0.3.26",
+          "0.4.4"
+        ],
+        "id": "RUSTSEC-2024-0332",
+        "modified": "2024-04-11T16:41:43.668809+00:00",
+        "published": "2024-04-03T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/h2",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0332.html",
+          "https://seanmonstar.com/blog/hyper-http2-continuation-flood/"
+        ],
+        "severity": null,
+        "summary": "Degradation of service in h2 servers with CONTINUATION Flood"
+      },
+      "cvss_score": null,
+      "dep_name": "h2",
+      "dep_version": "0.3.15",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:h2:0.3.15:RUSTSEC-2024-0332",
+      "in_kev": false,
+      "purl": "pkg:cargo/h2@0.3.15",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use h2` / `extern crate h2` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-12224",
+          "RUSTSEC-2024-0421"
+        ],
+        "fixed_versions": [
+          "1.0.0"
+        ],
+        "id": "GHSA-h97m-ww89-6jmq",
+        "modified": "2026-02-04T04:28:06.675879+00:00",
+        "published": "2024-12-09T20:41:10+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-12224",
+          "https://bugzilla.mozilla.org/show_bug.cgi?id=1887898",
+          "https://github.com/servo/rust-url",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0421.html"
+        ],
+        "severity": null,
+        "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded"
+      },
+      "cvss_score": null,
+      "dep_name": "idna",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00151,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:idna:0.3.0:GHSA-h97m-ww89-6jmq",
+      "in_kev": false,
+      "purl": "pkg:cargo/idna@0.3.0",
+      "raptor_risk_estimate": 11.032781642277257,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use idna` / `extern crate idna` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36385617,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9551130634431795,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": "no",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2024-0384",
+        "informational": "unmaintained",
+        "modified": "2024-11-10T13:10:28+00:00",
+        "published": "2024-09-01T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/instant",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0384.html",
+          "https://crates.io/crates/instant/0.1.13",
+          "https://github.com/sebcrozet/instant/issues/52"
+        ],
+        "severity": null,
+        "summary": "`instant` is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "instant",
+      "dep_version": "0.1.12",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:instant:0.1.12:RUSTSEC-2024-0384",
+      "in_kev": false,
+      "purl": "pkg:cargo/instant@0.1.12",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use instant` / `extern crate instant` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25537"
+        ],
+        "fixed_versions": [
+          "10.3.0"
+        ],
+        "id": "GHSA-h395-gr6q-cpjc",
+        "modified": "2026-02-05T03:43:54.288455+00:00",
+        "published": "2026-02-03T18:47:40+00:00",
+        "references": [
+          "https://github.com/Keats/jsonwebtoken/security/advisories/GHSA-h395-gr6q-cpjc",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25537",
+          "https://github.com/Keats/jsonwebtoken/commit/abbc3076742c4161347bc6b8bf4aa5eb86e1dc01",
+          "https://github.com/Keats/jsonwebtoken"
+        ],
+        "severity": null,
+        "summary": "jsonwebtoken has Type Confusion that leads to potential authorization bypass"
+      },
+      "cvss_score": null,
+      "dep_name": "jsonwebtoken",
+      "dep_version": "8.2.0",
+      "ecosystem": "Cargo",
+      "epss": 0.0004,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:jsonwebtoken:8.2.0:GHSA-h395-gr6q-cpjc",
+      "in_kev": false,
+      "purl": "pkg:cargo/jsonwebtoken@8.2.0",
+      "raptor_risk_estimate": 20.732392503556472,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/extractors/authentication/mod.rs:129"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.3632268,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.589370618,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": "yes",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2024-0013"
+        ],
+        "fixed_versions": [
+          "0.16.2"
+        ],
+        "id": "GHSA-22q8-ghmq-63vf",
+        "modified": "2026-02-04T04:35:38.761675+00:00",
+        "published": "2024-02-12T15:42:14+00:00",
+        "references": [
+          "https://github.com/rust-lang/git2-rs/pull/1017",
+          "https://github.com/rust-lang/git2-rs/commit/9e57876be78924c1e5f3f268bb599e3981fe58bb",
+          "https://github.com/rust-lang/git2-rs",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0013.html"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "summary": "libgit2-sys affected by memory corruption, denial of service, and arbitrary code execution in libgit2"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "libgit2-sys",
+      "dep_version": "0.14.1+1.5.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:GHSA-22q8-ghmq-63vf",
+      "in_kev": false,
+      "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
+      "raptor_risk_estimate": 16.126989646012497,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use libgit2-sys` / `extern crate libgit2-sys` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.288892752208747,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-22742",
+          "GHSA-8643-3wh5-rmjq",
+          "RUSTSEC-2023-0003"
+        ],
+        "fixed_versions": [
+          "0.14.2",
+          "0.13.5",
+          "0.16.1"
+        ],
+        "id": "GHSA-m4ch-rfv5-x5g3",
+        "modified": "2023-11-08T04:11:38.429673+00:00",
+        "published": "2023-01-20T23:36:41+00:00",
+        "references": [
+          "https://github.com/libgit2/libgit2/security/advisories/GHSA-8643-3wh5-rmjq",
+          "https://github.com/rust-lang/git2-rs/security/advisories/GHSA-m4ch-rfv5-x5g3",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-22742",
+          "https://github.com/rust-lang/git2-rs/commit/87934f87d36753ed702792ec063be7246444a8e1",
+          "https://github.com/rust-lang/git2-rs"
+        ],
+        "severity": {
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+        },
+        "summary": "git2-rs fails to verify SSH keys by default"
+      },
+      "cvss_score": 6.8,
+      "dep_name": "libgit2-sys",
+      "dep_version": "0.14.1+1.5.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00121,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:GHSA-m4ch-rfv5-x5g3",
+      "in_kev": false,
+      "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
+      "raptor_risk_estimate": 7.1733480997796795,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use libgit2-sys` / `extern crate libgit2-sys` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 68.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36368607,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.021343669845775,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-22q8-ghmq-63vf"
+        ],
+        "fixed_versions": [
+          "0.16.2"
+        ],
+        "id": "RUSTSEC-2024-0013",
+        "modified": "2026-02-04T03:46:03.412096+00:00",
+        "published": "2024-02-06T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/libgit2-sys",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0013.html",
+          "https://github.com/rust-lang/git2-rs/pull/1017",
+          "https://github.com/libgit2/libgit2/releases/tag/v1.7.2"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "summary": "Memory corruption, denial of service, and arbitrary code execution in libgit2"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "libgit2-sys",
+      "dep_version": "0.14.1+1.5.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:libgit2-sys:0.14.1+1.5.0:RUSTSEC-2024-0013",
+      "in_kev": false,
+      "purl": "pkg:cargo/libgit2-sys@0.14.1+1.5.0",
+      "raptor_risk_estimate": 16.126989646012497,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use libgit2-sys` / `extern crate libgit2-sys` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.288892752208747,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2022-0094"
+        ],
+        "fixed_versions": [
+          "0.1.39"
+        ],
+        "id": "GHSA-g23h-7vf9-xc25",
+        "modified": "2026-02-04T04:23:48.759675+00:00",
+        "published": "2024-11-12T21:21:36+00:00",
+        "references": [
+          "https://github.com/purpleprotocol/mimalloc_rust/issues/87",
+          "https://github.com/purpleprotocol/mimalloc_rust",
+          "https://rustsec.org/advisories/RUSTSEC-2022-0094.html"
+        ],
+        "severity": null,
+        "summary": "Mimalloc Can Allocate Memory with Bad Alignment"
+      },
+      "cvss_score": null,
+      "dep_name": "mimalloc",
+      "dep_version": "0.1.34",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:mimalloc:0.1.34:GHSA-g23h-7vf9-xc25",
+      "in_kev": false,
+      "purl": "pkg:cargo/mimalloc@0.1.34",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use mimalloc` / `extern crate mimalloc` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-g23h-7vf9-xc25"
+        ],
+        "fixed_versions": [
+          "0.1.39"
+        ],
+        "id": "RUSTSEC-2022-0094",
+        "informational": "unsound",
+        "modified": "2025-10-28T06:29:24.589313+00:00",
+        "published": "2022-11-23T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/mimalloc",
+          "https://rustsec.org/advisories/RUSTSEC-2022-0094.html",
+          "https://github.com/purpleprotocol/mimalloc_rust/issues/87"
+        ],
+        "severity": null,
+        "summary": "Mimalloc Can Allocate Memory with Bad Alignment"
+      },
+      "cvss_score": null,
+      "dep_name": "mimalloc",
+      "dep_version": "0.1.34",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:mimalloc:0.1.34:RUSTSEC-2022-0094",
+      "in_kev": false,
+      "purl": "pkg:cargo/mimalloc@0.1.34",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use mimalloc` / `extern crate mimalloc` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-27308",
+          "RUSTSEC-2024-0019"
+        ],
+        "fixed_versions": [
+          "0.8.11"
+        ],
+        "id": "GHSA-r8w9-5wcg-vfj7",
+        "modified": "2026-02-04T03:50:24.995209+00:00",
+        "published": "2024-03-04T20:44:35+00:00",
+        "references": [
+          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
+          "https://github.com/tokio-rs/tokio/issues/6369",
+          "https://github.com/tokio-rs/mio/pull/1760",
+          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "mio",
+      "dep_version": "0.8.5",
+      "ecosystem": "Cargo",
+      "epss": 0.00937,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:mio:0.8.5:GHSA-r8w9-5wcg-vfj7",
+      "in_kev": false,
+      "purl": "pkg:cargo/mio@0.8.5",
+      "raptor_risk_estimate": 13.959893095010312,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use mio` / `extern crate mio` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36831279,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.608702834911757,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": "yes",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2024-0436",
+        "informational": "unmaintained",
+        "modified": "2026-01-27T22:03:15.694766+00:00",
+        "published": "2024-10-07T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/paste",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0436.html",
+          "https://github.com/dtolnay/paste"
+        ],
+        "severity": null,
+        "summary": "paste - no longer maintained"
+      },
+      "cvss_score": null,
+      "dep_name": "paste",
+      "dep_version": "1.0.11",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:paste:1.0.11:RUSTSEC-2024-0436",
+      "in_kev": false,
+      "purl": "pkg:cargo/paste@1.0.11",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use paste` / `extern crate paste` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2024-0370",
+        "informational": "unmaintained",
+        "modified": "2024-09-09T12:08:37+00:00",
+        "published": "2024-09-01T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/proc-macro-error",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0370.html",
+          "https://gitlab.com/CreepySkeleton/proc-macro-error/-/issues/20"
+        ],
+        "severity": null,
+        "summary": "proc-macro-error is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "proc-macro-error",
+      "dep_version": "1.0.4",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:proc-macro-error:1.0.4:RUSTSEC-2024-0370",
+      "in_kev": false,
+      "purl": "pkg:cargo/proc-macro-error@1.0.4",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use proc-macro-error` / `extern crate proc-macro-error` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-53605",
+          "RUSTSEC-2024-0437"
+        ],
+        "fixed_versions": [
+          "3.7.2"
+        ],
+        "id": "GHSA-2gh3-rmm4-6rq5",
+        "modified": "2026-02-04T04:12:56.976974+00:00",
+        "published": "2025-03-07T20:02:37+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-53605",
+          "https://github.com/stepancheg/rust-protobuf/issues/749",
+          "https://github.com/stepancheg/rust-protobuf/commit/f06992f46771c0a092593b9ebf7afd48740b3ed6",
+          "https://github.com/stepancheg/rust-protobuf",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0437.html"
+        ],
+        "severity": null,
+        "summary": "Crash due to uncontrolled recursion in protobuf crate"
+      },
+      "cvss_score": null,
+      "dep_name": "protobuf",
+      "dep_version": "2.28.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00175,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:protobuf:2.28.0:GHSA-2gh3-rmm4-6rq5",
+      "in_kev": false,
+      "purl": "pkg:cargo/protobuf@2.28.0",
+      "raptor_risk_estimate": 4.223168939713874,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use protobuf` / `extern crate protobuf` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36399224999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9562182577997116,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2026-0097"
+        ],
+        "fixed_versions": [
+          "0.9.3",
+          "0.10.1",
+          "0.8.6"
+        ],
+        "id": "GHSA-cq8v-f236-94qc",
+        "modified": "2026-04-22T20:32:45.162648+00:00",
+        "published": "2026-04-14T01:03:36+00:00",
+        "references": [
+          "https://github.com/rust-random/rand/pull/1763",
+          "https://github.com/rust-random/rand",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
+        ],
+        "severity": null,
+        "summary": "Rand is unsound with a custom logger using rand::rng()"
+      },
+      "cvss_score": null,
+      "dep_name": "rand",
+      "dep_version": "0.8.5",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rand:0.8.5:GHSA-cq8v-f236-94qc",
+      "in_kev": false,
+      "purl": "pkg:cargo/rand@0.8.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch-auth/src/lib.rs:285",
+          "meilisearch-auth/src/lib.rs:286"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-cq8v-f236-94qc"
+        ],
+        "fixed_versions": [
+          "0.8.6",
+          "0.9.3",
+          "0.10.1"
+        ],
+        "id": "RUSTSEC-2026-0097",
+        "informational": "unsound",
+        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "published": "2026-04-09T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rand",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
+          "https://github.com/rust-random/rand/pull/1763"
+        ],
+        "severity": null,
+        "summary": "Rand is unsound with a custom logger using `rand::rng()`"
+      },
+      "cvss_score": null,
+      "dep_name": "rand",
+      "dep_version": "0.8.5",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rand:0.8.5:RUSTSEC-2026-0097",
+      "in_kev": false,
+      "purl": "pkg:cargo/rand@0.8.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch-auth/src/lib.rs:285",
+          "meilisearch-auth/src/lib.rs:286"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2023-0018"
+        ],
+        "fixed_versions": [
+          "0.8.0"
+        ],
+        "id": "GHSA-mc8h-8q98-g5hr",
+        "modified": "2026-02-04T04:09:51.248278+00:00",
+        "published": "2023-02-24T16:23:59+00:00",
+        "references": [
+          "https://github.com/XAMPPRocky/remove_dir_all/security/advisories/GHSA-mc8h-8q98-g5hr",
+          "https://github.com/XAMPPRocky/remove_dir_all/commit/7247a8b6ee59fc99bbb69ca6b3ca4bfd8c809ead",
+          "https://github.com/XAMPPRocky/remove_dir_all",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0018.html"
+        ],
+        "severity": null,
+        "summary": "Race Condition Enabling Link Following and Time-of-check Time-of-use (TOCTOU) Race Condition in remove_dir_all"
+      },
+      "cvss_score": null,
+      "dep_name": "remove_dir_all",
+      "dep_version": "0.5.3",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:GHSA-mc8h-8q98-g5hr",
+      "in_kev": false,
+      "purl": "pkg:cargo/remove_dir_all@0.5.3",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-mc8h-8q98-g5hr"
+        ],
+        "fixed_versions": [
+          "0.8.0"
+        ],
+        "id": "RUSTSEC-2023-0018",
+        "modified": "2023-11-08T04:21:01.612080+00:00",
+        "published": "2023-02-24T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/remove_dir_all",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0018.html",
+          "https://github.com/XAMPPRocky/remove_dir_all/commit/7247a8b6ee59fc99bbb69ca6b3ca4bfd8c809ead",
+          "https://github.com/advisories/GHSA-mc8h-8q98-g5hr"
+        ],
+        "severity": null,
+        "summary": "Race Condition Enabling Link Following and Time-of-check Time-of-use (TOCTOU)"
+      },
+      "cvss_score": null,
+      "dep_name": "remove_dir_all",
+      "dep_version": "0.5.3",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:remove_dir_all:0.5.3:RUSTSEC-2023-0018",
+      "in_kev": false,
+      "purl": "pkg:cargo/remove_dir_all@0.5.3",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use remove-dir-all` / `extern crate remove-dir-all` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-4432",
+          "GHSA-c86p-w88r-qvqr",
+          "GO-2025-3678",
+          "RUSTSEC-2025-0009"
+        ],
+        "fixed_versions": [
+          "0.17.12"
+        ],
+        "id": "GHSA-4p46-pwfr-66x6",
+        "modified": "2026-02-04T03:33:19.024195+00:00",
+        "published": "2025-03-07T16:23:50+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
+          "https://github.com/briansmith/ring/pull/2447",
+          "https://github.com/briansmith/ring/commit/ec2d3cf1d91f148c84e4806b4f0b3c98f6df3b38",
+          "https://access.redhat.com/security/cve/CVE-2025-4432",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2350655"
+        ],
+        "severity": null,
+        "summary": "Some AES functions may panic when overflow checking is enabled in ring"
+      },
+      "cvss_score": null,
+      "dep_name": "ring",
+      "dep_version": "0.16.20",
+      "ecosystem": "Cargo",
+      "epss": 0.00263,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:ring:0.16.20:GHSA-4p46-pwfr-66x6",
+      "in_kev": false,
+      "purl": "pkg:cargo/ring@0.16.20",
+      "raptor_risk_estimate": 4.228958053009994,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use ring` / `extern crate ring` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36449121,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9602706371069956,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.17.0"
+        ],
+        "id": "RUSTSEC-2025-0010",
+        "informational": "unmaintained",
+        "modified": "2025-03-07T15:46:47+00:00",
+        "published": "2025-03-05T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/ring",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0010.html",
+          "https://github.com/briansmith/ring/discussions/2450"
+        ],
+        "severity": null,
+        "summary": "Versions of *ring* prior to 0.17 are unmaintained."
+      },
+      "cvss_score": null,
+      "dep_name": "ring",
+      "dep_version": "0.16.20",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:ring:0.16.20:RUSTSEC-2025-0010",
+      "in_kev": false,
+      "purl": "pkg:cargo/ring@0.16.20",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use ring` / `extern crate ring` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-43806"
+        ],
+        "fixed_versions": [
+          "0.35.15",
+          "0.36.16",
+          "0.37.25",
+          "0.38.19"
+        ],
+        "id": "GHSA-c827-hfw6-qwvm",
+        "modified": "2026-02-04T04:27:18.876758+00:00",
+        "published": "2023-10-18T18:27:47+00:00",
+        "references": [
+          "https://github.com/bytecodealliance/rustix/security/advisories/GHSA-c827-hfw6-qwvm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-43806",
+          "https://github.com/imsnif/bandwhich/issues/284",
+          "https://github.com/imsnif/bandwhich/issues/284#issuecomment-1754321993",
+          "https://github.com/bytecodealliance/rustix/commit/31fd98ca723b93cc6101a3e29843ea5cf094e159"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "rustix's `rustix::fs::Dir` iterator with the `linux_raw` backend can cause memory explosion"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "rustix",
+      "dep_version": "0.36.6",
+      "ecosystem": "Cargo",
+      "epss": 0.00083,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rustix:0.36.6:GHSA-c827-hfw6-qwvm",
+      "in_kev": false,
+      "purl": "pkg:cargo/rustix@0.36.6",
+      "raptor_risk_estimate": 11.021090760987551,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use rustix` / `extern crate rustix` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36347060999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.796970229078634,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": "no",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-32650",
+          "GHSA-6g7w-8wpp-frhj"
+        ],
+        "fixed_versions": [
+          "0.21.11",
+          "0.22.4",
+          "0.23.5"
+        ],
+        "id": "RUSTSEC-2024-0336",
+        "modified": "2024-04-20T02:21:14+00:00",
+        "published": "2024-04-19T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rustls",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0336.html",
+          "https://github.com/rustls/rustls/security/advisories/GHSA-6g7w-8wpp-frhj"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "`rustls::ConnectionCommon::complete_io` could fall into an infinite loop based on network input"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "rustls",
+      "dep_version": "0.20.7",
+      "ecosystem": "Cargo",
+      "epss": 0.00054,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rustls:0.20.7:RUSTSEC-2024-0336",
+      "in_kev": false,
+      "purl": "pkg:cargo/rustls@0.20.7",
+      "raptor_risk_estimate": 12.295643529374997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/option.rs:16",
+          "meilisearch/src/option.rs:19"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36330618,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.606950470562497,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2025-0134",
+        "informational": "unmaintained",
+        "modified": "2025-12-05T19:07:59.622592+00:00",
+        "published": "2025-11-28T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rustls-pemfile",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0134.html",
+          "https://github.com/rustls/pemfile/issues/61"
+        ],
+        "severity": null,
+        "summary": "rustls-pemfile is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "rustls-pemfile",
+      "dep_version": "1.0.2",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rustls-pemfile:1.0.2:RUSTSEC-2025-0134",
+      "in_kev": false,
+      "purl": "pkg:cargo/rustls-pemfile@1.0.2",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/option.rs:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2023-0031"
+        ],
+        "fixed_versions": [
+          "0.9.8"
+        ],
+        "id": "GHSA-2qv5-7mw5-j3cg",
+        "modified": "2026-02-04T02:57:53.896334+00:00",
+        "published": "2023-04-03T22:53:18+00:00",
+        "references": [
+          "https://github.com/mvdnes/spin-rs/issues/148",
+          "https://github.com/mvdnes/spin-rs",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0031.html"
+        ],
+        "severity": null,
+        "summary": "spin-rs initialisation failure in `Once::try_call_once` can lead to undefined behaviour for other initialisers"
+      },
+      "cvss_score": null,
+      "dep_name": "spin",
+      "dep_version": "0.9.4",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:spin:0.9.4:GHSA-2qv5-7mw5-j3cg",
+      "in_kev": false,
+      "purl": "pkg:cargo/spin@0.9.4",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use spin` / `extern crate spin` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-2qv5-7mw5-j3cg"
+        ],
+        "fixed_versions": [
+          "0.9.8"
+        ],
+        "id": "RUSTSEC-2023-0031",
+        "informational": "unsound",
+        "modified": "2023-11-08T04:14:12.609447+00:00",
+        "published": "2023-03-31T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/spin",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0031.html",
+          "https://github.com/mvdnes/spin-rs/issues/148"
+        ],
+        "severity": null,
+        "summary": "Initialisation failure in `Once::try_call_once` can lead to undefined behaviour for other initialisers"
+      },
+      "cvss_score": null,
+      "dep_name": "spin",
+      "dep_version": "0.9.4",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:spin:0.9.4:RUSTSEC-2023-0031",
+      "in_kev": false,
+      "purl": "pkg:cargo/spin@0.9.4",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use spin` / `extern crate spin` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-33055",
+          "RUSTSEC-2026-0068"
+        ],
+        "fixed_versions": [
+          "0.4.45"
+        ],
+        "id": "GHSA-gchp-q4r4-x4ff",
+        "modified": "2026-05-19T16:15:17.005588+00:00",
+        "published": "2026-03-20T17:25:05+00:00",
+        "references": [
+          "https://github.com/alexcrichton/tar-rs/security/advisories/GHSA-gchp-q4r4-x4ff",
+          "https://github.com/composefs/tar-rs/security/advisories/GHSA-gchp-q4r4-x4ff",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-33055",
+          "https://github.com/alexcrichton/tar-rs/commit/de1a5870e603758f430073688691165f21a33946",
+          "https://github.com/alexcrichton/tar-rs"
+        ],
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+        },
+        "summary": "tar-rs incorrectly ignores PAX size headers if header size is nonzero"
+      },
+      "cvss_score": 8.1,
+      "dep_name": "tar",
+      "dep_version": "0.4.38",
+      "ecosystem": "Cargo",
+      "epss": 0.00017,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-gchp-q4r4-x4ff",
+      "in_kev": false,
+      "purl": "pkg:cargo/tar@0.4.38",
+      "raptor_risk_estimate": 23.12287688724029,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch-types/src/compression.rs:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36309639,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.29013884749125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": "yes",
+      "ssvc_exploitation": "poc"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-33056",
+          "RUSTSEC-2026-0067"
+        ],
+        "fixed_versions": [
+          "0.4.45"
+        ],
+        "id": "GHSA-j4xf-2g29-59ph",
+        "modified": "2026-03-25T19:47:46.388947+00:00",
+        "published": "2026-03-20T17:25:09+00:00",
+        "references": [
+          "https://github.com/alexcrichton/tar-rs/security/advisories/GHSA-j4xf-2g29-59ph",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-33056",
+          "https://github.com/alexcrichton/tar-rs/commit/17b1fd84e632071cb8eef9d3709bf347bd266446",
+          "https://github.com/alexcrichton/tar-rs",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0067.html"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
+        },
+        "summary": "tar-rs `unpack_in` can chmod arbitrary directories by following symlinks"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "tar",
+      "dep_version": "0.4.38",
+      "ecosystem": "Cargo",
+      "epss": 0.00017,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-j4xf-2g29-59ph",
+      "in_kev": false,
+      "purl": "pkg:cargo/tar@0.4.38",
+      "raptor_risk_estimate": 10.6500709891875,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch-types/src/compression.rs:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36309639,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.455049692431248,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25727",
+          "RUSTSEC-2026-0009"
+        ],
+        "fixed_versions": [
+          "0.3.47"
+        ],
+        "id": "GHSA-r6v5-fh4h-64xc",
+        "modified": "2026-02-23T22:50:56.245723+00:00",
+        "published": "2026-02-05T17:57:55+00:00",
+        "references": [
+          "https://github.com/time-rs/time/security/advisories/GHSA-r6v5-fh4h-64xc",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25727",
+          "https://github.com/time-rs/time/commit/1c63dc7985b8fa26bd8c689423cc56b7a03841ee",
+          "https://github.com/time-rs/time",
+          "https://github.com/time-rs/time/blob/main/CHANGELOG.md#0347-2026-02-05"
+        ],
+        "severity": null,
+        "summary": "time vulnerable to stack exhaustion Denial of Service attack"
+      },
+      "cvss_score": null,
+      "dep_name": "time",
+      "dep_version": "0.3.17",
+      "ecosystem": "Cargo",
+      "epss": 0.00016,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:time:0.3.17:GHSA-r6v5-fh4h-64xc",
+      "in_kev": false,
+      "purl": "pkg:cargo/time@0.3.17",
+      "raptor_risk_estimate": 6.553787495999999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/routes/tasks.rs:17",
+          "meilisearch/src/routes/tasks.rs:18",
+          "meilisearch/src/routes/tasks.rs:19",
+          "meilisearch/src/routes/mod.rs:13",
+          "meilisearch/src/routes/api_key.rs:13",
+          "... (+32 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.36309072,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.587651247199999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2023-0005"
+        ],
+        "fixed_versions": [
+          "1.24.2",
+          "1.20.4",
+          "1.18.5"
+        ],
+        "id": "GHSA-4q83-7cq4-p6wg",
+        "modified": "2026-02-04T04:36:59.278362+00:00",
+        "published": "2023-02-04T00:30:37+00:00",
+        "references": [
+          "https://github.com/tokio-rs/tokio/issues/5372",
+          "https://github.com/tokio-rs/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html"
+        ],
+        "severity": null,
+        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.24.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tokio:1.24.1:GHSA-4q83-7cq4-p6wg",
+      "in_kev": false,
+      "purl": "pkg:cargo/tokio@1.24.1",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/error.rs:7",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
+          "meilisearch/src/routes/indexes/documents.rs:28",
+          "meilisearch/src/analytics/segment_analytics.rs:22",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2025-0023"
+        ],
+        "fixed_versions": [
+          "1.44.2",
+          "1.38.2",
+          "1.43.1"
+        ],
+        "id": "GHSA-rr8g-9fpq-6wmg",
+        "modified": "2026-02-04T03:38:08.652126+00:00",
+        "published": "2025-04-07T21:12:50+00:00",
+        "references": [
+          "https://github.com/tokio-rs/tokio/pull/7232",
+          "https://github.com/tokio-rs/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html"
+        ],
+        "severity": null,
+        "summary": "Tokio broadcast channel calls clone in parallel, but does not require `Sync`"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.24.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tokio:1.24.1:GHSA-rr8g-9fpq-6wmg",
+      "in_kev": false,
+      "purl": "pkg:cargo/tokio@1.24.1",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/error.rs:7",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
+          "meilisearch/src/routes/indexes/documents.rs:28",
+          "meilisearch/src/analytics/segment_analytics.rs:22",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-4q83-7cq4-p6wg"
+        ],
+        "fixed_versions": [
+          "1.18.5",
+          "1.20.4",
+          "1.24.2"
+        ],
+        "id": "RUSTSEC-2023-0005",
+        "informational": "unsound",
+        "modified": "2023-11-08T04:15:17.465753+00:00",
+        "published": "2023-01-11T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0005.html",
+          "https://github.com/tokio-rs/tokio/issues/5372"
+        ],
+        "severity": null,
+        "summary": "`tokio::io::ReadHalf<T>::unsplit` is Unsound"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.24.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tokio:1.24.1:RUSTSEC-2023-0005",
+      "in_kev": false,
+      "purl": "pkg:cargo/tokio@1.24.1",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/error.rs:7",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
+          "meilisearch/src/routes/indexes/documents.rs:28",
+          "meilisearch/src/analytics/segment_analytics.rs:22",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-rr8g-9fpq-6wmg"
+        ],
+        "fixed_versions": [
+          "1.38.2",
+          "1.42.1",
+          "1.43.1",
+          "1.44.2"
+        ],
+        "id": "RUSTSEC-2025-0023",
+        "informational": "unsound",
+        "modified": "2025-10-28T06:29:26.130595+00:00",
+        "published": "2025-04-07T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/tokio",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0023.html",
+          "https://github.com/tokio-rs/tokio/pull/7232"
+        ],
+        "severity": null,
+        "summary": "Broadcast channel calls clone in parallel, but does not require `Sync`"
+      },
+      "cvss_score": null,
+      "dep_name": "tokio",
+      "dep_version": "1.24.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tokio:1.24.1:RUSTSEC-2025-0023",
+      "in_kev": false,
+      "purl": "pkg:cargo/tokio@1.24.1",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/error.rs:7",
+          "meilisearch/src/routes/tasks.rs:20",
+          "meilisearch/src/routes/indexes/documents.rs:27",
+          "meilisearch/src/routes/indexes/documents.rs:28",
+          "meilisearch/src/analytics/segment_analytics.rs:22",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.168527499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2023-0052"
+        ],
+        "fixed_versions": [
+          "0.22.2"
+        ],
+        "id": "GHSA-8qv2-5vq6-g2g7",
+        "modified": "2026-02-04T03:28:59.012178+00:00",
+        "published": "2023-08-25T00:12:39+00:00",
+        "references": [
+          "https://github.com/briansmith/webpki/issues/69",
+          "https://github.com/briansmith/webpki/issues/69#issuecomment-1699894848",
+          "https://github.com/briansmith/webpki/commit/30a108e0802fd09585e0d071013f24b8272d139b",
+          "https://github.com/briansmith/webpki",
+          "https://github.com/crypto-com/sgx-vendor"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "webpki: CPU denial of service in certificate path building"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "webpki",
+      "dep_version": "0.22.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:webpki:0.22.0:GHSA-8qv2-5vq6-g2g7",
+      "in_kev": false,
+      "purl": "pkg:cargo/webpki@0.22.0",
+      "raptor_risk_estimate": 14.064235156406248,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use webpki` / `extern crate webpki` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.844964609484371,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-8qv2-5vq6-g2g7"
+        ],
+        "fixed_versions": [
+          "0.22.2"
+        ],
+        "id": "RUSTSEC-2023-0052",
+        "modified": "2026-02-04T03:53:21.617323+00:00",
+        "published": "2023-08-22T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/webpki",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0052.html"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "webpki: CPU denial of service in certificate path building"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "webpki",
+      "dep_version": "0.22.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:webpki:0.22.0:RUSTSEC-2023-0052",
+      "in_kev": false,
+      "purl": "pkg:cargo/webpki@0.22.0",
+      "raptor_risk_estimate": 14.064235156406248,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use webpki` / `extern crate webpki` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.844964609484371,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2024-0320",
+        "informational": "unmaintained",
+        "modified": "2024-11-01T12:31:51+00:00",
+        "published": "2024-03-20T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/yaml-rust",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0320.html",
+          "https://github.com/rustsec/advisory-db/issues/1921"
+        ],
+        "severity": null,
+        "summary": "yaml-rust is unmaintained."
+      },
+      "cvss_score": null,
+      "dep_name": "yaml-rust",
+      "dep_version": "0.4.5",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:yaml-rust:0.4.5:RUSTSEC-2024-0320",
+      "in_kev": false,
+      "purl": "pkg:cargo/yaml-rust@0.4.5",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use yaml-rust` / `extern crate yaml-rust` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-rjhf-4mh8-9xjq",
+          "RUSTSEC-2023-0074"
+        ],
+        "fixed_versions": [
+          "0.2.9",
+          "0.3.2",
+          "0.4.1",
+          "0.5.2",
+          "0.6.6",
+          "0.7.31"
+        ],
+        "id": "GHSA-3mv5-343c-w2qg",
+        "modified": "2024-02-12T15:57:36+00:00",
+        "published": "2023-12-15T03:48:38+00:00",
+        "references": [
+          "https://github.com/google/zerocopy/security/advisories/GHSA-3mv5-343c-w2qg",
+          "https://github.com/google/zerocopy/issues/679",
+          "https://github.com/google/zerocopy/issues/716",
+          "https://github.com/google/zerocopy",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0074.html"
+        ],
+        "severity": null,
+        "summary": "Ref methods into_ref, into_mut, into_slice, and into_slice_mut are unsound when used with cell::Ref or cell::RefMut"
+      },
+      "cvss_score": null,
+      "dep_name": "zerocopy",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:GHSA-3mv5-343c-w2qg",
+      "in_kev": false,
+      "purl": "pkg:cargo/zerocopy@0.3.0",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use zerocopy` / `extern crate zerocopy` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-3mv5-343c-w2qg",
+          "RUSTSEC-2023-0074"
+        ],
+        "fixed_versions": [
+          "0.2.9",
+          "0.3.2",
+          "0.4.1",
+          "0.5.2",
+          "0.6.6",
+          "0.7.31"
+        ],
+        "id": "GHSA-rjhf-4mh8-9xjq",
+        "modified": "2024-02-12T15:57:50+00:00",
+        "published": "2023-12-18T19:18:46+00:00",
+        "references": [
+          "https://github.com/google/zerocopy/issues/679",
+          "https://github.com/google/zerocopy/issues/71",
+          "https://github.com/google/zerocopy/issues/716",
+          "https://github.com/google/zerocopy",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0074.html"
+        ],
+        "severity": null,
+        "summary": "Zerocopy: Some Ref methods are unsound with some type parameters"
+      },
+      "cvss_score": null,
+      "dep_name": "zerocopy",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:GHSA-rjhf-4mh8-9xjq",
+      "in_kev": false,
+      "purl": "pkg:cargo/zerocopy@0.3.0",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use zerocopy` / `extern crate zerocopy` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-3mv5-343c-w2qg",
+          "GHSA-rjhf-4mh8-9xjq"
+        ],
+        "fixed_versions": [
+          "0.2.9",
+          "0.3.2",
+          "0.4.1",
+          "0.5.2",
+          "0.6.6",
+          "0.7.31"
+        ],
+        "id": "RUSTSEC-2023-0074",
+        "modified": "2024-02-10T16:26:48.086990+00:00",
+        "published": "2023-12-14T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/zerocopy",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0074.html",
+          "https://github.com/google/zerocopy/issues/716"
+        ],
+        "severity": null,
+        "summary": "Some Ref methods are unsound with some type parameters"
+      },
+      "cvss_score": null,
+      "dep_name": "zerocopy",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:zerocopy:0.3.0:RUSTSEC-2023-0074",
+      "in_kev": false,
+      "purl": "pkg:cargo/zerocopy@0.3.0",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use zerocopy` / `extern crate zerocopy` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.6465,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.250647791724999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.64279,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    }
+  ]
+}

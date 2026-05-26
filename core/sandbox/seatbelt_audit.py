@@ -96,7 +96,7 @@ _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 # which is shared with the Linux ptrace tracer so the two backends
 # stay in sync. See that module for the full mechanism (token-bucket
 # + per-category + per-PID + 1-in-N sampling + CLI override).
-from . import audit_budget as _audit_budget
+from . import audit_budget as _audit_budget  # noqa: E402
 
 
 # Sandbox kext eventMessage format. Spike #4 confirmed:

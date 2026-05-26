@@ -21,12 +21,15 @@ from core.json import load_json
 from .languages import LANGUAGE_MAP, detect_language
 from .exclusions import (
     DEFAULT_EXCLUDES,
+    ROOT_ANCHORED_EXCLUDE_DIRS,
     is_binary_file,
     is_generated_file,
     match_exclusion_reason,
 )
 from .extractors import extract_items, count_sloc
 from .call_graph import (
+    extract_call_graph_c,
+    extract_call_graph_cpp,
     extract_call_graph_csharp,
     extract_call_graph_go,
     extract_call_graph_java,
@@ -37,6 +40,16 @@ from .call_graph import (
     extract_call_graph_rust,
 )
 from .diff import compare_inventories
+from core.build.macro_config import extract_build_tus, extract_macro_config
+from core.build.rust_modules import extract_rust_crate_modules
+from .dead_scope import detect_dead_scopes
+from .build_membership import (
+    crate_module_excluded,
+    detect_build_excluded,
+    tu_membership_excluded,
+)
+from .module_load_abort import detect_module_load_abort
+from .translation_view import detect_macro_call_targets, preprocess_view
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +92,10 @@ _DEFAULT_INVENTORY_CACHE_ROOT = (
 )
 
 
-def default_cache_dir(target_path: str) -> Path:
+def default_cache_dir(
+    target_path: str, *, allow_unreachable: bool = False,
+    config_fingerprint: str = "",
+) -> Path:
     """Return the persistent cache directory for ``target_path``'s
     inventory checklist.
 
@@ -94,9 +110,19 @@ def default_cache_dir(target_path: str) -> Path:
     without picking a project-specific path themselves.
     """
     target_abs = str(Path(target_path).resolve())
-    target_hash = hashlib.sha256(
-        target_abs.encode("utf-8"),
-    ).hexdigest()[:16]
+    # Fold the parse mode into the key: allow_unreachable changes the
+    # C/C++ view (#if 0 kept vs blanked), so the two modes must not share
+    # a cached checklist. Default mode keeps the original hash input, so
+    # existing cache dirs are unchanged.
+    key = target_abs if not allow_unreachable else target_abs + "\0allow_unreachable"
+    # Fold the macro config too: config-aware blanking (#ifdef resolved via
+    # -D/-U/.config) changes which arms are dead, so a config change must
+    # invalidate the cache even when file contents are identical (else a
+    # newly-live arm would stay blanked from cache → a false negative). Empty
+    # fingerprint (no config / non-C target) leaves the key unchanged.
+    if config_fingerprint:
+        key += "\0cfg=" + config_fingerprint
+    target_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
     return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
 
 
@@ -107,6 +133,7 @@ def build_inventory(
     extensions: Optional[Set[str]] = None,
     skip_generated: bool = True,
     parallel: bool = True,
+    allow_unreachable: bool = False,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -137,8 +164,35 @@ def build_inventory(
     Returns:
         Inventory dict (also saved to ``<output_dir>/checklist.json``).
     """
+    # Build macro config once (compile_commands.json / .config). Drives
+    # config-aware #ifdef resolution in each file's TranslationView. Empty
+    # (and inert) when no build artifacts are present or in isolation mode.
+    macro_config = extract_macro_config(target_path)
+    if allow_unreachable:
+        macro_config = None
+    # Translation-unit set (compile_commands membership), built once for the
+    # C/C++ build-membership witness. A witness record (not a view transform),
+    # so — like the Go //go:build detector — it is NOT disabled under
+    # allow_unreachable; the surface-only consumers ignore it in that mode.
+    build_tus = extract_build_tus(target_path)
+    # Rust crate-module set (mod-tree membership), same role for .rs sources.
+    crate_modules = extract_rust_crate_modules(target_path)
+    cfg_fp = macro_config.fingerprint() if macro_config else ""
+    # Fold the membership sets into the cache key: a compile_commands / mod-tree
+    # change (a file added to / removed from the build) must invalidate cached
+    # build_excluded marks even when file contents are unchanged.
+    if build_tus:
+        cfg_fp += "|tu=" + hashlib.sha256(
+            "\0".join(sorted(build_tus)).encode("utf-8")).hexdigest()[:16]
+    if crate_modules:
+        cfg_fp += "|rs=" + hashlib.sha256(
+            "\0".join(sorted(crate_modules)).encode("utf-8")).hexdigest()[:16]
+
     if output_dir is None:
-        output_dir = str(default_cache_dir(target_path))
+        output_dir = str(default_cache_dir(
+            target_path, allow_unreachable=allow_unreachable,
+            config_fingerprint=cfg_fp,
+        ))
     if exclude_patterns is None:
         exclude_patterns = DEFAULT_EXCLUDES
 
@@ -198,7 +252,8 @@ def build_inventory(
             futures = {
                 executor.submit(
                     _process_single_file, fp, target, exclude_patterns,
-                    skip_generated, old_files_by_path
+                    skip_generated, old_files_by_path, allow_unreachable,
+                    macro_config, build_tus, crate_modules,
                 ): fp
                 for fp in file_list
             }
@@ -227,7 +282,9 @@ def build_inventory(
         for filepath in file_list:
             _collect_result(
                 _process_single_file(filepath, target, exclude_patterns,
-                                     skip_generated, old_files_by_path)
+                                     skip_generated, old_files_by_path,
+                                     allow_unreachable, macro_config, build_tus,
+                                     crate_modules)
             )
 
     # Sort for consistent output
@@ -332,6 +389,21 @@ def _carry_forward_coverage(
                 item['checked_by'] = list(old_coverage[key])
 
 
+def _count_source_files(dirpath: Path, extensions: Set[str], cap: int = 1000) -> int:
+    """Count files under ``dirpath`` whose extension is a recognised source
+    extension, bounded at ``cap`` (we only need "holds source? roughly how
+    many" for an operator warning — not an exact census of a huge tree).
+    """
+    n = 0
+    for _root, _dirs, files in os.walk(dirpath):
+        for f in files:
+            if Path(f).suffix.lower() in extensions:
+                n += 1
+                if n >= cap:
+                    return n
+    return n
+
+
 def _collect_source_files(
     target: Path, extensions: Set[str],
 ) -> tuple[List[Path], List[Dict[str, Any]]]:
@@ -404,7 +476,27 @@ def _collect_source_files(
             if (Path(root) / d).is_symlink():
                 continue
             if d in exact_dir_names:
+                # Root-anchored names (examples/ samples/ demo/ docs/ …) also
+                # name first-party package/source segments, so pruning them by
+                # basename at any depth silently drops first-party source — a
+                # scanner-wide false negative. Prune them ONLY at the scan-root
+                # top level; keep + analyse nested occurrences.
+                if d in ROOT_ANCHORED_EXCLUDE_DIRS and Path(root) != target:
+                    kept_dirs.append(d)
+                    continue
                 rel = str((Path(root) / d).relative_to(target))
+                # Never SILENTLY drop source: if a pruned top-level anchored dir
+                # holds source files, warn with a count so the exclusion is
+                # visible and the operator can scan it directly if first-party.
+                if d in ROOT_ANCHORED_EXCLUDE_DIRS:
+                    n = _count_source_files(Path(root) / d, extensions)
+                    if n:
+                        logger.warning(
+                            "inventory: pruned top-level '%s/' (matches default "
+                            "exclude '%s/') holding %d source file(s); scan it "
+                            "directly if it is first-party code",
+                            rel, d, n,
+                        )
                 pruned_dirs.append({
                     "path": rel + "/",
                     "reason": "excluded_directory_pruned",
@@ -442,6 +534,10 @@ def _process_single_file(
     exclude_patterns: List[str],
     skip_generated: bool = True,
     old_files: Dict[str, Any] = None,
+    allow_unreachable: bool = False,
+    macro_config: Optional[object] = None,
+    build_tus: Optional[frozenset] = None,
+    crate_modules: Optional[frozenset] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
 
@@ -533,8 +629,21 @@ def _process_single_file(
                 old_entry['_stat'] = file_stat
                 return old_entry
 
+        # The parser reads a TranslationView (its parse_text), not raw
+        # content, so future preprocessing fidelity (e.g. C/C++ #if 0
+        # blanking, real cpp) slots in behind this seam without rewiring
+        # consumers. Identity view today ⇒ byte-identical behavior.
+        # Metrics (sloc, line_count, sha256) and text scanners
+        # (detect_dead_scopes / detect_module_load_abort) keep using the
+        # real `content`; only the tree-sitter / AST parse uses parse_text.
+        view = preprocess_view(
+            str(filepath), language, content,
+            allow_unreachable=allow_unreachable,
+            config=macro_config,
+        )
+        parse_text = view.parse_text
         tree_cache = {}
-        items = extract_items(str(filepath), language, content, _tree_cache=tree_cache)
+        items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)
         sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
         record: Dict[str, Any] = {
@@ -546,42 +655,138 @@ def _process_single_file(
             '_stat': file_stat,
             'items': [item.to_dict() for item in items],
         }
+        # S3: per-function lexical-dead tagging. Functions whose
+        # definition lies inside an always-false guard (``if False:``,
+        # ``if (false) {…}``, ``#[cfg(any())]``) never bind — the
+        # guard's body never runs / compiles. The reachability prepass
+        # demotes such functions regardless of in-scope call edges
+        # (two dead-scope functions calling each other otherwise read
+        # as mutually CALLED). Tagged here (not in each extractor) so
+        # detection lives in one place per language; field is set only
+        # when dead so inventory size stays flat.
+        dead_ranges = detect_dead_scopes(language, content)
+        if dead_ranges:
+            for item_dict in record['items']:
+                ls = item_dict.get('line_start') or 0
+                if ls and any(lo <= ls <= hi for lo, hi in dead_ranges):
+                    item_dict['lexical_dead'] = True
         # Call-graph extraction. The resolver in
         # core.inventory.reachability is language-agnostic; per-file
         # extractors emit the same FileCallGraph dataclass for
         # whichever languages have a walker.
         if language == 'python':
-            record['call_graph'] = extract_call_graph_python(content).to_dict()
+            record['call_graph'] = extract_call_graph_python(parse_text).to_dict()
         elif language in ('javascript', 'typescript'):
             # Tree-sitter-driven; gracefully empty when the grammar
             # isn't installed.
             record['call_graph'] = extract_call_graph_javascript(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'go':
             record['call_graph'] = extract_call_graph_go(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'java':
             record['call_graph'] = extract_call_graph_java(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'rust':
             record['call_graph'] = extract_call_graph_rust(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'ruby':
             record['call_graph'] = extract_call_graph_ruby(
-                content,
+                parse_text,
             ).to_dict()
         elif language in ('csharp', 'c_sharp'):
             record['call_graph'] = extract_call_graph_csharp(
-                content,
+                parse_text,
             ).to_dict()
         elif language == 'php':
             record['call_graph'] = extract_call_graph_php(
-                content,
+                parse_text,
             ).to_dict()
+        elif language == 'c':
+            # S5: wire the existing extract_call_graph_c into the
+            # dispatch. The walker has been present (and tested in
+            # core/inventory/tests) for a while but was orphaned —
+            # C files were getting empty call_graph records, so
+            # function_called returned no useful data for any C
+            # finding and the analysis prompt's Reachability: block
+            # was absent for every C scan. Closes RAPTOR's largest
+            # whole-language reachability blind spot.
+            record['call_graph'] = extract_call_graph_c(
+                parse_text,
+            ).to_dict()
+        elif language == 'cpp':
+            # S5: same wiring story for C++. _CppCallGraph inherits
+            # from _CCallGraph; adds class/namespace/qualified-id
+            # handling. Covers .cpp / .cc / .cxx / .hpp (per the
+            # languages.py extension map).
+            record['call_graph'] = extract_call_graph_cpp(
+                parse_text,
+            ).to_dict()
+        # U4 (macro-masking): record the function names invoked inside
+        # function-like macro bodies. tree-sitter sees a macro call as a
+        # call to the macro, not its expansion, so a function reachable
+        # only via a macro reads NOT_CALLED. The resolver consults this to
+        # downgrade such verdicts to UNCERTAIN (FN-safe). C/C++ only;
+        # scanned from parse_text so macros inside blanked #if 0 don't
+        # count. Stored only when non-empty to keep inventory size flat.
+        if language in ('c', 'cpp') and isinstance(record.get('call_graph'), dict):
+            macro_targets = detect_macro_call_targets(parse_text)
+            if macro_targets:
+                record['call_graph']['macro_call_targets'] = sorted(macro_targets)
+        # S4: file-level module-load-abort gate. When the file's
+        # top-level execution unconditionally aborts (raise
+        # ImportError / throw new Error / init() panic /
+        # compile_error!), no function it defines is reachable
+        # through import / link regardless of in-file call edges.
+        # The reachability resolver treats this as a whole-file
+        # NOT_REACHED gate. Stored only when detected so the field
+        # is absent (not False) on the overwhelming majority of
+        # files — keeps inventory size flat.
+        abort = detect_module_load_abort(language, content)
+        if abort is not None:
+            record['module_aborts_on_load'] = {
+                'line': abort.line,
+                'summary': abort.summary,
+            }
+        # Whole-file build exclusion (e.g. Go `//go:build ignore`): the file
+        # is never compiled, so every function in it is dead regardless of
+        # call edges or external linkage. Heuristic (config-dependent) — a
+        # surface-only gate, never hard-suppress.
+        excluded = detect_build_excluded(language, content)
+        if excluded is not None:
+            record['build_excluded'] = {
+                'line': excluded.line,
+                'summary': excluded.summary,
+            }
+        # C/C++ build-membership: a source TU absent from compile_commands.json
+        # is not compiled → dead. Whole-file, heuristic. Only when a
+        # content-based detector above didn't already fire. Headers are exempt
+        # (tu_membership_excluded checks the extension). Path resolved to match
+        # the resolved TU-set entries.
+        if 'build_excluded' not in record and build_tus is not None:
+            tu_excluded = tu_membership_excluded(
+                str(filepath.resolve()), build_tus,
+            )
+            if tu_excluded is not None:
+                record['build_excluded'] = {
+                    'line': tu_excluded.line,
+                    'summary': tu_excluded.summary,
+                }
+        # Rust crate-module membership: a .rs not reachable via the mod tree
+        # from any crate root is not compiled → dead. Whole-file, heuristic.
+        if 'build_excluded' not in record and crate_modules is not None:
+            rs_excluded = crate_module_excluded(
+                str(filepath.resolve()), crate_modules,
+            )
+            if rs_excluded is not None:
+                record['build_excluded'] = {
+                    'line': rs_excluded.line,
+                    'summary': rs_excluded.summary,
+                }
         return record
 
     except Exception as e:

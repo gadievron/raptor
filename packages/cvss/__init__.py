@@ -1,5 +1,21 @@
 """CVSS v3.1 base score calculator."""
 
-from .calculator import compute_base_score, parse_vector, validate_vector, compute_score_safe, score_finding, score_findings
+from .calculator import (
+    compute_base_score,
+    compute_score_safe,
+    parse_vector,
+    score_finding,
+    score_findings,
+    score_for_label,
+    validate_vector,
+)
 
-__all__ = ["compute_base_score", "parse_vector", "validate_vector", "compute_score_safe", "score_finding", "score_findings"]
+__all__ = [
+    "compute_base_score",
+    "compute_score_safe",
+    "parse_vector",
+    "score_finding",
+    "score_findings",
+    "score_for_label",
+    "validate_vector",
+]

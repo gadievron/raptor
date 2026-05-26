@@ -1,0 +1,32 @@
+# Files / paths semgrep should not scan as application code.
+# Inline ``# nosemgrep:`` directives are preferred for first-party
+# code; this file is reserved for non-code paths and third-party-
+# data mirrors where inline suppression isn't applicable.
+
+# Semgrep's own rule cache — these JSON files ARE detection regexes
+# for secrets / patterns and trigger their own rules. Not first-
+# party RAPTOR code.
+engine/semgrep/rules/registry-cache/
+
+# Operator-facing documentation explaining credential env-var
+# conventions. The ``service_account`` JSON in code-fences is a
+# placeholder shape for operators, not a real credential.
+# Markdown doesn't support inline ``# nosemgrep:`` directives the
+# way Python does.
+.claude/skills/oss-forensics/github-evidence-kit/SKILL.md
+
+# Intentionally-vulnerable test fixtures. RAPTOR ships these to
+# verify that the scanners can DETECT the relevant vulnerability
+# classes. Scanning them as if they were production code generates
+# guaranteed false positives. Surfaced 2026-05-21 by the CodeQL
+# + Semgrep dogfood pass — every finding in these paths was an
+# intentional test fixture, zero were real bugs.
+test/data/
+packages/llm_analysis/tests/fixtures/iris_e2e_multilang/
+packages/codeql/tests/fixtures/
+packages/sca/tests/fixtures/
+
+# Note: CodeQL has its own scan scope (built per-language at DB
+# creation time) and doesn't honour ``.semgrepignore``. The
+# fixtures above will still appear in CodeQL findings; operators
+# triaging output should filter by path prefix.

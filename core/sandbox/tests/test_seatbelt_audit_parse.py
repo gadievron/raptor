@@ -199,8 +199,8 @@ def test_log_streamer_uses_injected_budget_for_summary(tmp_path):
     streamer.stop()
 
     lines = (tmp_path / seatbelt_audit.DENIALS_FILE).read_text().splitlines()
-    summaries = [json.loads(l) for l in lines
-                  if json.loads(l).get("type") == "audit_summary"]
+    summaries = [json.loads(line) for line in lines
+                  if json.loads(line).get("type") == "audit_summary"]
     assert len(summaries) == 1
     s = summaries[0]
     assert s["total_records"] == 3

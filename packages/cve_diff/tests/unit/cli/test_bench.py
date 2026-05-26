@@ -199,7 +199,7 @@ def test_bench_retry_runs_transient_failures(monkeypatch) -> None:
     monkeypatch.setattr("cve_diff.cli.bench._run_one", fake_run_one)
     monkeypatch.setattr("cve_diff.cli.bench.typer.echo", lambda *a, **kw: None)
 
-    _run_bench_retry_pass(summary, "/tmp/x", 95.0, 128 * 1024, 4, lambda: None)
+    _run_bench_retry_pass(summary, "./x", 95.0, 128 * 1024, 4, lambda: None)
 
     # Only the 2 transient CVEs got retried
     assert sorted(rerun_log) == ["CVE-C", "CVE-D"]
@@ -226,7 +226,7 @@ def test_bench_retry_skips_when_no_transient_failures(monkeypatch) -> None:
     calls: list = []
     monkeypatch.setattr("cve_diff.cli.bench._run_one", lambda *a, **kw: calls.append(1) or None)
 
-    _run_bench_retry_pass(summary, "/tmp/x", 95.0, 128 * 1024, 2, lambda: None)
+    _run_bench_retry_pass(summary, "./x", 95.0, 128 * 1024, 2, lambda: None)
 
     assert calls == []  # no retries invoked
     assert summary.passed == 1  # unchanged

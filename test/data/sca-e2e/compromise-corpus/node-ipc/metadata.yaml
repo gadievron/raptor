@@ -1,0 +1,17 @@
+incident: node-ipc credential-stealer
+ecosystem: npm
+package: node-ipc
+malicious_versions:
+  - "9.1.6"
+  - "9.2.3"
+  - "12.0.1"
+disclosure_date: 2026-05-14
+classification: maintainer-account compromise (or sabotage)
+references:
+  - https://www.stepsecurity.io/blog/node-ipc-npm-supply-chain-attack
+expected_signal_summary: |
+  ~10M weekly-download foundational library was compromised. The
+  recency of the publish (relative to install-time) is the
+  highest-signal indicator — operators pulling 9.2.3 the day it was
+  uploaded should see a recent_publish flag even before any CVE is
+  minted. vuln_dep fires once OSV/GHSA carries the malicious-mark.

@@ -12,7 +12,7 @@ import re
 import logging
 import warnings
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,10 @@ class FunctionMetadata:
     attributes: List[str] = field(default_factory=list)  # decorators AND annotations
     return_type: Optional[str] = None
     parameters: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    # Annotations on the ENCLOSING class (Java only): a method carries its
+    # class's stereotype annotations (@Service / @Component / …) so reachability
+    # can treat public methods of a container-managed bean as framework entries.
+    class_attributes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -153,6 +157,20 @@ class PythonExtractor:
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append(self._extract_function(child, class_name))
                 # Walk into nested functions/classes
+                self._walk(child, functions, class_name=class_name)
+            else:
+                # Descend into compound statements (if / try / with /
+                # for / while / match) so functions nested inside them
+                # are still captured. tree-sitter extraction already
+                # does this; the stdlib fallback previously stopped at
+                # the first non-class/def node, so functions inside
+                # e.g. ``if False:`` guards, ``try/except`` import
+                # fallbacks, or context managers were invisible to
+                # inventory + reachability on tree-sitter-less
+                # environments. class_name is preserved — these nodes
+                # don't open a class scope. Only FunctionDef nodes are
+                # collected, so recursing through expression children
+                # is harmless (lambdas are ast.Lambda, not FunctionDef).
                 self._walk(child, functions, class_name=class_name)
 
     def _extract_function(self, node: ast.AST, class_name: Optional[str]) -> FunctionInfo:
@@ -364,14 +382,25 @@ class CExtractor:
         try:
             prefix = line.split(name)[0].strip() if name in line else ""
             words = prefix.split()
-            visibility = None
+            storage = set()
             type_words = []
             for w in words:
                 w = w.strip("*")
                 if w in self.STORAGE_CLASSES:
-                    visibility = w
+                    storage.add(w)
                 elif w in self.C_TYPE_HINTS or w not in self.KEYWORDS:
                     type_words.append(w)
+            # Linkage is the entry signal. `static` (internal linkage) is
+            # load-bearing and must not be masked by `inline` (not a linkage
+            # class) — `static inline` is still internal. `extern` wins: it is
+            # external linkage, and the invalid `extern static` combo is
+            # treated as external (never under-claim reachability).
+            if "extern" in storage:
+                visibility = "extern"
+            elif "static" in storage:
+                visibility = "static"
+            else:
+                visibility = None
             return_type = " ".join(type_words) if type_words else None
             return FunctionMetadata(visibility=visibility, return_type=return_type)
         except Exception:
@@ -826,17 +855,35 @@ class TreeSitterExtractor:
                 logger.warning(f"tree-sitter parse failed for {filepath}: {e}")
                 return []  # Caller will fall back to regex extractor
         functions = []
-        self._walk(_tree.root_node, functions, class_name=None)
+        self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
         return functions
 
-    def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str]) -> None:
+    def _class_annotations(self, node) -> List[str]:
+        """Annotations declared on a class/interface (Java).
+
+        Reads the class node's ``modifiers`` block, the same shape used for
+        method annotations. Other languages don't put annotations there, so
+        this returns ``[]`` for them.
+        """
+        out: List[str] = []
+        for child in node.children:
+            if child.type == "modifiers":
+                for mod in child.children:
+                    if mod.type in ("marker_annotation", "annotation"):
+                        out.append(mod.text.decode().lstrip("@"))
+        return out
+
+    def _walk(self, node, functions: List[FunctionInfo], class_name: Optional[str],
+              class_attributes: Sequence[str] = ()) -> None:
         for child in node.children:
             if child.type in self.class_types:
                 cname = self._get_name(child)
-                self._walk(child, functions, class_name=cname)
+                self._walk(child, functions, class_name=cname,
+                           class_attributes=self._class_annotations(child))
             elif child.type in ("lexical_declaration", "variable_declaration"):
                 # JS/TS: const foo = () => {} — arrow function inside variable declaration
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
                 continue
             elif child.type == "variable_declarator":
                 # JS/TS: const bar = () => {} or const bar = function() {}
@@ -859,7 +906,8 @@ class TreeSitterExtractor:
                             ),
                         ))
                     continue
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
                 continue
             elif child.type in self.func_types:
                 # Check for decorated_definition wrapper (Python)
@@ -872,20 +920,24 @@ class TreeSitterExtractor:
                     child = self._find_child(parent, self.func_types) or child
 
                 try:
-                    fi = self._extract_function(child, class_name, attrs)
+                    fi = self._extract_function(child, class_name, attrs, class_attributes)
                     if fi:
                         functions.append(fi)
                 except Exception as e:
                     logger.debug(f"tree-sitter: failed to extract function at line {child.start_point[0]+1}: {e}")
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             elif child.type == "decorated_definition":
                 # Python: walk into decorated definitions
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             else:
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
 
     def _extract_function(self, node, class_name: Optional[str],
-                          attrs: List[str]) -> Optional[FunctionInfo]:
+                          attrs: List[str],
+                          class_attributes: Sequence[str] = ()) -> Optional[FunctionInfo]:
         name = self._get_name(node)
         if not name:
             return None
@@ -910,6 +962,7 @@ class TreeSitterExtractor:
                 attributes=attrs,
                 return_type=return_type,
                 parameters=parameters,
+                class_attributes=list(class_attributes),
             ),
         )
 
@@ -932,10 +985,19 @@ class TreeSitterExtractor:
                             visibility = (visibility or "") + " static"
                             visibility = visibility.strip()
 
-        # C/C++: storage class specifier
-        for child in node.children:
-            if child.type == "storage_class_specifier":
-                visibility = child.text.decode()
+        # C/C++: storage class specifier. Linkage is the entry signal:
+        # `static` = internal linkage (not externally callable). It is
+        # load-bearing and must NOT be masked by a following `inline` (not a
+        # linkage class) — `static inline` is still internal. `extern` takes
+        # priority: it means external linkage, and the invalid `extern static`
+        # combo is treated as external (the reachability-conservative choice —
+        # never under-claim reachability on malformed input).
+        specs = [c.text.decode() for c in node.children
+                 if c.type == "storage_class_specifier"]
+        if "extern" in specs:
+            visibility = "extern"
+        elif "static" in specs:
+            visibility = "static"
 
         # Go: exported from capitalisation, receiver as class_name
         if self.language == "go":

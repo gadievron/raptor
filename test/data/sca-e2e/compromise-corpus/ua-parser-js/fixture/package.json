@@ -1,0 +1,8 @@
+{
+  "name": "ua-parser-js-fixture",
+  "version": "0.0.1",
+  "description": "fixture pinning a compromised ua-parser-js version",
+  "dependencies": {
+    "ua-parser-js": "0.7.29"
+  }
+}

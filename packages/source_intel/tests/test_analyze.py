@@ -198,6 +198,7 @@ def test_alias_scan_skips_non_c_files(tmp_path):
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -229,6 +230,7 @@ def test_e2e_real_spatch_detects_literal_wur(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -256,6 +258,7 @@ def test_e2e_real_spatch_detects_literal_nonnull(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -280,6 +283,7 @@ def test_e2e_real_spatch_detects_literal_alloc_size(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -302,6 +306,7 @@ def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -343,6 +348,7 @@ def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path):
     assert by_kind[KIND_ACCESS] == {"ro_fn", "wo_fn"}
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -373,6 +379,7 @@ def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -402,6 +409,7 @@ def test_e2e_discovers_project_alias_and_emits_project_alias_evidence(tmp_path):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",

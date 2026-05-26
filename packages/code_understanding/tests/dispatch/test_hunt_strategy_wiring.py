@@ -250,3 +250,19 @@ class TestStrategyBlockDirect:
         # intentional.
         block = _build_hunt_strategy_block("")
         assert "## Strategy: general" in block
+
+
+# ---------------------------------------------------------------------------
+# lifecycle_drift reaches the hunt prompt (no CWE pin — keyword only)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleDriftReaches:
+    def test_dumpable_pattern_pins_lifecycle_drift(self):
+        # lifecycle_drift has no CWE signal; the ``dumpable`` token in
+        # ``get_dumpable`` is what pins it, exemplar and all.
+        block = _build_hunt_strategy_block(
+            "get_dumpable trusted for tasks without an mm",
+        )
+        assert "## Strategy: lifecycle_drift" in block
+        assert "CVE-2026-46333" in block  # lifecycle_drift exemplar

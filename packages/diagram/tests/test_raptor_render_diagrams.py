@@ -15,6 +15,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
+# Module-level marker — every test spawns the real libexec/
+# raptor-render-diagrams wrapper as a subprocess.
+pytestmark = pytest.mark.integration
+
 
 # parents[3] climbs:
 #   [0] packages/diagram/tests/  (this file's directory)

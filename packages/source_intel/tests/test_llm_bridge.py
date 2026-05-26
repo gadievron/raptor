@@ -8,7 +8,6 @@ subprocess is required.
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -41,9 +40,9 @@ def _path(rule_id: str = "cpp/null-dereference", file_path: str = "a.c"):
 # ---- make_source_intel_collector --------------------------------------
 
 
-def test_collector_skipped_run_with_no_observations_returns_none():
+def test_collector_skipped_run_with_no_observations_returns_none(tmp_path):
     skipped = SourceIntelResult(
-        target="/tmp/x",
+        target=str(tmp_path),
         skipped_reason="spatch_not_available",
     )
     collector = make_source_intel_collector()
@@ -51,20 +50,20 @@ def test_collector_skipped_run_with_no_observations_returns_none():
         "packages.source_intel.analyze.analyze",
         return_value=skipped,
     ):
-        block = collector(_path(), Path("/tmp/x"))
+        block = collector(_path(), tmp_path)
     assert block is None
 
 
-def test_collector_runs_analyze_and_returns_untrusted_block():
+def test_collector_runs_analyze_and_returns_untrusted_block(tmp_path):
     """analyze() returns a result with one observation; collector
     renders it as an UntrustedBlock."""
     result = SourceIntelResult(
-        target="/tmp/x",
+        target=str(tmp_path),
         attributes=(
             AttributeEvidence(
                 kind=KIND_NORETURN,
                 function_name="panic",
-                location=("/tmp/x/a.c", 10),
+                location=(str(tmp_path / "a.c"), 10),
                 match_source="literal",
                 raw_match="noreturn",
             ),
@@ -82,23 +81,23 @@ def test_collector_runs_analyze_and_returns_untrusted_block():
             return_value="panic",
         ),
     ):
-        block = collector(_path(), Path("/tmp/x"))
+        block = collector(_path(), tmp_path)
     assert isinstance(block, UntrustedBlock)
     assert block.kind == "source-intel-evidence"
     assert block.origin == "cocci-structural-evidence"
     assert "panic" in block.content
 
 
-def test_collector_empty_render_returns_none():
+def test_collector_empty_render_returns_none(tmp_path):
     """Result is non-empty but the renderer filters everything out
     (e.g. attributes scoped to a different function)."""
     result = SourceIntelResult(
-        target="/tmp/x",
+        target=str(tmp_path),
         attributes=(
             AttributeEvidence(
                 kind=KIND_NORETURN,
                 function_name="some_other_function",
-                location=("/tmp/x/a.c", 10),
+                location=(str(tmp_path / "a.c"), 10),
                 match_source="literal",
                 raw_match="noreturn",
             ),
@@ -116,7 +115,7 @@ def test_collector_empty_render_returns_none():
             return_value="caller_function",
         ),
     ):
-        block = collector(_path(), Path("/tmp/x"))
+        block = collector(_path(), tmp_path)
     # render emits an explicit "no signal" line for the requested
     # function — that IS still a useful block (carries the absence).
     # So we expect a block, not None.
@@ -124,7 +123,7 @@ def test_collector_empty_render_returns_none():
     assert "no attribute or proximity evidence" in block.content
 
 
-def test_collector_swallows_exceptions():
+def test_collector_swallows_exceptions(tmp_path):
     """Any exception in the collector pipeline must be swallowed —
     validate_path must never fail over an evidence issue."""
     collector = make_source_intel_collector()
@@ -132,19 +131,19 @@ def test_collector_swallows_exceptions():
         "packages.source_intel.analyze.analyze",
         side_effect=RuntimeError("boom"),
     ):
-        block = collector(_path(), Path("/tmp/x"))
+        block = collector(_path(), tmp_path)
     assert block is None
 
 
-def test_collector_uses_cache_when_provided():
+def test_collector_uses_cache_when_provided(tmp_path):
     """When cache.get() hits, analyze() is not invoked again."""
     cached = SourceIntelResult(
-        target="/tmp/x",
+        target=str(tmp_path),
         attributes=(
             AttributeEvidence(
                 kind=KIND_NORETURN,
                 function_name="panic",
-                location=("/tmp/x/a.c", 10),
+                location=(str(tmp_path / "a.c"), 10),
                 match_source="literal",
                 raw_match="noreturn",
             ),
@@ -179,13 +178,13 @@ def test_collector_uses_cache_when_provided():
             return_value="panic",
         ),
     ):
-        block = collector(_path(), Path("/tmp/x"))
+        block = collector(_path(), tmp_path)
     assert isinstance(block, UntrustedBlock)
     assert cache.gets == 1
     assert cache.puts == 0
 
 
-def test_repo_path_resolver_invoked():
+def test_repo_path_resolver_invoked(tmp_path):
     """When provided, the resolver gets first crack at picking the
     scan target (kernel-scale targets may want to narrow)."""
     seen = {}
@@ -194,21 +193,21 @@ def test_repo_path_resolver_invoked():
         seen["called"] = True
         return repo_path / "subtree"
 
-    result = SourceIntelResult(target="/tmp/x", skipped_reason="x")
+    result = SourceIntelResult(target=str(tmp_path), skipped_reason="x")
     collector = make_source_intel_collector(repo_path_resolver=_resolver)
     with patch(
         "packages.source_intel.analyze.analyze",
         return_value=result,
     ) as analyze_mock:
-        collector(_path(), Path("/tmp/x"))
+        collector(_path(), tmp_path)
     assert seen.get("called") is True
-    assert analyze_mock.call_args.args[0] == Path("/tmp/x/subtree")
+    assert analyze_mock.call_args.args[0] == tmp_path / "subtree"
 
 
 # ---- make_cwe_dispatched_collector ------------------------------------
 
 
-def test_dispatcher_routes_memory_corruption_to_source_intel():
+def test_dispatcher_routes_memory_corruption_to_source_intel(tmp_path):
     calls = []
 
     def _sanitizer(d, r):
@@ -227,12 +226,12 @@ def test_dispatcher_routes_memory_corruption_to_source_intel():
         source_intel_collector=_source_intel,
     )
 
-    block = dispatcher(_path(rule_id="cpp/null-dereference"), Path("/tmp/x"))
+    block = dispatcher(_path(rule_id="cpp/null-dereference"), tmp_path)
     assert isinstance(block, UntrustedBlock)
     assert calls == [("source_intel", "cpp/null-dereference")]
 
 
-def test_dispatcher_routes_injection_to_sanitizer():
+def test_dispatcher_routes_injection_to_sanitizer(tmp_path):
     calls = []
 
     def _sanitizer(d, r):
@@ -247,11 +246,11 @@ def test_dispatcher_routes_injection_to_sanitizer():
         sanitizer_collector=_sanitizer,
         source_intel_collector=_source_intel,
     )
-    dispatcher(_path(rule_id="py/sql-injection"), Path("/tmp/x"))
+    dispatcher(_path(rule_id="py/sql-injection"), tmp_path)
     assert calls == [("sanitizer", "py/sql-injection")]
 
 
-def test_dispatcher_handles_missing_branches():
+def test_dispatcher_handles_missing_branches(tmp_path):
     """With one branch unwired, dispatcher returns None for the
     rule_id that would route to the missing branch."""
     def _sanitizer(d, r):
@@ -265,13 +264,13 @@ def test_dispatcher_handles_missing_branches():
         source_intel_collector=None,
     )
     # memory-corruption → source_intel branch missing → None
-    assert dispatcher(_path(rule_id="cpp/double-free"), Path("/tmp/x")) is None
+    assert dispatcher(_path(rule_id="cpp/double-free"), tmp_path) is None
     # injection → sanitizer branch wired → returns block
-    block = dispatcher(_path(rule_id="py/sql-injection"), Path("/tmp/x"))
+    block = dispatcher(_path(rule_id="py/sql-injection"), tmp_path)
     assert isinstance(block, UntrustedBlock)
 
 
-def test_dispatcher_custom_prefixes_override_default():
+def test_dispatcher_custom_prefixes_override_default(tmp_path):
     seen = []
 
     def _source_intel(d, r):
@@ -283,8 +282,8 @@ def test_dispatcher_custom_prefixes_override_default():
         source_intel_collector=_source_intel,
         source_intel_rule_prefixes={"foo/bar-"},
     )
-    dispatcher(_path(rule_id="foo/bar-baz"), Path("/tmp/x"))
-    dispatcher(_path(rule_id="cpp/null-dereference"), Path("/tmp/x"))
+    dispatcher(_path(rule_id="foo/bar-baz"), tmp_path)
+    dispatcher(_path(rule_id="cpp/null-dereference"), tmp_path)
     # Only the matching prefix routed to source_intel; the previously-
     # default cpp/null-dereference went to sanitizer (no source_intel hit)
     assert seen == ["foo/bar-baz"]

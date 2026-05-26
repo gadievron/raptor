@@ -493,13 +493,14 @@ class UrllibClient:
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
+        max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> Dict[str, Any]:
         self._validate_url(url)
         merged = {"Accept": "application/json", "User-Agent": self._ua}
         if headers:
             merged.update(headers)
         resp = self._fetch(url, method="GET", timeout=timeout, body=None,
-                           headers=merged, max_bytes=DEFAULT_MAX_BYTES,
+                           headers=merged, max_bytes=max_bytes,
                            total_timeout=total_timeout, retries=retries,
                            follow_redirects=follow_redirects)
         return resp.json()

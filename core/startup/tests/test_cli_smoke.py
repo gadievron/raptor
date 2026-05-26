@@ -97,6 +97,7 @@ def test_invalid_mode_errors():
     assert "Unknown mode" in (r.stdout + r.stderr)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "mode,required_keyword",
     [
@@ -143,38 +144,38 @@ def test_missing_required_arg_errors(mode: str, required_keyword: str):
 def test_scan_accepts_policy_groups_underscore():
     """``scan --policy_groups`` (underscore) is accepted by argparse."""
     assert _argparse_accepted(
-        "scan", "--repo", "/tmp", "--policy_groups", "secrets"
+        "scan", "--repo", "./repo", "--policy_groups", "secrets"
     )
 
 
 def test_agentic_accepts_codeql_flag():
-    assert _argparse_accepted("agentic", "--repo", "/tmp", "--codeql")
+    assert _argparse_accepted("agentic", "--repo", "./repo", "--codeql")
 
 
 def test_agentic_accepts_no_codeql_flag():
-    assert _argparse_accepted("agentic", "--repo", "/tmp", "--no-codeql")
+    assert _argparse_accepted("agentic", "--repo", "./repo", "--no-codeql")
 
 
 def test_agentic_accepts_max_findings():
     assert _argparse_accepted(
-        "agentic", "--repo", "/tmp", "--max-findings", "10"
+        "agentic", "--repo", "./repo", "--max-findings", "10"
     )
 
 
 def test_fuzz_accepts_duration():
     assert _argparse_accepted(
-        "fuzz", "--binary", "/tmp/bin", "--duration", "60"
+        "fuzz", "--binary", "./bin", "--duration", "60"
     )
 
 
 def test_fuzz_accepts_parallel():
     assert _argparse_accepted(
-        "fuzz", "--binary", "/tmp/bin", "--parallel", "4"
+        "fuzz", "--binary", "./bin", "--parallel", "4"
     )
 
 
 def test_fuzz_accepts_autonomous():
-    assert _argparse_accepted("fuzz", "--binary", "/tmp/bin", "--autonomous")
+    assert _argparse_accepted("fuzz", "--binary", "./bin", "--autonomous")
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +183,7 @@ def test_fuzz_accepts_autonomous():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "module",
     ["raptor", "raptor_agentic", "raptor_fuzzing", "raptor_codeql"],

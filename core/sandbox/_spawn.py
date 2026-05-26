@@ -1063,6 +1063,13 @@ def run_sandboxed(
                     except (ValueError, OSError):
                         warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
+                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                    # exec_env is from a RAPTOR caller — either an
+                    # explicit env arg with DANGEROUS_ENV_VARS
+                    # strip applied (lines 1015-1019), or an inherit
+                    # of the caller's env on the no-env-supplied
+                    # path. Either way the caller is trusted (RAPTOR
+                    # owns the sandbox spawn surface).
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
                     os._exit(127)
@@ -1112,11 +1119,15 @@ def run_sandboxed(
     tracer_pid: Optional[int] = None
     try:
         # Close the ends the child owns — parent doesn't write to them.
-        os.close(p_ready_w); _parent_fds.discard(p_ready_w)
-        os.close(p_go_r);    _parent_fds.discard(p_go_r)
+        os.close(p_ready_w)
+        _parent_fds.discard(p_ready_w)
+        os.close(p_go_r)
+        _parent_fds.discard(p_go_r)
         if capture_output:
-            os.close(out_w); _parent_fds.discard(out_w)
-            os.close(err_w); _parent_fds.discard(err_w)
+            os.close(out_w)
+            _parent_fds.discard(out_w)
+            os.close(err_w)
+            _parent_fds.discard(err_w)
 
         # Step 4: wait for child to signal "unshare done, ready for newuidmap".
         try:
@@ -1124,7 +1135,8 @@ def run_sandboxed(
                 _kill_and_reap(child_pid)
                 raise RuntimeError("sandbox child did not signal ready")
         finally:
-            os.close(p_ready_r); _parent_fds.discard(p_ready_r)
+            os.close(p_ready_r)
+            _parent_fds.discard(p_ready_r)
 
         # Step 6: newuidmap / newgidmap.
         host_uid = os.getuid()
@@ -1253,6 +1265,10 @@ def run_sandboxed(
                     ]
                     if _audit_config_path is not None:
                         tracer_argv.append(_audit_config_path)
+                    # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                    # tracer_env is hand-crafted: 2 keys
+                    # (PYTHONPATH + PATH), no inheritance. Explicitly
+                    # safer than os.environ-copy.
                     os.execvpe(
                         sys.executable, tracer_argv, tracer_env,
                     )
@@ -1279,7 +1295,8 @@ def run_sandboxed(
             # below would block FOREVER on tracer death, because the
             # parent's own t_ready_w would keep the pipe write end
             # alive and EOF would never be signalled to the read.
-            os.close(t_ready_w); _parent_fds.discard(t_ready_w)
+            os.close(t_ready_w)
+            _parent_fds.discard(t_ready_w)
 
             # Parent: wait for tracer to signal ready. If tracer dies
             # before signalling, our read returns 0 bytes — treat as
@@ -1287,7 +1304,8 @@ def run_sandboxed(
             try:
                 ready = os.read(t_ready_r, 1)
             finally:
-                os.close(t_ready_r); _parent_fds.discard(t_ready_r)
+                os.close(t_ready_r)
+                _parent_fds.discard(t_ready_r)
             if not ready:
                 # Tracer failed to attach. Reap it (capture exit code
                 # for diagnostics), kill the target child (still
@@ -1355,7 +1373,8 @@ def run_sandboxed(
         try:
             os.write(p_go_w, b"G")
         finally:
-            os.close(p_go_w); _parent_fds.discard(p_go_w)
+            os.close(p_go_w)
+            _parent_fds.discard(p_go_w)
     except BaseException:
         # Any failure above: kill+reap the target child if it's not
         # already dead, reap the audit tracer if forked, close
@@ -1430,7 +1449,8 @@ def run_sandboxed(
                     for fd in ready:
                         chunk = os.read(fd, 65536)
                         if not chunk:
-                            os.close(fd); _parent_fds.discard(fd)
+                            os.close(fd)
+                            _parent_fds.discard(fd)
                             fds.remove(fd)
                         elif fd == out_r:
                             stdout_buf += chunk

@@ -1,0 +1,8 @@
+{
+  "name": "node-ipc-fixture",
+  "version": "0.0.1",
+  "description": "fixture pinning a compromised node-ipc version (May 2026)",
+  "dependencies": {
+    "node-ipc": "9.2.3"
+  }
+}

@@ -1,0 +1,12 @@
+# Detection requirements for Spring4Shell (CVE-2022-22965, March 2022).
+#
+# spring-beans 5.3.17 has the class-loader RCE. CISA KEV-listed.
+# Mirrors the log4shell signal floor: vuln_dep + KEV + high
+# severity. Two independent maven smoke tests gives us slightly
+# more coverage of the maven OSV path.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: high
+    require_kev: true
+    cve_id: CVE-2022-22965

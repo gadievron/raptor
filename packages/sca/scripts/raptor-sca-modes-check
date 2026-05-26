@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""SCA mode-coverage E2E harness.
+
+Companion to ``raptor-sca-compromise-check`` — that harness asks
+"would we detect known compromises?" against narrow synthetic
+fixtures. This harness asks "do the different operator-facing
+modes (scan / bump / fix) produce sensible output on real-shape
+projects?" against wider fixtures (multi-file: manifest +
+Dockerfile + GHA workflow).
+
+Each fixture under the corpus dir has:
+  - ``fixture/`` — multi-file project tree
+  - ``expected.yaml`` — per-mode expectations (exit code, surfaces,
+    invariants like source-tree-non-mutation)
+  - ``metadata.yaml`` — description + which deps are deliberately
+    pinned vulnerable to give SCA findings to chew on
+
+Modes driven today:
+  * ``scan`` — exits 0, emits findings.json with >= min_findings
+  * ``bump --whatif`` — exits 0, surfaces expected types
+    (dockerfile_from, gha_uses)
+  * ``fix --cve-only`` — emits proposed/, leaves source untouched
+
+The harness copies each fixture to a per-mode tempdir before
+running so source stays pristine.
+
+Usage:
+  raptor-sca-modes-check <corpus-dir> [--no-offline]
+
+Exit codes:
+  0  every mode on every fixture passes its assertions
+  1  at least one assertion failed
+  2  argparse / corpus-walk / harness internal error
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+logger = logging.getLogger("raptor-sca-modes-check")
+
+
+@dataclass
+class ModeResult:
+    mode: str
+    ok: bool
+    note: str = ""
+
+
+@dataclass
+class FixtureResult:
+    name: str
+    modes: List[ModeResult] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return all(m.ok for m in self.modes)
+
+
+def _load_yaml(path: Path) -> Dict[str, Any]:
+    """PyYAML loader. The harness depends on PyYAML being available
+    (it's a runtime dep of raptor-sca already)."""
+    import yaml
+    text = path.read_text(encoding="utf-8")
+    loaded = yaml.safe_load(text)
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _discover_fixtures(corpus_dir: Path) -> List[Path]:
+    """Every immediate subdir containing ``expected.yaml``. The
+    fixture may be either project-style (has a ``fixture/`` subdir
+    with a manifest tree) or coord-style (no fixture/ subdir; just
+    coordinate args in expected.yaml — for ``check`` / ``upgrade``
+    / ``diff`` which don't operate on project trees)."""
+    if not corpus_dir.is_dir():
+        return []
+    out: List[Path] = []
+    for entry in sorted(corpus_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        if (entry / "expected.yaml").is_file():
+            out.append(entry)
+    return out
+
+
+def _is_coord_style(fixture_dir: Path) -> bool:
+    """A fixture is coord-style when it has no ``fixture/`` subdir;
+    its expected.yaml carries ``mode`` + ``args`` rather than
+    per-mode (scan/bump/fix) sections."""
+    return not (fixture_dir / "fixture").is_dir()
+
+
+def _env_with_trust() -> Dict[str, str]:
+    env = os.environ.copy()
+    env["RAPTOR_DIR"] = str(_REPO_ROOT)
+    env["_RAPTOR_TRUSTED"] = "1"
+    return env
+
+
+def _copy_to_tempdir(fixture: Path, work_dir: Path) -> Path:
+    """Copy the fixture into ``work_dir`` and return the scan-target
+    path. Keeps the source corpus pristine across mode invocations."""
+    scan_target = work_dir / "fixture"
+    shutil.copytree(fixture, scan_target)
+    return scan_target
+
+
+def _fingerprint_tree(root: Path) -> Dict[str, str]:
+    """Return a {relative-path: sha256-of-bytes} mapping for every
+    file in ``root``. Used to assert source-tree non-mutation."""
+    import hashlib
+    out: Dict[str, str] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        out[str(path.relative_to(root))] = hashlib.sha256(data).hexdigest()
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Per-mode runners
+# ---------------------------------------------------------------------------
+
+def _run_scan(
+    fixture_dir: Path, expected: Dict[str, Any], *, offline: bool,
+) -> ModeResult:
+    """Run ``raptor-sca <target>`` (the default scan mode); assert
+    expected.scan invariants."""
+    spec = expected.get("scan", {}) or {}
+    with tempfile.TemporaryDirectory(prefix="modes-scan-") as work:
+        work_dir = Path(work)
+        scan_target = _copy_to_tempdir(fixture_dir, work_dir)
+        out_dir = work_dir / "out"
+        cmd = [
+            sys.executable, "-m", "packages.sca.cli",
+            str(scan_target),
+            "--out", str(out_dir),
+            "--no-progress", "--no-llm",
+        ]
+        if offline:
+            cmd.append("--offline")
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+            env=_env_with_trust(),
+        )
+        exit_expected = int(spec.get("exit_code", 0))
+        if proc.returncode != exit_expected:
+            return ModeResult(
+                "scan", False,
+                f"exit {proc.returncode} != {exit_expected}; "
+                f"stderr={proc.stderr[:200]}",
+            )
+        findings_path = out_dir / "findings.json"
+        if not findings_path.is_file():
+            return ModeResult("scan", False, "no findings.json emitted")
+        try:
+            findings = json.loads(findings_path.read_text())
+        except json.JSONDecodeError as e:
+            return ModeResult("scan", False, f"findings.json invalid: {e}")
+        if not isinstance(findings, list):
+            return ModeResult("scan", False, "findings.json not a list")
+        min_findings = int(spec.get("min_findings", 0))
+        if len(findings) < min_findings:
+            return ModeResult(
+                "scan", False,
+                f"only {len(findings)} findings, expected >= {min_findings}",
+            )
+        expected_ecos = set(spec.get("ecosystems_present") or [])
+        present_ecos = {
+            row.get("sca", {}).get("ecosystem")
+            for row in findings
+            if isinstance(row, dict)
+        }
+        present_ecos.discard(None)
+        missing = expected_ecos - present_ecos
+        if missing:
+            return ModeResult(
+                "scan", False,
+                f"ecosystems missing from findings: {sorted(missing)}; "
+                f"present: {sorted(present_ecos)}",
+            )
+        return ModeResult(
+            "scan", True,
+            f"{len(findings)} findings, ecos={sorted(present_ecos)}",
+        )
+
+
+def _run_bump(
+    fixture_dir: Path, expected: Dict[str, Any], *, offline: bool,
+) -> ModeResult:
+    """Run ``raptor-sca bump <target>`` in --whatif (default) mode;
+    assert expected.bump invariants including source-tree
+    non-mutation. ``bump`` uses ``--json`` to give us a parsable
+    surface list."""
+    spec = expected.get("bump", {}) or {}
+    with tempfile.TemporaryDirectory(prefix="modes-bump-") as work:
+        work_dir = Path(work)
+        scan_target = _copy_to_tempdir(fixture_dir, work_dir)
+        before = _fingerprint_tree(scan_target)
+        cmd = [
+            sys.executable, "-m", "packages.sca.cli",
+            "bump", str(scan_target),
+            "--json",
+        ]
+        # ``bump`` doesn't take --no-llm / --offline directly; the
+        # bump pipeline reuses the registry clients which honour
+        # the cache + offline state via env. Keep the invocation
+        # minimal and rely on cached state from prior scans.
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
+            env=_env_with_trust(),
+        )
+        exit_expected = int(spec.get("exit_code", 0))
+        if proc.returncode != exit_expected:
+            return ModeResult(
+                "bump", False,
+                f"exit {proc.returncode} != {exit_expected}; "
+                f"stderr={proc.stderr[:200]}",
+            )
+        after = _fingerprint_tree(scan_target)
+        if before != after:
+            changed = sorted(
+                set(before) ^ set(after) |
+                {k for k in before if before.get(k) != after.get(k)}
+            )
+            return ModeResult(
+                "bump", False,
+                f"source tree mutated by --whatif: {changed[:5]}",
+            )
+        surfaces = _extract_bump_surfaces(proc.stdout)
+        expected_surfaces = set(spec.get("surfaces_present") or [])
+        missing = expected_surfaces - surfaces
+        if missing:
+            return ModeResult(
+                "bump", False,
+                f"surfaces missing: {sorted(missing)}; "
+                f"found: {sorted(surfaces)}",
+            )
+        return ModeResult(
+            "bump", True,
+            f"surfaces={sorted(surfaces)}",
+        )
+
+
+def _extract_bump_surfaces(stdout: str) -> set:
+    """Parse ``raptor-sca bump --json`` output, return the set of
+    surface kinds (``dockerfile_from``, ``gha_uses``, ``yaml_image``,
+    ``helm_chart``, ``git_submodule``) found.
+
+    The exact JSON shape may have changed between bumper versions;
+    we look for any string that looks like a surface-kind enum
+    value anywhere in the payload."""
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    surfaces = set()
+    # Bumper's surface-kind enum (per
+    # ``packages/sca/bump/orchestrator.py``): ``arg`` (Dockerfile ARG
+    # pin), ``from_image`` (Dockerfile FROM), ``yaml_image`` (k8s /
+    # compose / gitlab-ci ``image:``), ``gha_uses`` (GHA action pin),
+    # ``helm_chart``, ``git_submodule``.
+    _SURFACE_KINDS = {
+        "arg", "from_image", "yaml_image", "gha_uses",
+        "helm_chart", "git_submodule",
+    }
+
+    def _walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(v, str) and v in _SURFACE_KINDS:
+                    surfaces.add(v)
+                _walk(v)
+        elif isinstance(node, list):
+            for it in node:
+                _walk(it)
+
+    _walk(data)
+    return surfaces
+
+
+def _run_fix(
+    fixture_dir: Path, expected: Dict[str, Any], *, offline: bool,
+) -> ModeResult:
+    """Run ``raptor-sca fix --cve-only <target>``; assert
+    expected.fix invariants — emits proposed/, source tree
+    untouched."""
+    spec = expected.get("fix", {}) or {}
+    with tempfile.TemporaryDirectory(prefix="modes-fix-") as work:
+        work_dir = Path(work)
+        scan_target = _copy_to_tempdir(fixture_dir, work_dir)
+        before = _fingerprint_tree(scan_target)
+        out_dir = work_dir / "fix-out"
+        cmd = [
+            sys.executable, "-m", "packages.sca.cli",
+            "fix", str(scan_target),
+            "--cve-only",
+            "--out", str(out_dir),
+        ]
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
+            env=_env_with_trust(),
+        )
+        exit_expected = int(spec.get("exit_code", 0))
+        if proc.returncode != exit_expected:
+            return ModeResult(
+                "fix", False,
+                f"exit {proc.returncode} != {exit_expected}; "
+                f"stderr={proc.stderr[:200]}",
+            )
+        if spec.get("source_tree_unchanged"):
+            after = _fingerprint_tree(scan_target)
+            if before != after:
+                return ModeResult(
+                    "fix", False,
+                    "source tree mutated by fix --cve-only (must be "
+                    "proposed/-only)",
+                )
+        if spec.get("emits_proposed_dir"):
+            proposed = out_dir / "proposed"
+            if not proposed.is_dir():
+                return ModeResult(
+                    "fix", False,
+                    f"no proposed/ directory at {proposed}",
+                )
+            proposed_files = list(proposed.rglob("*"))
+            file_count = sum(1 for p in proposed_files if p.is_file())
+            if file_count == 0:
+                return ModeResult(
+                    "fix", False,
+                    "proposed/ directory is empty",
+                )
+            return ModeResult(
+                "fix", True,
+                f"proposed/ has {file_count} rewritten file(s)",
+            )
+        return ModeResult("fix", True, "")
+
+
+def _run_coord_mode(
+    fixture_dir: Path, spec: Dict[str, Any],
+) -> ModeResult:
+    """Run a coord-style fixture: ``raptor-sca <mode> <args...>``.
+    The fixture's expected.yaml carries ``mode``, ``args`` (list),
+    and ``expected.{exit_code, stdout_contains}``.
+
+    ``${FIXTURE_DIR}`` in args is expanded to the fixture dir path
+    so references to baseline.json / current.json work from any
+    cwd.
+    """
+    mode = str(spec.get("mode", ""))
+    raw_args = spec.get("args") or []
+    if not isinstance(raw_args, list):
+        return ModeResult(mode, False, "expected.yaml args must be a list")
+    args: List[str] = []
+    for a in raw_args:
+        s = str(a)
+        s = s.replace("${FIXTURE_DIR}", str(fixture_dir))
+        args.append(s)
+    expected = spec.get("expected", {}) or {}
+
+    cmd = [sys.executable, "-m", "packages.sca.cli", mode, *args]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            env=_env_with_trust(),
+        )
+    except subprocess.TimeoutExpired:
+        return ModeResult(mode, False, "timed out after 120s")
+    exit_expected = int(expected.get("exit_code", 0))
+    if proc.returncode != exit_expected:
+        return ModeResult(
+            mode, False,
+            f"exit {proc.returncode} != {exit_expected}; "
+            f"stderr={proc.stderr[:200]}",
+        )
+    stdout_contains = expected.get("stdout_contains") or []
+    missing = [s for s in stdout_contains if s not in proc.stdout]
+    if missing:
+        return ModeResult(
+            mode, False,
+            f"stdout missing expected substrings: {missing}; "
+            f"stdout_head={proc.stdout[:200]!r}",
+        )
+    return ModeResult(mode, True, "")
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+def _evaluate_fixture(
+    fixture_dir: Path, *, offline: bool,
+) -> FixtureResult:
+    """Run every mode declared by the fixture's expected.yaml. The
+    fixture is project-style (has a ``fixture/`` subdir; expected.yaml
+    has per-mode scan/bump/fix sections) or coord-style (no
+    ``fixture/`` subdir; expected.yaml has top-level mode + args)."""
+    name = fixture_dir.name
+    expected = _load_yaml(fixture_dir / "expected.yaml")
+    res = FixtureResult(name=name)
+    if _is_coord_style(fixture_dir):
+        logger.info("  %s...", expected.get("mode", "<unknown>"))
+        res.modes.append(_run_coord_mode(fixture_dir, expected))
+        return res
+    fixture_root = fixture_dir / "fixture"
+    if "scan" in expected:
+        logger.info("  scan...")
+        res.modes.append(_run_scan(fixture_root, expected, offline=offline))
+    if "bump" in expected:
+        logger.info("  bump...")
+        res.modes.append(_run_bump(fixture_root, expected, offline=offline))
+    if "fix" in expected:
+        logger.info("  fix...")
+        res.modes.append(_run_fix(fixture_root, expected, offline=offline))
+    return res
+
+
+def _format_report(results: Sequence[FixtureResult]) -> str:
+    lines: List[str] = []
+    lines.append("")
+    lines.append("=== mode-coverage report ===")
+    width = max((len(r.name) for r in results), default=20)
+    for r in results:
+        for m in r.modes:
+            status = "PASS" if m.ok else "FAIL"
+            note = f" — {m.note}" if m.note else ""
+            lines.append(
+                f"  {r.name:<{width}}  {m.mode:<5} {status}{note}"
+            )
+    total_modes = sum(len(r.modes) for r in results)
+    passed_modes = sum(
+        1 for r in results for m in r.modes if m.ok
+    )
+    rate = (passed_modes / total_modes * 100) if total_modes else 0
+    lines.append("")
+    lines.append(
+        f"Mode pass rate: {passed_modes}/{total_modes} ({rate:.0f}%)"
+    )
+    return "\n".join(lines)
+
+
+def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="raptor-sca-modes-check",
+        description=(
+            "Drive ``raptor-sca`` operator-facing modes (scan / "
+            "bump / fix) against real-shape fixtures; assert "
+            "per-mode invariants."
+        ),
+    )
+    p.add_argument(
+        "corpus", type=Path,
+        help="Path to the modes-corpus directory.",
+    )
+    p.add_argument(
+        "--offline", action="store_true", default=False,
+        help="Run with ``--offline`` for scan (hermetic). "
+             "Default: live (allows registry / OSV queries).",
+    )
+    p.add_argument(
+        "--only", action="append", default=[],
+        help="Restrict to fixtures whose dir name matches this "
+             "substring. Repeatable.",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = _parse_args(list(argv) if argv is not None else sys.argv[1:])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    fixtures = _discover_fixtures(args.corpus)
+    if args.only:
+        fixtures = [
+            f for f in fixtures
+            if any(needle in f.name for needle in args.only)
+        ]
+    if not fixtures:
+        print(
+            f"raptor-sca-modes-check: no fixtures found under "
+            f"{args.corpus}",
+            file=sys.stderr,
+        )
+        return 2
+
+    results: List[FixtureResult] = []
+    for fixture_dir in fixtures:
+        logger.info("running %s", fixture_dir.name)
+        results.append(_evaluate_fixture(fixture_dir, offline=args.offline))
+
+    print(_format_report(results))
+    return 0 if all(r.ok for r in results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

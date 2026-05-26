@@ -43,11 +43,12 @@ If unsure, ask the user which canonical name they meant. Don't guess silently.
 
 Per `(model, decision_class)` cell:
 
-- `events.cheap_short_circuit` — `{correct, incorrect}`. Recorded when a cheap-tier verdict ("clear FP") is later compared against full ANALYSE. *Currently the only event-type with a producer wired.*
-- `events.multi_model_consensus` — agreed-with-majority vs dissented. *Producer wires in a follow-up PR.*
-- `events.judge_review` — judge upheld vs overruled this model. *Follow-up.*
-- `events.tool_evidence` — tool agreed with vs contradicted this model's claim. *Follow-up.*
-- `events.operator_feedback` — operator's marking matched vs contradicted this model's verdict. *Follow-up; needs LLM-call-id breadcrumb on findings.*
+- `events.cheap_short_circuit` — `{correct, incorrect}`. Recorded when a cheap-tier verdict ("clear FP") is later compared against full ANALYSE. Producer wired in `core/llm/client.py` via `LLMClient.generate_structured`; consumers include `packages/codeql/dataflow_validator` and `packages/codeql/autonomous_analyzer`.
+- `events.multi_model_consensus` — agreed-with-majority vs dissented. Producer wired at `packages/llm_analysis/orchestrator.py` (`record_consensus_outcomes`); fires on multi-model agentic runs for disputed findings only (100%-agreement runs correctly produce no events).
+- `events.judge_review` — judge upheld vs overruled this model. Producer wired at `packages/llm_analysis/orchestrator.py` (`record_judge_outcomes`); fires when a judge model is configured via `--judge`.
+- `events.tool_evidence` — tool agreed with vs contradicted this model's claim. Producer at `core/llm/scorecard/tool_evidence.py`; recorded via `raptor-llm-scorecard tool-evidence` CLI subcommand (operator-driven; automated wiring from validators is per-consumer).
+- `events.operator_feedback` — operator's marking matched vs contradicted this model's verdict. Recorded via `raptor-llm-scorecard mark` CLI subcommand. No automated producer — explicitly operator-driven by design (the loop-closing ground-truth signal).
+- `events.reasoning_divergence` — sister event for agreed-verdict findings whose reasoning text diverged. Producer at `packages/llm_analysis/orchestrator.py` (`record_reasoning_divergence`), companion to consensus.
 - `disagreement_samples` — bounded log (max 5) of reasoning text from incorrect outcomes; truncated at 500 chars per side; reasoning only, never the prompt.
 - `policy_override` — `auto` (data-driven) | `force_short_circuit` | `force_fall_through`.
 
@@ -124,7 +125,7 @@ After showing scorecard data, look for actionable follow-ups and offer them — 
 
 Always be explicit about these — operators reading the scorecard at face value will misread it otherwise:
 
-- **Only `cheap_short_circuit` has a wired producer in this PR.** The other four event types are reserved-zero columns until follow-up PRs land. Don't treat their `0/0` as "this model is perfect on multi-model consensus" — it means "no data."
+- **`0/0` cells mean "no observations yet", not "this model is perfect at this event type."** Even with all producers wired, cells stay zero until the relevant condition triggers — e.g. `multi_model_consensus` only records on DISPUTED findings (100%-agreement panels correctly produce no events); `judge_review` only fires when a judge is configured; `tool_evidence` requires an external validator to disagree with the model. Read `0/0` as absent signal, not validation.
 - **"Correct" means "matched full ANALYSE", not "matched ground truth."** Both models can share blind spots. The operator-feedback hook (when wired) is what closes that loop.
 - **Statistical model is Wilson 95% upper bound, not exact Bayesian.** It's standard for proportion CIs; calibrated for small n (better than naïve point estimate); not the only valid choice.
 - **Cross-project data mixes:** the scorecard is global by design (lessons carry across projects). For a project-scoped view, prefix-filter on `--consumer codeql` and use `--since` to scope by recency.

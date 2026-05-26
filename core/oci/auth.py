@@ -77,6 +77,11 @@ def lookup_credentials(registry: str) -> Optional[BasicCredentials]:
     """
     creds = _from_env(registry)
     if creds is not None:
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+        # Only the registry hostname is interpolated; the env-var
+        # NAMES (``RAPTOR_OCI_<HOST>_USER`` / ``_PASSWORD``) are
+        # documentation strings, not their values. No credentials
+        # disclosed.
         logger.info(
             "core.oci.auth: using env-var credentials for %s "
             "(RAPTOR_OCI_<HOST>_USER / _PASSWORD)", registry,

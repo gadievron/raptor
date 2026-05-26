@@ -19,8 +19,13 @@ Architecture exercised:
   3. Codeql analyzer constructed with ``reachability_inventory=``
      pointing at the prepass's inventory. Analyzer's
      ``_check_reachability`` returns "not_called" for findings
-     in the dead function and "called" for findings in the live
-     one — WITHOUT rebuilding the inventory.
+     in the dead function and "reachable" for findings in the live
+     one (it has an entry→sink path from main) — WITHOUT rebuilding
+     the inventory. ``not_called`` is a
+     HEURISTIC verdict: it is surfaced but NO LONGER hard-skips
+     the expensive analysis (only SOUND witnesses — module_aborts
+     / lexical_dead — do; that wiring lives in the codeql
+     prefilter test).
   4. /validate's ``demote_unreachable_paths`` invoked with the
      SAME inventory (via ``inventory=`` kwarg). Attack paths
      anchored to dead-code findings get proximity clamped and
@@ -34,7 +39,9 @@ Verifies:
   * Prepass builds + persists priority markers to checklist.
   * In-process inventory sharing actually works (no rebuilds in
     sibling consumers when DI'd).
-  * Codeql short-circuits before the dataflow validator runs.
+  * Codeql surfaces the not_called verdict but (U11) does NOT
+    hard-skip on it — the finding proceeds past the reachability
+    skip gate into the full analysis.
   * /validate demotes the right paths.
   * All three consumers' verdicts are CONSISTENT for the same
     function (synthetic project shape verifies the resolver's
@@ -207,25 +214,32 @@ def test_full_pipeline_dead_code_deprioritised(tmp_path):
     )
 
     assert analyzer._check_reachability(dead_finding, target) == "not_called"
-    assert analyzer._check_reachability(live_finding, target) == "called"
+    # Routed through the entry-aware classifier: the live handler has an
+    # entry→sink path from main(), so it classifies "reachable" (a strictly
+    # stronger live verdict than the 1-hop "called"). Either way: LIVE, no skip.
+    assert analyzer._check_reachability(live_finding, target) == "reachable"
 
-    # Stage-2b: short-circuit observable in analyze_finding_autonomous.
-    analyzer.dataflow_validator = MagicMock()
-    analyzer.dataflow_validator.validate_finding.side_effect = (
-        AssertionError(
-            "dataflow validator should not have been invoked for "
-            "dead-code finding"
-        )
-    )
-    # Stub parse_sarif_finding so we don't need real SARIF.
+    # Stage-2b (U11): not_called is a HEURISTIC verdict — surface-only, NOT
+    # a hard skip. The finding must proceed PAST the reachability skip gate
+    # into the full analysis (only SOUND witnesses hard-skip). We prove this
+    # with a sentinel raised by the first post-gate stage; a hard skip would
+    # have returned before reaching it.
     analyzer.parse_sarif_finding = lambda r, run: dead_finding
-
-    result = analyzer.analyze_finding_autonomous(
-        sarif_result={}, sarif_run={},
-        repo_path=target, out_dir=tmp_path / "codeql-out",
+    analyzer.read_vulnerable_code = MagicMock(
+        side_effect=RuntimeError("reached past reachability skip gate")
     )
-    assert result.skipped_reason == "reachability_not_called"
-    assert result.reachability_verdict == "not_called"
+    got_past = False
+    try:
+        analyzer.analyze_finding_autonomous(
+            sarif_result={}, sarif_run={},
+            repo_path=target, out_dir=tmp_path / "codeql-out",
+        )
+    except RuntimeError as e:
+        got_past = "past reachability skip gate" in str(e)
+    assert got_past, (
+        "not_called is heuristic — it must surface but NOT hard-skip "
+        "the analysis under U11"
+    )
 
     # ----- Stage 3: /validate consumer with shared inventory -----
     from packages.exploitability_validation.reachability import (

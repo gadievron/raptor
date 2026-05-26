@@ -1,0 +1,364 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:52:55Z",
+    "git_ref": "3.0.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of flask",
+    "project_license": "BSD-3-Clause",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/pallets/flask.git@3.0.0. Project source not redistributed.",
+    "url": "https://github.com/pallets/flask.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-27516"
+        ],
+        "fixed_versions": [
+          "3.1.6"
+        ],
+        "id": "GHSA-cpwx-vrp4-4pq7",
+        "modified": "2026-02-04T04:14:58.595738+00:00",
+        "published": "2025-03-05T20:40:14+00:00",
+        "references": [
+          "https://github.com/pallets/jinja/security/advisories/GHSA-cpwx-vrp4-4pq7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-27516",
+          "https://github.com/pallets/jinja/commit/90457bbf33b8662926ae65cdde4c4c32e756e403",
+          "https://github.com/pallets/jinja",
+          "https://lists.debian.org/debian-lts-announce/2025/04/msg00022.html"
+        ],
+        "severity": null,
+        "summary": "Jinja2 vulnerable to sandbox breakout through attr filter selecting format method"
+      },
+      "cvss_score": null,
+      "dep_name": "jinja2",
+      "dep_version": "3.1.2",
+      "ecosystem": "PyPI",
+      "epss": 0.00121,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-cpwx-vrp4-4pq7",
+      "in_kev": false,
+      "purl": "pkg:pypi/jinja2@3.1.2",
+      "raptor_risk_estimate": 6.5645335634999995,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/templating.py:5",
+          "src/flask/templating.py:6",
+          "src/flask/templating.py:7",
+          "src/flask/templating.py:8",
+          "src/flask/sansio/scaffold.py:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300847,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.787860437499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-56201"
+        ],
+        "fixed_versions": [
+          "3.1.5"
+        ],
+        "id": "GHSA-gmj6-6f8f-6699",
+        "modified": "2026-02-04T02:33:41.652230+00:00",
+        "published": "2024-12-23T17:54:12+00:00",
+        "references": [
+          "https://github.com/pallets/jinja/security/advisories/GHSA-gmj6-6f8f-6699",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-56201",
+          "https://github.com/pallets/jinja/issues/1792",
+          "https://github.com/pallets/jinja/commit/767b23617628419ae3709ccfb02f9602ae9fe51f",
+          "https://github.com/pallets/jinja"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Jinja has a sandbox breakout through malicious filenames"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "jinja2",
+      "dep_version": "3.1.2",
+      "ecosystem": "PyPI",
+      "epss": 0.00423,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-gmj6-6f8f-6699",
+      "in_kev": false,
+      "purl": "pkg:pypi/jinja2@3.1.2",
+      "raptor_risk_estimate": 14.509970861100001,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/templating.py:5",
+          "src/flask/templating.py:6",
+          "src/flask/templating.py:7",
+          "src/flask/templating.py:8",
+          "src/flask/sansio/scaffold.py:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302961,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.03058131,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-22195"
+        ],
+        "fixed_versions": [
+          "3.1.3"
+        ],
+        "id": "GHSA-h5c8-rqwp-cp95",
+        "modified": "2026-02-04T04:32:39.638919+00:00",
+        "published": "2024-01-11T15:20:48+00:00",
+        "references": [
+          "https://github.com/pallets/jinja/security/advisories/GHSA-h5c8-rqwp-cp95",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-22195",
+          "https://github.com/pallets/jinja/commit/716795349a41d4983a9a4771f7d883c96ea17be7",
+          "https://github.com/pallets/jinja",
+          "https://github.com/pallets/jinja/releases/tag/3.1.3"
+        ],
+        "severity": {
+          "score": 5.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter"
+      },
+      "cvss_score": 5.4,
+      "dep_name": "jinja2",
+      "dep_version": "3.1.2",
+      "ecosystem": "PyPI",
+      "epss": 0.00151,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-h5c8-rqwp-cp95",
+      "in_kev": false,
+      "purl": "pkg:pypi/jinja2@3.1.2",
+      "raptor_risk_estimate": 8.866265222474999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/templating.py:5",
+          "src/flask/templating.py:6",
+          "src/flask/templating.py:7",
+          "src/flask/templating.py:8",
+          "src/flask/sansio/scaffold.py:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 54.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30105699999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.336006447499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-34064"
+        ],
+        "fixed_versions": [
+          "3.1.4"
+        ],
+        "id": "GHSA-h75v-3vvj-5mfj",
+        "modified": "2026-02-04T03:24:55.822549+00:00",
+        "published": "2024-05-06T14:20:59+00:00",
+        "references": [
+          "https://github.com/pallets/jinja/security/advisories/GHSA-h75v-3vvj-5mfj",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-34064",
+          "https://github.com/pallets/jinja/commit/0668239dc6b44ef38e7a6c9f91f312fd4ca581cb",
+          "https://github.com/pallets/jinja",
+          "https://lists.debian.org/debian-lts-announce/2024/12/msg00009.html"
+        ],
+        "severity": {
+          "score": 5.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter"
+      },
+      "cvss_score": 5.4,
+      "dep_name": "jinja2",
+      "dep_version": "3.1.2",
+      "ecosystem": "PyPI",
+      "epss": 0.01147,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-h75v-3vvj-5mfj",
+      "in_kev": false,
+      "purl": "pkg:pypi/jinja2@3.1.2",
+      "raptor_risk_estimate": 9.003876292574999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/templating.py:5",
+          "src/flask/templating.py:6",
+          "src/flask/templating.py:7",
+          "src/flask/templating.py:8",
+          "src/flask/sansio/scaffold.py:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 54.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.308029,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.505896657499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-56326"
+        ],
+        "fixed_versions": [
+          "3.1.5"
+        ],
+        "id": "GHSA-q2x7-8rv6-6q7h",
+        "modified": "2026-02-04T03:01:31.510689+00:00",
+        "published": "2024-12-23T17:56:08+00:00",
+        "references": [
+          "https://github.com/pallets/jinja/security/advisories/GHSA-q2x7-8rv6-6q7h",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-56326",
+          "https://github.com/pallets/jinja/commit/48b0687e05a5466a91cd5812d604fa37ad0943b4",
+          "https://github.com/pallets/jinja",
+          "https://github.com/pallets/jinja/releases/tag/3.1.5"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Jinja has a sandbox breakout through indirect reference to format method"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "jinja2",
+      "dep_version": "3.1.2",
+      "ecosystem": "PyPI",
+      "epss": 0.0042,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:jinja2:3.1.2:GHSA-q2x7-8rv6-6q7h",
+      "in_kev": false,
+      "purl": "pkg:pypi/jinja2@3.1.2",
+      "raptor_risk_estimate": 12.860511826499998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "src/flask/templating.py:5",
+          "src/flask/templating.py:6",
+          "src/flask/templating.py:7",
+          "src/flask/templating.py:8",
+          "src/flask/sansio/scaffold.py:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30294,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.662730649999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    }
+  ]
+}

@@ -23,9 +23,9 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from core.binary.capability_diff import diff_binary_capabilities
-from core.binary.fingerprint import bucket_imports
-from packages.binary_analysis.radare2_understand import (
+from core.binary.capability_diff import diff_binary_capabilities  # noqa: E402
+from core.binary.fingerprint import bucket_imports  # noqa: E402
+from packages.binary_analysis.radare2_understand import (  # noqa: E402
     BinaryContextMap,
 )
 

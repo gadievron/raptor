@@ -109,6 +109,17 @@ def _to_fileobj(source: Union[bytes, Iterable[bytes]]) -> io.IOBase:
     return _ChunkStream(source)
 
 
+class TarEntryCountExceeded(Exception):
+    """Raised when a tar's member count exceeds ``max_entry_count`` (opt-in).
+    Tar has no central directory, so this bounds a million-tiny-entries walk."""
+
+
+class TarTotalBytesExceeded(Exception):
+    """Raised when the cumulative extracted-bytes total exceeds
+    ``max_total_bytes`` (opt-in) — the aggregate-size bomb defense (per-member
+    cap doesn't bound the sum). Always raises, never silently truncates."""
+
+
 def extract_files_from_tar(
     source: Union[bytes, Iterable[bytes]],
     *,
@@ -118,6 +129,8 @@ def extract_files_from_tar(
     allow_absolute_paths: bool = False,
     expected_count: Optional[int] = None,
     unique_keys: bool = False,
+    max_total_bytes: Optional[int] = None,
+    max_entry_count: Optional[int] = None,
 ) -> Dict[str, bytes]:
     """Walk ``source`` (a tar archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -160,7 +173,13 @@ def extract_files_from_tar(
         return found
 
     try:
+        total_bytes = 0
+        count = 0
         for member in tf:
+            count += 1
+            if max_entry_count is not None and count > max_entry_count:
+                raise TarEntryCountExceeded(
+                    f"tar exceeds {max_entry_count} entries (bomb-shape); refusing")
             if not member.isfile():
                 continue
             reason = safe_member_reason(
@@ -195,9 +214,16 @@ def extract_files_from_tar(
                     f"duplicate tar key {key!r} (unique_keys=True)"
                 )
             try:
-                found[key] = f.read()
+                data = f.read()
             finally:
                 f.close()
+            if max_total_bytes is not None:
+                total_bytes += len(data)
+                if total_bytes > max_total_bytes:
+                    raise TarTotalBytesExceeded(
+                        f"tar extraction exceeds {max_total_bytes} bytes "
+                        f"(bomb-shape); refusing")
+            found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break
     finally:

@@ -1,0 +1,85 @@
+name: SCA compromise-detection check
+
+# Drives ``packages/sca/scripts/raptor-sca-compromise-check`` against the
+# committed corpus of known supply-chain compromises. Asserts the
+# SCA pipeline still surfaces the expected detection signal(s)
+# for each incident, plus two end-to-end checks:
+#
+#   * report.md ↔ findings.json severity-count parity
+#   * --fail-on-severity info exits 1 on every fixture (CI-gate
+#     machinery end-to-end)
+#
+# Catches the silent-coverage class of bug — the canonical
+# example would be "OSV stopped surfacing log4shell at the
+# expected severity" or "the sentinel-name list lost
+# ua-parser-js" or "the install-hook regex no longer matches
+# ``curl | sh``". These are regressions a unit-test suite
+# wouldn't catch because they're integration-of-detector +
+# external-data shifts.
+#
+# Runs on:
+#   - manual dispatch (workflow_dispatch) — operator-triggered
+#   - weekly cron (Monday 05:00 UTC, one hour after the stress
+#     sweep so they don't queue against each other)
+#   - PR touching the corpus / harness / supply-chain detector —
+#     prevents an incoming change from quietly breaking detection
+#
+# Network: hits OSV + KEV + npm/PyPI registries. Per-fixture
+# wallclock ~10-15s on a warm cache; whole corpus runs in
+# 1-2 minutes once OSV responds.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 5 * * 1'
+  pull_request:
+    paths:
+      - 'packages/sca/scripts/raptor-sca-compromise-check'
+      - 'test/data/sca-e2e/compromise-corpus/**'
+      - 'packages/sca/supply_chain/**'
+      - 'packages/sca/findings.py'
+      - 'packages/sca/thresholds.py'
+
+permissions:
+  contents: read
+
+# A new push or cron firing while a previous run is in-flight
+# supersedes it — the latest state is what matters.
+concurrency:
+  group: sca-compromise-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compromise-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.13'
+
+      - name: Install runtime deps
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          pip install -r requirements.txt
+
+      - name: Run compromise-detection harness
+        # Trust marker required by ``libexec/*`` scripts. CI is the
+        # trusted-caller analogue of the operator's CLI.
+        env:
+          _RAPTOR_TRUSTED: '1'
+        # The harness exits 1 if any axis (catch / parity / gate)
+        # fails on any fixture — that propagates straight to the
+        # workflow check. The per-fixture report (which signals
+        # matched / missed) is in the run's stdout; operators
+        # reproduce a regression locally via:
+        #   packages/sca/scripts/raptor-sca-compromise-check \
+        #     test/data/sca-e2e/compromise-corpus --only <fixture-name>
+        run: |
+          packages/sca/scripts/raptor-sca-compromise-check \
+            test/data/sca-e2e/compromise-corpus \
+            --no-offline

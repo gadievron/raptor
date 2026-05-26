@@ -234,7 +234,10 @@ class TestStagingPromote:
             staging_arg = Path(cmd[3])
             staging_arg.mkdir(parents=True, exist_ok=True)
             (staging_arg / "db-info.json").write_text("{}")
-            r = MagicMock(); r.returncode = 0; r.stdout = "2.16.0"; r.stderr = ""
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0"
+            r.stderr = ""
             return r
 
         with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
@@ -280,7 +283,10 @@ class TestStagingPromote:
             staging_arg = Path(cmd[3])
             staging_arg.mkdir(parents=True, exist_ok=True)
             (staging_arg / "loser-marker").write_text("loser")
-            r = MagicMock(); r.returncode = 0; r.stdout = "2.16.0"; r.stderr = ""
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0"
+            r.stderr = ""
             return r
 
         # Patch _evict_stale_canonical to no-op so the test stays focused on
@@ -338,7 +344,10 @@ class TestStagingPromote:
             staging_arg.mkdir(parents=True, exist_ok=True)
             (staging_arg / "codeql-database.yml").write_text("language: python\n")
             (staging_arg / "valid-content").write_text("our build")
-            r = MagicMock(); r.returncode = 0; r.stdout = "2.16.0"; r.stderr = ""
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0"
+            r.stderr = ""
             return r
 
         with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
@@ -384,7 +393,10 @@ class TestStagingPromote:
             staging_arg = Path(cmd[3])
             staging_arg.mkdir(parents=True, exist_ok=True)
             (staging_arg / "partial").write_text("garbage")
-            r = MagicMock(); r.returncode = 1; r.stdout = ""; r.stderr = "build failed"
+            r = MagicMock()
+            r.returncode = 1
+            r.stdout = ""
+            r.stderr = "build failed"
             return r
 
         with patch('core.sandbox.run', side_effect=fake_sandbox_run), \

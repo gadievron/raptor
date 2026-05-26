@@ -1,0 +1,2793 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T21:33:37Z",
+    "git_ref": "v0.7.19",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of pterodactyl-0.7",
+    "project_license": "MIT",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/pterodactyl/panel.git@v0.7.19. Project source not redistributed.",
+    "url": "https://github.com/pterodactyl/panel.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "3.371.4"
+        ],
+        "id": "GHSA-27qh-8cxx-2cr5",
+        "modified": "2026-04-28T16:59:23.390758+00:00",
+        "published": "2026-03-27T19:54:58+00:00",
+        "references": [
+          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-27qh-8cxx-2cr5",
+          "https://github.com/aws/aws-sdk-php",
+          "https://github.com/aws/aws-sdk-php/blob/master/src/CloudFront/Signer.php",
+          "https://github.com/aws/aws-sdk-php/releases/tag/3.371.4"
+        ],
+        "severity": null,
+        "summary": "AWS SDK for PHP has CloudFront Policy Document Injection via Special Characters"
+      },
+      "cvss_score": null,
+      "dep_name": "aws/aws-sdk-php",
+      "dep_version": "3.74.1",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-27qh-8cxx-2cr5",
+      "in_kev": false,
+      "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Aws\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.198084374999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-51651",
+          "CVE-2025-69820",
+          "GHSA-73jg-4qh6-3f4g",
+          "GO-2026-4390"
+        ],
+        "fixed_versions": [
+          "3.288.1"
+        ],
+        "id": "GHSA-557v-xcg6-rm5m",
+        "modified": "2026-02-04T07:36:06.785913+00:00",
+        "published": "2023-12-21T23:16:13+00:00",
+        "references": [
+          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-557v-xcg6-rm5m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-51651",
+          "https://github.com/aws/aws-sdk-php/commit/aebc9f801438746ac4ade327551576cb75f635f2",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/aws/aws-sdk-php/CVE-2023-51651.yaml",
+          "https://github.com/aws/aws-sdk-php"
+        ],
+        "severity": {
+          "score": 6.0,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Potential URI resolution path traversal in the AWS SDK for PHP"
+      },
+      "cvss_score": 6.0,
+      "dep_name": "aws/aws-sdk-php",
+      "dep_version": "3.74.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00201,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-557v-xcg6-rm5m",
+      "in_kev": false,
+      "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
+      "raptor_risk_estimate": 11.041377878519688,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Aws\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 60.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301407,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.561772339475,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-14761"
+        ],
+        "fixed_versions": [
+          "3.368.0"
+        ],
+        "id": "GHSA-x8cp-jf6f-r4xh",
+        "modified": "2026-02-04T03:45:01.242800+00:00",
+        "published": "2025-12-18T18:52:34+00:00",
+        "references": [
+          "https://github.com/aws/aws-sdk-php/security/advisories/GHSA-x8cp-jf6f-r4xh",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-14761",
+          "https://github.com/aws/aws-sdk-php/commit/6827cac70397dca07e6e86f7cf630954ec2bc6bf",
+          "https://aws.amazon.com/security/security-bulletins/AWS-2025-032",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/aws/aws-sdk-php/CVE-2025-14761.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "AWS SDK for PHP's S3 Encryption Client has a Key Commitment Issue"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "aws/aws-sdk-php",
+      "dep_version": "3.74.1",
+      "ecosystem": "Packagist",
+      "epss": 0.0002,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-x8cp-jf6f-r4xh",
+      "in_kev": false,
+      "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
+      "raptor_risk_estimate": 5.582188173039172,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Aws\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30013999999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.012626810725,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-31090"
+        ],
+        "fixed_versions": [
+          "6.5.8",
+          "7.4.5"
+        ],
+        "id": "GHSA-25mq-v84q-4j7r",
+        "modified": "2024-02-16T08:21:48.242166+00:00",
+        "published": "2022-06-21T16:57:10+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-25mq-v84q-4j7r",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-31090",
+          "https://github.com/guzzle/guzzle/commit/1dd98b0564cb3f6bd16ce683cb755f94c10fbd82",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2022-31090.yaml",
+          "https://github.com/guzzle/guzzle"
+        ],
+        "severity": {
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "CURLOPT_HTTPAUTH option not cleared on change of origin"
+      },
+      "cvss_score": 7.7,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.04985,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-25mq-v84q-4j7r",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 13.5949897689375,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 77.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.334895,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.636345393749998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2022-29248",
+          "CVE-2022-29248",
+          "DRUPAL-CORE-2022-010"
+        ],
+        "fixed_versions": [
+          "6.5.6",
+          "7.4.3"
+        ],
+        "id": "GHSA-cwmx-hcrq-mhc3",
+        "modified": "2025-12-10T23:41:02.272273+00:00",
+        "published": "2022-05-25T18:09:55+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-cwmx-hcrq-mhc3",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-29248",
+          "https://github.com/guzzle/guzzle/pull/3018",
+          "https://github.com/guzzle/guzzle/commit/74a8602c6faec9ef74b7a9391ac82c5e65b1cdab",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2022-29248.yaml"
+        ],
+        "severity": {
+          "score": 8.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:H/A:N"
+        },
+        "summary": "Cross-domain cookie leakage in Guzzle"
+      },
+      "cvss_score": 8.0,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00637,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-cwmx-hcrq-mhc3",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 13.234685618999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 80.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.304459,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.990969899999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2022-31042",
+          "BIT-drupal-2022-31043",
+          "CVE-2022-31042",
+          "CVE-2022-31043",
+          "DRUPAL-CORE-2022-011",
+          "GHSA-w248-ffj2-4v5q"
+        ],
+        "fixed_versions": [
+          "6.5.7",
+          "7.4.4"
+        ],
+        "id": "GHSA-f2wf-25xc-69c9",
+        "modified": "2025-12-10T23:40:57.755467+00:00",
+        "published": "2022-06-09T23:47:25+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-f2wf-25xc-69c9",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-31042",
+          "https://github.com/guzzle/guzzle/commit/e3ff079b22820c2029d4c2a87796b6a0b8716ad8",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2022-31042.yaml",
+          "https://github.com/guzzle/guzzle"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Failure to strip the Cookie header on change in host or HTTP downgrade"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.01454,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-f2wf-25xc-69c9",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 12.564295216874998,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.310178,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.497586687499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-31091"
+        ],
+        "fixed_versions": [
+          "6.5.8",
+          "7.4.5"
+        ],
+        "id": "GHSA-q559-8m2m-g699",
+        "modified": "2023-11-08T04:09:25.594961+00:00",
+        "published": "2022-06-21T20:07:16+00:00",
+        "references": [
+          "https://github.com/guzzle/guzzle/security/advisories/GHSA-q559-8m2m-g699",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-31091",
+          "https://github.com/guzzle/guzzle/commit/1dd98b0564cb3f6bd16ce683cb755f94c10fbd82",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/guzzle/CVE-2022-31091.yaml",
+          "https://github.com/guzzle/guzzle"
+        ],
+        "severity": {
+          "score": 7.7,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "Change in port should be considered a change in origin"
+      },
+      "cvss_score": 7.7,
+      "dep_name": "guzzlehttp/guzzle",
+      "dep_version": "6.3.3",
+      "ecosystem": "Packagist",
+      "epss": 0.0034,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/guzzle:6.3.3:GHSA-q559-8m2m-g699",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/guzzle@6.3.3",
+      "raptor_risk_estimate": 12.679872570749998,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 77.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30238,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.506571074999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "8.40.0",
+          "6.20.26"
+        ],
+        "id": "GHSA-4mg9-vhxq-vm7j",
+        "modified": "2024-12-02T05:40:15.245335+00:00",
+        "published": "2021-04-29T21:52:53+00:00",
+        "references": [
+          "https://github.com/laravel/framework/security/advisories/GHSA-4mg9-vhxq-vm7j",
+          "https://github.com/laravel/framework",
+          "https://packagist.org/packages/illuminate/database",
+          "https://packagist.org/packages/laravel/framework"
+        ],
+        "severity": null,
+        "summary": "SQL Server LIMIT / OFFSET SQL Injection in laravel/framework and illuminate/database"
+      },
+      "cvss_score": null,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-4mg9-vhxq-vm7j",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 7.5009254167499995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.198084374999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-43808"
+        ],
+        "fixed_versions": [
+          "6.20.42",
+          "7.30.6",
+          "8.75.0"
+        ],
+        "id": "GHSA-66hf-2p6w-jqfw",
+        "modified": "2026-03-13T22:01:16.767646+00:00",
+        "published": "2021-12-08T19:57:36+00:00",
+        "references": [
+          "https://github.com/laravel/framework/security/advisories/GHSA-66hf-2p6w-jqfw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-43808",
+          "https://github.com/laravel/framework/pull/39906",
+          "https://github.com/laravel/framework/pull/39908",
+          "https://github.com/laravel/framework/pull/39909"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Laravel Framework XSS in Blade templating engine"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": 0.00359,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-66hf-2p6w-jqfw",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 6.4587920102328775,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302513,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.6548200926337495,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-laravel-2025-27515",
+          "CVE-2025-27515"
+        ],
+        "fixed_versions": [
+          "12.1.1",
+          "11.44.1",
+          "10.48.29"
+        ],
+        "id": "GHSA-78fx-h6xr-vch4",
+        "modified": "2025-03-12T21:39:25.943407+00:00",
+        "published": "2025-03-05T19:09:39+00:00",
+        "references": [
+          "https://github.com/laravel/framework/security/advisories/GHSA-78fx-h6xr-vch4",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-27515",
+          "https://github.com/laravel/framework/commit/2d133034fefddfb047838f4caca3687a3ba811a5",
+          "https://github.com/laravel/framework/commit/a4f7a8f9b83e21882abeef78c3174c66b0f4a26b",
+          "https://github.com/laravel/framework"
+        ],
+        "severity": null,
+        "summary": "Laravel has a File Validation Bypass"
+      },
+      "cvss_score": null,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": 0.00284,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-78fx-h6xr-vch4",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 4.230339545955659,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301988,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.8088047757499996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-laravel-2024-52301",
+          "CVE-2024-52301"
+        ],
+        "fixed_versions": [
+          "6.20.45",
+          "7.30.7",
+          "8.83.28",
+          "9.52.17",
+          "10.48.23",
+          "11.31.0"
+        ],
+        "id": "GHSA-gv7v-rgg6-548h",
+        "modified": "2024-12-21T18:37:57.182411+00:00",
+        "published": "2024-11-12T22:08:42+00:00",
+        "references": [
+          "https://github.com/laravel/framework/security/advisories/GHSA-gv7v-rgg6-548h",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-52301",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/laravel/framework/CVE-2024-52301.yaml",
+          "https://github.com/advisories/GHSA-gv7v-rgg6-548h",
+          "https://github.com/laravel/framework"
+        ],
+        "severity": {
+          "score": 0.0,
+          "severity": "none",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N"
+        },
+        "summary": "Laravel environment manipulation via query string"
+      },
+      "cvss_score": 0.0,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": 0.65712,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-gv7v-rgg6-548h",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 0.0,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 0.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.759984,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 0.0,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "none"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-9081"
+        ],
+        "fixed_versions": [
+          "6.20.44"
+        ],
+        "id": "GHSA-pfg4-p438-p874",
+        "modified": "2024-02-16T08:24:40.221686+00:00",
+        "published": "2022-05-14T01:31:22+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-9081",
+          "https://github.com/Laworigin/Laworigin.github.io/blob/master/2019/02/21/laravelv5-7%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96rce/index.html",
+          "https://github.com/laravel/framework",
+          "https://github.com/laravel/framework/discussions/40184",
+          "https://laworigin.github.io/2019/02/21/laravelv5-7%E5%8F%8D%E5%BA%8F%E5%88%97%E5%8C%96rce"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Laravel Framework Deserialization Vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-pfg4-p438-p874",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 18.3772672710375,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 16.068245375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "6.18.31",
+          "7.22.4"
+        ],
+        "id": "GHSA-qm5c-m76r-2hfr",
+        "modified": "2024-11-29T05:40:19.902767+00:00",
+        "published": "2024-05-15T22:16:52+00:00",
+        "references": [
+          "https://blog.laravel.com/laravel-cookie-security-releases",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/laravel/framework/2020-07-27-1.yaml",
+          "https://github.com/laravel/framework"
+        ],
+        "severity": {
+          "score": 9.9,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H"
+        },
+        "summary": "Laravel RCE vulnerability in \"cookie\" session driver"
+      },
+      "cvss_score": 9.9,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-qm5c-m76r-2hfr",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 18.564790406456247,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 99.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 16.232207062499995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-19316"
+        ],
+        "fixed_versions": [
+          "5.8.17"
+        ],
+        "id": "GHSA-w2pm-r78h-4m7v",
+        "modified": "2024-02-19T05:24:32.920369+00:00",
+        "published": "2022-01-06T23:13:42+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-19316",
+          "https://github.com/laravel/framework/commit/44c3feb604944599ad1c782a9942981c3991fa31",
+          "https://github.com/laravel/framework",
+          "http://www.netbytesec.com/advisories/OSCommandInjectionInLaravelFramework"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "OS Command Injection in Laravel Framework"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": 0.04286,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-w2pm-r78h-4m7v",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 9.885947786379258,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.330002,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.325348095780002,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-laravel-2020-24941",
+          "CVE-2020-24941"
+        ],
+        "fixed_versions": [
+          "6.18.35",
+          "7.24.0"
+        ],
+        "id": "GHSA-w68r-5p45-5rqp",
+        "modified": "2023-12-06T01:00:24.436250+00:00",
+        "published": "2021-05-06T18:54:20+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-24941",
+          "https://github.com/laravel/framework/commit/897d107775737a958dbd0b2f3ea37877c7526371",
+          "https://blog.laravel.com/security-release-laravel-61835-7240"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Improper Input Validation in Laravel"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": 0.00214,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-w68r-5p45-5rqp",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 7.923252317756454,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301498,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.7039370220625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "6.20.14",
+          "7.30.4",
+          "8.24.0"
+        ],
+        "id": "GHSA-x7p5-p2c9-phvg",
+        "modified": "2024-12-02T05:49:41.891932+00:00",
+        "published": "2021-02-02T15:47:08+00:00",
+        "references": [
+          "https://github.com/laravel/framework/security/advisories/GHSA-x7p5-p2c9-phvg",
+          "https://github.com/advisories/GHSA-3p32-j457-pg5x",
+          "https://packagist.org/packages/illuminate/database",
+          "https://packagist.org/packages/laravel/framework"
+        ],
+        "severity": {
+          "score": 7.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Unexpected database bindings"
+      },
+      "cvss_score": 7.2,
+      "dep_name": "laravel/framework",
+      "dep_version": "v5.7.14",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:laravel/framework:v5.7.14:GHSA-x7p5-p2c9-phvg",
+      "in_kev": false,
+      "purl": "pkg:composer/laravel/framework@v5.7.14",
+      "raptor_risk_estimate": 13.501665750149996,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Laravel\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 72.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.8052415,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22145"
+        ],
+        "fixed_versions": [
+          "3.8.4",
+          "2.72.6"
+        ],
+        "id": "GHSA-j3f9-p6hm-5w6q",
+        "modified": "2025-02-25T18:48:28.814404+00:00",
+        "published": "2025-01-08T21:03:28+00:00",
+        "references": [
+          "https://github.com/CarbonPHP/carbon/security/advisories/GHSA-j3f9-p6hm-5w6q",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22145",
+          "https://github.com/briannesbitt/Carbon/commit/129700ed449b1f02d70272d2ac802357c8c30c58",
+          "https://github.com/CarbonPHP/carbon",
+          "https://lists.debian.org/debian-lts-announce/2025/02/msg00032.html"
+        ],
+        "severity": null,
+        "summary": "Carbon has an arbitrary file include via unvalidated input passed to Carbon::setLocale"
+      },
+      "cvss_score": null,
+      "dep_name": "nesbot/carbon",
+      "dep_version": "1.36.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00095,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:nesbot/carbon:1.36.1:GHSA-j3f9-p6hm-5w6q",
+      "in_kev": false,
+      "purl": "pkg:composer/nesbot/carbon@1.36.1",
+      "raptor_risk_estimate": 4.217906109444673,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Nesbot\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300665,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.7921185209374997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-24765"
+        ],
+        "fixed_versions": [
+          "8.5.52",
+          "9.6.33",
+          "10.5.62",
+          "11.5.50",
+          "12.5.8"
+        ],
+        "id": "GHSA-vvj3-c3rp-c85p",
+        "modified": "2026-05-05T15:55:47.547809+00:00",
+        "published": "2026-01-27T22:26:22+00:00",
+        "references": [
+          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
+          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
+          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "phpunit/phpunit",
+      "dep_version": "7.4.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00126,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpunit/phpunit:7.4.4:GHSA-vvj3-c3rp-c85p",
+      "in_kev": false,
+      "purl": "pkg:composer/phpunit/phpunit@7.4.4",
+      "raptor_risk_estimate": 8.22889363953928,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "vendor referenced only by test code"
+        },
+        "evidence": [
+          "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:6",
+          "tests/Assertions/NestedObjectAssertionsTrait.php:11",
+          "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4",
+          "tests/Assertions/ControllerAssertionsTrait.php:14",
+          "tests/Assertions/CommandAssertionsTrait.php:11"
+        ],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300882,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.919974455005,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-10905"
+        ],
+        "fixed_versions": [
+          "1.7.2"
+        ],
+        "id": "GHSA-62m3-fc7f-jpp8",
+        "modified": "2024-02-16T08:03:16.897238+00:00",
+        "published": "2022-03-26T00:09:58+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-10905",
+          "https://github.com/erusev/parsedown/issues/699",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/erusev/parsedown/CVE-2019-10905.yaml",
+          "https://github.com/erusev/parsedown",
+          "https://github.com/erusev/parsedown/releases/tag/1.7.2"
+        ],
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Parsedown Class-Name Injection"
+      },
+      "cvss_score": 8.1,
+      "dep_name": "erusev/parsedown",
+      "dep_version": "1.7.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00521,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:erusev/parsedown:1.7.1:GHSA-62m3-fc7f-jpp8",
+      "in_kev": false,
+      "purl": "pkg:composer/erusev/parsedown@1.7.1",
+      "raptor_risk_estimate": 8.598009628272033,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Erusev\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 81.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.303647,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.342912470043875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2022-24775",
+          "CVE-2022-24775",
+          "DRUPAL-CORE-2022-006"
+        ],
+        "fixed_versions": [
+          "1.8.4",
+          "2.1.1"
+        ],
+        "id": "GHSA-q7rv-6hp3-vh96",
+        "modified": "2026-02-04T03:15:15.096166+00:00",
+        "published": "2022-03-25T19:26:33+00:00",
+        "references": [
+          "https://github.com/guzzle/psr7/security/advisories/GHSA-q7rv-6hp3-vh96",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24775",
+          "https://github.com/guzzle/psr7/pull/485/commits/e55afaa3fc138c89adf3b55a8ba20dc60d17f1f1",
+          "https://github.com/guzzle/psr7/pull/486/commits/9a96d9db668b485361ed9de7b5bf1e54895df1dc",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2022-24775.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Improper Input Validation in guzzlehttp/psr7"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "guzzlehttp/psr7",
+      "dep_version": "1.4.2",
+      "ecosystem": "Packagist",
+      "epss": 0.00931,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:1.4.2:GHSA-q7rv-6hp3-vh96",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/psr7@1.4.2",
+      "raptor_risk_estimate": 8.8078471330125,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.306517,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.131516040874998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-29197"
+        ],
+        "fixed_versions": [
+          "1.9.1",
+          "2.4.5"
+        ],
+        "id": "GHSA-wxmh-65f7-jcvw",
+        "modified": "2026-02-04T04:19:33.828903+00:00",
+        "published": "2023-04-19T18:25:53+00:00",
+        "references": [
+          "https://github.com/guzzle/psr7/security/advisories/GHSA-q7rv-6hp3-vh96",
+          "https://github.com/guzzle/psr7/security/advisories/GHSA-wxmh-65f7-jcvw",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-29197",
+          "https://cve.mitre.org/cgi-bin/cvename.cgi?name=2022-24775",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/guzzlehttp/psr7/CVE-2023-29197.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Improper header name validation in guzzlehttp/psr7"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "guzzlehttp/psr7",
+      "dep_version": "1.4.2",
+      "ecosystem": "Packagist",
+      "epss": 0.04782,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:guzzlehttp/psr7:1.4.2:GHSA-wxmh-65f7-jcvw",
+      "in_kev": false,
+      "purl": "pkg:composer/guzzlehttp/psr7@1.4.2",
+      "raptor_risk_estimate": 9.330062517524999,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Services/Subusers/SubuserUpdateService.php:13",
+          "app/Services/Servers/SuspensionService.php:14",
+          "app/Services/Servers/StartupModificationService.php:7",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/ServerCreationService.php:11",
+          "... (+22 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.333474,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.5828132867499995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-32708"
+        ],
+        "fixed_versions": [
+          "1.1.4",
+          "2.1.1"
+        ],
+        "id": "GHSA-9f46-5r25-5wfm",
+        "modified": "2026-03-13T22:01:08.982482+00:00",
+        "published": "2021-06-29T03:13:28+00:00",
+        "references": [
+          "https://github.com/thephpleague/flysystem/security/advisories/GHSA-9f46-5r25-5wfm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-32708",
+          "https://github.com/thephpleague/flysystem/commit/a3c694de9f7e844b76f9d1b61296ebf6e8d89d74",
+          "https://github.com/thephpleague/flysystem/commit/f3ad69181b8afed2c9edf7be5a2918144ff4ea32",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/league/flysystem/CVE-2021-32708.yaml"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "league/flysystem",
+      "dep_version": "1.0.49",
+      "ecosystem": "Packagist",
+      "epss": 0.07327,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:league/flysystem:1.0.49:GHSA-9f46-5r25-5wfm",
+      "in_kev": false,
+      "purl": "pkg:composer/league/flysystem@1.0.49",
+      "raptor_risk_estimate": 17.889951020025,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Transformers/Daemon/ApiKeyTransformer.php:8",
+          "app/Transformers/Api/Application/BaseTransformer.php:9",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
+          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:7",
+          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:32",
+          "... (+2 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.35128899999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.874414461749998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25129"
+        ],
+        "fixed_versions": [
+          "0.12.19",
+          "0.11.23"
+        ],
+        "id": "GHSA-4486-gxhx-5mg7",
+        "modified": "2026-02-03T03:13:39.153449+00:00",
+        "published": "2026-01-30T21:28:44+00:00",
+        "references": [
+          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
+          "https://github.com/bobthecow/psysh",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
+        ],
+        "severity": {
+          "score": 6.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
+      },
+      "cvss_score": 6.7,
+      "dep_name": "psy/psysh",
+      "dep_version": "v0.9.9",
+      "ecosystem": "Packagist",
+      "epss": 5e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:psy/psysh:v0.9.9:GHSA-4486-gxhx-5mg7",
+      "in_kev": false,
+      "purl": "pkg:composer/psy/psysh@v0.9.9",
+      "raptor_risk_estimate": 11.007680632449365,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Psy\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 67.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.300035,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.5495539788231247,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-28859"
+        ],
+        "fixed_versions": [
+          "1.5.18",
+          "5.4.13",
+          "6.2.5"
+        ],
+        "id": "GHSA-wjv8-pxr6-5f4r",
+        "modified": "2025-05-15T21:45:29.667645+00:00",
+        "published": "2024-03-18T20:36:06+00:00",
+        "references": [
+          "https://github.com/FriendsOfSymfony1/symfony1/security/advisories/GHSA-wjv8-pxr6-5f4r",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-28859",
+          "https://github.com/FriendsOfSymfony1/symfony1/commit/edb850f94fb4de18ca53d0d1824910d6e8130166",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/friendsofsymfony1/swiftmailer/CVE-2024-28859.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/friendsofsymfony1/symfony1/CVE-2024-28859.yaml"
+        ],
+        "severity": {
+          "score": 5.0,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:L"
+        },
+        "summary": "Gadget chain in Symfony 1 due to vulnerable Swift Mailer dependency"
+      },
+      "cvss_score": 5.0,
+      "dep_name": "swiftmailer/swiftmailer",
+      "dep_version": "v6.1.3",
+      "ecosystem": "Packagist",
+      "epss": 0.05107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:swiftmailer/swiftmailer:v6.1.3:GHSA-wjv8-pxr6-5f4r",
+      "in_kev": false,
+      "purl": "pkg:composer/swiftmailer/swiftmailer@v6.1.3",
+      "raptor_risk_estimate": 11.884840578626873,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Swiftmailer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.33574899999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9642292947312496,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-64500"
+        ],
+        "fixed_versions": [
+          "5.4.50",
+          "6.4.29",
+          "7.3.7"
+        ],
+        "id": "GHSA-3rg7-wf37-54rm",
+        "modified": "2026-02-04T03:01:05.453147+00:00",
+        "published": "2025-11-12T21:50:37+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
+          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
+        ],
+        "severity": {
+          "score": 7.3,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+        },
+        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
+      },
+      "cvss_score": 7.3,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.0238,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-3rg7-wf37-54rm",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
+      "raptor_risk_estimate": 12.40220274225,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 73.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.31666,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.301823357499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-50345"
+        ],
+        "fixed_versions": [
+          "5.4.46",
+          "6.4.14",
+          "7.1.7"
+        ],
+        "id": "GHSA-mrqx-rp3w-jpjp",
+        "modified": "2025-11-03T23:05:56.908103+00:00",
+        "published": "2024-11-06T15:22:09+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
+          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
+        ],
+        "severity": {
+          "score": 3.1,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
+      },
+      "cvss_score": 3.1,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.00394,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-mrqx-rp3w-jpjp",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
+      "raptor_risk_estimate": 5.109166837725,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 31.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.30275799999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.9646441807499992,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-10913"
+        ],
+        "fixed_versions": [
+          "2.7.51",
+          "2.8.50",
+          "3.4.26",
+          "4.1.12",
+          "4.2.7"
+        ],
+        "id": "GHSA-x92h-wmg2-6hp7",
+        "modified": "2023-11-08T04:00:58.948619+00:00",
+        "published": "2019-12-02T18:10:24+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-10913",
+          "https://github.com/symfony/symfony/commit/944e60f083c3bffbc6a0b5112db127a10a66a8ec",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2019-10913.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2019-10913.yaml",
+          "https://symfony.com/blog/cve-2019-10913-reject-invalid-http-method-overrides"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Invalid HTTP method overrides allow possible XSS or other attacks in Symfony"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.00257,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-x92h-wmg2-6hp7",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
+      "raptor_risk_estimate": 16.117208084775,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.301799,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.34241439425,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-18888"
+        ],
+        "fixed_versions": [
+          "2.8.52",
+          "3.4.35",
+          "4.2.12",
+          "4.3.8"
+        ],
+        "id": "GHSA-xhh6-956q-4q69",
+        "modified": "2024-02-20T05:28:56.318097+00:00",
+        "published": "2019-12-02T18:08:19+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-18888",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2019-18888.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mime/CVE-2019-18888.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2019-18888.yaml",
+          "https://github.com/symfony/symfony/releases/tag/v4.3.8"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Argument injection in a MimeTypeGuesser in Symfony"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.0231,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-xhh6-956q-4q69",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
+      "raptor_risk_estimate": 12.728556534374997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.31617,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.490264906249998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-symfony-2022-24894",
+          "CVE-2022-24894"
+        ],
+        "fixed_versions": [
+          "4.4.50",
+          "5.4.20",
+          "6.0.20",
+          "6.1.12",
+          "6.2.6"
+        ],
+        "id": "GHSA-h7vf-5wrv-9fhv",
+        "modified": "2025-02-13T19:02:16.092641+00:00",
+        "published": "2023-02-01T18:48:09+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-h7vf-5wrv-9fhv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24894",
+          "https://github.com/symfony/symfony/commit/d2f6322af9444ac5cd1ef3ac6f280dbef7f9d1fb",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-kernel/CVE-2022-24894.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2022-24894.yaml"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:H/I:L/A:L"
+        },
+        "summary": "Symfony storing cookie headers in HttpCache"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "symfony/http-kernel",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.00182,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-kernel:v4.1.7:GHSA-h7vf-5wrv-9fhv",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-kernel@v4.1.7",
+      "raptor_risk_estimate": 9.691895362575,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.301274,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.614730560250001,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-18887"
+        ],
+        "fixed_versions": [
+          "2.8.52",
+          "3.4.35",
+          "4.2.12",
+          "4.3.8"
+        ],
+        "id": "GHSA-q8hg-pf8v-cxrv",
+        "modified": "2024-02-20T05:19:46.052258+00:00",
+        "published": "2022-03-26T00:22:49+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-18887",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-kernel/CVE-2019-18887.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2019-18887.yaml",
+          "https://github.com/symfony/symfony/releases/tag/v4.3.8",
+          "https://lists.fedoraproject.org/archives/list/package-announce%40lists.fedoraproject.org/message/DZNXRVHDQBNZQUCNRVZICPPBFRAUWUJX"
+        ],
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Symfony Http-Kernel has non-constant time comparison in UriSigner"
+      },
+      "cvss_score": 8.1,
+      "dep_name": "symfony/http-kernel",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.00813,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-kernel:v4.1.7:GHSA-q8hg-pf8v-cxrv",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-kernel@v4.1.7",
+      "raptor_risk_estimate": 13.436594412637499,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 81.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.305691,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.8213717146249975,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-51736"
+        ],
+        "fixed_versions": [
+          "5.4.46",
+          "6.4.14",
+          "7.1.7"
+        ],
+        "id": "GHSA-qq5c-677p-737q",
+        "modified": "2025-03-07T13:40:26.737075+00:00",
+        "published": "2024-11-06T15:22:55+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-qq5c-677p-737q",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-51736",
+          "https://github.com/symfony/symfony/commit/18ecd03eda3917fdf901a48e72518f911c64a1c9",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/process/CVE-2024-51736.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-51736.yaml"
+        ],
+        "severity": {
+          "score": 8.4,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Symfony vulnerable to command execution hijack on Windows with Process class"
+      },
+      "cvss_score": 8.4,
+      "dep_name": "symfony/process",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 0.00783,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/process:v4.1.7:GHSA-qq5c-677p-737q",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/process@v4.1.7",
+      "raptor_risk_estimate": 13.92779841705,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 84.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.305481,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.105480113499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-24739"
+        ],
+        "fixed_versions": [
+          "5.4.51",
+          "6.4.33",
+          "7.3.11",
+          "7.4.5",
+          "8.0.5"
+        ],
+        "id": "GHSA-r39x-jcww-82v6",
+        "modified": "2026-02-16T13:43:45.548028+00:00",
+        "published": "2026-01-28T21:28:10+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-r39x-jcww-82v6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-24739",
+          "https://github.com/symfony/symfony/issues/62921",
+          "https://github.com/symfony/symfony/pull/63164",
+          "https://github.com/symfony/symfony/commit/35203939050e5abd3caf2202113b00cab5d379b3"
+        ],
+        "severity": {
+          "score": 6.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:H"
+        },
+        "summary": "Symfony's incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows"
+      },
+      "cvss_score": 6.3,
+      "dep_name": "symfony/process",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/process:v4.1.7:GHSA-r39x-jcww-82v6",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/process@v4.1.7",
+      "raptor_risk_estimate": 10.321086969112498,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "app/Http/Controllers/Base/IndexController.php:11",
+          "app/Exceptions/Handler.php:15",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 63.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.30006299999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.971291207874997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2021-41116",
+          "CVE-2021-41116"
+        ],
+        "fixed_versions": [
+          "1.10.23",
+          "2.1.9"
+        ],
+        "id": "GHSA-frqg-7g38-6gcf",
+        "modified": "2026-03-13T22:14:10.290132+00:00",
+        "published": "2021-10-05T20:23:18+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-frqg-7g38-6gcf",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-41116",
+          "https://github.com/composer/composer/commit/ca5e2f8d505fd3bfac6f7c85b82f2740becbc0aa",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/composer/composer/CVE-2021-41116.yaml",
+          "https://github.com/composer/composer"
+        ],
+        "severity": {
+          "score": 8.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N"
+        },
+        "summary": "Improper escaping of command arguments on Windows leading to command injection"
+      },
+      "cvss_score": 8.2,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00975,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-frqg-7g38-6gcf",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 8.765384346932043,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 82.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.306825,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.44254318405625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2026-40261",
+          "CVE-2026-40261"
+        ],
+        "fixed_versions": [
+          "2.9.6",
+          "2.2.27"
+        ],
+        "id": "GHSA-gqw4-4w2p-838q",
+        "modified": "2026-04-24T13:29:20.375762+00:00",
+        "published": "2026-04-14T20:01:42+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-gqw4-4w2p-838q",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-40261",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/composer/composer/CVE-2026-40261.yaml",
+          "https://github.com/composer/composer",
+          "https://github.com/composer/composer/releases/tag/2.9.6"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Composer has a command injection via malicious perforce reference"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.0004,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-gqw4-4w2p-838q",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 9.27143340999612,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.30028,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.66590768644,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2021-29472",
+          "CVE-2021-29472"
+        ],
+        "fixed_versions": [
+          "1.10.22",
+          "2.0.13"
+        ],
+        "id": "GHSA-h5h8-pc6h-jvvx",
+        "modified": "2026-03-13T22:16:15.883423+00:00",
+        "published": "2021-04-29T21:52:04+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-h5h8-pc6h-jvvx",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-29472",
+          "https://blog.sonarsource.com/php-supply-chain-attack-on-composer",
+          "https://getcomposer.org",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/composer/composer/CVE-2021-29472.yaml"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Composer's missing argument delimiter can lead to code execution via VCS repository URLs or source download URLs on systems with Mercurial"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.03585,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-h5h8-pc6h-jvvx",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 9.784493575864754,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.32509499999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.051496134684999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2023-43655",
+          "CVE-2023-43655"
+        ],
+        "fixed_versions": [
+          "1.10.27",
+          "2.2.22",
+          "2.6.4"
+        ],
+        "id": "GHSA-jm6m-4632-36hf",
+        "modified": "2025-02-13T19:36:33.563645+00:00",
+        "published": "2023-09-29T20:39:21+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-jm6m-4632-36hf",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-43655",
+          "https://github.com/composer/composer/commit/4fce14795aba98e40b6c4f5047305aba17a6120d",
+          "https://github.com/composer/composer/commit/955a48e6319c8962e5cd421b07c00ab3c728968c",
+          "https://github.com/composer/composer/commit/95e091c921037b7b6564942845e7b738f6b95c9c"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Composer Remote Code Execution vulnerability via web-accessible composer.phar"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.02069,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-jm6m-4632-36hf",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 9.565086181941806,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.314483,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.886601328609001,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2026-40176",
+          "CVE-2026-40176"
+        ],
+        "fixed_versions": [
+          "2.9.6",
+          "2.2.27"
+        ],
+        "id": "GHSA-wg36-wvj6-r67p",
+        "modified": "2026-04-24T13:29:19.983971+00:00",
+        "published": "2026-04-14T20:03:08+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-wg36-wvj6-r67p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-40176",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/composer/composer/CVE-2026-40176.yaml",
+          "https://github.com/composer/composer",
+          "https://github.com/composer/composer/releases/tag/2.9.6"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Composer has a command injection via malicious perforce repository"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00014,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-wg36-wvj6-r67p",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 8.214526112904363,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.300098,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.133184257611499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-composer-2022-24828",
+          "CVE-2022-24828"
+        ],
+        "fixed_versions": [
+          "1.10.26",
+          "2.2.12",
+          "2.3.5"
+        ],
+        "id": "GHSA-x7cr-6qr6-2hh6",
+        "modified": "2024-02-21T05:32:42.447669+00:00",
+        "published": "2022-04-22T20:15:38+00:00",
+        "references": [
+          "https://github.com/composer/composer/security/advisories/GHSA-x7cr-6qr6-2hh6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24828",
+          "https://github.com/composer/composer/commit/2c40c53637c5c7e43fff7c09d3d324d632734709",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/composer/composer/CVE-2022-24828.yaml",
+          "https://github.com/composer/composer"
+        ],
+        "severity": {
+          "score": 8.3,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:H/A:H"
+        },
+        "summary": "Missing input validation can lead to command execution in composer"
+      },
+      "cvss_score": 8.3,
+      "dep_name": "composer/composer",
+      "dep_version": "1.7.3",
+      "ecosystem": "Packagist",
+      "epss": 0.00268,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-x7cr-6qr6-2hh6",
+      "in_kev": false,
+      "purl": "pkg:composer/composer/composer@1.7.3",
+      "raptor_risk_estimate": 8.775770483296276,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Composer\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 83.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.301876,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.4241897163554995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-11358",
+          "DRUPAL-CORE-2019-006"
+        ],
+        "fixed_versions": [
+          "3.4.0",
+          "4.3.4",
+          "2.1.9",
+          "2.2.2",
+          "1.19.0"
+        ],
+        "id": "GHSA-6c3j-c64m-qhgq",
+        "modified": "2026-03-13T21:56:20.301637+00:00",
+        "published": "2019-04-26T16:29:11+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/pull/4333",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc",
+          "https://github.com/django/django/commit/34ec52269ade54af31a021b12969913129571a3f"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "maximebf/debugbar",
+      "dep_version": "v1.15.0",
+      "ecosystem": "Packagist",
+      "epss": 0.02362,
+      "exploit_evidence": {
+        "edb_ids": [
+          52141
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.15.0:GHSA-6c3j-c64m-qhgq",
+      "in_kev": false,
+      "purl": "pkg:composer/maximebf/debugbar@v1.15.0",
+      "raptor_risk_estimate": 11.41290720891749,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Maximebf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.316534,
+        "exploit_evidence_multiplier": 1.19,
+        "exposure_multiplier": 0.5,
+        "final": 4.057179525266823,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11022",
+          "CVE-2020-11022"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0",
+          "1.19.0"
+        ],
+        "id": "GHSA-gxr4-xjj5-5px2",
+        "modified": "2026-04-13T14:01:26.874485+00:00",
+        "published": "2020-04-29T22:18:55+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "maximebf/debugbar",
+      "dep_version": "v1.15.0",
+      "ecosystem": "Packagist",
+      "epss": 0.02456,
+      "exploit_evidence": {
+        "edb_ids": [
+          49766
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.15.0:GHSA-gxr4-xjj5-5px2",
+      "in_kev": false,
+      "purl": "pkg:composer/maximebf/debugbar@v1.15.0",
+      "raptor_risk_estimate": 11.429068133053258,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Maximebf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.317192,
+        "exploit_evidence_multiplier": 1.19,
+        "exposure_multiplier": 0.5,
+        "final": 4.59880865725827,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    }
+  ]
+}

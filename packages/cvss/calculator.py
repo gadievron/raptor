@@ -178,6 +178,41 @@ def compute_score_safe(vector: Optional[str]) -> tuple[Optional[float], Optional
         return None, None
 
 
+def score_for_label(label: Optional[str]) -> Optional[float]:
+    """Return a representative CVSS numeric for a severity label.
+
+    Inverse-ish of the ``_SEVERITY`` threshold table at the top of
+    this module. Used by consumers that have a tier label
+    (``"CRITICAL"`` / ``"HIGH"`` / etc.) but no parseable vector —
+    typical for OSV / GHSA records on ecosystems where upstream
+    advisories ship a label but no numeric (Cargo / NuGet /
+    Packagist advisories disproportionately so).
+
+    Returns the LOWER BOUND of each tier per ``_SEVERITY`` so the
+    score is conservative (label says "Critical", we return 9.0
+    rather than 10.0). Operators consuming the score get a
+    representative-but-not-inflated value matching what
+    ``compute_base_score`` would have produced for a borderline
+    in-tier vector.
+
+    Returns ``None`` for unknown / empty inputs — callers fall
+    back to their own neutral default. Case-insensitive match
+    (LLM-emitted advisories often capitalise inconsistently).
+    """
+    if not label:
+        return None
+    norm = label.strip().lower()
+    # Build the inverse from the SAME threshold table the forward
+    # direction uses — drift between the two would silently break
+    # the score↔label bijection.
+    inverse = {name.lower(): threshold for threshold, name in _SEVERITY}
+    # ``info`` is operator-convenience: not part of CVSS proper but
+    # used by SCA for commented-out deps and hand-tagged low-risk
+    # findings. Map to a sub-Low value.
+    inverse.setdefault("info", 1.0)
+    return inverse.get(norm)
+
+
 def score_finding(finding: dict) -> None:
     """Compute CVSS score for a single finding dict. Modifies in place.
 

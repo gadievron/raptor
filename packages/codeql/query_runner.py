@@ -24,7 +24,7 @@ from core.logging import get_logger
 logger = get_logger()
 
 
-import re
+import re  # noqa: E402
 
 # Tightened from `[\w/.-]+\S*` which accepted any path-like
 # blob (path-traversal `../../etc/passwd`, multi-segment
@@ -303,7 +303,7 @@ class QueryRunner:
                             resolved_to_absolute = True
                             logger.info(f"✓ Resolved suite to absolute path (alt): {actual_suite_path}")
                         else:
-                            logger.error(f"❌ Cannot resolve suite path - will attempt pack reference (may cause conflicts)")
+                            logger.error("❌ Cannot resolve suite path - will attempt pack reference (may cause conflicts)")
             else:
                 # Already an absolute path or simple name
                 if Path(suite_name).exists():
@@ -367,7 +367,6 @@ class QueryRunner:
                     # container registry; seccomp blocks UDP (no DNS
                     # exfil — the proxy resolves on behalf). Landlock
                     # pins writes to the codeql pack cache dir.
-                    from pathlib import Path
                     codeql_cache = Path.home() / ".codeql"
                     codeql_cache.mkdir(parents=True, exist_ok=True)
                     # Retry the download up to 3x with exponential
@@ -976,12 +975,12 @@ def main():
         )
 
     if result.success:
-        print(f"\n✓ Analysis completed")
+        print("\n✓ Analysis completed")
         print(f"  Findings: {result.findings_count}")
         print(f"  SARIF: {result.sarif_path}")
         print(f"  Duration: {result.duration_seconds:.1f}s")
     else:
-        print(f"\n✗ Analysis failed")
+        print("\n✗ Analysis failed")
         for error in result.errors:
             print(f"  {error}")
 

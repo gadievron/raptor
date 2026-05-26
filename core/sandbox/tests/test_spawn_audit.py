@@ -23,18 +23,18 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import json
-import os
-import platform
-import signal
-import time
+import json  # noqa: E402
+import os  # noqa: E402
+import platform  # noqa: E402
+import signal  # noqa: E402
+import time  # noqa: E402
 
-import pytest
+import pytest  # noqa: E402
 
-from core.sandbox import probes
-from core.sandbox import ptrace_probe
-from core.sandbox._spawn import run_sandboxed
-from core.sandbox import tracer as tracer_mod
+from core.sandbox import probes  # noqa: E402
+from core.sandbox import ptrace_probe  # noqa: E402
+from core.sandbox._spawn import run_sandboxed  # noqa: E402
+from core.sandbox import tracer as tracer_mod  # noqa: E402
 
 
 pytestmark = [

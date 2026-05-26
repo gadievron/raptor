@@ -1,0 +1,130 @@
+{
+  "_source": {
+    "cves_in_corpus": 1169,
+    "cves_queried": 1073,
+    "cves_with_any_evidence_ref": 163,
+    "cves_with_exploit_host_url": 17,
+    "exploit_host_allowlist": [
+      "0day.today",
+      "exploit-db.com",
+      "gist.github.com",
+      "huntr.dev",
+      "packetstormsecurity.com",
+      "packetstormsecurity.org",
+      "seclists.org"
+    ],
+    "fetched_at": "2026-05-09T21:58:17Z",
+    "license": "Derived signal: presence + URL only. Source URLs are public observable facts; evidence content is NOT fetched or stored.",
+    "name": "OSV EVIDENCE references (corpus-scoped)",
+    "provenance": "Walks every CVE referenced in project_samples/ findings, queries OSV /vulns/{id}, and extracts references where type=='EVIDENCE'. Corpus-scoped because OSV exposes no CVE-listing endpoint; the universe is bounded by what our scans actually surface.",
+    "url": "https://api.osv.dev/v1/vulns/{id}"
+  },
+  "signals": {
+    "CVE-2018-17572": {
+      "evidence_urls": [
+        "https://gist.github.com/Raghavrao29/1cb84f1f2d8ce993fd7b2d1366d35f48"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-11841": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/152840/Go-Cryptography-Libraries-Cleartext-Message-Spoofing.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-17558": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/157078/Apache-Solr-8.3.0-Velocity-Template-Remote-Code-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-5418": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/152178/Rails-5.2.1-Arbitrary-File-Content-Disclosure.html",
+        "https://www.exploit-db.com/exploits/46585/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2019-5420": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/152704/Ruby-On-Rails-DoubleTap-Development-Mode-secret_key_base-Remote-Code-Execution.html",
+        "https://www.exploit-db.com/exploits/46785/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2020-11022": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162159/jQuery-1.2-Cross-Site-Scripting.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2020-11023": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/162160/jQuery-1.0.3-Cross-Site-Scripting.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2020-12827": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/158111/MJML-4.6.2-Path-Traversal.html",
+        "http://seclists.org/fulldisclosure/2020/Jun/23"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2020-9283": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/156480/Go-SSH-0.0.2-Denial-Of-Service.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-23440": {
+      "evidence_urls": [
+        "https://www.huntr.dev/bounties/2eae1159-01de-4f82-a177-7478a408c4a2/"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-3664": {
+      "evidence_urls": [
+        "https://huntr.dev/bounties/1625557993985-unshiftio/url-parse"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2021-42550": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/167794/Open-Xchange-App-Suite-7.10.x-Cross-Site-Scripting-Command-Injection.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2022-22965": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/166713/Spring4Shell-Code-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2022-23221": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/165676/H2-Database-Console-Remote-Code-Execution.html",
+        "http://seclists.org/fulldisclosure/2022/Jan/39"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2023-26141": {
+      "evidence_urls": [
+        "https://gist.github.com/keeganparr1/1dffd3c017339b7ed5371ed3d81e6b2a"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2023-46604": {
+      "evidence_urls": [
+        "https://packetstormsecurity.com/files/175676/Apache-ActiveMQ-Unauthenticated-Remote-Code-Execution.html"
+      ],
+      "has_osv_evidence": true
+    },
+    "CVE-2024-23897": {
+      "evidence_urls": [
+        "http://packetstormsecurity.com/files/176840/Jenkins-2.441-LTS-2.426.3-Arbitrary-File-Read.html"
+      ],
+      "has_osv_evidence": true
+    }
+  }
+}

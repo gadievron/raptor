@@ -94,6 +94,9 @@ def _get_available_ollama_models() -> List[str]:
 
     _ollama_checked = True
     try:
+        # nosemgrep: sinks.raptor.web.ssrf.dynamic-url
+        # ``ollama_url`` is validated via ``_validate_ollama_url``
+        # (line 82); operator-config-supplied + scheme-locked.
         response = requests.get(f"{ollama_url}/api/tags", timeout=2)
         if response.status_code == 200:
             data = response.json()

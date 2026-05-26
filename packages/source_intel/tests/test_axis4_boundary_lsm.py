@@ -22,6 +22,7 @@ from packages.source_intel.analyze import (
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -44,6 +45,7 @@ def test_e2e_user_boundary_fires_on_copy_from_user(tmp_path):
     assert "copy_to_user" in fns
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -76,6 +78,7 @@ def test_boundary_evidence_empty_when_no_calls():
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -97,6 +100,7 @@ def test_e2e_lsm_fires_on_security_inode(tmp_path):
     assert "security_file_permission" in hooks
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

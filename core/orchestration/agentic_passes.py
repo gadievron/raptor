@@ -321,17 +321,27 @@ def run_validate_postpass(
     analysis_report: Path,
     block_cc_dispatch: bool = False,
     claude_bin: Optional[str] = None,
+    *,
+    allow_unreachable: bool = False,
 ) -> PostpassResult:
     """Run /validate against findings flagged exploitable or high-confidence.
 
     Creates a proper /validate run directory as a sibling of the agentic dir
     so the bridge's tier-2 lookup finds any /understand sibling automatically.
 
+    ``allow_unreachable`` is forwarded into the validate-driver prompt so
+    the claude-code sub-agent knows the operator opted into in-isolation
+    review. The agent passes it through to the PipelineConfig when
+    constructing the validation pipeline (the substrate's
+    PipelineConfig.allow_unreachable field threads to the Stage B
+    attack-path demoter).
+
     Never raises — enrichment failure must not break the base agentic pipeline.
     """
     try:
         return _run_validate_postpass_unsafe(
-            target, agentic_out_dir, analysis_report, block_cc_dispatch, claude_bin)
+            target, agentic_out_dir, analysis_report, block_cc_dispatch,
+            claude_bin, allow_unreachable=allow_unreachable)
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
         return PostpassResult(ran=False,
@@ -344,6 +354,8 @@ def _run_validate_postpass_unsafe(
     analysis_report: Path,
     block_cc_dispatch: bool,
     claude_bin: Optional[str],
+    *,
+    allow_unreachable: bool = False,
 ) -> PostpassResult:
     if block_cc_dispatch:
         return PostpassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
@@ -454,8 +466,23 @@ def _run_validate_postpass_unsafe(
                 },
             )
 
+        # Operator-flag handoff to the validation orchestrator.
+        # Mirrors the parent-checklist-pointer.json pattern: the
+        # launcher writes overrides to a known filename in
+        # validate_dir; the orchestrator's Stage 0 reads it and
+        # merges into self.config. Substrate-enforced — bypasses
+        # the claude-code sub-agent's prompt-interpretation path
+        # entirely, so the flag works regardless of whether the
+        # SKILL.md teaches the agent about it.
+        if allow_unreachable:
+            save_json(
+                validate_dir / "pipeline-config-overrides.json",
+                {"allow_unreachable": True},
+            )
+
         prompt = _build_validate_prompt(target, agentic_out_dir, validate_dir,
-                                        analysis_report, selection_file, len(selected))
+                                        analysis_report, selection_file, len(selected),
+                                        allow_unreachable=allow_unreachable)
 
         try:
             from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
@@ -901,6 +928,8 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
 
 def _mark_unreachable_low_priority(
     agentic_out_dir: Path, target: Path,
+    *,
+    allow_unreachable: bool = False,
 ) -> int:
     """Mark dead-code functions as ``priority=low`` in the
     agentic checklist.
@@ -912,6 +941,11 @@ def _mark_unreachable_low_priority(
     complementary and run consecutively. Functions already
     marked ``priority=high`` by context-map enrichment are
     skipped (entry-point analysis trumps reachability).
+
+    ``allow_unreachable`` (from --allow-unreachable) is threaded
+    to ``mark_unreachable_low_priority``: when True, NOT_CALLED
+    functions do NOT get the priority=low demotion. Framework-
+    callable / registered-via-call annotations still apply.
 
     Returns the count of functions marked low-priority. Best-
     effort; failures logged at debug.
@@ -927,7 +961,9 @@ def _mark_unreachable_low_priority(
         checklist = load_json(checklist_path)
         if not isinstance(checklist, dict):
             return 0
-        marked = mark_unreachable_low_priority(checklist, target)
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=allow_unreachable,
+        )
         if marked:
             save_json(checklist_path, checklist)
         return marked
@@ -942,6 +978,8 @@ def _mark_unreachable_low_priority(
 def run_reachability_prepass(
     target: Path,
     agentic_out_dir: Path,
+    *,
+    allow_unreachable: bool = False,
 ) -> "ReachabilityPrepassResult":
     """Always-on companion to ``run_understand_prepass``.
 
@@ -956,6 +994,11 @@ def run_reachability_prepass(
     them to the model — so the priority=low marking shifts the
     analysis budget to live code regardless of whether the
     operator passed --understand.
+
+    ``allow_unreachable`` (from --allow-unreachable) is threaded
+    to the underlying enrichment pass. When True, NOT_CALLED
+    functions are NOT demoted (still get caller-context fields
+    + framework_callable / registered_via_call annotations).
 
     Best-effort: any failure (missing checklist, inventory build
     error, malformed call_graph) is logged at debug; the
@@ -1003,6 +1046,7 @@ def run_reachability_prepass(
             )
         marked = mark_unreachable_low_priority(
             checklist, target, inventory=inventory,
+            allow_unreachable=allow_unreachable,
         )
         # Caller-context enrichment runs AFTER the dead-code
         # marking so already-marked functions can be skipped
@@ -1133,7 +1177,24 @@ Keep output concise. Report what you mapped and exit.
 
 def _build_validate_prompt(target: Path, agentic_out_dir: Path, validate_dir: Path,
                             analysis_report: Path, selection_file: Path,
-                            selected_count: int) -> str:
+                            selected_count: int,
+                            *,
+                            allow_unreachable: bool = False) -> str:
+    allow_unreachable_note = ""
+    if allow_unreachable:
+        allow_unreachable_note = """
+**OPERATOR FLAG: --allow-unreachable**
+
+The operator passed --allow-unreachable. When constructing the
+validation PipelineConfig (or whatever your equivalent invocation
+path uses), set ``allow_unreachable=True`` so the Stage B attack-
+path demoter does NOT demote paths anchored to NOT_CALLED
+functions. The substrate's PipelineConfig.allow_unreachable
+threads to packages.exploitability_validation.reachability.
+demote_unreachable_paths and turns the demotion into a no-op.
+Reachability-related findings still surface; the report ranking
+reflects the LLM verdict rather than the static reachability gate.
+"""
     return f"""You are running the /validate post-pass for the /agentic security
 workflow. The base agentic pipeline has finished and produced an analysis
 report; your job is to run the full validation pipeline against the
@@ -1144,7 +1205,7 @@ Agentic out_dir:      {agentic_out_dir}
 Analysis report:      {analysis_report}
 Selection file:       {selection_file}
 Validate output dir:  {validate_dir}
-
+{allow_unreachable_note}
 Read the findings from {selection_file}. **The launcher has already
 translated them into /validate's FindingsContainer shape** (id, file, line,
 description, ruling.status, etc.) — no field-mapping needed on your end.

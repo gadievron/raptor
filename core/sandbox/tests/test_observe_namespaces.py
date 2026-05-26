@@ -30,13 +30,17 @@ from tempfile import TemporaryDirectory
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux",
-    reason=(
-        "Linux-only sandbox internals (mount-ns / Landlock / seccomp / "
-        "ptrace tracer) — see core/sandbox/_macos_spawn.py for the macOS path"
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform != "linux",
+        reason=(
+            "Linux-only sandbox internals (mount-ns / Landlock / seccomp / "
+            "ptrace tracer) — see core/sandbox/_macos_spawn.py for the macOS path"
+        ),
     ),
-)
+    # Real ptrace + real subprocess + real namespace isolation. 20s test.
+    pytest.mark.integration,
+]
 
 
 def _prereqs_met() -> tuple[bool, str]:

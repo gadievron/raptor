@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+"""SCA compromise-detection harness.
+
+Walks a corpus of supply-chain compromise fixtures, runs
+``raptor-sca`` on each, and asserts the expected detection
+signal(s) fired. Outputs a per-fixture PASS / FAIL plus an
+aggregate catch rate.
+
+Each fixture directory under the corpus has:
+  - ``fixture/`` — minimal project (manifest + lockfile only;
+    no malicious payload)
+  - ``expected.yaml`` — required signal(s) — kind + severity floor
+  - ``metadata.yaml`` — incident name, dates, references
+
+Usage:
+  raptor-sca-compromise-check <corpus-dir> [--offline]
+
+Exit codes:
+  0  every fixture's expected signal(s) fired
+  1  at least one fixture missed an expected signal
+  2  argparse / corpus-walk / harness internal error
+
+This is an operator-runnable evaluation tool, not a unit test —
+the fixtures depend on the OSV / KEV / supply-chain heuristic
+state of the SCA pipeline, which varies over time as advisories
+land. A FAIL doesn't necessarily indicate a code regression;
+read the miss list and update the fixture (or the production
+detector) accordingly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+logger = logging.getLogger("raptor-sca-compromise-check")
+
+# Safety: fixtures must contain ONLY manifest / lockfile bytes. The
+# harness refuses to run any fixture containing files outside this
+# allowlist — the point of the corpus is to prove we can detect
+# compromises *without* unpacking malicious payloads, so a fixture
+# with an installed ``node_modules/`` or a ``.tar.gz`` snuck in
+# would defeat the threat model and is therefore a refusal-to-load
+# condition. Curators who genuinely need to ship malicious bytes
+# for a content-aware detector pull them from the Datadog encrypted
+# samples archive at runtime; never check them into the corpus.
+_FIXTURE_ALLOWED_FILENAMES: Tuple[str, ...] = (
+    # npm / yarn / pnpm
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    # Python
+    "requirements.txt", "requirements-dev.txt", "pyproject.toml",
+    "Pipfile", "Pipfile.lock", "poetry.lock", "setup.py", "setup.cfg",
+    # Maven / Gradle
+    "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile",
+    "settings.gradle", "settings.gradle.kts",
+    # Go / Rust / Ruby / .NET / PHP
+    "go.mod", "go.sum", "Cargo.toml", "Cargo.lock",
+    "Gemfile", "Gemfile.lock", "composer.json", "composer.lock",
+    # .NET
+    "packages.config",
+    # Container / orchestration
+    "Dockerfile", "Containerfile", "docker-compose.yml",
+    "docker-compose.yaml", "Chart.yaml", "Chart.lock",
+    ".gitmodules",
+    # GHA
+    "action.yml", "action.yaml",
+)
+_FIXTURE_ALLOWED_SUFFIXES: Tuple[str, ...] = (
+    ".csproj", ".vbproj", ".fsproj",  # .NET project files
+    # Consumer source — small files we author to exercise the
+    # reachability layer. The allowlist is policy: source we write
+    # is in scope; ``node_modules/`` etc. (installed deps that COULD
+    # contain malicious package bytes) are still blocked via the
+    # directory blocklist below.
+    ".js", ".ts", ".mjs", ".cjs",     # JavaScript / TypeScript
+    ".py",                              # Python
+    ".java", ".kt", ".scala",          # JVM family
+    ".go",                              # Go
+    ".rs",                              # Rust
+    ".rb",                              # Ruby
+    ".cs", ".vb", ".fs",                # .NET source
+    ".php",                             # PHP
+    ".c", ".cc", ".cpp", ".h", ".hpp",  # C / C++ (consumer code)
+)
+
+# vuln_type prefix mapping — the corpus uses short kind names; the
+# harness maps each to the prefix(es) the production pipeline emits.
+# Some signals have both ``sca:supply_chain:`` and ``sca:supplychain:``
+# prefixes in the wild (legacy + current) so we match either.
+_KIND_TO_PREFIXES: Dict[str, Tuple[str, ...]] = {
+    "vuln_dep": ("sca:vulnerable_dependency",),
+    "install_hook_suspicious": (
+        "sca:supply_chain:install_hook_suspicious",
+        "sca:supplychain:install_hook_suspicious",
+    ),
+    "typosquat_candidate": (
+        "sca:supply_chain:typosquat_candidate",
+        "sca:supplychain:typosquat_candidate",
+    ),
+    "recent_publish": (
+        "sca:supply_chain:recent_publish",
+        "sca:supplychain:recent_publish",
+    ),
+    "maintainer_change": (
+        "sca:supply_chain:maintainer_change",
+        "sca:supplychain:maintainer_change",
+        "sca:supply_chain:maintainer_account_change",
+        "sca:supplychain:maintainer_account_change",
+    ),
+    "image_capability_drift": (
+        "sca:supply_chain:image_capability_drift",
+    ),
+    "binary_capability_delta": (
+        "sca:supply_chain:binary_capability_delta",
+    ),
+    "sentinel_match": (
+        "sca:supply_chain:sentinel_match",
+        "sca:supplychain:sentinel_match",
+    ),
+    "yanked_version": (
+        "sca:hygiene:yanked_version",
+    ),
+    "low_bus_factor": (
+        "sca:supply_chain:low_bus_factor",
+        "sca:supplychain:low_bus_factor",
+    ),
+}
+
+_SEVERITY_RANK = {
+    "info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4,
+}
+
+
+@dataclass
+class ExpectedSignal:
+    """One required detection from ``expected.yaml``."""
+    kind: str
+    severity_floor: str = "info"
+    require_kev: bool = False
+    cve_id: Optional[str] = None
+    reachability: Optional[str] = None
+    # When set, the matched finding's ``sca.reachability.verdict``
+    # must equal this string. Common values: ``imported``,
+    # ``likely_called``, ``not_reachable``. Used by fixtures that
+    # include consumer source code to assert SCA's import-detection
+    # layer flips the verdict correctly.
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ExpectedSignal":
+        return cls(
+            kind=str(d.get("kind", "")),
+            severity_floor=str(d.get("severity_floor", "info")),
+            require_kev=bool(d.get("require_kev", False)),
+            cve_id=d.get("cve_id"),
+            reachability=d.get("reachability"),
+        )
+
+
+@dataclass
+class FixtureResult:
+    name: str
+    fixture_path: Path
+    passed: bool
+    expected: List[ExpectedSignal] = field(default_factory=list)
+    matched: List[ExpectedSignal] = field(default_factory=list)
+    missed: List[ExpectedSignal] = field(default_factory=list)
+    parity_ok: bool = True
+    parity_note: str = ""
+    gate_ok: bool = True
+    gate_note: str = ""
+    note: str = ""
+
+
+def _load_yaml(path: Path) -> Dict[str, Any]:
+    """Minimal YAML loader — we only need top-level keys and lists
+    of dicts with scalar values. Uses PyYAML if available, falls
+    back to a tiny parser for the trivial subset we emit."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml
+        loaded = yaml.safe_load(text)
+        return loaded if isinstance(loaded, dict) else {}
+    except ImportError:
+        pass
+    return _trivial_yaml_parse(text)
+
+
+def _trivial_yaml_parse(text: str) -> Dict[str, Any]:
+    """Tiny YAML parser for the corpus's expected.yaml shape only:
+    top-level scalars + a ``must_detect:`` list of dicts. Hand-rolled
+    so the harness has no third-party-lib dependency."""
+    result: Dict[str, Any] = {}
+    current_list_key: Optional[str] = None
+    current_item: Optional[Dict[str, Any]] = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        # Strip comments
+        if "#" in line and not line.startswith(" "):
+            line = line.split("#", 1)[0].rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):
+            # top-level key
+            if line.endswith(":"):
+                key = line[:-1].strip()
+                result[key] = []
+                current_list_key = key
+                current_item = None
+            elif ":" in line:
+                key, val = line.split(":", 1)
+                result[key.strip()] = _coerce(val.strip())
+                current_list_key = None
+        else:
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                if current_list_key is None:
+                    continue
+                current_item = {}
+                result[current_list_key].append(current_item)
+                rest = stripped[2:].strip()
+                if ":" in rest:
+                    k, v = rest.split(":", 1)
+                    current_item[k.strip()] = _coerce(v.strip())
+            elif ":" in stripped and current_item is not None:
+                k, v = stripped.split(":", 1)
+                current_item[k.strip()] = _coerce(v.strip())
+    return result
+
+
+def _coerce(v: str) -> Any:
+    if v.lower() in ("true", "yes"):
+        return True
+    if v.lower() in ("false", "no"):
+        return False
+    if v == "":
+        return ""
+    return v.strip('"').strip("'")
+
+
+def _discover_fixtures(corpus_dir: Path) -> List[Path]:
+    """Every immediate subdir of ``corpus_dir`` that contains both
+    a ``fixture/`` subdir and an ``expected.yaml``."""
+    if not corpus_dir.is_dir():
+        return []
+    out: List[Path] = []
+    for entry in sorted(corpus_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        if (entry / "fixture").is_dir() and (entry / "expected.yaml").is_file():
+            out.append(entry)
+    return out
+
+
+def _fixture_safety_check(fixture_root: Path) -> Optional[str]:
+    """Refuse to run a fixture that contains files outside the
+    manifest / lockfile allowlist. The threat model is: a fixture
+    is metadata-only, so the harness exercises detectors against
+    pinned references without ever touching the malicious payload.
+    Returns None when safe, an error string otherwise."""
+    for path in fixture_root.rglob("*"):
+        if path.is_dir():
+            # Forbid known-installed-deps directories — these are
+            # the most likely vector for malicious bytes sneaking
+            # into the corpus via a careless commit.
+            if path.name in {
+                "node_modules", "venv", ".venv", "vendor",
+                "site-packages", ".cache", "target", "build",
+                "dist", "__pycache__",
+            }:
+                return (
+                    f"fixture contains installed-deps dir {path.relative_to(fixture_root)!s}; "
+                    f"manifest-only fixtures forbid this"
+                )
+            continue
+        if not path.is_file():
+            # Symlinks / sockets / devices — refuse unconditionally
+            return f"fixture contains non-regular file {path.relative_to(fixture_root)!s}"
+        name = path.name
+        if name in _FIXTURE_ALLOWED_FILENAMES:
+            continue
+        if any(name.endswith(suffix) for suffix in _FIXTURE_ALLOWED_SUFFIXES):
+            continue
+        return (
+            f"fixture contains unexpected file {path.relative_to(fixture_root)!s}; "
+            f"corpus is manifest-only by policy (allowed: "
+            f"{', '.join(_FIXTURE_ALLOWED_FILENAMES[:5])} ...)"
+        )
+    return None
+
+
+@dataclass
+class _ScanArtifacts:
+    """Both renderings produced by a single ``raptor-sca`` invocation
+    on a fixture — the machine-readable findings list and the
+    human-readable markdown report. The parity check compares
+    these two views to catch presentation regressions where the
+    markdown drops or duplicates a finding."""
+    findings: List[Dict[str, Any]]
+    report_md: str = ""
+
+
+def _run_sca(
+    fixture_path: Path, *, offline: bool,
+) -> Tuple[Optional["_ScanArtifacts"], str]:
+    """Subprocess-invoke ``raptor-sca`` on a COPY of the fixture;
+    return the parsed findings.json plus stderr-on-failure.
+
+    Copying matters: ``raptor-sca``'s sandboxed transitive resolver
+    creates a ``.home/`` directory inside the target tree (the
+    sandbox's fake HOME for pip-compile / npm resolve). Scanning the
+    source fixture in-place would contaminate the corpus and fail
+    the next run's safety check. The copy keeps source pristine and
+    the contamination dies with the tempdir.
+
+    Uses ``--offline`` by default for hermeticity; pass
+    ``offline=False`` to allow live OSV / KEV queries (slower,
+    network-dependent, but safe — JSON-API queries, no code
+    execution)."""
+    with tempfile.TemporaryDirectory(prefix="sca-compromise-") as work_dir:
+        scan_target = Path(work_dir) / "fixture"
+        out_dir = Path(work_dir) / "out"
+        shutil.copytree(fixture_path, scan_target)
+        cmd: List[str] = [
+            sys.executable, "-m", "packages.sca.cli",
+            str(scan_target),
+            "--out", str(out_dir),
+            "--no-progress", "--no-llm",
+        ]
+        if offline:
+            cmd.append("--offline")
+        env = os.environ.copy()
+        env["RAPTOR_DIR"] = str(_REPO_ROOT)
+        env["_RAPTOR_TRUSTED"] = "1"
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "raptor-sca scan timed out after 300s"
+        findings_path = out_dir / "findings.json"
+        if not findings_path.is_file():
+            return None, (
+                f"raptor-sca did not emit findings.json (rc={proc.returncode}):"
+                f" stderr={proc.stderr[:1000]}"
+            )
+        try:
+            data = json.loads(findings_path.read_text())
+        except json.JSONDecodeError as e:
+            return None, f"findings.json was not valid JSON: {e}"
+        if not isinstance(data, list):
+            return None, f"findings.json was {type(data).__name__}, not list"
+        report_md = ""
+        report_path = out_dir / "report.md"
+        if report_path.is_file():
+            try:
+                report_md = report_path.read_text(encoding="utf-8")
+            except OSError:
+                report_md = ""
+        return _ScanArtifacts(findings=data, report_md=report_md), ""
+
+
+# Severity-row regex anchored to the report.md summary table shape:
+#   ``| Critical | 1 |``
+# Captures the severity name + the count. Permissive on whitespace
+# so a future renderer that pads cells differently still parses.
+_REPORT_SEVERITY_ROW = re.compile(
+    r"^\|\s*(Critical|High|Medium|Low|Info)\s*\|\s*(\d+)\s*\|\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _parity_check(art: "_ScanArtifacts") -> Tuple[bool, str]:
+    """Compare the markdown report's severity counts against the
+    findings.json's per-severity counts. Returns ``(ok, note)``;
+    ``ok=False`` means the human-readable rendering disagrees with
+    the machine-readable artefact — a real presentation bug.
+
+    The parity check is non-fatal for the overall PASS / FAIL
+    verdict (it surfaces as a separate column in the report) so a
+    pure parity regression doesn't mask a substantive detection
+    miss.
+    """
+    if not art.report_md:
+        return True, "no report.md to compare"
+    severity_counts: Dict[str, int] = {
+        "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+    }
+    for row in art.findings:
+        if not isinstance(row, dict):
+            continue
+        sev = str(row.get("severity", "info")).lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+    md_counts: Dict[str, int] = {}
+    for m in _REPORT_SEVERITY_ROW.finditer(art.report_md):
+        md_counts[m.group(1).lower()] = int(m.group(2))
+    if not md_counts:
+        # No summary table found — the report renderer must have
+        # changed shape. Don't fail the parity check on this alone;
+        # surface a note so an operator can investigate.
+        return True, "no summary table parsed from report.md"
+    discrepancies: List[str] = []
+    for sev in ("critical", "high", "medium", "low", "info"):
+        expected_count = severity_counts[sev]
+        rendered_count = md_counts.get(sev, 0)
+        # The report.md summary table only includes a row for a
+        # severity when it has at least one finding, so a missing
+        # row is OK when the json count is also zero.
+        if rendered_count != expected_count:
+            discrepancies.append(
+                f"{sev}: json={expected_count} md={rendered_count}"
+            )
+    if discrepancies:
+        return False, "; ".join(discrepancies)
+    return True, ""
+
+
+def _run_gate(
+    fixture_path: Path, *, offline: bool,
+) -> Tuple[Optional[int], str]:
+    """Re-invoke ``raptor-sca`` on a copy of the fixture with the
+    most-permissive gate flags (``--fail-on-* info`` across vuln /
+    supply-chain / hygiene). Returns ``(exit_code, err)``.
+
+    Purpose: prove the CI-gate path end-to-end. Every fixture in
+    the corpus represents a known compromise that fires at least
+    one finding at ``info`` or higher; with the gate set to ``info``
+    on all three axes, exit code MUST be 1. An exit-0 here means
+    either (a) the gate path silently drops findings the scan
+    surfaces (regression), or (b) the gate flag wiring is broken.
+
+    Like ``_run_sca``, copies the fixture to a tempdir first so
+    the source corpus stays pristine.
+    """
+    with tempfile.TemporaryDirectory(prefix="sca-gate-check-") as work_dir:
+        scan_target = Path(work_dir) / "fixture"
+        out_dir = Path(work_dir) / "out"
+        shutil.copytree(fixture_path, scan_target)
+        cmd: List[str] = [
+            sys.executable, "-m", "packages.sca.cli",
+            str(scan_target),
+            "--out", str(out_dir),
+            "--no-progress", "--no-llm",
+            "--fail-on-severity", "info",
+            "--fail-on-supply-chain", "info",
+            "--fail-on-hygiene", "info",
+        ]
+        if offline:
+            cmd.append("--offline")
+        env = os.environ.copy()
+        env["RAPTOR_DIR"] = str(_REPO_ROOT)
+        env["_RAPTOR_TRUSTED"] = "1"
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "raptor-sca gate timed out after 300s"
+        return proc.returncode, ""
+
+
+def _row_matches_expected(
+    row: Dict[str, Any], expected: ExpectedSignal,
+) -> bool:
+    """Predicate: does this finding satisfy one expected signal?"""
+    vt = row.get("vuln_type", "")
+    prefixes = _KIND_TO_PREFIXES.get(expected.kind)
+    if not prefixes:
+        return False
+    if not any(vt == p or vt.startswith(p + ":") for p in prefixes):
+        return False
+    sev = row.get("severity", "info")
+    if _SEVERITY_RANK.get(sev, 0) < _SEVERITY_RANK.get(
+        expected.severity_floor, 0,
+    ):
+        return False
+    if expected.require_kev:
+        if not row.get("sca", {}).get("in_kev"):
+            return False
+    if expected.cve_id:
+        aliases = (
+            row.get("sca", {}).get("advisory", {}).get("aliases") or []
+        )
+        adv_id = (
+            row.get("sca", {}).get("advisory", {}).get("id") or ""
+        )
+        if expected.cve_id not in aliases and expected.cve_id != adv_id:
+            return False
+    if expected.reachability:
+        verdict = (
+            row.get("sca", {}).get("reachability", {}).get("verdict")
+        )
+        if verdict != expected.reachability:
+            return False
+    return True
+
+
+def _evaluate_fixture(
+    fixture_dir: Path, *, offline: bool,
+) -> FixtureResult:
+    """Run SCA on one fixture, score it against expected.yaml."""
+    name = fixture_dir.name
+    expected_path = fixture_dir / "expected.yaml"
+    expected_raw = _load_yaml(expected_path).get("must_detect", []) or []
+    expected: List[ExpectedSignal] = [
+        ExpectedSignal.from_dict(d) for d in expected_raw if isinstance(d, dict)
+    ]
+
+    safety_err = _fixture_safety_check(fixture_dir / "fixture")
+    if safety_err is not None:
+        return FixtureResult(
+            name=name, fixture_path=fixture_dir,
+            passed=False, expected=expected, missed=expected,
+            note=f"SAFETY REFUSAL: {safety_err}",
+        )
+
+    art, err = _run_sca(fixture_dir / "fixture", offline=offline)
+    if art is None:
+        return FixtureResult(
+            name=name, fixture_path=fixture_dir,
+            passed=False, expected=expected, missed=expected,
+            note=err,
+        )
+
+    matched: List[ExpectedSignal] = []
+    missed: List[ExpectedSignal] = []
+    for exp in expected:
+        if any(_row_matches_expected(r, exp) for r in art.findings):
+            matched.append(exp)
+        else:
+            missed.append(exp)
+    parity_ok, parity_note = _parity_check(art)
+    gate_rc, gate_err = _run_gate(fixture_dir / "fixture", offline=offline)
+    if gate_rc is None:
+        gate_ok = False
+        gate_note = gate_err
+    elif gate_rc == 1:
+        gate_ok = True
+        gate_note = ""
+    else:
+        # Exit 0 means the gate didn't trip on a fixture we know has
+        # findings — gate machinery regression. Exit 2 means
+        # invalid args; treat as harness bug and surface.
+        gate_ok = False
+        gate_note = (
+            f"unexpected exit code {gate_rc} from "
+            f"--fail-on-severity info (expected 1)"
+        )
+    return FixtureResult(
+        name=name, fixture_path=fixture_dir,
+        passed=len(missed) == 0,
+        expected=expected, matched=matched, missed=missed,
+        parity_ok=parity_ok, parity_note=parity_note,
+        gate_ok=gate_ok, gate_note=gate_note,
+    )
+
+
+def _format_report(
+    results: Sequence[FixtureResult], *, json_out: bool,
+) -> str:
+    if json_out:
+        return json.dumps(
+            [
+                {
+                    "name": r.name,
+                    "passed": r.passed,
+                    "missed": [
+                        {"kind": m.kind, "severity_floor": m.severity_floor}
+                        for m in r.missed
+                    ],
+                    "parity_ok": r.parity_ok,
+                    "parity_note": r.parity_note,
+                    "note": r.note,
+                }
+                for r in results
+            ],
+            indent=2,
+        )
+    width = max((len(r.name) for r in results), default=20)
+    lines: List[str] = []
+    lines.append("")
+    lines.append("=== compromise-detection report ===")
+    for r in results:
+        status = "PASS" if r.passed else "FAIL"
+        parity_tag = "  parity:ok" if r.parity_ok else "  parity:MISMATCH"
+        gate_tag = "  gate:ok" if r.gate_ok else "  gate:BROKEN"
+        suffix = ""
+        if r.passed and r.matched:
+            suffix = f" ({len(r.matched)}/{len(r.expected)} signals matched)"
+        elif not r.passed:
+            misses = ", ".join(m.kind for m in r.missed)
+            suffix = f" — missed: {misses}"
+            if r.note:
+                suffix += f" [{r.note[:120]}]"
+        if not r.parity_ok and r.parity_note:
+            suffix += f" — parity: {r.parity_note}"
+        if not r.gate_ok and r.gate_note:
+            suffix += f" — gate: {r.gate_note}"
+        lines.append(
+            f"  {r.name:<{width}}  {status}{parity_tag}{gate_tag}{suffix}"
+        )
+    passed = sum(1 for r in results if r.passed)
+    parity_ok = sum(1 for r in results if r.parity_ok)
+    gate_ok = sum(1 for r in results if r.gate_ok)
+    total = len(results)
+    rate = (passed / total * 100) if total else 0
+    parity_rate = (parity_ok / total * 100) if total else 0
+    gate_rate = (gate_ok / total * 100) if total else 0
+    lines.append("")
+    lines.append(f"Catch rate:  {passed}/{total} ({rate:.0f}%)")
+    lines.append(f"Parity rate: {parity_ok}/{total} ({parity_rate:.0f}%) — "
+                 f"report.md summary counts vs findings.json")
+    lines.append(f"Gate rate:   {gate_ok}/{total} ({gate_rate:.0f}%) — "
+                 f"--fail-on-severity info exits 1 on every fixture")
+    return "\n".join(lines)
+
+
+def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="raptor-sca-compromise-check",
+        description=(
+            "Evaluate raptor-sca's detection of known supply-chain "
+            "compromises against a corpus of fixtures."
+        ),
+    )
+    p.add_argument(
+        "corpus", type=Path,
+        help="Path to the corpus directory (typically "
+             "test/data/sca-e2e/compromise-corpus).",
+    )
+    p.add_argument(
+        "--offline", action="store_true", default=True,
+        help="Run with ``--offline`` (hermetic, uses cached OSV / KEV "
+             "data). Default. Use ``--no-offline`` for live network.",
+    )
+    p.add_argument(
+        "--no-offline", dest="offline", action="store_false",
+        help="Allow live OSV / KEV queries instead of relying on "
+             "cached data.",
+    )
+    p.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON instead of the human report.",
+    )
+    p.add_argument(
+        "--only", action="append", default=[],
+        help="Restrict to fixtures whose directory name matches this "
+             "substring. Repeatable.",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = _parse_args(list(argv) if argv is not None else sys.argv[1:])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    fixtures = _discover_fixtures(args.corpus)
+    if args.only:
+        fixtures = [
+            f for f in fixtures
+            if any(needle in f.name for needle in args.only)
+        ]
+    if not fixtures:
+        print(
+            f"raptor-sca-compromise-check: no fixtures found under "
+            f"{args.corpus}",
+            file=sys.stderr,
+        )
+        return 2
+
+    results: List[FixtureResult] = []
+    for fixture_dir in fixtures:
+        logger.info("running %s", fixture_dir.name)
+        results.append(_evaluate_fixture(fixture_dir, offline=args.offline))
+
+    print(_format_report(results, json_out=args.json))
+    # Exit 1 if any axis failed — catch, parity, or gate. A pure
+    # parity / gate failure without a catch failure is still a
+    # regression worth blocking on.
+    all_ok = all(r.passed and r.parity_ok and r.gate_ok for r in results)
+    return 0 if all_ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

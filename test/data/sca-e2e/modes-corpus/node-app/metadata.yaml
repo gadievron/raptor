@@ -1,0 +1,9 @@
+name: node-app
+ecosystem: npm
+shape: |
+  package.json (3 vulnerable npm pins) + Dockerfile (node:18-alpine).
+  Tests scan/bump/fix against a realistic Node-project shape.
+deliberately_vulnerable_pins:
+  - lodash@4.17.4              # prototype pollution CVEs
+  - axios@0.21.0               # SSRF + others
+  - minimist@1.2.0             # prototype pollution

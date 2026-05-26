@@ -1,0 +1,865 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:52:52Z",
+    "git_ref": "v2.31.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of requests",
+    "project_license": "Apache-2.0",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/psf/requests.git@v2.31.0. Project source not redistributed.",
+    "url": "https://github.com/psf/requests.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-32274"
+        ],
+        "fixed_versions": [
+          "26.3.1"
+        ],
+        "id": "GHSA-3936-cmfr-pm3m",
+        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "published": "2026-03-12T18:33:10+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-32274",
+          "https://github.com/psf/black/pull/5038",
+          "https://github.com/psf/black/commit/4937fe6cf241139ddbfc16b0bdbb5b422798909d",
+          "https://github.com/psf/black"
+        ],
+        "severity": null,
+        "summary": "Black: Arbitrary file writes from unsanitized user input in cache file name"
+      },
+      "cvss_score": null,
+      "dep_name": "black",
+      "dep_version": "22.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00021,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:22.3.0:GHSA-3936-cmfr-pm3m",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@22.3.0",
+      "raptor_risk_estimate": 4.964226224304899,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==22.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300147,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.3318823528125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.935,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21503",
+          "PYSEC-2024-48"
+        ],
+        "fixed_versions": [
+          "24.3.0"
+        ],
+        "id": "GHSA-fj7x-q9j7-g6q6",
+        "modified": "2026-02-04T03:39:28.463485+00:00",
+        "published": "2024-03-19T06:30:52+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
+          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
+          "https://github.com/psf/black",
+          "https://github.com/psf/black/releases/tag/24.3.0",
+          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "black",
+      "dep_version": "22.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00081,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:22.3.0:GHSA-fj7x-q9j7-g6q6",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@22.3.0",
+      "raptor_risk_estimate": 15.712764028790914,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==22.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300567,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.721187205356249,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.935,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "yes"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-50782"
+        ],
+        "fixed_versions": [
+          "42.0.0"
+        ],
+        "id": "GHSA-3ww4-gg4f-jr7f",
+        "modified": "2026-02-28T05:12:47.573911+00:00",
+        "published": "2024-02-05T21:30:31+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-50782",
+          "https://github.com/pyca/cryptography/issues/9785",
+          "https://access.redhat.com/security/cve/CVE-2023-50782",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=2254432",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Python Cryptography package vulnerable to Bleichenbacher timing oracle attack"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00855,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-3ww4-gg4f-jr7f",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 17.92582003468265,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.305985,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.35567984375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "41.0.0"
+        ],
+        "id": "GHSA-5cpq-8wj7-hf2v",
+        "modified": "2026-02-04T02:57:14.653935+00:00",
+        "published": "2023-06-02T17:13:10+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-5cpq-8wj7-hf2v",
+          "https://github.com/pyca/cryptography/commit/8708245ccdeaff21d65eea68a4f8d2a7c5949a22",
+          "https://cryptography.io/en/latest/changelog/#v41-0-0",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": null,
+        "summary": "Vulnerable OpenSSL included in cryptography wheels"
+      },
+      "cvss_score": null,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-5cpq-8wj7-hf2v",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.665624999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-26130",
+          "PYSEC-2024-225"
+        ],
+        "fixed_versions": [
+          "42.0.4"
+        ],
+        "id": "GHSA-6vqw-3v5j-54x4",
+        "modified": "2026-02-04T04:29:27.133905+00:00",
+        "published": "2024-02-21T18:04:40+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-6vqw-3v5j-54x4",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-26130",
+          "https://github.com/pyca/cryptography/pull/10423",
+          "https://github.com/pyca/cryptography/commit/97d231672763cdb5959a3b191e692a362f1b9e55",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "cryptography NULL pointer dereference with pkcs12.serialize_key_and_certificates when called with a non-matching certificate and private key and an hmac_hash override"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00425,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-6vqw-3v5j-54x4",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 12.366836226562498,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302975,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.253810156249997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-0727"
+        ],
+        "fixed_versions": [
+          "42.0.2"
+        ],
+        "id": "GHSA-9v9h-cgj8-h64p",
+        "modified": "2026-02-04T03:46:49.577237+00:00",
+        "published": "2024-01-26T09:30:23+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-0727",
+          "https://github.com/github/advisory-database/pull/3472",
+          "https://github.com/openssl/openssl/pull/23362",
+          "https://github.com/alexcrichton/openssl-src-rs/commit/add20f73b6b42be7451af2e1044d4e0e778992b2",
+          "https://github.com/openssl/openssl/commit/09df4395b5071217b76dc7d3d2e630eb8c5a79c2"
+        ],
+        "severity": {
+          "score": 5.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Null pointer dereference in PKCS12 parsing"
+      },
+      "cvss_score": 5.5,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00236,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-9v9h-cgj8-h64p",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 9.042416715749999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 55.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301652,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.486625574999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-38325",
+          "PYSEC-2023-112"
+        ],
+        "fixed_versions": [
+          "41.0.2"
+        ],
+        "id": "GHSA-cf7p-gm2m-833m",
+        "modified": "2026-02-04T03:43:50.582283+00:00",
+        "published": "2023-07-14T21:31:08+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-38325",
+          "https://github.com/pyca/cryptography/issues/9207",
+          "https://github.com/pyca/cryptography/pull/7960",
+          "https://github.com/pyca/cryptography/pull/9208",
+          "https://github.com/pyca/cryptography/commit/1ca7adc97b76a9dfbd3d850628b613eb93b78fc3"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "cryptography mishandles SSH certificates"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 0.01095,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-cf7p-gm2m-833m",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 21.770482160842434,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30766499999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.41253734375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "yes"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "43.0.1"
+        ],
+        "id": "GHSA-h4gh-qq45-vh27",
+        "modified": "2026-02-04T03:06:49.280647+00:00",
+        "published": "2024-09-03T21:59:48+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-h4gh-qq45-vh27",
+          "https://github.com/pyca/cryptography",
+          "https://openssl-library.org/news/secadv/20240903.txt"
+        ],
+        "severity": null,
+        "summary": "pyca/cryptography has a vulnerable OpenSSL included in cryptography wheels"
+      },
+      "cvss_score": null,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-h4gh-qq45-vh27",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.665624999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-49083",
+          "PYSEC-2023-254"
+        ],
+        "fixed_versions": [
+          "41.0.6"
+        ],
+        "id": "GHSA-jfhm-5ghh-2f97",
+        "modified": "2026-02-04T04:40:12.618451+00:00",
+        "published": "2023-11-28T20:46:46+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-jfhm-5ghh-2f97",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-49083",
+          "https://github.com/pyca/cryptography/pull/9926",
+          "https://github.com/pyca/cryptography/commit/f09c261ca10a31fe41b1262306db7f8f1da0e48a",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "cryptography vulnerable to NULL-dereference when loading PKCS7 certificates"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00909,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-jfhm-5ghh-2f97",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 17.366636978970565,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.306363,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.15653192125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "41.0.3"
+        ],
+        "id": "GHSA-jm77-qphf-c4w8",
+        "modified": "2026-02-04T04:40:22.560238+00:00",
+        "published": "2023-08-01T22:34:41+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-jm77-qphf-c4w8",
+          "https://github.com/pyca/cryptography/commit/b22271cf3c3dd8dc8978f8f4b00b5c7060b6538d",
+          "https://github.com/pyca/cryptography/commit/bfa4d95f0f356f2d535efd5c775e0fb3efe90ef2",
+          "https://github.com/pyca/cryptography",
+          "https://www.openssl.org/news/secadv/20230714.txt"
+        ],
+        "severity": null,
+        "summary": "pyca/cryptography's wheels include vulnerable OpenSSL"
+      },
+      "cvss_score": null,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-jm77-qphf-c4w8",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.665624999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-34073"
+        ],
+        "fixed_versions": [
+          "46.0.6"
+        ],
+        "id": "GHSA-m959-cc7f-wv43",
+        "modified": "2026-04-06T23:34:55.360383+00:00",
+        "published": "2026-03-27T19:56:21+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-m959-cc7f-wv43",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-34073",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "cryptography has incomplete DNS name constraint enforcement on peer names"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-m959-cc7f-wv43",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 8.6828191962375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30006299999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.176381723749999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-26007",
+          "ECHO-9290-b93d-4581"
+        ],
+        "fixed_versions": [
+          "46.0.5"
+        ],
+        "id": "GHSA-r6ph-v2qm-q3c2",
+        "modified": "2026-05-07T15:11:22.071197+00:00",
+        "published": "2026-02-10T21:27:06+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-r6ph-v2qm-q3c2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-26007",
+          "https://github.com/pyca/cryptography/commit/0eebb9dbb6343d9bc1d91e5a2482ed4e054a6d8c",
+          "https://github.com/pyca/cryptography",
+          "https://github.com/pyca/cryptography/releases/tag/46.0.5"
+        ],
+        "severity": null,
+        "summary": "cryptography Vulnerable to a Subgroup Attack Due to Missing Subgroup Validation for SECT Curves"
+      },
+      "cvss_score": null,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-r6ph-v2qm-q3c2",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 6.5530710915,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30006299999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.770171437499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "41.0.4"
+        ],
+        "id": "GHSA-v8gr-m533-ghj9",
+        "modified": "2026-02-04T04:40:35.677396+00:00",
+        "published": "2023-09-21T17:07:01+00:00",
+        "references": [
+          "https://github.com/pyca/cryptography/security/advisories/GHSA-v8gr-m533-ghj9",
+          "https://github.com/pyca/cryptography/commit/fc11bce6930e591ce26a2317b31b9ce2b3e25512",
+          "https://github.com/pyca/cryptography"
+        ],
+        "severity": null,
+        "summary": "Vulnerable OpenSSL included in cryptography wheels"
+      },
+      "cvss_score": null,
+      "dep_name": "cryptography",
+      "dep_version": "40.0.0",
+      "ecosystem": "PyPI",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-v8gr-m533-ghj9",
+      "in_kev": false,
+      "purl": "pkg:pypi/cryptography@40.0.0",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test source"
+        },
+        "evidence": [
+          "requests/help.py:30",
+          "requests/__init__.py:132"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.665624999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    }
+  ]
+}

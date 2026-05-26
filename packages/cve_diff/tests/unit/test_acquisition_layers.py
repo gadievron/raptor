@@ -328,7 +328,7 @@ def test_clean_dest_refuses_filesystem_root():
 def test_clean_dest_refuses_short_absolute_path():
     from cve_diff.acquisition.layers import _clean_dest
     with pytest.raises(ValueError, match="dangerous path"):
-        _clean_dest(Path("/tmp"))
+        _clean_dest(Path("."))
 
 
 def test_clean_dest_refuses_relative_path():

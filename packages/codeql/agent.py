@@ -276,6 +276,26 @@ class CodeQLAgent:
                     detected = self.language_detector.detect_languages(min_files=1)
                     detected = self.language_detector.filter_codeql_supported(detected)
 
+                # Confidence-gate fallback. The min_confidence threshold
+                # in detect_languages defends against stray manifests
+                # (e.g. a `pom.xml` in a docs example dir) but is also
+                # tripped by trees with real source code and zero build
+                # files — multi-language minimal repros, fixture trees,
+                # vendored reference snapshots. The two retry
+                # tiers above both gate on confidence; if both returned
+                # empty, fall back to a file-count-only floor and log
+                # loud per-language WARNINGs so the operator knows the
+                # scan is running on low-confidence detection. Better
+                # than the silent-skip footgun of the pre-fix path.
+                if not detected:
+                    logger.warning(
+                        "No languages cleared the confidence gate after "
+                        "two retries; falling back to file-count floor "
+                        "(low-confidence detection — verify results)"
+                    )
+                    detected = self.language_detector.detect_languages_floor(floor=2)
+                    detected = self.language_detector.filter_codeql_supported(detected)
+
             if not detected:
                 error = "No CodeQL-supported languages detected"
                 logger.error(error)
@@ -579,7 +599,7 @@ class CodeQLAgent:
                     dataflow_examples.extend(examples)
 
         if total_dataflow_paths > 0:
-            print(f"\nDataflow Analysis:")
+            print("\nDataflow Analysis:")
             print(f"  Findings with dataflow paths: {total_dataflow_paths}")
             avg_steps = total_dataflow_steps / total_dataflow_paths if total_dataflow_paths > 0 else 0
             print(f"  Average path length: {avg_steps:.1f} steps")
@@ -692,7 +712,7 @@ class CodeQLAgent:
         try:
             from tabulate import tabulate
 
-            print(f"\n  Example Dataflow Paths:")
+            print("\n  Example Dataflow Paths:")
 
             table_data = []
             for example in dataflow_examples:
@@ -713,7 +733,7 @@ class CodeQLAgent:
 
         except ImportError:
             # Fallback to simple formatting if tabulate not available
-            print(f"\n  Example Dataflow Paths:")
+            print("\n  Example Dataflow Paths:")
             for i, example in enumerate(dataflow_examples, 1):
                 print(f"    {i}. {example['rule']}: {example['source']} → {example['sink']} ({example['steps']} steps)")
         except Exception as e:

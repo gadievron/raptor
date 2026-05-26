@@ -112,6 +112,31 @@ class TestPythonExtractor:
         funcs = PythonExtractor().extract("t.py", code)
         assert funcs[0].line_end == 3
 
+    def test_function_inside_compound_statement_extracted(self):
+        # The stdlib walker must descend into compound statements (if /
+        # try / with / for / while) so nested functions are captured —
+        # matching tree-sitter. Pre-fix it stopped at the first non-
+        # class/def node, so functions inside ``if False:`` guards or
+        # ``try/except`` import fallbacks were invisible to inventory +
+        # reachability on tree-sitter-less environments. Required for
+        # the dead-scope reachability gate to have anything to tag.
+        code = (
+            "if False:\n"
+            "    def dead_fn(x):\n"
+            "        return x\n"
+            "\n"
+            "try:\n"
+            "    import fast\n"
+            "except ImportError:\n"
+            "    def fallback(y):\n"
+            "        return y\n"
+            "\n"
+            "def live(z):\n"
+            "    return z\n"
+        )
+        names = {f.name for f in PythonExtractor().extract("t.py", code)}
+        assert names == {"dead_fn", "fallback", "live"}
+
 
 # ---------------------------------------------------------------------------
 # Regex extractors — basic metadata
@@ -151,6 +176,26 @@ class TestCRegexExtractor:
         code = "extern int process(int x) {\n}\n"
         funcs = CExtractor().extract("t.c", code)
         assert funcs[0].metadata.visibility == "extern"
+
+    def test_static_inline_is_static_not_inline(self):
+        # Gap 2: `inline` must not mask the `static` internal-linkage signal
+        # (`static inline` is still internal — not an external entry).
+        code = "static inline int clamp(int a, int b) {\n    return a;\n}\n"
+        funcs = CExtractor().extract("t.h", code)
+        assert funcs[0].metadata.visibility == "static"
+
+    def test_extern_beats_static_on_conflict(self):
+        # Invalid `extern static` (conflicting linkage) is treated as external
+        # — never under-claim reachability on malformed input.
+        code = "extern static int weird(void) {\n    return 0;\n}\n"
+        funcs = CExtractor().extract("t.c", code)
+        assert funcs[0].metadata.visibility == "extern"
+
+    def test_bare_inline_is_not_static(self):
+        # `inline` alone is not a linkage class → external (not "static").
+        code = "inline int helper(void) {\n    return 0;\n}\n"
+        funcs = CExtractor().extract("t.c", code)
+        assert funcs[0].metadata.visibility != "static"
 
     def test_return_type(self):
         code = "int main() {\n}\n"

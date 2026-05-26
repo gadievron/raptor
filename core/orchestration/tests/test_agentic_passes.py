@@ -663,7 +663,7 @@ class BackstopTests(unittest.TestCase):
         with patch("core.orchestration.agentic_passes._run_understand_prepass_unsafe",
                    side_effect=RuntimeError("boom")):
             result = run_understand_prepass(
-                target=Path("/tmp/x"), agentic_out_dir=Path("/tmp/y"),
+                target=Path("scratch"), agentic_out_dir=Path("out"),
             )
         self.assertFalse(result.ran)
         self.assertIn("RuntimeError", result.skipped_reason)
@@ -673,8 +673,8 @@ class BackstopTests(unittest.TestCase):
         with patch("core.orchestration.agentic_passes._run_validate_postpass_unsafe",
                    side_effect=ValueError("kaboom")):
             result = run_validate_postpass(
-                target=Path("/tmp/x"), agentic_out_dir=Path("/tmp/y"),
-                analysis_report=Path("/tmp/y/r.json"),
+                target=Path("scratch"), agentic_out_dir=Path("out"),
+                analysis_report=Path("out/r.json"),
             )
         self.assertFalse(result.ran)
         self.assertIn("ValueError", result.skipped_reason)
@@ -1025,7 +1025,7 @@ class AdversarialBugsTests(unittest.TestCase):
             with self.assertLogs(
                 "core.orchestration.agentic_passes", level="WARNING"
             ) as cm:
-                _complete_lifecycle(Path("/tmp/whatever"))
+                _complete_lifecycle(Path("scratch"))
             self.assertTrue(
                 any("complete" in m.lower() and ("returned" in m.lower()
                                                   or "failed" in m.lower())
@@ -1045,7 +1045,7 @@ class LifecycleHelperResilienceTests(unittest.TestCase):
         with patch("core.orchestration.agentic_passes.subprocess.run",
                    side_effect=OSError("disk full")):
             # Should swallow the OSError, not raise.
-            _complete_lifecycle(Path("/tmp/whatever"))
+            _complete_lifecycle(Path("scratch"))
 
     def test_fail_lifecycle_handles_none_gracefully(self):
         # _fail_lifecycle is called from error paths where the dir might
@@ -1057,7 +1057,7 @@ class LifecycleHelperResilienceTests(unittest.TestCase):
         from core.orchestration.agentic_passes import _fail_lifecycle
         with patch("core.orchestration.agentic_passes.subprocess.run",
                    side_effect=OSError("no such file")):
-            _fail_lifecycle(Path("/tmp/whatever"), "test")  # must not raise
+            _fail_lifecycle(Path("scratch"), "test")  # must not raise
 
 
 class TimeoutTests(unittest.TestCase):
@@ -1377,8 +1377,8 @@ class RuleOfTwoTests(unittest.TestCase):
     def test_understand_blocked_in_ci(self):
         with patch("core.security.rule_of_two.is_interactive", return_value=False):
             result = run_understand_prepass(
-                target=Path("/tmp/fake-target"),
-                agentic_out_dir=Path("/tmp/fake-out"),
+                target=Path("scratch/target"),
+                agentic_out_dir=Path("scratch/out"),
                 claude_bin="/fake/claude",
             )
         self.assertFalse(result.ran)
@@ -1391,7 +1391,7 @@ class RuleOfTwoTests(unittest.TestCase):
             report.write_text('{"results": []}')
             with patch("core.security.rule_of_two.is_interactive", return_value=False):
                 result = run_validate_postpass(
-                    target=Path("/tmp/fake-target"),
+                    target=Path("scratch/target"),
                     agentic_out_dir=tmp,
                     analysis_report=report,
                     claude_bin="/fake/claude",
@@ -1404,8 +1404,8 @@ class RuleOfTwoTests(unittest.TestCase):
              patch("core.orchestration.agentic_passes.shutil.which",
                    return_value=None):
             result = run_understand_prepass(
-                target=Path("/tmp/nonexistent-target"),
-                agentic_out_dir=Path("/tmp/nonexistent-out"),
+                target=Path("scratch/nonexistent-target"),
+                agentic_out_dir=Path("scratch/nonexistent-out"),
             )
         # Gets past the Rule of Two gate, fails at next check
         self.assertFalse(result.ran)
@@ -1420,7 +1420,7 @@ class RuleOfTwoTests(unittest.TestCase):
                  patch("core.orchestration.agentic_passes.shutil.which",
                        return_value=None):
                 result = run_validate_postpass(
-                    target=Path("/tmp/nonexistent-target"),
+                    target=Path("scratch/nonexistent-target"),
                     agentic_out_dir=tmp,
                     analysis_report=report,
                 )

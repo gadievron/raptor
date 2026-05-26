@@ -1,0 +1,10 @@
+name: py-app
+ecosystem: PyPI
+shape: |
+  requirements.txt (3 vulnerable PyPI pins) + Dockerfile (python:3.9-slim)
+  + .github/workflows/ci.yml (3 GHA action pins). Tests scan/bump/fix
+  against a realistic Python-project shape.
+deliberately_vulnerable_pins:
+  - requests==2.20.0          # CVE-2018-18074 + others
+  - urllib3==1.24.1           # multiple CVEs
+  - jinja2==2.10.0            # CVE-2019-10906 + others

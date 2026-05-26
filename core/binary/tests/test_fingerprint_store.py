@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 
-from core.binary.fingerprint import CapabilityFingerprint
+from core.binary.fingerprint import (
+    FINGERPRINT_SCHEMA_VERSION,
+    CapabilityFingerprint,
+)
 from core.binary.fingerprint_store import (
     STORE_SCHEMA_VERSION,
     delete_fingerprint,
@@ -22,7 +25,7 @@ from core.binary.fingerprint_store import (
 def _fp(*, sha="abc", arch="x86", bits=64,
         buckets=None) -> CapabilityFingerprint:
     return CapabilityFingerprint(
-        schema_version=1,
+        schema_version=FINGERPRINT_SCHEMA_VERSION,
         binary_path="/test",
         binary_sha256=sha, arch=arch, bits=bits,
         binary_format="elf",
@@ -165,6 +168,52 @@ class TestSchemaVersioning:
         with open(file_path, "w") as f:
             json.dump(data, f)
         assert load_fingerprint(tmp_path, "ref") is None
+
+    def test_mismatched_fingerprint_shape_load_returns_none(
+            self, tmp_path):
+        """Wrapper version OK, embedded fingerprint shape stale —
+        treat as no baseline. Regression for the silent-false-
+        positive-drift bug: a stored fingerprint with an old
+        FINGERPRINT_SCHEMA_VERSION must not be diffed against a
+        fresh one with a newer shape (new buckets would all show
+        as drift)."""
+        save_fingerprint(tmp_path, "ref", _fp())
+        file_path = next(tmp_path.glob("*.json"))
+        with open(file_path) as f:
+            data = json.load(f)
+        # Wrapper stays current; tamper only with embedded shape.
+        data["fingerprint"]["schema_version"] = \
+            FINGERPRINT_SCHEMA_VERSION - 1
+        with open(file_path, "w") as f:
+            json.dump(data, f)
+        assert load_fingerprint(tmp_path, "ref") is None
+
+    def test_iter_refs_skips_mismatched_fingerprint_shape(
+            self, tmp_path):
+        """Same regression as above, applied to iter_refs() —
+        stale-shape entries must be skipped by the enumeration
+        path too (drift detectors that scan the whole store
+        depend on this)."""
+        save_fingerprint(tmp_path, "good", _fp(sha="A"))
+        # Write a stale-shape entry directly (correct wrapper,
+        # stale embedded schema_version).
+        (tmp_path / "deadbeef.json").write_text(json.dumps({
+            "schema_version": STORE_SCHEMA_VERSION,
+            "ref": "stale-shape",
+            "fingerprint": {
+                "schema_version": FINGERPRINT_SCHEMA_VERSION - 1,
+                "binary_path": "/test",
+                "binary_sha256": "B",
+                "arch": "x86",
+                "bits": 64,
+                "binary_format": "elf",
+                "capability_buckets": {},
+            },
+        }))
+        refs = dict(iter_refs(tmp_path))
+        assert "good" in refs
+        assert "stale-shape" not in refs
+        assert len(refs) == 1
 
 
 # ---------------------------------------------------------------------------

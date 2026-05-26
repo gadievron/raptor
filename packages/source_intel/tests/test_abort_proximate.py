@@ -70,6 +70,7 @@ def test_enclosing_function_handles_out_of_range(tmp_path):
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -105,6 +106,7 @@ def test_e2e_abort_proximate_fires_on_bug_on(tmp_path):
     assert "panic" in macros
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",

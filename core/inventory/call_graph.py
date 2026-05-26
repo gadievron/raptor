@@ -128,11 +128,25 @@ class CallSite:
     ``class C.foo`` if B and C are unrelated. ``None`` everywhere
     else — module-level call, non-self chain, longer chain than the
     safe-narrow case.
+
+    ``argument_identifiers`` is the list of bare-identifier
+    arguments at this call site. For ``http.HandleFunc("/x",
+    handler)`` the list is ``["handler"]``; for ``app.use(mw1,
+    mw2)`` it is ``["mw1", "mw2"]``; for ``f("string", 42)`` it
+    is ``[]``. Used by the reachability resolver to detect
+    function-as-argument registration (Express / Fastify / Koa /
+    net/http / gin / echo route handlers) — a function passed as
+    an argument to a recognised registration method is callable
+    via that framework's runtime dispatch even though no static
+    call site invokes it directly. Populated by extractors that
+    bother — empty list when the extractor hasn't been taught to
+    record arguments (backwards-compatible default).
     """
     line: int
     chain: List[str]
     caller: Optional[str] = None
     receiver_class: Optional[str] = None
+    argument_identifiers: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -255,6 +269,15 @@ class FileCallGraph:
                 entry["caller"] = intern(c.caller)
             if c.receiver_class is not None:
                 entry["receiver_class"] = intern(c.receiver_class)
+            # argument_identifiers omitted from serialised form when
+            # empty — the vast majority of call sites have no
+            # identifier args (constant args, no args, etc.) and
+            # writing empty lists for all of them inflates inventory
+            # JSON size meaningfully on large repos.
+            if c.argument_identifiers:
+                entry["argument_identifiers"] = [
+                    intern(a) for a in c.argument_identifiers
+                ]
             calls.append(entry)
 
         # Intern import keys + values — the same dependency name
@@ -299,6 +322,11 @@ class FileCallGraph:
                     chain=list(c.get("chain") or []),
                     caller=c.get("caller"),
                     receiver_class=c.get("receiver_class"),
+                    # Older inventories pre-date argument_identifiers;
+                    # `or []` defaults to empty for backwards compat.
+                    argument_identifiers=list(
+                        c.get("argument_identifiers") or []
+                    ),
                 )
                 for c in (d.get("calls") or [])
             ],
@@ -983,6 +1011,7 @@ class _JsCallGraph:
             chain=chain,
             caller=caller,
             receiver_class=receiver_class,
+            argument_identifiers=self._call_identifier_args(node),
         ))
 
     # ------------------------------------------------------------------
@@ -1074,6 +1103,36 @@ class _JsCallGraph:
             if c.is_named:
                 return c.type == self._STRING_NODE
         return False
+
+    def _call_identifier_args(self, call_node) -> List[str]:
+        """Bare-identifier argument names at this call site, in order.
+
+        ``f(handler)`` → ``["handler"]``.
+        ``app.get('/x', handler)`` → ``["handler"]`` (string literal
+        skipped — only identifiers are recorded).
+        ``app.use(mw1, mw2)`` → ``["mw1", "mw2"]``.
+        ``f(() => {}, 42)`` → ``[]`` (arrow function not an identifier).
+        ``f(obj.method)`` → ``[]`` (member access not a bare ident;
+        recorded as a CALL chain elsewhere when invoked but here as
+        an argument we conservatively skip — bare references to
+        functions defined in the file are the load-bearing case for
+        framework-registration detection).
+
+        Used by the resolver to detect function-as-argument
+        registration patterns (Express ``app.get(path, handler)``,
+        Go ``http.HandleFunc(path, handler)``). Empty list when no
+        identifier args present — vast majority of call sites.
+        """
+        args = self._first_child_of_type(call_node, (self._ARGS_NODE,))
+        if args is None:
+            return []
+        out: List[str] = []
+        for c in args.children:
+            if not c.is_named:
+                continue
+            if c.type == self._IDENT_NODE:
+                out.append(c.text.decode())
+        return out
 
     def _subscript_string_literal(self, subscript_node) -> Optional[str]:
         """``obj["name"]`` → ``"name"``. Returns None for
@@ -1466,6 +1525,7 @@ class _GoCallGraph:
             line=node.start_point[0] + 1,
             chain=chain,
             caller=caller,
+            argument_identifiers=self._call_identifier_args(node),
         ))
 
     def _call_callee(self, call_node):
@@ -1476,6 +1536,40 @@ class _GoCallGraph:
             if c.is_named:
                 return c
         return None
+
+    def _call_identifier_args(self, call_node) -> List[str]:
+        """Bare-identifier argument names at this call site, in order.
+
+        ``http.HandleFunc("/x", handler)`` → ``["handler"]`` (string
+        literal skipped — only identifiers are recorded).
+        ``router.GET("/users", listUsers, authMW)`` →
+        ``["listUsers", "authMW"]``.
+        ``f(struct{}{})`` → ``[]`` (composite literal not an
+        identifier).
+        ``f(obj.Method)`` → ``[]`` (selector_expression not a bare
+        identifier; method values aren't recorded here — the
+        load-bearing case for framework-registration detection is
+        bare function references defined in the file).
+
+        Used by the resolver to detect function-as-argument
+        registration patterns (net/http ``HandleFunc``, gin/echo
+        ``GET/POST/...``, chi ``Get/Post/...``). Empty list when no
+        identifier args present — vast majority of call sites.
+        """
+        args = None
+        for c in call_node.children:
+            if c.type == self._ARG_LIST_NODE:
+                args = c
+                break
+        if args is None:
+            return []
+        out: List[str] = []
+        for c in args.children:
+            if not c.is_named:
+                continue
+            if c.type == self._IDENT_NODE:
+                out.append(c.text.decode())
+        return out
 
     def _callee_chain(self, callee) -> Optional[List[str]]:
         """``foo`` → ``["foo"]``;

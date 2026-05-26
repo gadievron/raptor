@@ -202,6 +202,7 @@ class TestCliSummaryRendersTruncation:
     sys.platform != "linux",
     reason="Real tracer-budget E2E — Linux ptrace + seccomp",
 )
+@pytest.mark.integration
 class TestEndToEndBudgetOverflow(unittest.TestCase):
     """Run a workload that opens many files under a tiny global cap;
     confirm the summary record with non-zero drops surfaces in the

@@ -1,0 +1,270 @@
+{
+  "improvement": 0.0,
+  "improvement_threshold": 0.05,
+  "joint_winning_metric": [
+    1.0,
+    1.0,
+    0.6476344438802824
+  ],
+  "max_delta": 0.1,
+  "mode": "joint",
+  "notes": [
+    "baseline metric (P20, NDCG, \u03c1) = (1.000, 1.000, 0.574) on 4462 samples",
+    "single-pass per-constant ends at (P20=1.000, NDCG=1.000, \u03c1=0.634)",
+    "restart #2: skipped \u2014 could not sample an admissible starting point in 10 attempts",
+    "best restart ends at (P20=1.000, NDCG=1.000, \u03c1=0.648) after 3 pass(es), converged=True (seed_index=3)",
+    "joint \u03c1 improvement vs single-pass +0.013 (P20 +0.000) below threshold 0.050; joint search confirms per-constant is at the basin floor on this corpus"
+  ],
+  "overall_baseline_precision": 1.0,
+  "overall_proposed_precision": 1.0,
+  "per_constant": [
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 96.8,
+      "name": "_KEV_FLOOR",
+      "proposed": 96.8,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 1.5972,
+      "name": "_KEV_MULTIPLIER",
+      "proposed": 1.75692,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 72.6,
+      "name": "_EXPLOIT_EVIDENCE_FLOOR",
+      "proposed": 79.86,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 1.4399,
+      "name": "_EXPLOIT_EVIDENCE_MULTIPLIER",
+      "proposed": 1.58389,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 96.8,
+      "name": "_SSVC_ACTIVE_FLOOR",
+      "proposed": 96.8,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 1.452,
+      "name": "_SSVC_ACTIVE_MULTIPLIER",
+      "proposed": 1.452,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 72.6,
+      "name": "_SSVC_POC_FLOOR",
+      "proposed": 79.86,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 1.4399,
+      "name": "_SSVC_POC_MULTIPLIER",
+      "proposed": 1.4399,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 1.21,
+      "name": "_SSVC_AUTOMATABLE_BONUS",
+      "proposed": 1.331,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.363,
+      "name": "_EPSS_FLOOR_MULTIPLIER",
+      "proposed": 0.39930000000000004,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.567,
+      "name": "_EPSS_RANGE_MULTIPLIER",
+      "proposed": 0.5103,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.5103,
+      "name": "_REACH_NOT_REACHABLE_MAX_REDUCTION",
+      "proposed": 0.45927,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.7574,
+      "name": "_REACH_NOT_EVALUATED_MULTIPLIER",
+      "proposed": 0.6816599999999999,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_FLOOR_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_RANGE_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.7,
+      "name": "_DEPTH_DECAY_BASE",
+      "proposed": 0.7,
+      "proposed_precision": 1.0
+    }
+  ],
+  "proposed_values": {
+    "_EPSS_FLOOR_MULTIPLIER": 0.39930000000000004,
+    "_EPSS_RANGE_MULTIPLIER": 0.5103,
+    "_EXPLOIT_EVIDENCE_FLOOR": 79.86,
+    "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.58389,
+    "_KEV_MULTIPLIER": 1.75692,
+    "_REACH_NOT_EVALUATED_MULTIPLIER": 0.6816599999999999,
+    "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.45927,
+    "_SSVC_AUTOMATABLE_BONUS": 1.331,
+    "_SSVC_POC_FLOOR": 79.86
+  },
+  "restarts": [
+    {
+      "converged": true,
+      "final_metric": [
+        1.0,
+        1.0,
+        0.6342234207793347
+      ],
+      "final_values": {
+        "_DEPTH_DECAY_BASE": 0.7,
+        "_EPSS_FLOOR_MULTIPLIER": 0.39930000000000004,
+        "_EPSS_RANGE_MULTIPLIER": 0.5103,
+        "_EXPLOIT_EVIDENCE_FLOOR": 79.86,
+        "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.58389,
+        "_EXPO_FLOOR_MULTIPLIER": 0.5,
+        "_EXPO_RANGE_MULTIPLIER": 0.5,
+        "_KEV_FLOOR": 96.8,
+        "_KEV_MULTIPLIER": 1.75692,
+        "_REACH_NOT_EVALUATED_MULTIPLIER": 0.6816599999999999,
+        "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.45927,
+        "_SSVC_ACTIVE_FLOOR": 96.8,
+        "_SSVC_ACTIVE_MULTIPLIER": 1.452,
+        "_SSVC_AUTOMATABLE_BONUS": 1.331,
+        "_SSVC_POC_FLOOR": 79.86,
+        "_SSVC_POC_MULTIPLIER": 1.4399
+      },
+      "passes": 2,
+      "seed_index": 0,
+      "starting_metric": [
+        1.0,
+        1.0,
+        0.5735337040529855
+      ]
+    },
+    {
+      "converged": false,
+      "final_metric": [
+        1.0,
+        1.0,
+        0.6464283830176052
+      ],
+      "final_values": {
+        "_DEPTH_DECAY_BASE": 0.7258459951385825,
+        "_EPSS_FLOOR_MULTIPLIER": 0.39930000000000004,
+        "_EPSS_RANGE_MULTIPLIER": 0.5103,
+        "_EXPLOIT_EVIDENCE_FLOOR": 79.86,
+        "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.58389,
+        "_EXPO_FLOOR_MULTIPLIER": 0.5139999759854094,
+        "_EXPO_RANGE_MULTIPLIER": 0.5056949743774647,
+        "_KEV_FLOOR": 99.42685084095879,
+        "_KEV_MULTIPLIER": 1.75692,
+        "_REACH_NOT_EVALUATED_MULTIPLIER": 0.6816599999999999,
+        "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.45927,
+        "_SSVC_ACTIVE_FLOOR": 92.28869063487085,
+        "_SSVC_ACTIVE_MULTIPLIER": 1.5788044922717084,
+        "_SSVC_AUTOMATABLE_BONUS": 1.331,
+        "_SSVC_POC_FLOOR": 79.86,
+        "_SSVC_POC_MULTIPLIER": 1.5740079739489254
+      },
+      "passes": 6,
+      "seed_index": 1,
+      "starting_metric": [
+        1.0,
+        1.0,
+        0.5829462225247479
+      ]
+    },
+    {
+      "converged": true,
+      "final_metric": [
+        1.0,
+        1.0,
+        0.6476344438802824
+      ],
+      "final_values": {
+        "_DEPTH_DECAY_BASE": 0.7167134114464945,
+        "_EPSS_FLOOR_MULTIPLIER": 0.39930000000000004,
+        "_EPSS_RANGE_MULTIPLIER": 0.5103,
+        "_EXPLOIT_EVIDENCE_FLOOR": 79.86,
+        "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.58389,
+        "_EXPO_FLOOR_MULTIPLIER": 0.4746215347788625,
+        "_EXPO_RANGE_MULTIPLIER": 0.5094519153533441,
+        "_KEV_FLOOR": 98.3674309704395,
+        "_KEV_MULTIPLIER": 1.75692,
+        "_REACH_NOT_EVALUATED_MULTIPLIER": 0.6816599999999999,
+        "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.45927,
+        "_SSVC_ACTIVE_FLOOR": 90.1678976129084,
+        "_SSVC_ACTIVE_MULTIPLIER": 1.5858101935109006,
+        "_SSVC_AUTOMATABLE_BONUS": 1.331,
+        "_SSVC_POC_FLOOR": 79.86,
+        "_SSVC_POC_MULTIPLIER": 1.58389
+      },
+      "passes": 3,
+      "seed_index": 3,
+      "starting_metric": [
+        1.0,
+        1.0,
+        0.5401816902295302
+      ]
+    }
+  ],
+  "sample_count": 4462,
+  "single_pass_metric": [
+    1.0,
+    1.0,
+    0.6342234207793347
+  ],
+  "snapshot_date": "2026-05-22",
+  "status": "rejected"
+}

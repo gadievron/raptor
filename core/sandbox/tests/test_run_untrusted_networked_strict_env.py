@@ -11,7 +11,7 @@ import pytest
 from core.sandbox import context as _ctx
 
 
-def test_run_untrusted_networked_forwards_strict_env(monkeypatch):
+def test_run_untrusted_networked_forwards_strict_env(monkeypatch, tmp_path):
     captured = {}
 
     def fake_run(cmd, **kwargs):
@@ -28,8 +28,8 @@ def test_run_untrusted_networked_forwards_strict_env(monkeypatch):
 
     _ctx.run_untrusted_networked(
         ["echo", "ok"],
-        target="/tmp/raptor-target",
-        output="/tmp/raptor-output",
+        target=str(tmp_path / "target"),
+        output=str(tmp_path / "output"),
         proxy_hosts=["api.example.com"],
     )
 
@@ -50,7 +50,7 @@ def test_run_untrusted_networked_forwards_strict_env(monkeypatch):
     assert captured["kwargs"].get("proxy_hosts") == ["api.example.com"]
 
 
-def test_run_untrusted_rejects_caller_strict_env():
+def test_run_untrusted_rejects_caller_strict_env(tmp_path):
     """Caller passing strict_env= must get the clean guard message, not
     a confusing "multiple values for keyword argument" TypeError.
 
@@ -62,19 +62,19 @@ def test_run_untrusted_rejects_caller_strict_env():
     with pytest.raises(TypeError, match="strict_env"):
         _ctx.run_untrusted(
             ["echo", "ok"],
-            target="/tmp/raptor-target",
-            output="/tmp/raptor-output",
+            target=str(tmp_path / "target"),
+            output=str(tmp_path / "output"),
             strict_env=False,
         )
 
 
-def test_run_untrusted_networked_rejects_caller_strict_env():
+def test_run_untrusted_networked_rejects_caller_strict_env(tmp_path):
     """Same defensive parity for the networked variant."""
     with pytest.raises(TypeError, match="strict_env"):
         _ctx.run_untrusted_networked(
             ["echo", "ok"],
-            target="/tmp/raptor-target",
-            output="/tmp/raptor-output",
+            target=str(tmp_path / "target"),
+            output=str(tmp_path / "output"),
             proxy_hosts=["api.example.com"],
             strict_env=False,
         )

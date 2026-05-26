@@ -67,3 +67,50 @@ def load_findings_from_dir(run_dir: Path) -> List[Dict[str, Any]]:
     if isinstance(data, dict):
         return data.get("findings", data.get("results", []))
     return []
+
+
+def load_sca_findings_from_dir(run_dir: Path) -> List[Dict[str, Any]]:
+    """Load SCA findings from a run's ``sca/findings.json`` subdir.
+
+    ``/sca`` and ``/agentic`` write dependency findings to
+    ``<run_dir>/sca/findings.json`` (a bare list of rows) rather than the
+    top-level ``findings.json`` that :func:`load_findings_from_dir` reads,
+    so the unified project view never saw them. The rows are already
+    normalised to the common finding shape (``id`` / ``file`` = manifest
+    path / ``function`` = package name / ``line`` / ``severity`` /
+    ``vuln_type`` = ``sca:<class>:<kind>``), so they group, dedup, and
+    render through the same machinery — they're only *discovered*
+    separately. Kept distinct from :func:`load_findings_from_dir` so
+    correlate / merge_runs / run-summary keep their code-finding scope;
+    the findings view opts in explicitly.
+    """
+    data = load_json(run_dir / "sca" / "findings.json")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("findings", data.get("results", []))
+    return []
+
+
+def merge_sca_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
+    """Collect + dedup SCA findings across runs.
+
+    Dedup by stable finding id, falling back to ``dedup_key``
+    (file, function, line). ``run_dirs`` is ordered (later overrides
+    earlier), so the latest run's copy of a recurring finding wins —
+    matching :func:`core.project.merge.merge_findings` semantics for
+    code findings.
+    """
+    merged: Dict[Any, Dict[str, Any]] = {}
+    for run_dir in run_dirs:
+        for finding in load_sca_findings_from_dir(Path(run_dir)):
+            # SCA rows always carry a stable finding_id, so the fallback
+            # is for malformed/legacy rows only. Use group_key (includes
+            # vuln_type), NOT dedup_key (file, function, line) — every SCA
+            # row has line=0 and file=manifest, so dedup_key would collide
+            # distinct findings on the same package (a slopsquat AND a CVE
+            # on `lodash` share ("package.json","lodash",0)). group_key
+            # keeps them distinct via the sca:<class>:<kind> vuln_type.
+            key = get_finding_id(finding) or group_key(finding)
+            merged[key] = finding
+    return list(merged.values())

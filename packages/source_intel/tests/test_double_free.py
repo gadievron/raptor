@@ -37,6 +37,7 @@ def _finding(file_path: str, sink_line: int,
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -60,6 +61,7 @@ def test_e2e_double_free_fires_on_classic_pattern(tmp_path):
     assert "second" in roles
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
@@ -83,6 +85,7 @@ def test_e2e_double_free_skipped_on_reassign(tmp_path):
     assert not r.double_frees, f"got {r.double_frees!r}"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

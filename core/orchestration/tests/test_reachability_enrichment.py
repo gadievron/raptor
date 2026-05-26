@@ -390,3 +390,583 @@ def test_enrich_caller_context_uncertain_caller_counted_separately(
     assert enriched == 1
     func = checklist["files"][0]["items"][0]
     assert func["caller_count_uncertain"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Framework-callable bypass — functions with framework-dispatch
+# decorators must NOT be demoted to priority=low even when the static
+# call graph shows zero callers.
+# ---------------------------------------------------------------------------
+
+
+class TestFrameworkCallableBypass:
+    def test_flask_route_handler_not_demoted(self, tmp_path):
+        # A Flask route handler has no in-project callers — only
+        # the Flask runtime invokes it via the registered route.
+        # Pre-fix this regressed to priority=low; the LLM analysis
+        # then deferred on it. With S1, the framework-callable
+        # check skips the demotion.
+        target = _project(tmp_path, {
+            "src/api.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "\n"
+                "@app.route('/users')\n"
+                "def list_users():\n"
+                "    return []\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/api.py": [{
+                "name": "list_users", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low", (
+            "Flask @app.route handler must not be demoted — "
+            "framework dispatches to it at runtime"
+        )
+        # The diagnostic annotation should mark it as
+        # framework-callable so operators can see WHY this didn't
+        # get a priority downgrade.
+        assert func.get("priority_reason") == (
+            "reachability:framework_callable"
+        )
+
+    def test_django_receiver_naked_decorator_not_demoted(self, tmp_path):
+        # Django's @receiver is the bare-name form covered by S1b.
+        # Validates that S1b's naked-name set propagates through
+        # to the consumer wiring.
+        target = _project(tmp_path, {
+            "src/signals.py": (
+                "from django.dispatch import receiver\n"
+                "from django.db.models.signals import post_save\n"
+                "\n"
+                "@receiver(post_save)\n"
+                "def update_profile(sender, instance, **kw):\n"
+                "    pass\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/signals.py": [{
+                "name": "update_profile", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low"
+
+    def test_genuinely_dead_function_still_demoted(self, tmp_path):
+        # A function with no callers AND no framework-dispatch
+        # decorator IS dead code — the framework-callable bypass
+        # must not over-fire on non-decorated functions.
+        target = _project(tmp_path, {
+            "src/v.py": (
+                "def dead(): pass\n"
+                "def alive(): pass\n"
+            ),
+            "src/main.py": (
+                "from src.v import alive\n"
+                "alive()\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/v.py": [
+                {"name": "dead", "kind": "function",
+                 "line_start": 1, "line_end": 1},
+                {"name": "alive", "kind": "function",
+                 "line_start": 2, "line_end": 2},
+            ],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        funcs = checklist["files"][0]["items"]
+        dead = next(f for f in funcs if f["name"] == "dead")
+        alive = next(f for f in funcs if f["name"] == "alive")
+        assert dead["priority"] == "low"
+        assert dead["priority_reason"] == "reachability:not_called"
+        assert "priority" not in alive  # called → no demotion at all
+
+
+class TestRegistrationViaCallBypass:
+    """S2: JS / Go function-as-argument registration. A handler
+    passed as an identifier argument to a routing call
+    (``http.HandleFunc("/x", handler)``, ``app.get("/users",
+    handler)``) must NOT be demoted to priority=low even though
+    the static graph shows no callers — the framework dispatches
+    to it via the registration call.
+    """
+
+    def test_allow_unreachable_suppresses_demotion(self, tmp_path):
+        # C2: --allow-unreachable opts out of NOT_CALLED demotion.
+        # A genuinely-dead function does NOT get priority=low.
+        target = _project(tmp_path, {
+            "src/v.py": "def dead(): pass\n",
+        })
+        checklist = _checklist({
+            "src/v.py": [{
+                "name": "dead", "kind": "function",
+                "line_start": 1, "line_end": 1,
+            }],
+        })
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        assert marked == 0
+        func = checklist["files"][0]["items"][0]
+        assert "priority" not in func, (
+            "--allow-unreachable must NOT demote NOT_CALLED functions"
+        )
+        assert "priority_reason" not in func
+
+    def test_allow_unreachable_still_annotates_framework_callable(
+        self, tmp_path,
+    ):
+        # Framework-callable annotation is affirmative reachability
+        # evidence, not a deferral signal — should still apply even
+        # under --allow-unreachable (the operator may find it useful
+        # to know which functions ARE framework-registered).
+        target = _project(tmp_path, {
+            "src/api.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "\n"
+                "@app.route('/x')\n"
+                "def handler():\n"
+                "    return 1\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/api.py": [{
+                "name": "handler", "kind": "function",
+                "line_start": 5, "line_end": 6,
+            }],
+        })
+        mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        func = checklist["files"][0]["items"][0]
+        # framework_callable annotation still applies
+        assert func.get("priority_reason") == (
+            "reachability:framework_callable"
+        )
+
+    def test_go_handler_registered_via_handlefunc_not_demoted(
+        self, tmp_path,
+    ):
+        try:
+            import tree_sitter_go  # noqa: F401
+        except ImportError:
+            import pytest
+            pytest.skip("tree_sitter_go not installed")
+        target = _project(tmp_path, {
+            "src/main.go": (
+                'package main\n'
+                'import "net/http"\n'
+                'func handler(w http.ResponseWriter, r *http.Request) {}\n'
+                'func main() {\n'
+                '\thttp.HandleFunc("/x", handler)\n'
+                '}\n'
+            ),
+        })
+        checklist = _checklist({
+            "src/main.go": [{
+                "name": "handler", "kind": "function",
+                "line_start": 3, "line_end": 3,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low", (
+            "Go handler registered via http.HandleFunc must not "
+            "be demoted — framework dispatches to it at runtime"
+        )
+        assert func.get("priority_reason") == (
+            "reachability:registered_via_call"
+        )
+
+
+class TestModuleLoadAbortGate:
+    """S4: a file whose top-level execution unconditionally aborts
+    (raise ImportError / throw / panic / compile_error!) is a whole-
+    file reachability gate — every function defined below the abort
+    line is dead regardless of in-file call edges. The gate trumps
+    CALLED (peers calling the function are equally dead) and trumps
+    framework registration (decorator/registration code beneath the
+    abort never executes)."""
+
+    def test_all_functions_below_abort_demoted(self, tmp_path):
+        # Top-of-module raise → everything below it is dead even
+        # though the two functions call each other (which would
+        # otherwise read CALLED for `helper`).
+        target = _project(tmp_path, {
+            "src/disabled.py": (
+                "import os\n"
+                "raise ImportError('module disabled')\n"
+                "\n"
+                "def entry(cmd):\n"
+                "    return helper(cmd)\n"
+                "\n"
+                "def helper(cmd):\n"
+                "    return os.system(cmd)\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/disabled.py": [
+                {"name": "entry", "kind": "function",
+                 "line_start": 4, "line_end": 5},
+                {"name": "helper", "kind": "function",
+                 "line_start": 7, "line_end": 8},
+            ],
+        })
+        marked = mark_unreachable_low_priority(checklist, target)
+        assert marked == 2
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for name in ("entry", "helper"):
+            assert funcs[name]["priority"] == "low"
+            assert funcs[name]["priority_reason"] == (
+                "reachability:module_aborts"
+            )
+
+    def test_function_above_abort_not_module_demoted(self, tmp_path):
+        # A function whose def lies ABOVE the abort line ran (and
+        # could have registered) before the abort fired — the S4
+        # gate must not fire for it. It falls through to normal
+        # call-graph logic.
+        target = _project(tmp_path, {
+            "src/mixed.py": (
+                "def early(cmd):\n"           # line 1
+                "    return cmd\n"             # line 2
+                "raise SystemExit(1)\n"        # line 3
+                "def late(cmd):\n"             # line 4
+                "    return cmd\n"             # line 5
+            ),
+            "src/main.py": (
+                "from src.mixed import early\n"
+                "early('x')\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/mixed.py": [
+                {"name": "early", "kind": "function",
+                 "line_start": 1, "line_end": 2},
+                {"name": "late", "kind": "function",
+                 "line_start": 4, "line_end": 5},
+            ],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        # `late` is below the abort → module_aborts demotion.
+        assert funcs["late"]["priority"] == "low"
+        assert funcs["late"]["priority_reason"] == (
+            "reachability:module_aborts"
+        )
+        # `early` is above the abort → S4 gate did NOT fire. It has
+        # a real caller (main.py) so it isn't NOT_CALLED-demoted
+        # either; the key assertion is that its reason is not the
+        # module-abort reason.
+        assert funcs["early"].get("priority_reason") != (
+            "reachability:module_aborts"
+        )
+
+    def test_module_abort_trumps_framework_callable(self, tmp_path):
+        # Even a Flask route handler is dead if its @app.route
+        # decorator sits below a module-load abort — the decorator
+        # never runs, so the route is never registered.
+        target = _project(tmp_path, {
+            "src/api.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "raise ImportError('disabled')\n"
+                "\n"
+                "@app.route('/users')\n"
+                "def list_users():\n"
+                "    return []\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/api.py": [{
+                "name": "list_users", "kind": "function",
+                "line_start": 6, "line_end": 7,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func["priority"] == "low"
+        assert func["priority_reason"] == "reachability:module_aborts"
+
+    def test_allow_unreachable_suppresses_module_abort_demotion(
+        self, tmp_path,
+    ):
+        target = _project(tmp_path, {
+            "src/disabled.py": (
+                "raise ImportError('module disabled')\n"
+                "def vuln(cmd):\n"
+                "    import os; os.system(cmd)\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/disabled.py": [{
+                "name": "vuln", "kind": "function",
+                "line_start": 2, "line_end": 3,
+            }],
+        })
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        assert marked == 0
+        func = checklist["files"][0]["items"][0]
+        assert "priority" not in func
+        assert func.get("priority_reason") != "reachability:module_aborts"
+
+    def test_allow_unreachable_framework_handler_in_aborting_file_not_live(
+        self, tmp_path,
+    ):
+        # A framework handler defined BELOW a top-level abort: its @route
+        # decorator never runs (the file aborts on import), so it is NOT
+        # affirmatively framework-reachable. Under allow_unreachable it is not
+        # demoted AND not annotated framework_callable — the whole-file abort
+        # witness shadows the framework signal (the unified classifier checks
+        # module_aborts before framework). [pr11 behaviour refinement]
+        target = _project(tmp_path, {
+            "src/disabled.py": (
+                "raise ImportError('disabled')\n"
+                "@app.route('/y')\n"
+                "def handler(q):\n"
+                "    cursor.execute(q)\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/disabled.py": [{
+                "name": "handler", "kind": "function",
+                "line_start": 3, "line_end": 4,
+            }],
+        })
+        mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority") != "low"          # isolation: not demoted
+        assert func.get("priority_reason") != (        # but NOT called live
+            "reachability:framework_callable"
+        )
+
+    def test_clean_file_not_module_demoted(self, tmp_path):
+        # No abort → S4 gate dormant; normal NOT_CALLED logic only.
+        target = _project(tmp_path, {
+            "src/v.py": (
+                "def dead(): pass\n"
+                "def alive(): pass\n"
+            ),
+            "src/main.py": (
+                "from src.v import alive\n"
+                "alive()\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/v.py": [
+                {"name": "dead", "kind": "function",
+                 "line_start": 1, "line_end": 1},
+                {"name": "alive", "kind": "function",
+                 "line_start": 2, "line_end": 2},
+            ],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        # dead → NOT_CALLED (not module_aborts), alive → untouched.
+        assert funcs["dead"]["priority_reason"] == (
+            "reachability:not_called"
+        )
+        assert "priority" not in funcs["alive"]
+
+
+class TestLexicalDeadGate:
+    """S3: functions defined inside an always-false guard
+    (``if False:`` / ``if (false) {…}`` / ``#[cfg(any())]``) never
+    bind — the guard body never runs / compiles. The gate trumps
+    CALLED (two dead-scope functions calling each other read as
+    mutually CALLED) and framework registration."""
+
+    def test_function_in_if_false_demoted(self, tmp_path):
+        # dead_a and dead_b call each other inside `if False:`, so
+        # the static graph reads both CALLED — but the whole scope
+        # is dead.
+        target = _project(tmp_path, {
+            "src/mod.py": (
+                "if False:\n"
+                "    def dead_a(x):\n"
+                "        return dead_b(x)\n"
+                "    def dead_b(x):\n"
+                "        return dead_a(x)\n"
+                "\n"
+                "def live():\n"
+                "    return 1\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/mod.py": [
+                {"name": "dead_a", "kind": "function",
+                 "line_start": 2, "line_end": 3},
+                {"name": "dead_b", "kind": "function",
+                 "line_start": 4, "line_end": 5},
+                {"name": "live", "kind": "function",
+                 "line_start": 7, "line_end": 8},
+            ],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for name in ("dead_a", "dead_b"):
+            assert funcs[name]["priority"] == "low"
+            assert funcs[name]["priority_reason"] == (
+                "reachability:lexical_dead"
+            )
+
+    def test_allow_unreachable_suppresses_lexical_dead(self, tmp_path):
+        target = _project(tmp_path, {
+            "src/mod.py": (
+                "if False:\n"
+                "    def dead(x):\n"
+                "        return x\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/mod.py": [{
+                "name": "dead", "kind": "function",
+                "line_start": 2, "line_end": 3,
+            }],
+        })
+        marked = mark_unreachable_low_priority(
+            checklist, target, allow_unreachable=True,
+        )
+        assert marked == 0
+        func = checklist["files"][0]["items"][0]
+        assert "priority" not in func
+
+    def test_live_function_not_lexical_demoted(self, tmp_path):
+        # A function with a dead `if False:` block INSIDE its body is
+        # itself live — only the inner statements are dead, and there's
+        # no nested function to tag. The function must not be demoted.
+        target = _project(tmp_path, {
+            "src/mod.py": (
+                "def handler(x):\n"
+                "    if False:\n"
+                "        unreachable_call(x)\n"
+                "    return x\n"
+            ),
+            "src/main.py": (
+                "from src.mod import handler\n"
+                "handler('x')\n"
+            ),
+        })
+        checklist = _checklist({
+            "src/mod.py": [{
+                "name": "handler", "kind": "function",
+                "line_start": 1, "line_end": 4,
+            }],
+        })
+        mark_unreachable_low_priority(checklist, target)
+        func = checklist["files"][0]["items"][0]
+        assert func.get("priority_reason") != "reachability:lexical_dead"
+
+
+class TestEntryReachabilityGate:
+    """U7: entry-point forward reachability. Catches the dead-island (a
+    function that reads CALLED but no path from any entry reaches it) and
+    keeps exported/non-static entries that 1-hop NOT_CALLED would wrongly
+    demote. CI-safe: a synthetic inventory (visibility + call edges) is
+    passed in, so no tree-sitter grammar is needed."""
+
+    def _synthetic_c(self):
+        items = [
+            {"name": "api", "kind": "function", "line_start": 1,
+             "metadata": {"visibility": None}},           # non-static entry
+            {"name": "isl_a", "kind": "function", "line_start": 5,
+             "metadata": {"visibility": "static"}},
+            {"name": "isl_b", "kind": "function", "line_start": 9,
+             "metadata": {"visibility": "static"}},
+        ]
+        calls = [
+            {"caller": "isl_a", "chain": ["isl_b"], "line": 6},
+            {"caller": "isl_b", "chain": ["isl_a"], "line": 10},
+        ]
+        inv = {"files": [{"path": "app.c", "language": "c",
+                          "items": items,
+                          "call_graph": {"imports": {}, "calls": calls}}]}
+        checklist = {"files": [{"path": "app.c", "items": items}]}
+        return inv, checklist
+
+    def test_dead_island_demoted(self, tmp_path):
+        inv, checklist = self._synthetic_c()
+        mark_unreachable_low_priority(checklist, tmp_path, inventory=inv)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for n in ("isl_a", "isl_b"):
+            assert funcs[n]["priority"] == "low"
+            assert funcs[n]["priority_reason"] == (
+                "reachability:no_path_from_entry"
+            )
+
+    def test_non_static_entry_not_demoted(self, tmp_path):
+        # The library-API fix: an exported (non-static) function with no
+        # in-project caller is an entry → must NOT be demoted (1-hop
+        # NOT_CALLED would have wrongly demoted it).
+        inv, checklist = self._synthetic_c()
+        mark_unreachable_low_priority(checklist, tmp_path, inventory=inv)
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["api"].get("priority") != "low"
+
+    def test_allow_unreachable_suppresses_no_path_demotion(self, tmp_path):
+        inv, checklist = self._synthetic_c()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv, allow_unreachable=True,
+        )
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["isl_a"].get("priority") != "low"
+        assert marked == 0
+
+
+class TestBuildExcludedGate:
+    """Gap 1: a build-excluded file (Go ``//go:build ignore``) is never
+    compiled, so every function in it demotes — even ``main``/``init``, which
+    are normally Go entries. Heuristic → soft-demote, respects
+    allow_unreachable. Synthetic inventory keeps this tree-sitter-independent."""
+
+    def _synthetic_go(self):
+        items = [
+            {"name": "main", "kind": "function", "line_start": 4},
+            {"name": "run", "kind": "function", "line_start": 5},
+        ]
+        inv = {"files": [{
+            "path": "gen.go", "language": "go", "items": items,
+            "build_excluded": {"line": 1, "summary": "//go:build ignore"},
+            "call_graph": {"imports": {}, "calls": []},
+        }]}
+        checklist = {"files": [{"path": "gen.go", "items": items}]}
+        return inv, checklist
+
+    def test_build_excluded_demotes_every_function(self, tmp_path):
+        inv, checklist = self._synthetic_go()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv,
+        )
+        assert marked == 2
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        for name in ("main", "run"):
+            assert funcs[name]["priority"] == "low"
+            assert funcs[name]["priority_reason"] == (
+                "reachability:build_excluded"
+            )
+
+    def test_allow_unreachable_suppresses_build_excluded_demotion(
+        self, tmp_path,
+    ):
+        inv, checklist = self._synthetic_go()
+        marked = mark_unreachable_low_priority(
+            checklist, tmp_path, inventory=inv, allow_unreachable=True,
+        )
+        assert marked == 0
+        funcs = {f["name"]: f for f in checklist["files"][0]["items"]}
+        assert funcs["main"].get("priority_reason") != (
+            "reachability:build_excluded"
+        )

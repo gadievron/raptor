@@ -83,3 +83,73 @@ def _bypass_git_sandbox(monkeypatch):
     monkeypatch.setattr(layers_mod, "fetch_commit", _test_fetch_commit)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_retry_backoff(monkeypatch):
+    """No-op ``time.sleep`` for unit tests.
+
+    ResilientLLMClient (``llm/client.py``) retries with
+    ``time.sleep(backoff_factor ** attempt)`` and AgentLoop adds an
+    in-loop 0/5/15s backoff. Tests that drive the retry path with a
+    mocked-failing provider otherwise sit through the REAL backoff —
+    measured at 14s for ``test_provider_error_raises_llm_call_failed``
+    and ~9-11s each for the pipeline retry tests on the 2-core CI
+    runner (they were the entire cve_diff tier's wall-clock). The retry
+    COUNT and error-propagation behaviour is independent of how long
+    the backoff sleeps, so no-op the sleep.
+
+    Safe across the unit tree: the only timing-sensitive tests
+    (``infra/test_rate_limit.py``) drive an INJECTED fake clock
+    (``clk.sleep``), not the global ``time.sleep``, so their assertions
+    are unaffected.
+    """
+    import time
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff_sleep(monkeypatch):
+    """Neutralise the LLM client's retry backoff for unit tests.
+
+    cve_diff/llm/client.py retries a failed provider.generate with
+    time.sleep(backoff_factor ** attempt) (factor 2.0 -> 2+4+8s...). Any
+    test that drives the pipeline into retries or the meta-retry path
+    otherwise pays real backoff seconds -- the dominant cost behind the
+    slow cve_diff pipeline tests. No-op the sleep: retry *logic* is
+    unchanged, only the wall-clock delay is removed. The infra rate-limit
+    tests inject their own fake clock, so they are unaffected by this
+    global patch.
+    """
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+
+@pytest.fixture(autouse=True)
+def _offline_consensus(monkeypatch):
+    """Keep the default-on 2-method consensus offline in unit tests.
+
+    Pipeline.run() executes run_consensus() by default
+    (enable_consensus=True), which calls the live OSV and NVD APIs via
+    cve_diff.report.consensus._osv_client() / _nvd_client(). CI can't
+    reach those hosts, so each request blocks on NvdClient's 30s socket
+    timeout (DEFAULT_TIMEOUT_S) — the flat ~30s on the pipeline/CLI
+    tests. The _no_real_retry_backoff sleep no-op can't help: a socket
+    timeout is not a sleep.
+
+    Stub the two network entry points so run_consensus runs its real
+    aggregation logic but resolves to "no pointer" without any HTTP.
+    test_report_consensus re-patches these same names inside each test
+    body (after this autouse fixture), so those tests are unaffected.
+    """
+    from cve_diff.report import consensus as consensus_mod
+
+    class _OfflineOsvClient:
+        def get_vuln(self, _cve_id):
+            return None
+
+    class _OfflineNvdClient:
+        def get_payload(self, _cve_id):
+            return None
+
+    monkeypatch.setattr(consensus_mod, "_osv_client", lambda: _OfflineOsvClient())
+    monkeypatch.setattr(consensus_mod, "_nvd_client", lambda: _OfflineNvdClient())
+
+

@@ -39,7 +39,7 @@ from core.json import JsonCache
 from core.oci.client import OciRegistryClient, RegistryError
 from core.oci.image_ref import parse_image_ref
 
-from ._version_filter import highest_stable
+from ._version_filter import highest_stable, highest_stable_with_variant
 from .github_releases import (
     NoStableVersionsFound,
     UpstreamLookupError,
@@ -58,6 +58,7 @@ def latest_tag(
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
     client: Optional[OciRegistryClient] = None,
     per_page: int = 100,
+    variant: str = "",
 ) -> str:
     """Return the highest stable-semver tag for the OCI image.
 
@@ -71,11 +72,18 @@ def latest_tag(
     credential-lookup overrides / token reuse across calls).
     Without one, a fresh client is constructed from ``http``.
 
+    ``variant`` — when non-empty, filter the tag list to
+    ``<semver>-<variant>`` shaped tags and return the highest.
+    Use to bump ``python:3.9-slim`` → ``python:3.12-slim`` (pass
+    ``variant="slim"``) while skipping the bare-semver and
+    other-variant entries in the registry. Pass the empty string
+    (default) for bare-semver-only behaviour.
+
     Raises:
 
     * :class:`NoStableVersionsFound` — no tag in the repo's tag
-      list matches the stable-semver shape (caller should fall
-      back to e.g. GitHub releases or skip the bump).
+      list matches the requested shape (caller should fall back
+      to e.g. GitHub releases or skip the bump).
     * :class:`UpstreamLookupError` — registry returned a non-200
       / shape-regression / network failure.
     """
@@ -83,10 +91,14 @@ def latest_tag(
         image_ref, http=http, cache=cache, ttl_seconds=ttl_seconds,
         client=client, per_page=per_page,
     )
-    winner = highest_stable(tags)
+    if variant:
+        winner = highest_stable_with_variant(tags, variant)
+    else:
+        winner = highest_stable(tags)
     if winner is None:
         raise NoStableVersionsFound(
             f"no stable-semver tags found for {image_ref}"
+            + (f" with variant {variant!r}" if variant else "")
         )
     return winner
 

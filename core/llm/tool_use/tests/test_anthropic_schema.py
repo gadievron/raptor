@@ -35,9 +35,9 @@ SDKTextBlock = anthropic_types.TextBlock
 SDKToolUseBlock = anthropic_types.ToolUseBlock
 Usage = anthropic_types.Usage
 
-from core.llm.config import ModelConfig
-from core.llm.providers import AnthropicProvider
-from core.llm.tool_use import (
+from core.llm.config import ModelConfig  # noqa: E402
+from core.llm.providers import AnthropicProvider  # noqa: E402
+from core.llm.tool_use import (  # noqa: E402
     Message as OurMessage,
     StopReason,
     TextBlock,

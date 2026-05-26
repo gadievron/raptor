@@ -1,0 +1,172 @@
+name: SCA PR gate
+
+# Runs raptor-sca against the PR head AND main, then diffs the two
+# findings.json sets. Fails the build when the PR introduces a new
+# vulnerability at the configured severity threshold (default: high).
+#
+# Posts a markdown delta comment on the PR — operators see exactly
+# which CVEs / hygiene rules fired or resolved between the two
+# branches without having to read raw scan output.
+#
+# Tuned for SCA-relevant changes: only fires when the PR touches a
+# manifest / lockfile / Dockerfile. Skip the workflow on docs-only
+# PRs without burning CI minutes.
+
+on:
+  pull_request:
+    paths:
+      - '**/requirements*.txt'
+      - '**/pyproject.toml'
+      - '**/Pipfile'
+      - '**/Pipfile.lock'
+      - '**/poetry.lock'
+      - '**/uv.lock'
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/yarn.lock'
+      - '**/pnpm-lock.yaml'
+      - '**/pnpm-workspace.yaml'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/go.mod'
+      - '**/go.sum'
+      - '**/Gemfile'
+      - '**/Gemfile.lock'
+      - '**/composer.json'
+      - '**/composer.lock'
+      - '**/*.csproj'
+      - '**/packages.config'
+      - '**/packages.lock.json'
+      - '**/pom.xml'
+      - '**/build.gradle'
+      - '**/build.gradle.kts'
+      - '**/gradle.lockfile'
+      - '**/settings.gradle*'
+      - '**/Dockerfile'
+      - '**/Dockerfile.*'
+      - '**/Containerfile'
+      - '**/docker-compose*.yml'
+      - '**/.pre-commit-config.yaml'
+      - '.github/workflows/*.yml'
+      - '.gitlab-ci.yml'
+      - '.github/workflows/sca-pr-gate.yml'
+
+permissions:
+  contents: read
+  pull-requests: write    # to post the diff comment
+
+concurrency:
+  group: sca-pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          # Need full history so we can check out main as the
+          # baseline below.
+          fetch-depth: 0
+          # Avoid the default merge-commit checkout — we want the
+          # PR head exactly as it would be merged.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          pip install -r requirements.txt
+
+      - name: Scan PR head
+        run: bin/raptor-sca . --out /tmp/sca-pr
+
+      - name: Scan main baseline
+        # We checkout main into a sibling dir so the PR-head working
+        # tree stays untouched (cleanup on workflow termination is
+        # automatic; this is just hygiene).
+        run: |
+          git fetch origin main:refs/heads/_baseline
+          git worktree add /tmp/sca-baseline-tree _baseline
+          bin/raptor-sca /tmp/sca-baseline-tree --out /tmp/sca-base
+          git worktree remove --force /tmp/sca-baseline-tree
+          git branch -D _baseline
+
+      - name: Compute diff
+        id: diff
+        # ``set +e`` so the diff command's non-zero exit (regression
+        # found) doesn't abort this step — we capture the exit code,
+        # post the comment, and only THEN fail if regressions exist.
+        run: |
+          set +e
+          bin/raptor-sca diff \
+            /tmp/sca-base/findings.json \
+            /tmp/sca-pr/findings.json \
+            --fail-on-severity high \
+            --out /tmp/sca-diff.md
+          DIFF_EXIT=$?
+          echo "exit=$DIFF_EXIT" >> "$GITHUB_OUTPUT"
+          # Mirror the diff into the workflow's step summary so
+          # reviewers see it inline on the run page even without
+          # leaving GitHub Actions.
+          if [ -f /tmp/sca-diff.md ]; then
+            cat /tmp/sca-diff.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Post PR comment
+        # Non-fatal: PRs from forks get a read-only GITHUB_TOKEN
+        # regardless of the workflow's ``permissions:`` block (the
+        # org-level "Workflow permissions" policy gates write tokens
+        # to same-repo PRs). When the comment-post fails we log a
+        # warning and continue — the diff is still surfaced via
+        # GITHUB_STEP_SUMMARY (above) and the regression gate (below)
+        # still fails on high-severity additions.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Idempotent: ``gh pr comment --create-if-none`` would be
+        # ideal but isn't a flag; the conventional shape is ``gh pr
+        # comment --edit-last`` to update the most recent comment
+        # rather than spam new ones on every push. We use a marker
+        # in the body so subsequent runs find + edit OUR comment
+        # rather than touching reviewers'.
+        run: |
+          set -eu
+          MARKER="<!-- raptor-sca-pr-gate -->"
+          BODY="$MARKER
+
+          $(cat /tmp/sca-diff.md)"
+          # Find an existing comment with our marker to update.
+          PR="${{ github.event.pull_request.number }}"
+          EXISTING=$(gh api \
+            "/repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" \
+            | head -1) || {
+              echo "::warning::sca-pr-gate: could not list PR comments (likely a fork PR with restricted GITHUB_TOKEN); skipping comment post. Diff is in the step summary."
+              exit 0
+            }
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH \
+              "/repos/${{ github.repository }}/issues/comments/$EXISTING" \
+              -f body="$BODY" || {
+                echo "::warning::sca-pr-gate: PATCH on existing comment failed; skipping. Diff is in the step summary."
+                exit 0
+              }
+          else
+            gh pr comment "$PR" --body "$BODY" || {
+              echo "::warning::sca-pr-gate: gh pr comment failed (likely a fork PR with restricted GITHUB_TOKEN); skipping. Diff is in the step summary."
+              exit 0
+            }
+          fi
+
+      - name: Fail on high-severity regressions
+        if: steps.diff.outputs.exit != '0'
+        run: |
+          echo "::error::SCA diff reports new high-severity findings — see PR comment for details."
+          exit 1

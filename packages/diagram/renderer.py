@@ -190,7 +190,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             if isinstance(data, dict):
                 data = data.get("paths") or data.get("attack_paths") or next(iter(data.values()), [])
             if isinstance(data, list) and data:
-                body = f"_Source: `attack-paths.json`_\n\n" + attack_paths.generate(data)
+                body = "_Source: `attack-paths.json`_\n\n" + attack_paths.generate(data)
                 sections.append(_section("Attack Paths", body))
         except Exception as exc:
             sections.append(_section("Attack Paths", f"> Could not render `attack-paths.json`: {exc}"))

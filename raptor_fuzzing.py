@@ -60,8 +60,28 @@ Examples:
 """,
     )
 
-    ap.add_argument("--binary", required=True, help="Path to binary to fuzz")
+    ap.add_argument("--binary", help="Path to binary to fuzz")
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
+    ap.add_argument(
+        "--prepare-corpus",
+        metavar="PROJECT_DIR",
+        help="Prepare a deterministic seed corpus from project fixtures and exit",
+    )
+    ap.add_argument(
+        "--seed-out",
+        help="Output directory for --prepare-corpus (default: out/fuzz_seeds_<project>)",
+    )
+    ap.add_argument(
+        "--seed-max-size",
+        type=int,
+        default=1024 * 1024,
+        help="Maximum seed file size in bytes for --prepare-corpus (default: 1048576)",
+    )
+    ap.add_argument(
+        "--seed-include-lockfiles",
+        action="store_true",
+        help="Allow lockfiles such as package-lock.json in prepared seed corpora",
+    )
     ap.add_argument("--duration", type=int, default=3600, help="Fuzzing duration in seconds (default: 3600)")
     ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
@@ -120,11 +140,87 @@ Examples:
              "flag only affects the secondary LLM-exploit "
              "Witnesses produced by ``CrashAnalysisAgent``.",
     )
+    ap.add_argument(
+        "--execute-exploits",
+        action="store_true",
+        help="Execute each LLM-emitted exploit against the fuzzed "
+             "binary inside the sandbox after compile-verify, then "
+             "thread the observed outcome (EXIT_SIGNAL / "
+             "SANITIZER_REPORT / NO_OBVIOUS_EFFECT / ...) into the "
+             "recorded Witness. DEFAULT OFF — actually running LLM-"
+             "generated code is a policy shift even with the "
+             "sandbox (Landlock + seccomp + namespaces + network "
+             "block). Enable when you want post-execution evidence "
+             "in the Witness manifest; pair with --no-network if "
+             "you want the strictest containment. Requires "
+             "compile-verify (cannot run without a binary), so "
+             "implicitly no-op when --no-verify-exploits is also "
+             "set. Per-exploit timeout: 5s by default; raise via "
+             "--execute-timeout if your exploits genuinely need "
+             "more wall-clock.",
+    )
+    ap.add_argument(
+        "--execute-timeout",
+        type=int,
+        default=5,
+        help="Per-exploit execution timeout in seconds (only "
+             "meaningful with --execute-exploits). Default 5s — "
+             "matches the long-dormant ``safe_test_exploit`` "
+             "default. Timeouts surface as outcome=UNKNOWN with "
+             "timed_out=True in the Witness detail.",
+    )
+    ap.add_argument(
+        "--execute-sanitizers",
+        type=str,
+        default="",
+        help="Comma-separated gcc sanitizer names to compile each "
+             "exploit with before execution (e.g. "
+             "``address,undefined``). Only meaningful with "
+             "--execute-exploits. When ``address`` is included, an "
+             "exploit that triggers a memory-safety bug surfaces as "
+             "WitnessOutcome.SANITIZER_REPORT (vs the bare "
+             "EXIT_SIGNAL you get from an unsanitised crash). "
+             "Allowlist matches ExploitValidator: address, undefined, "
+             "memory, thread, leak, kernel-address, hwaddress.",
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
+
+    if args.prepare_corpus:
+        from core.config import RaptorConfig
+        from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
+
+        source_dir = Path(args.prepare_corpus)
+        if args.seed_out:
+            seed_out = Path(args.seed_out)
+        else:
+            seed_out = RaptorConfig.get_out_dir() / f"fuzz_seeds_{source_dir.name}"
+        try:
+            manifest = prepare_seed_corpus(
+                SeedCorpusOptions(
+                    source_dir=source_dir,
+                    out_dir=seed_out,
+                    max_file_size=args.seed_max_size,
+                    include_lockfiles=args.seed_include_lockfiles,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to prepare seed corpus: {e}")
+            sys.exit(1)
+
+        print("Seed corpus prepared")
+        print(f"  source: {manifest['source_dir']}")
+        print(f"  output: {manifest['out_dir']}")
+        print(f"  seeds: {manifest['seed_count']}")
+        print(f"  skipped: {manifest['skipped_count']}")
+        print(f"  manifest: {Path(manifest['out_dir']) / 'manifest.json'}")
+        sys.exit(0)
+
+    if not args.binary:
+        ap.error("--binary is required unless --prepare-corpus is used")
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
@@ -465,6 +561,13 @@ Examples:
             verify_exploits=not args.no_verify_exploits,
             judge_intent=not args.no_judge_intent,
             record_witnesses=not args.no_record_witnesses,
+            execute_exploits=args.execute_exploits,
+            execute_timeout=args.execute_timeout,
+            execute_sanitizers=(
+                [s.strip() for s in args.execute_sanitizers.split(",")
+                 if s.strip()]
+                if args.execute_sanitizers else None
+            ),
         )
 
         # Initialize multi-turn analyser if autonomous mode
@@ -656,6 +759,38 @@ Examples:
     print(f"   Crashes: {crashes_dir}")
     print(f"   Analysis: {out_dir / 'analysis'}")
     print(f"   Exploits: {out_dir / 'analysis' / 'exploits'}")
+
+    # Witness summary — two stores in play here. The fuzz crashes
+    # are recorded under ``<out>/witnesses`` (source=fuzz) by the
+    # crash-collection step; the LLM-emitted exploits land under
+    # ``<out>/analysis/witnesses`` (source=llm_emit_run) by the
+    # ``CrashAnalysisAgent`` wiring. Surface both — operators don't
+    # care about the layout split, they care about the totals.
+    from core.reporting import render_witness_summary
+    fuzz_summary = render_witness_summary(out_dir / "witnesses")
+    llm_summary = render_witness_summary(out_dir / "analysis" / "witnesses")
+    if fuzz_summary or llm_summary:
+        print("")
+        if fuzz_summary:
+            print(f" Fuzz witnesses ({out_dir / 'witnesses'}):")
+            print(fuzz_summary)
+        if llm_summary:
+            print(f" LLM-exploit witnesses ({out_dir / 'analysis' / 'witnesses'}):")
+            print(llm_summary)
+
+    # ZKPoX eligibility — FREE surfacing (trigger model): pure
+    # classification of the witnesses we just recorded, no bundle
+    # assembly and no execution. Tells the operator how many
+    # witnesses could become zero-knowledge proof candidates — a
+    # pre-flight signal for whether installing the heavyweight
+    # proving stack would have anything to chew on. Discovery scans
+    # both run-local stores (<out>/witnesses + <out>/analysis/
+    # witnesses) in one pass.
+    from packages.zkpox import render_run_eligibility
+    elig = render_run_eligibility(out_dir)
+    if elig:
+        print("")
+        print(elig)
 
     # Save summary report
     report = {

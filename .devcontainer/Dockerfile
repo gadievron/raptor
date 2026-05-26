@@ -9,7 +9,7 @@ FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
 # The base image's `node` devcontainer-feature install path added a stale
 # yarn apt source (NO_PUBKEY 62D54FD4003F6525, breaks apt-get update) AND
 # the yarn 1.x package itself (/usr/bin/yarn). Remove both so the later
-# `npm install -g yarn` step doesn't collide on aarch64 builds.
+# `npm install -g yarn@1.22.22` step doesn't collide on aarch64 builds.
 RUN rm -f /etc/apt/sources.list.d/yarn.list \
     && (apt-get -y remove yarn || echo "yarn not installed - skipping removal")
 
@@ -77,7 +77,7 @@ RUN pip install --no-cache-dir semgrep==1.161.0
 # NOTE: Requires --privileged container flag and kernel parameter configuration
 # ============================================================================
 
-RUN apt-get update && apt-get install -y --no-install-recommends rr \
+RUN apt-get update && apt-get install -y --no-install-recommends rr=5.9.0-9 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     || echo "rr not available on this architecture - skipping"
 
@@ -139,7 +139,7 @@ RUN apt-get update \
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
     && bash /tmp/nodesource_setup.sh \
     && rm /tmp/nodesource_setup.sh \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends nodejs=24.15.0+dfsg+~cs24.12.2-1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code@2.1.119
 
@@ -147,7 +147,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
-RUN npm install -g yarn pnpm
+RUN npm install -g yarn@1.22.22 pnpm@11.3.0
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

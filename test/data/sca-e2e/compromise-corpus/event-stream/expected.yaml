@@ -1,0 +1,11 @@
+# Detection requirements for the event-stream / flatmap-stream
+# compromise (Nov 2018).
+#
+# event-stream@3.3.6 itself was published normally, but its
+# transitive dep flatmap-stream@0.1.1 carried bitcoin-wallet
+# stealer payload targeting Copay. We assert vuln_dep on the
+# direct dep — OSV's record covers event-stream as well.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: medium

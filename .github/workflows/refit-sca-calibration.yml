@@ -1,0 +1,216 @@
+name: Refit SCA risk-score multipliers
+
+# Auto-PR refit of the multiplier constants in
+# ``packages/sca/risk.py`` based on the calibration corpus's
+# project-sample findings.
+#
+# Pipeline (per run):
+#   1. Validate the corpus — read latest verdict.
+#   2. If verdict is needs_retune (or workflow_dispatch invoked),
+#      run libexec/raptor-sca-refit-calibration --apply.
+#   3. If risk.py changed, commit + open auto-PR with diff +
+#      report.
+#
+# Cadence: monthly. Per-constant grid search reads project
+# samples and recomputes precision; cheap (no network), but
+# month-over-month tracking is appropriate for a slow-moving
+# threat-landscape corpus.
+#
+# Doesn't auto-merge — weight changes are operator-reviewed.
+
+on:
+  schedule:
+    # 5th of each month, 06:00 UTC. Spread across the month from
+    # the data-refresh workflows (1st = project samples; Tuesdays
+    # = ground-truth signals); refit runs after the corpus has had
+    # a chance to settle from those refreshes.
+    - cron: '0 6 5 * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force refit even if validation says validated_v1'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: refit-sca-calibration
+  cancel-in-progress: false
+
+jobs:
+  refit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.12'
+
+      - name: Install minimal deps
+        # Pure-Python refit — no numpy / sklearn. Just whatever
+        # the SCA package itself needs to import (urllib3 etc.).
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          pip install 'urllib3==2.7.0,<3.0'
+
+      - name: Validate corpus
+        # Re-run validation to get the latest verdict. If it's
+        # validated_v1 AND the operator didn't pass --force, we
+        # skip the refit (no change needed). If needs_retune /
+        # unverified, proceed.
+        id: validate
+        env:
+          _RAPTOR_TRUSTED: '1'
+        run: |
+          set +e
+          packages/sca/scripts/raptor-sca-validate-corpus
+          # Re-read the report to extract the verdict for gating.
+          python <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, glob, os, sys
+          paths = sorted(
+              glob.glob('packages/sca/data/calibration/validation/*.json'),
+              reverse=True,
+          )
+          verdict = "unverified"
+          for p in paths:
+              try:
+                  data = json.loads(open(p).read())
+              except Exception:
+                  continue
+              if isinstance(data, dict) and isinstance(
+                      data.get("verdict"), str):
+                  verdict = data["verdict"]
+                  break
+          print(f"verdict={verdict}")
+          EOF
+
+      - name: Decide whether to refit
+        id: gate
+        # Pass GHA expressions via ``env:`` instead of interpolating
+        # directly into the shell script — defends against shell
+        # injection if either ``steps.validate.outputs.verdict`` or
+        # ``inputs.force`` ever carries shell metacharacters. Today
+        # both are operator-controlled via ``workflow_dispatch``,
+        # but the canonical pattern is to use ``env:`` always.
+        # See GitHub docs:
+        # https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
+        env:
+          VERDICT: ${{ steps.validate.outputs.verdict }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -eu
+          if [ "$FORCE" = "true" ]; then
+            echo "should_refit=true" >> "$GITHUB_OUTPUT"
+            echo "  → forcing refit (workflow_dispatch input)"
+          elif [ "$VERDICT" = "needs_retune" ] \
+              || [ "$VERDICT" = "unverified" ]; then
+            echo "should_refit=true" >> "$GITHUB_OUTPUT"
+            echo "  → verdict $VERDICT triggers refit"
+          else
+            echo "should_refit=false" >> "$GITHUB_OUTPUT"
+            echo "  → verdict $VERDICT; refit skipped"
+          fi
+
+      - name: Refit + apply
+        if: steps.gate.outputs.should_refit == 'true'
+        env:
+          _RAPTOR_TRUSTED: '1'
+        # ``--apply`` writes the proposed multiplier values back
+        # to packages/sca/risk.py if the improvement gate passes.
+        # Exit codes:
+        #   0  proposed + applied
+        #   1  rejected (no improvement)
+        #   2  insufficient_samples
+        #   3  error
+        # We don't fail the workflow on rejected/insufficient —
+        # the report still ships.
+        run: |
+          set +e
+          libexec/raptor-sca-refit-calibration --apply
+          rc=$?
+          echo "refit exit: $rc"
+          # Only exit 3 (genuine error) should fail the workflow.
+          if [ $rc -eq 3 ]; then
+            exit 1
+          fi
+
+      - name: Diff?
+        if: steps.gate.outputs.should_refit == 'true'
+        id: diff
+        run: |
+          if git diff --quiet -- \
+              packages/sca/risk.py \
+              packages/sca/data/calibration/refit/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit + push to refit branch
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          BRANCH="auto/sca-calibration-refit"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add packages/sca/risk.py \
+                  packages/sca/data/calibration/refit/
+          git commit -m "chore(sca): refit risk-score multipliers
+
+          Auto-generated by .github/workflows/refit-sca-calibration.yml.
+          Per-constant grid search over packages/sca/risk.py multipliers
+          against the calibration corpus's project samples; ships only
+          if joint top-20 precision improvement clears 5 percentage
+          points. See packages/sca/data/calibration/refit/<date>.json
+          for per-constant deltas."
+          git push --force origin "$BRANCH"
+
+      - name: Create or update PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          BRANCH="auto/sca-calibration-refit"
+          BODY=$(cat <<'EOF'
+          Auto-PR from `.github/workflows/refit-sca-calibration.yml`.
+
+          Per-constant grid search over `packages/sca/risk.py`'s
+          multiplier constants. Each constant tested at ±10% of its
+          current value against the calibration corpus's project
+          samples; the variant maximising top-20 precision wins.
+          Joint improvement gate: ≥5 percentage points or no ship.
+
+          Review checklist:
+          - [ ] `packages/sca/data/calibration/refit/<date>.json`
+                shows the per-constant deltas + precision metrics
+          - [ ] Joint precision improvement clears 5%
+          - [ ] No constant moved more than 10% from its previous
+                value (the workflow enforces, but spot-check the
+                diff)
+          - [ ] Existing risk-scoring tests still pass post-refit
+
+          Sources: same calibration corpus (KEV / EPSS / EDB / MSF /
+          GitHub PoC + OSS project samples) the validate workflow
+          uses.
+          EOF
+          )
+          if ! gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(sca): refit risk-score multipliers" \
+              --body "$BODY"
+          else
+            gh pr edit "$BRANCH" --body "$BODY"
+          fi

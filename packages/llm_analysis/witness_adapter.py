@@ -49,6 +49,8 @@ def witness_from_exploit(
     intent_confidence: Optional[float] = None,
     target_source_path: Optional[Path] = None,
     target_binary_path: Optional[Path] = None,
+    executed_outcome: Optional[WitnessOutcome] = None,
+    executed_detail: Optional[dict] = None,
     produced_by: str = "agentic",
 ) -> tuple[Witness, bytes]:
     """Wrap an LLM-emitted exploit as a ``Witness`` + the raw bytes.
@@ -81,6 +83,14 @@ def witness_from_exploit(
     when the LLM-emitted exploit was synthesised against a built
     target (e.g. crash-agent's path from a fuzz crash). The
     ``/agentic`` path normally has source only, no binary.
+
+    ``executed_outcome`` overrides the default ``NOT_RUN`` when the
+    caller actually ran the exploit (the PR E path:
+    ``--execute-exploits`` is on, ``compile_and_execute`` returned an
+    outcome). ``executed_detail`` (when present) merges into
+    ``outcome_detail`` so the executed signal / sanitizer / blocked
+    fields land alongside the compile + intent-match verdicts.
+    Default ``None`` keeps the legacy NOT_RUN behaviour.
     """
     data = exploit_code.encode("utf-8", errors="replace")
     bytes_hash = compute_bytes_hash(data)
@@ -100,6 +110,12 @@ def witness_from_exploit(
         outcome_detail["intent_verdict"] = intent_verdict
     if intent_confidence is not None:
         outcome_detail["intent_confidence"] = intent_confidence
+    if executed_detail:
+        # Executed-side fields don't collide with the compile/
+        # intent-match keys above; merge in directly. Caller is
+        # responsible for not stuffing huge payloads here — keep
+        # the manifest readable.
+        outcome_detail.update(executed_detail)
 
     target_source_hash: Optional[str] = None
     if target_source_path is not None and target_source_path.is_file():
@@ -109,11 +125,16 @@ def witness_from_exploit(
     if target_binary_path is not None and target_binary_path.is_file():
         target_binary_hash = sha256_file(target_binary_path)
 
+    observed_outcome = (
+        executed_outcome if executed_outcome is not None
+        else WitnessOutcome.NOT_RUN
+    )
+
     witness = Witness(
         bytes_hash=bytes_hash,
         bytes_len=len(data),
         source=WitnessSource.LLM_EMIT_RUN,
-        observed_outcome=WitnessOutcome.NOT_RUN,
+        observed_outcome=observed_outcome,
         outcome_detail=outcome_detail,
         target_binary_hash=target_binary_hash,
         target_source_hash=target_source_hash,

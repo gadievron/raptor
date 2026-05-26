@@ -1,364 +1,228 @@
-"""
-CBOR disclosure bundle producer + parser.
+"""ZKPoX Tier 0/1 — prover-ready bundle assembly.
 
-Schema follows proposal §8 (`docs/proposals/raptor-zkpox-design.md`)
-with one deliberate deviation: the `vendor_envelope` substructure
-exposes our three layered ciphertexts directly (`aes_blob`, `ct_K_age`,
-`ct_K_tlock`) rather than collapsing them into a single opaque
-`ciphertext` field. The proposal's "ciphertext: <bstr>" framing was
-abstract; we make the layering visible so verifiers can reason about
-which decrypt path was used.
+Once a witness is eligible (see :mod:`packages.zkpox.eligibility`),
+the bundle is the stable hand-off shape that every higher tier
+(1.5 reproduction, 2 RISC-V, 3 SP1) consumes. Assembly is **on
+request** in the design's trigger model — it produces a persistent
+artifact on disk, so the operator asks for it rather than getting
+it automatically.
 
-Sigstore Rekor anchoring (the `timestamp` field) is Phase 1.4. In 1.3
-the field is omitted entirely from the bundle; producers and parsers
-treat it as optional.
+A bundle gathers everything a prover needs *about* the claim:
 
-Every bytestring field is encoded as CBOR major type 2 (bstr). Hashes
-are stored as the `sha256:HEX` string convention from the proposal
-rather than raw 32-byte bstr — easier to log, copy-paste, and grep.
+  * the witness bytes (the secret the ZK tiers will hide; held in
+    the clear at Tier 0/1),
+  * the target artefact hashes (binary / source),
+  * the observed outcome + detail,
+  * provenance (source pipeline, produced_by, timestamp),
+  * a Tier-1 attestation: the structured claim itself.
+
+A bundle is NOT a proof. Tier 0/1 is attestation-only — "I assert
+this". The cryptographic strength comes at Tier 3. The bundle is
+the substrate the prover reads.
+
+The full tier model lives in the package docstring
+(``packages/zkpox/__init__.py``).
 """
 
 from __future__ import annotations
 
-import hashlib
-from dataclasses import dataclass, field
+import json
+import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
-import cbor2  # type: ignore[import-untyped]
+from core.witness.store import WitnessStore
+from core.witness.types import Witness
 
-from .envelope import Envelope
-
-
-BUNDLE_VERSION = "zkpox-1.0"
-ENVELOPE_SCHEME = "zkpox-aes256gcm+age+tlock-drand-quicknet/v1"
+from packages.zkpox.eligibility import is_zkpox_eligible
 
 
-# ---------------------------------------------------------------------------
-# Dataclasses mirroring the schema
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class Target:
-    kind: str           # "elf" | "wasm" | "evm" | "llvm-ir"
-    hash: str           # "sha256:HEX"
-    url: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+# A witness identity is always a sha256 hex digest. We use it as a
+# path component (bundle dir name), so anything that isn't a clean
+# 64-char lowercase hex string is rejected — a corrupt / malicious
+# value containing ``/`` or ``..`` must never reach ``Path(...)``
+# where it could escape the output tree. Honest data always matches.
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
-@dataclass(frozen=True)
-class Vulnerability:
-    cls: str            # "memory-safety" | "cfi" | "info-leak" | "evm-*"
-    gadget_id: str      # e.g. "memory-safety::oob-write@1.0.0"
-    gadget_id_hash: str # "sha256:HEX" — commits to the gadget IDENTIFIER
-                        # string (not yet the source). Phase 1.5.x will
-                        # add a separate `gadget_code_hash` that commits
-                        # to the gadget implementation; see
-                        # docs/zkpox-scope.md.
-    leaked_fields: list[str] = field(default_factory=list)
+class ZKPoXBundleError(Exception):
+    """Raised when a bundle can't be assembled (ineligible witness,
+    missing bytes, etc.)."""
 
 
-@dataclass(frozen=True)
-class Proof:
-    system: str         # e.g. "sp1-stark-core/v6.1.0", "sp1-groth16-bn254/v6.1.0"
-    bytes: bytes        # raw proof artefact (the SP1 SDK's saved proof bytes)
-    verifier_key_hash: str  # "sha256:HEX"
+def _require_clean_hash(witness_hash: str) -> None:
+    """Reject a witness_hash that isn't a bare sha256 hex digest.
 
-
-@dataclass(frozen=True)
-class HarnessRef:
-    git_url: str | None
-    rev: str | None
-    hash: str           # "sha256:HEX" — locks the harness binary
-
-
-@dataclass(frozen=True)
-class VendorEnvelope:
-    """Layered vendor + time-lock envelope. Three ciphertexts:
-
-    - aes_blob:    nonce || AES-256-GCM(witness, K)        (see envelope.aes_*)
-    - ct_K_age:    K encrypted to the vendor's age pubkey  (vendor decrypt path)
-    - ct_K_tlock:  K encrypted to a Drand future round     (time-lock decrypt path)
+    Defends the path construction in :func:`write_bundle` against
+    traversal: the hash is used as a directory name, so a value
+    with ``..`` / ``/`` segments could otherwise ``mkdir`` outside
+    the intended output tree.
     """
-
-    scheme: str
-    aes_blob: bytes
-    ct_K_age: bytes
-    ct_K_tlock: bytes
-    drand_round_min: int | None
-    vendor_pubkey: str
-    vendor_pubkey_fingerprint: str  # sha256 hex of the pubkey string
+    if not isinstance(witness_hash, str) or not _SHA256_HEX.match(witness_hash):
+        raise ZKPoXBundleError(
+            f"witness_hash {witness_hash!r} is not a sha256 hex "
+            f"digest; refusing to use it as a path component"
+        )
 
 
-@dataclass(frozen=True)
-class Researcher:
-    pubkey: str | None              # researcher's signing pubkey
-    signature_over_bundle: bytes | None
-    contact: str | None             # email / link; can be None for anonymity
+@dataclass
+class ZKPoXBundle:
+    """A Tier 0/1 prover-ready bundle for one witness.
 
-
-@dataclass(frozen=True)
-class Bundle:
-    version: str
-    target: Target
-    vulnerability: Vulnerability
-    proof: Proof
-    harness: HarnessRef
-    vendor_envelope: VendorEnvelope
-    researcher: Researcher | None = None
-    timestamp: "Timestamp | None" = None
-    # Beta-feature marker. True for every bundle this code writes; the
-    # verifier prints a loud banner whenever it sees True. Once the
-    # proof system / bundle format / verifier all stabilise (Phase 1.6+)
-    # this flips to False at producer side. `_from_dict` defaults to
-    # True on absent so old bundles without the field still warn —
-    # better to false-warn than silently skip the marker.
-    experimental: bool = True
-
-
-@dataclass(frozen=True)
-class Timestamp:
-    """Sigstore Rekor anchor binding the bundle hash to a moment in time.
-
-    The bundle hash this binds to is `bundle_hash_pre_timestamp(bundle)` —
-    a canonical-CBOR hash of the bundle with `timestamp` omitted. That
-    lets the Timestamp be added *after* signing/serialising the rest of
-    the bundle without invalidating the binding.
-
-    Field semantics mirror Rekor's response shape (the `verification`
-    block of POST /api/v1/log/entries). `inclusion_proof_hashes` is the
-    Merkle path from our entry up to the tree root; combined with
-    `inclusion_proof_root_hash` + `inclusion_proof_tree_size` it lets a
-    verifier reconstruct and check the path.
+    ``tier`` starts at ``"0/1"`` (attestation). The reproduction
+    step (Tier 1.5) upgrades a persisted bundle by attaching a
+    ``reproduction`` block and bumping ``tier`` — this dataclass
+    carries the slot but leaves it ``None`` at assembly time.
     """
+    witness_hash: str
+    witness_len: int
+    source: str               # WitnessSource value
+    observed_outcome: str     # WitnessOutcome value
+    outcome_detail: Dict[str, Any]
+    target_binary_hash: Optional[str]
+    target_source_hash: Optional[str]
+    produced_by: Optional[str]
+    timestamp: Optional[str]
+    attestation: Dict[str, Any]
+    tier: str = "0/1"
+    reproduction: Optional[Dict[str, Any]] = None
 
-    rekor_log_index: int
-    rekor_log_id: str            # sha256 hex of Rekor's log public key
-    integrated_time: int          # Unix seconds the entry was integrated
-    entry_uuid: str               # Rekor's per-entry UUID
-    inclusion_proof_root_hash: str  # hex of the tree root at integration
-    inclusion_proof_tree_size: int
-    inclusion_proof_hashes: list[str]  # Merkle path, hex per node
-
-
-# ---------------------------------------------------------------------------
-# Hashing helpers
-# ---------------------------------------------------------------------------
-
-def sha256_file(path: Path) -> str:
-    """Stream-hash a file; return the proposal's `sha256:HEX` form."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(64 * 1024), b""):
-            h.update(chunk)
-    return f"sha256:{h.hexdigest()}"
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
-def sha256_bytes(data: bytes) -> str:
-    return f"sha256:{hashlib.sha256(data).hexdigest()}"
-
-
-# ---------------------------------------------------------------------------
-# Producer
-# ---------------------------------------------------------------------------
-
-def vendor_envelope_from(
-    envelope: Envelope,
-    *,
-    vendor_pubkey: str,
-    drand_round_min: int | None = None,
-) -> VendorEnvelope:
-    """Wrap a raw :class:`Envelope` into the bundle's typed substructure.
-
-    Computes the vendor pubkey fingerprint (sha256 of the public-key
-    string). drand_round_min is informational; the tle blob already
-    binds the actual round.
-    """
-    return VendorEnvelope(
-        scheme=ENVELOPE_SCHEME,
-        aes_blob=envelope.aes_blob,
-        ct_K_age=envelope.ct_K_age,
-        ct_K_tlock=envelope.ct_K_tlock,
-        drand_round_min=drand_round_min,
-        vendor_pubkey=vendor_pubkey,
-        vendor_pubkey_fingerprint=sha256_bytes(vendor_pubkey.encode()),
+def _build_attestation(witness: Witness) -> Dict[str, Any]:
+    """The Tier-1 claim, stated plainly. No crypto — this is the
+    assertion a Tier-3 proof would later make zero-knowledge."""
+    target = witness.target_binary_hash or witness.target_source_hash
+    target_kind = (
+        "binary" if witness.target_binary_hash else "source"
     )
-
-
-# ---------------------------------------------------------------------------
-# CBOR encode / decode
-# ---------------------------------------------------------------------------
-
-def to_cbor(bundle: Bundle) -> bytes:
-    return cbor2.dumps(_to_dict(bundle))
-
-
-def from_cbor(blob: bytes) -> Bundle:
-    return _from_dict(cbor2.loads(blob))
-
-
-def bundle_hash_pre_timestamp(bundle: Bundle) -> bytes:
-    """Canonical-CBOR sha256 of the bundle with timestamp set to None.
-
-    This is the hash a Sigstore Rekor anchor binds: anchoring happens
-    AFTER everything else but BEFORE the timestamp field is filled, so
-    we compute the hash with timestamp excluded. The producer
-    (anchor.py) signs this hash; the verifier checks
-    sha256(canonical_cbor(bundle with timestamp=None)) matches what
-    Rekor recorded.
-
-    Uses cbor2's `canonical=True` encoder for deterministic
-    serialisation: map keys sorted by length-then-bytewise per
-    RFC 8949 §4.2.1.
-    """
-    pre = bundle if bundle.timestamp is None else _replace_timestamp(bundle, None)
-    return hashlib.sha256(cbor2.dumps(_to_dict(pre), canonical=True)).digest()
-
-
-def _replace_timestamp(bundle: Bundle, ts: "Timestamp | None") -> Bundle:
-    """Functional update — `dataclasses.replace` would also work, but
-    Bundle is frozen so we go the long way for clarity."""
-    return Bundle(
-        version=bundle.version,
-        target=bundle.target,
-        vulnerability=bundle.vulnerability,
-        proof=bundle.proof,
-        harness=bundle.harness,
-        vendor_envelope=bundle.vendor_envelope,
-        researcher=bundle.researcher,
-        timestamp=ts,
-        experimental=bundle.experimental,
-    )
-
-
-def with_timestamp(bundle: Bundle, ts: "Timestamp") -> Bundle:
-    """Return a copy of `bundle` with its timestamp field set. Useful
-    after anchor.anchor_bundle(...) returns a Timestamp."""
-    return _replace_timestamp(bundle, ts)
-
-
-def _to_dict(bundle: Bundle) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "version": bundle.version,
-        "experimental": bundle.experimental,
-        "target": {
-            "kind": bundle.target.kind,
-            "hash": bundle.target.hash,
-            "metadata": dict(bundle.target.metadata),
-        },
-        "vulnerability": {
-            "class": bundle.vulnerability.cls,
-            "gadget_id": bundle.vulnerability.gadget_id,
-            "gadget_id_hash": bundle.vulnerability.gadget_id_hash,
-            "leaked_fields": list(bundle.vulnerability.leaked_fields),
-        },
-        "proof": {
-            "system": bundle.proof.system,
-            "bytes": bundle.proof.bytes,
-            "verifier_key_hash": bundle.proof.verifier_key_hash,
-        },
-        "harness": {
-            "git_url": bundle.harness.git_url,
-            "rev": bundle.harness.rev,
-            "hash": bundle.harness.hash,
-        },
-        "vendor_envelope": {
-            "scheme": bundle.vendor_envelope.scheme,
-            "aes_blob": bundle.vendor_envelope.aes_blob,
-            "ct_K_age": bundle.vendor_envelope.ct_K_age,
-            "ct_K_tlock": bundle.vendor_envelope.ct_K_tlock,
-            "drand_round_min": bundle.vendor_envelope.drand_round_min,
-            "vendor_pubkey": bundle.vendor_envelope.vendor_pubkey,
-            "vendor_pubkey_fingerprint": bundle.vendor_envelope.vendor_pubkey_fingerprint,
-        },
+    return {
+        "claim": (
+            f"input with sha256 {witness.bytes_hash} makes the "
+            f"{target_kind} artefact (sha256 {target}) exhibit "
+            f"outcome {witness.observed_outcome.value}"
+        ),
+        "witness_bytes_sha256": witness.bytes_hash,
+        "target_artefact_sha256": target,
+        "target_artefact_kind": target_kind,
+        "observed_outcome": witness.observed_outcome.value,
+        "attestation_only": True,
+        "note": (
+            "Tier 0/1 attestation — asserted, not proven. "
+            "Cryptographic proof requires Tier 3 (SP1)."
+        ),
     }
-    if bundle.target.url is not None:
-        payload["target"]["url"] = bundle.target.url
-    if bundle.researcher is not None:
-        payload["researcher"] = {
-            "pubkey": bundle.researcher.pubkey,
-            "signature_over_bundle": bundle.researcher.signature_over_bundle,
-            "contact": bundle.researcher.contact,
-        }
-    if bundle.timestamp is not None:
-        ts = bundle.timestamp
-        payload["timestamp"] = {
-            "rekor_log_index": ts.rekor_log_index,
-            "rekor_log_id": ts.rekor_log_id,
-            "integrated_time": ts.integrated_time,
-            "entry_uuid": ts.entry_uuid,
-            "inclusion_proof_root_hash": ts.inclusion_proof_root_hash,
-            "inclusion_proof_tree_size": ts.inclusion_proof_tree_size,
-            "inclusion_proof_hashes": list(ts.inclusion_proof_hashes),
-        }
-    return payload
 
 
-def _from_dict(d: dict[str, Any]) -> Bundle:
-    target_d = d["target"]
-    vuln_d = d["vulnerability"]
-    proof_d = d["proof"]
-    harness_d = d["harness"]
-    env_d = d["vendor_envelope"]
-    researcher_d = d.get("researcher")
-    timestamp_d = d.get("timestamp")
-    return Bundle(
-        # Default True on absent: a bundle without the field is from an
-        # older pre-marker producer, treat it as experimental rather
-        # than silently dropping the warning.
-        experimental=bool(d.get("experimental", True)),
-        version=d["version"],
-        target=Target(
-            kind=target_d["kind"],
-            hash=target_d["hash"],
-            url=target_d.get("url"),
-            metadata=dict(target_d.get("metadata", {})),
+def assemble_bundle(
+    witness: Witness,
+    store: WitnessStore,
+) -> ZKPoXBundle:
+    """Assemble a Tier 0/1 bundle for ``witness``.
+
+    Raises :class:`ZKPoXBundleError` if the witness is ineligible
+    or its bytes blob is missing from ``store`` (can't assemble a
+    bundle whose subject bytes we can't retrieve).
+
+    The bytes themselves are NOT inlined into the returned bundle
+    object (they may be large); :func:`write_bundle` copies the
+    blob alongside the manifest on persist.
+    """
+    _require_clean_hash(witness.bytes_hash)
+
+    verdict = is_zkpox_eligible(witness)
+    if not verdict.eligible:
+        raise ZKPoXBundleError(
+            f"witness {witness.bytes_hash[:16]} ineligible: "
+            f"{verdict.reason}"
+        )
+
+    # Confirm the bytes are retrievable — a bundle for bytes we
+    # can't produce is useless to a prover.
+    if store.blob_path(witness.bytes_hash) is None:
+        raise ZKPoXBundleError(
+            f"witness {witness.bytes_hash[:16]} bytes blob missing "
+            f"from store; cannot assemble bundle"
+        )
+
+    return ZKPoXBundle(
+        witness_hash=witness.bytes_hash,
+        witness_len=witness.bytes_len,
+        source=witness.source.value,
+        observed_outcome=witness.observed_outcome.value,
+        outcome_detail=(
+            dict(witness.outcome_detail)
+            if isinstance(witness.outcome_detail, dict) else {}
         ),
-        vulnerability=Vulnerability(
-            cls=vuln_d["class"],
-            gadget_id=vuln_d["gadget_id"],
-            gadget_id_hash=vuln_d["gadget_id_hash"],
-            leaked_fields=list(vuln_d.get("leaked_fields", [])),
-        ),
-        proof=Proof(
-            system=proof_d["system"],
-            bytes=proof_d["bytes"],
-            verifier_key_hash=proof_d["verifier_key_hash"],
-        ),
-        harness=HarnessRef(
-            git_url=harness_d.get("git_url"),
-            rev=harness_d.get("rev"),
-            hash=harness_d["hash"],
-        ),
-        vendor_envelope=VendorEnvelope(
-            scheme=env_d["scheme"],
-            aes_blob=env_d["aes_blob"],
-            ct_K_age=env_d["ct_K_age"],
-            ct_K_tlock=env_d["ct_K_tlock"],
-            drand_round_min=env_d.get("drand_round_min"),
-            vendor_pubkey=env_d["vendor_pubkey"],
-            vendor_pubkey_fingerprint=env_d["vendor_pubkey_fingerprint"],
-        ),
-        researcher=(
-            None
-            if researcher_d is None
-            else Researcher(
-                pubkey=researcher_d.get("pubkey"),
-                signature_over_bundle=researcher_d.get("signature_over_bundle"),
-                contact=researcher_d.get("contact"),
-            )
-        ),
+        target_binary_hash=witness.target_binary_hash,
+        target_source_hash=witness.target_source_hash,
+        produced_by=witness.produced_by,
         timestamp=(
-            None
-            if timestamp_d is None
-            else Timestamp(
-                rekor_log_index=int(timestamp_d["rekor_log_index"]),
-                rekor_log_id=timestamp_d["rekor_log_id"],
-                integrated_time=int(timestamp_d["integrated_time"]),
-                entry_uuid=timestamp_d["entry_uuid"],
-                inclusion_proof_root_hash=timestamp_d["inclusion_proof_root_hash"],
-                inclusion_proof_tree_size=int(timestamp_d["inclusion_proof_tree_size"]),
-                inclusion_proof_hashes=list(timestamp_d.get("inclusion_proof_hashes", [])),
-            )
+            witness.timestamp.isoformat()
+            if witness.timestamp is not None else None
         ),
+        attestation=_build_attestation(witness),
     )
+
+
+def write_bundle(
+    bundle: ZKPoXBundle,
+    store: WitnessStore,
+    out_dir: Path,
+) -> Path:
+    """Persist a bundle under ``out_dir/zkpox/<witness_hash>/``.
+
+    Layout mirrors the WitnessStore convention:
+
+        <out_dir>/zkpox/<witness_hash>/
+            manifest.json      # the ZKPoXBundle
+            witness.bin        # the raw witness bytes (copied from store)
+
+    Returns the bundle directory path. The bytes are copied so the
+    bundle is self-contained — a prover (or an operator handing the
+    bundle off) doesn't need the original WitnessStore.
+    """
+    # Re-validate before using the hash as a path component — a
+    # caller could have mutated bundle.witness_hash after assembly.
+    _require_clean_hash(bundle.witness_hash)
+    bundle_dir = Path(out_dir) / "zkpox" / bundle.witness_hash
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy the witness bytes into the bundle (self-contained).
+    data = store.get_bytes(bundle.witness_hash)
+    (bundle_dir / "witness.bin").write_bytes(data)
+
+    manifest_path = bundle_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(bundle.as_dict(), indent=2),
+        encoding="utf-8",
+    )
+    return bundle_dir
+
+
+def render_bundle(bundle: ZKPoXBundle) -> str:
+    """Console-friendly one-block view of a bundle."""
+    lines = [
+        f"ZKPoX bundle (tier {bundle.tier}):",
+        f"   witness:  {bundle.witness_hash[:16]}... "
+        f"({bundle.witness_len}B, source={bundle.source})",
+        f"   outcome:  {bundle.observed_outcome}",
+        "   target:   "
+        + (
+            f"binary {bundle.target_binary_hash[:16]}..."
+            if bundle.target_binary_hash
+            else f"source {bundle.target_source_hash[:16]}..."
+            if bundle.target_source_hash else "none"
+        ),
+        f"   claim:    {bundle.attestation['claim']}",
+    ]
+    if bundle.reproduction is not None:
+        rep = bundle.reproduction
+        lines.append(
+            f"   reproduced: {rep.get('reproduced')} "
+            f"({rep.get('runs')} runs)"
+        )
+    return "\n".join(lines)

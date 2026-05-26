@@ -1,0 +1,246 @@
+name: SCA-gated self-bump
+
+# Weekly self-update: runs raptor-sca against the repo's own dep
+# surfaces and opens a single PR with every Clean-verdict bump.
+#
+# Two complementary passes, both fully mechanical (--no-llm):
+#
+#   1. ``raptor-sca fix --harden`` on Python / Debian apt / npm
+#      tooling pins — pins / bumps every
+#      loose dep in requirements.txt and requirements-dev.txt to the
+#      highest version that passes the full SCA signal set (OSV vulns,
+#      KEV, EPSS, yanked-version detection, license diff, hygiene
+#      checks, supply-chain checks incl. install hooks / typo-squat /
+#      compromised-package feed / maintainer-change / binary-capability
+#      delta, version-diff size, function-level reachability).
+#      ``--self-test`` runs SCA again on the patched worktree to verify
+#      the patch actually reduces findings before emitting it.
+#
+#   2. ``raptor-sca bump`` on non-manifest surfaces — Dockerfile ARG
+#      pins, Dockerfile FROM image refs, ``RUN pip install pkg==N``
+#      inline pins, GHA workflow ``uses:`` refs, k8s/compose/gitlab-ci
+#      ``image:`` refs, Helm Chart.yaml deps, git submodules. Same SCA
+#      signal set; ``--apply`` writes only Clean verdicts in place,
+#      Review/Block leave a comment for operator triage.
+#
+# Both passes are no-LLM (mechanical signals only) so CI doesn't
+# depend on any API keys.
+#
+# Auth surface: needs ``contents: write`` + ``pull-requests: write``
+# to open the bump PR. Same surface as Dependabot. Auto-merge is
+# deliberately NOT enabled — operator reviews the PR before merging.
+#
+# Branch-protection assumption: this workflow's safety relies on
+# ``main`` having branch protection that requires PR review before
+# merge. The Megalodon attack (May 2026) compromised 5,500 repos
+# via "direct Poisoned Pipeline Execution" — pushing malicious
+# workflow YAML directly to ``main`` on repos that didn't enforce
+# review. If you copy this workflow into a repo without branch
+# protection, you've removed the operator-review gate that prevents
+# a compromised bot identity from auto-merging its own bump.
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'    # Monday 12:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write           # to push the sca-self-bump branch
+  pull-requests: write      # to open / update the PR
+
+concurrency:
+  group: sca-self-bump
+  cancel-in-progress: false
+
+jobs:
+  self-bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          fetch-depth: 1
+          # The harden --self-test runs every git op (stash / worktree /
+          # apply) through RAPTOR's read-restricted sandbox
+          # (restrict_reads=True — see harden.py). actions/checkout's
+          # default persist-credentials writes an auth config into
+          # .git/config that references a token file under RUNNER_TEMP;
+          # the sandbox correctly denies reading it (credential-exfil
+          # surface — exactly what the Landlock warning flags), so
+          # ``git stash create`` aborts with "bad config line 12 in
+          # .git/config". The harden / bump passes are all local git ops
+          # needing no credentials, so keep the token out of .git/config.
+          # The final push authenticates explicitly via GH_TOKEN instead.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install RAPTOR + deps
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Phase 1 — harden Python / Debian / npm manifests
+        id: harden
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # higher rate limits for OSV / GitHub queries
+        run: |
+          set -euo pipefail
+          # Subcommand: ``raptor-sca fix --harden`` — verified via
+          # ``bin/raptor-sca --help`` against the simulation findings
+          # 2026-05-20. ``--git-patch`` emits ``upgrade.patch``
+          # alongside ``candidates.json`` + ``report.md`` in the
+          # output dir. ``--self-test`` re-runs SCA against the
+          # patched worktree to confirm findings reduced before
+          # emitting. ``--no-llm`` keeps the run mechanical-only
+          # (no API keys in CI). NO ``--ecosystems`` filter — we
+          # want the bump to cover Python (requirements.txt),
+          # Debian (apt-installed in devcontainer), and npm
+          # (yarn / pnpm in devcontainer).
+          rm -rf /tmp/sca-harden-out
+          bin/raptor-sca fix . --harden \
+            --out /tmp/sca-harden-out \
+            --git-patch \
+            --self-test \
+            --no-llm
+          if [[ -s /tmp/sca-harden-out/upgrade.patch ]]; then
+            echo "patch_present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "patch_present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply harden patch
+        if: steps.harden.outputs.patch_present == 'true'
+        run: git apply --verbose /tmp/sca-harden-out/upgrade.patch
+
+      - name: Phase 2 — bump non-manifest surfaces
+        id: bump
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ``--apply`` writes Clean-verdict bumps in place. Review /
+          # Block verdicts are never auto-applied — they surface in
+          # the report only.
+          bin/raptor-sca bump . \
+            --apply \
+            --pr-comment \
+            --repo-label "self-bump $(date -u +%Y-%m-%d)" \
+            > pr-body.md
+
+      - name: Exclude workflow-file changes (GITHUB_TOKEN can't push them)
+        run: |
+          set -euo pipefail
+          # GitHub categorically refuses to let the default GITHUB_TOKEN
+          # push any change to .github/workflows/* — and there is NO
+          # ``workflows`` permission grantable to it (the key doesn't
+          # exist), so this can't be fixed with a permissions: block.
+          # Revert any workflow-file edits the harden / bump passes applied
+          # so the branch is pushable; pr-body.md still lists them for the
+          # operator to pin manually. This also keeps the weekly bot from
+          # rewriting CI definitions — consistent with this workflow's
+          # threat model (see header). To auto-pin workflow files instead,
+          # push with a ``workflows``-scoped PAT / GitHub App token rather
+          # than the default GITHUB_TOKEN.
+          if [[ -n "$(git status --porcelain -- .github/workflows/)" ]]; then
+            git checkout -- .github/workflows/
+            printf '\n---\n**Note:** proposed changes to `.github/workflows/*` were excluded from this PR — GitHub forbids the default `GITHUB_TOKEN` from pushing workflow files. Pin those manually, or run this job with a `workflows`-scoped token.\n' >> pr-body.md
+          fi
+
+      - name: Detect changes
+        id: changes
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "No safe bumps to propose this week."
+          fi
+
+      - name: Configure git identity
+        if: steps.changes.outputs.changes == 'true'
+        run: |
+          # Use the bot identity that ships with GitHub Actions —
+          # commits made under this identity show up as
+          # "github-actions[bot]" in the UI and are recognised by
+          # branch-protection rules that allow bots.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit + push branch
+        if: steps.changes.outputs.changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # persist-credentials:false (see Checkout) keeps the GITHUB_TOKEN
+          # out of .git/config, so point origin at a tokenised URL for the
+          # push. Done here — after the sandboxed harden / bump passes — so
+          # the token is never in .git/config while those local git ops run.
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # ``checkout -B`` recreates the branch from HEAD even if it
+          # exists, so weekly runs reuse the same branch name without
+          # carrying stale commits forward.
+          git checkout -B sca-self-bump
+          git add -A
+          git commit -m "chore: SCA-gated self-bump
+
+          Mechanical bump applied by .github/workflows/sca-self-bump.yml.
+          Every change passed the full raptor-sca signal set
+          (vulns / KEV / EPSS / yanked / license / hygiene /
+          supply-chain / capability-delta / reachability)."
+          # Fetch the remote branch (if any) so ``--force-with-lease`` has a
+          # baseline to compare against; best-effort since the first run has
+          # no such branch yet. ``--force-with-lease`` then refuses the push
+          # if the branch moved since this fetch (e.g. an operator amended
+          # the open PR), where a plain ``--force`` would clobber it.
+          git fetch origin sca-self-bump || true
+          git push --force-with-lease origin sca-self-bump
+
+      - name: Open or update PR
+        if: steps.changes.outputs.changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # gh CLI ships with the github-hosted ubuntu runner so we
+          # don't need a third-party action. Idempotent: if a PR for
+          # ``sca-self-bump`` is already open we update its body
+          # (preserving review comments), otherwise we open a new one.
+          pr_num=$(gh pr list \
+            --head sca-self-bump \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [[ -n "$pr_num" ]]; then
+            gh pr edit "$pr_num" --body-file pr-body.md
+            echo "Updated existing PR #$pr_num"
+            pr_ref="$pr_num"
+          else
+            # Create WITHOUT --label: gh treats a label that isn't defined
+            # in the repo as a hard error and aborts PR creation entirely
+            # (this is what failed on the missing ``sca-self-bump`` label).
+            # Labels are applied best-effort below so they can never block
+            # the PR.
+            pr_ref=$(gh pr create \
+              --base main \
+              --head sca-self-bump \
+              --title "chore: SCA-gated self-bump" \
+              --body-file pr-body.md)
+            echo "Opened PR $pr_ref"
+          fi
+          # Best-effort labels — a missing label must never fail the run.
+          # The token has pull-requests:write, which applies EXISTING
+          # labels but can't create new ones, so create any you want
+          # auto-applied once under Settings → Labels.
+          for lbl in dependencies sca-self-bump; do
+            gh pr edit "$pr_ref" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

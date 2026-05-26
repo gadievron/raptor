@@ -203,7 +203,7 @@ def build_triage_prompt(
 ) -> str:
     """Compose the triage prompt for one candidate match."""
     parts = [
-        f"SEED BUG (the confirmed instance, used as ground truth):",
+        "SEED BUG (the confirmed instance, used as ground truth):",
         f"  File:     {seed.file}",
         f"  Function: {seed.function}",
         f"  Lines:    {seed.line_start}–{seed.line_end}",

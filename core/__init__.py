@@ -64,6 +64,10 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module 'core' has no attribute {name!r}")
     submod_name, attr_name = spec
     import importlib
+    # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import
+    # ``submod_name`` is from the module-level ``_LAZY_EXPORTS``
+    # dict (constant in this file) — not attacker-controlled.
+    # PEP 562 lazy re-export.
     submod = importlib.import_module(submod_name)
     value = getattr(submod, attr_name)
     # Cache on this module so subsequent accesses bypass __getattr__.

@@ -1,0 +1,18 @@
+# Per-mode expectations for py-app fixture.
+
+scan:
+  exit_code: 0
+  min_findings: 3
+  ecosystems_present:
+    - PyPI
+
+bump:
+  exit_code: 0
+  surfaces_present:
+    - from_image             # FROM python:${PY_VERSION}-slim
+    - gha_uses               # actions/checkout@v3 + actions/setup-python@v4
+
+fix:
+  exit_code: 0
+  emits_proposed_dir: true
+  source_tree_unchanged: true

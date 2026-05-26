@@ -101,10 +101,23 @@ def main():
 
     elif action == "complete":
         if len(sys.argv) < 3:
-            print("Usage: raptor-run-lifecycle complete <output_dir>", file=sys.stderr)
+            print("Usage: raptor-run-lifecycle complete <output_dir> [--model <id>]",
+                  file=sys.stderr)
             sys.exit(1)
+        # Optional --model: the ambient harness model only the agent knows
+        # (RAPTOR's Python can't read /model — no env var). The /understand
+        # skill instructs the agent to pass its own model id here.
+        rest = sys.argv[3:]
+        model = rest[rest.index("--model") + 1] if (
+            "--model" in rest and rest.index("--model") + 1 < len(rest)) else None
         try:
-            complete_run(Path(sys.argv[2]))
+            manifest = None
+            if model:
+                from core.run.provenance import harness_model_entry
+                entry = harness_model_entry(model)
+                if entry:
+                    manifest = {"models": [entry]}
+            complete_run(Path(sys.argv[2]), manifest=manifest)
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)

@@ -1,0 +1,37 @@
+# Detection requirements for the ctx PyPI compromise (May 2022).
+#
+# Attacker took over the dormant ``ctx`` package namespace and
+# uploaded versions 0.2.2 / 0.2.5 / 0.2.6 that exfiltrated env
+# vars (AWS keys etc.).
+#
+# Three convergent detection signals on this fixture:
+#  * vuln_dep (medium) — both OSV advisories surface (Embedded
+#    Malicious Code in ctx + PYSEC-2022-199).
+#  * sentinel_match (critical) — SCA's known-malicious sentinel
+#    list explicitly names ctx as a "name reuse — credential
+#    stealer (2022)" entry.
+#  * typosquat_candidate (medium) — name 'ctx' is distance 2 from
+#    popular package 'nox'. The pair is a known false-positive
+#    couple (ctx is a real attack, nox is a real package — they
+#    share short-name density, not intent) but the detector
+#    firing on a 3-letter package name is itself a useful signal:
+#    short names warrant a second look during dependency adoption.
+#
+# Note: yanked_version does NOT fire here. PyPI's yank semantics
+# differ from npm's — the malicious versions were removed from
+# PyPI rather than marked yanked-but-present. Our hygiene detector
+# reads the npm "yanked" marker; the PyPI removal pathway surfaces
+# as vuln_dep instead.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: medium
+    reachability: imported
+    # The fixture includes main.py which imports ctx. SCA's Python
+    # reachability layer must flip the verdict from not_reachable
+    # to imported — proves the AST-based import detection
+    # recognises top-level ``import ctx`` of the malicious dep.
+  - kind: sentinel_match
+    severity_floor: critical
+  - kind: typosquat_candidate
+    severity_floor: medium

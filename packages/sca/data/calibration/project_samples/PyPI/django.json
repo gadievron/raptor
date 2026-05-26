@@ -1,0 +1,12 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:53:05Z",
+    "git_ref": "4.2.7",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of django",
+    "project_license": "BSD-3-Clause",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/django/django.git@4.2.7. Project source not redistributed.",
+    "url": "https://github.com/django/django.git"
+  },
+  "findings": []
+}

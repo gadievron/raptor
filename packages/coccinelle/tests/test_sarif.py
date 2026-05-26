@@ -21,8 +21,8 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from packages.coccinelle.models import SpatchMatch, SpatchResult
-from packages.coccinelle.sarif import results_to_sarif
+from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
+from packages.coccinelle.sarif import results_to_sarif  # noqa: E402
 
 
 def _run0(doc):
@@ -96,7 +96,7 @@ def test_cross_fs_path_preserved():
     result = SpatchResult(rule="r", matches=[
         SpatchMatch(file="/usr/include/string.h", line=1, message="x"),
     ])
-    doc = results_to_sarif([result], Path("/tmp/some-other-repo"))
+    doc = results_to_sarif([result], Path("./some-other-repo"))
     sr = _run0(doc)["results"][0]
     assert sr["locations"][0]["physicalLocation"][
         "artifactLocation"]["uri"] == "/usr/include/string.h"

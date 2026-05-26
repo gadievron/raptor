@@ -446,6 +446,8 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
     """Persist a profile. mode 0600, dir mode 0700."""
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions
+        # 0o700 = owner-only — most restrictive POSIX mode.
         os.chmod(_CACHE_DIR, 0o700)
     except OSError as exc:
         logger.warning("calibrate: cache dir setup failed: %s", exc)
@@ -462,6 +464,8 @@ def _save_to_cache(fingerprint: str, profile: SandboxProfile) -> None:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(profile.to_json())
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions
+            # 0o600 = owner-only file mode.
             os.chmod(tmp_path, 0o600)
             os.rename(tmp_path, path)
         except BaseException:

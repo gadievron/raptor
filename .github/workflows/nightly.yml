@@ -1,0 +1,81 @@
+name: Nightly (slow + integration)
+
+# The `slow` and `integration` markers are deselected by default in
+# pytest.ini (`addopts = -m "not integration and not slow"`), so these
+# tests run NOWHERE in the per-PR / per-push test matrix. This workflow
+# is the only place they execute in CI:
+#
+#   * slow        — perf baselines + sandbox-setup-heavy resolver tests
+#                   (deterministic; a failure is a real regression).
+#   * integration — live-network contract tests against OSV / NVD /
+#                    GitHub (flaky by nature; an external outage must
+#                    not red-fail the run, so that step is
+#                    continue-on-error).
+#
+# Deliberately a standalone workflow, NOT a job in tests.yml: it must
+# never ride tests.yml's `merge_group` force_full path — the merge queue
+# must not block on a live-API hiccup or a multi-minute perf baseline.
+
+on:
+  schedule:
+    # 07:00 UTC — on the days tests.yml's full-suite cron also fires
+    # (Mon/Thu 06:00) this stays an hour clear of it; every other day
+    # it runs alone.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+  VENV_PATH: .venv
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  slow-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Create venv and install deps
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+
+      - name: Run slow tests (deterministic — failure is a real regression)
+        run: |
+          source $VENV_PATH/bin/activate
+          # CLI -m overrides pytest.ini's default deselect.
+          python -m pytest -m slow core packages --durations=25
+
+      - name: Run integration tests (live network — informational)
+        # External-service outages (OSV/NVD/GitHub down or rate-limited)
+        # must not red-fail the nightly. A genuine contract break still
+        # shows as a failed step for a human to inspect.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # higher rate limits for the live GitHub tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest -m integration core packages --durations=25

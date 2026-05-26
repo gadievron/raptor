@@ -5,7 +5,13 @@
 - Produces out/recon.json with simple inventory: file counts, languages by extension
 - Produces scan-manifest.json (input_hash, timestamp, agent meta)
 """
-import argparse, json, os, shutil, sys, tempfile, time
+import argparse
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 # Setup path for core module imports. Use RAPTOR_DIR env var

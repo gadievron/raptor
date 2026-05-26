@@ -1,0 +1,22 @@
+[
+  "ch.qos.logback:logback-classic",
+  "com.fasterxml.jackson.core:jackson-databind",
+  "com.google.code.gson:gson",
+  "com.google.guava:guava",
+  "com.squareup.okhttp3:okhttp",
+  "commons-io:commons-io",
+  "io.netty:netty-all",
+  "junit:junit",
+  "mysql:mysql-connector-java",
+  "org.apache.commons:commons-lang3",
+  "org.apache.httpcomponents:httpclient",
+  "org.apache.logging.log4j:log4j-core",
+  "org.junit.jupiter:junit-jupiter",
+  "org.mockito:mockito-core",
+  "org.postgresql:postgresql",
+  "org.projectlombok:lombok",
+  "org.slf4j:slf4j-api",
+  "org.springframework.boot:spring-boot-starter",
+  "org.springframework:spring-core",
+  "org.testcontainers:testcontainers"
+]

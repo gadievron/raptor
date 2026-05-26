@@ -521,14 +521,26 @@ python3 packages/recon/agent.py \
 
 **Purpose**: Software Composition Analysis (dependency vulnerabilities)
 
-**Main Entry Point**: `agent.py`
+**Main Entry Point**: `cli.py` (invoked via the `libexec/raptor-sca-run`
+shim or `python3 raptor.py sca`)
 
 **CLI Interface**:
 ```bash
-python3 packages/sca/agent.py \
-  --repo /path/to/code \
-  --out /path/to/output
+# Recommended — wraps the run-lifecycle helpers + project resolution.
+libexec/raptor-sca-run /path/to/code --out /path/to/output
+
+# Equivalent direct invocation:
+python3 -m packages.sca.cli /path/to/code --out /path/to/output
+
+# Or via the unified launcher:
+python3 raptor.py sca --repo /path/to/code --out /path/to/output
 ```
+
+Sub-commands (`fix`, `check`, `upgrade`, `diff`, `verify`, `health`,
+`purl`, `render`, `clean-cache`) are documented in
+`.claude/commands/raptor-sca.md`. Threshold-based CI gating is exposed
+via `--fail-on-severity` / `--fail-on-kev` / `--fail-on-supply-chain` /
+`--fail-on-hygiene` flags on the main scan and on `render`.
 
 **Responsibilities**:
 - Detect dependency files (requirements.txt, package.json, pom.xml, etc.)
@@ -537,8 +549,9 @@ python3 packages/sca/agent.py \
 - Suggest remediation (version upgrades)
 
 **Outputs**:
-- `sca_report.json` - Dependency vulnerabilities
-- `dependencies.json` - Full dependency list
+- `findings.json` - Dependency vulnerabilities (canonical schema)
+- `report.md` - Human-readable summary
+- `sbom.cdx.json` - CycloneDX 1.5 SBOM with VEX
 
 **Dependencies**:
 - `core.config` (paths)

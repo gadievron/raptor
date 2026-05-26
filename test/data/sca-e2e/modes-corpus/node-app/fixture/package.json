@@ -1,0 +1,10 @@
+{
+  "name": "node-app-fixture",
+  "version": "0.0.1",
+  "description": "modes-corpus fixture: Node project with vulnerable pinned deps",
+  "dependencies": {
+    "lodash": "4.17.4",
+    "axios": "0.21.0",
+    "minimist": "1.2.0"
+  }
+}

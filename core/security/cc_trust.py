@@ -66,6 +66,20 @@ def set_trust_override(val: bool) -> None:
     _trust_override_set = bool(val)
 
 
+def is_trust_overridden() -> bool:
+    """Return the current process-wide trust override.
+
+    Public reader for the flag set by :func:`set_trust_override`.
+    Subsystems that want to surface a "trust state" diagnostic to the
+    operator read this directly rather than going through the heavier
+    ``check_repo_claude_trust`` repo scan.
+
+    Returns True when the operator opted into trust via the CLI
+    (``--trust-repo``); False by the default-strict posture.
+    """
+    return _trust_override_set
+
+
 @dataclass
 class Finding:
     """One labelled row in the per-file findings table."""

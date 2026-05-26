@@ -21,12 +21,12 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import os
-import shutil
-import sys
-import tempfile
-import unittest
-from pathlib import Path
+import os  # noqa: E402
+import shutil  # noqa: E402
+import sys  # noqa: E402
+import tempfile  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 
 def _mount_ns_usable() -> bool:
@@ -173,9 +173,17 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
         target/output path). This is the main isolation win over
         Landlock-only mode."""
         from core.sandbox._spawn import run_sandboxed
-        canary = f"/tmp/.raptor-canary-{os.getpid()}"
-        Path(canary).write_text("SHOULD-NOT-BE-VISIBLE\n")
-        try:
+        # The canary must live in the HOST /tmp root: this test proves the
+        # per-sandbox tmpfs shadows /tmp *itself*, so a nested tmp_path
+        # wouldn't exercise the mount. NamedTemporaryFile gives a
+        # collision-free name and cleans up even when an assert fails —
+        # no hand-rolled os.getpid() name or try/finally unlink.
+        with tempfile.NamedTemporaryFile(
+            dir="/tmp", prefix=".raptor-canary-", mode="w",
+        ) as cf:
+            cf.write("SHOULD-NOT-BE-VISIBLE\n")
+            cf.flush()
+            canary = cf.name
             r = run_sandboxed(
                 ["sh", "-c", f"cat {canary} 2>&1 || echo GONE"],
                 target=self.tmp.name, output=self.tmp.name,
@@ -193,8 +201,6 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
             self.assertIn("GONE", r.stdout,
                           "/tmp canary leaked into sandboxed view — "
                           "per-sandbox tmpfs isolation broken")
-        finally:
-            os.unlink(canary)
 
     def test_stub_dir_cleaned_up_after_run(self):
         """The parent-created tempfile.mkdtemp stub must be removed

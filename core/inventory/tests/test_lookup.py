@@ -156,7 +156,7 @@ class TestMetadataInVulnerabilityContext(unittest.TestCase):
                 "attributes": ["@app.route('/api')"],
             },
         }
-        vuln = VulnerabilityContext(finding, Path("/tmp"))
+        vuln = VulnerabilityContext(finding, Path("."))
         result = vuln.to_dict()
         self.assertEqual(result["metadata"]["class_name"], "Handler")
         self.assertIn("@app.route('/api')", result["metadata"]["attributes"])
@@ -172,7 +172,7 @@ class TestMetadataInVulnerabilityContext(unittest.TestCase):
             "startLine": 30,
             "message": "test",
         }
-        vuln = VulnerabilityContext(finding, Path("/tmp"))
+        vuln = VulnerabilityContext(finding, Path("."))
         result = vuln.to_dict()
         self.assertNotIn("metadata", result)
 

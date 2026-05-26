@@ -27,13 +27,13 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import platform
-import signal
-from pathlib import Path
+import platform  # noqa: E402
+import signal  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-import pytest
+import pytest  # noqa: E402
 
-from core.sandbox import tracer
+from core.sandbox import tracer  # noqa: E402
 
 
 pytestmark = pytest.mark.skipif(

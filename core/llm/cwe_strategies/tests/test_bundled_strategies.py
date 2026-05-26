@@ -1,4 +1,4 @@
-"""Coverage for the 7 bundled strategies.
+"""Coverage for the 8 bundled strategies.
 
 Verifies every shipped strategy:
   * Loads cleanly via the strict schema.
@@ -29,6 +29,7 @@ _EXPECTED_STRATEGIES = {
     "auth_privilege",
     "cryptography",
     "memory_aliasing",
+    "lifecycle_drift",
 }
 
 
@@ -48,7 +49,7 @@ def by_name(all_strategies):
 
 
 class TestBundle:
-    def test_all_seven_present(self, by_name):
+    def test_all_expected_present(self, by_name):
         names = set(by_name)
         missing = _EXPECTED_STRATEGIES - names
         assert not missing, f"missing bundled strategies: {sorted(missing)}"
@@ -179,6 +180,20 @@ class TestPickerReachability:
             function_name="splice_pages",
         )
         assert "memory_aliasing" in {s.name for s in out}
+
+    def test_lifecycle_drift_via_path(self, by_name):
+        out = pick_strategies(
+            file_path="kernel/ptrace.c",
+            function_name="__ptrace_may_access",
+        )
+        assert "lifecycle_drift" in {s.name for s in out}
+
+    def test_lifecycle_drift_via_keyword(self, by_name):
+        out = pick_strategies(
+            file_path="src/foo.c",
+            function_name="check_dumpable",
+        )
+        assert "lifecycle_drift" in {s.name for s in out}
 
 
 # ---------------------------------------------------------------------------

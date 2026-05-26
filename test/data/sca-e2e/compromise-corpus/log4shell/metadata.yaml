@@ -1,0 +1,20 @@
+incident: Log4Shell
+ecosystem: Maven
+package: org.apache.logging.log4j:log4j-core
+malicious_versions:
+  - "2.14.1"   # widely-deployed pre-disclosure version exercising the
+               # JNDI lookup bug; any 2.0-beta9..2.14.1 inclusive is
+               # affected and would surface the same advisory.
+disclosure_date: 2021-12-09
+classification: pre-existing vulnerability  # not a supplier compromise
+                                            # — author's vuln, KEV-listed
+                                            # the same day as disclosure
+references:
+  - CVE-2021-44228
+  - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
+  - https://www.cisa.gov/news-events/cybersecurity-advisories/aa21-356a
+expected_signal_summary: |
+  log4j-core 2.14.1 is on CISA KEV with the most-cited CVE of the
+  decade. Any SCA system that doesn't surface this finding has a
+  load-bearing failure. Treated as the smoke-test floor for the
+  vuln_dep + KEV path.

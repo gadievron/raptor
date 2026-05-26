@@ -8,19 +8,25 @@ Run: python3 -m pytest core/sandbox/tests/test_e2e_sandbox.py -v
 
 import sys as _sys
 import pytest as _pytest
-pytestmark = _pytest.mark.skipif(
-    _sys.platform != "linux",
-    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
-)
+pytestmark = [
+    _pytest.mark.skipif(
+        _sys.platform != "linux",
+        reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
+    ),
+    # Every test in this file exercises real sandbox primitives
+    # (namespaces, Landlock, seccomp, ptrace) on real subprocesses.
+    # Opt-in via ``pytest -m integration``.
+    _pytest.mark.integration,
+]
 
 
-import os
-import subprocess
-import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import os  # noqa: E402
+import subprocess  # noqa: E402
+import unittest  # noqa: E402
+from pathlib import Path  # noqa: E402
+from tempfile import TemporaryDirectory  # noqa: E402
 
-from core.sandbox import (
+from core.sandbox import (  # noqa: E402
     check_landlock_available,
     check_net_available,
     sandbox,
@@ -1733,9 +1739,12 @@ class TestE2EBuildToolCompatibility(unittest.TestCase):
             # Point it into the sandbox's output so Landlock allows writes.
             # Must pre-create — Go doesn't bootstrap GOTMPDIR itself.
             import os as _os
-            gocache = Path(out) / ".gocache"; gocache.mkdir()
-            gopath = Path(out) / ".gopath"; gopath.mkdir()
-            gotmp = Path(out) / ".gotmp"; gotmp.mkdir()
+            gocache = Path(out) / ".gocache"
+            gocache.mkdir()
+            gopath = Path(out) / ".gopath"
+            gopath.mkdir()
+            gotmp = Path(out) / ".gotmp"
+            gotmp.mkdir()
             env = dict(_os.environ)
             env["GOCACHE"] = str(gocache)
             env["GOPATH"] = str(gopath)

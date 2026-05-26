@@ -70,6 +70,16 @@ _REGISTRY_FAMILIES: List[Tuple[Callable[[str], bool], List[str]]] = [
     # GitLab Container Registry — usually ``registry.gitlab.com`` for
     # the SaaS, or ``registry.<host>`` for self-hosted.
     (lambda r: r == "registry.gitlab.com", ["registry.gitlab.com"]),
+
+    # Elastic's container registry — manifests on docker.elastic.co,
+    # tokens on docker-auth.elastic.co. Same auth-host split as Docker
+    # Hub. Missing from the registry-family map was surfaced by the
+    # May 2026 200-project sweep: any project with
+    # ``FROM docker.elastic.co/...`` (multiple Maven-Elasticsearch
+    # variants) emitted repeated egress-proxy DENYs on
+    # ``docker-auth.elastic.co``.
+    (lambda r: r == "docker.elastic.co",
+     ["docker.elastic.co", "docker-auth.elastic.co"]),
 ]
 
 

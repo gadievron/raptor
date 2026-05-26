@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# raptor-sca — scan, fix, and manage dependency security
+#
+# Wraps libexec/raptor-sca-run (non-interactive, no Claude Code needed).
+#
+# Install: add this directory to PATH, or symlink to a directory already on PATH.
+#
+# Usage:
+#   raptor-sca /path/to/project              Scan for vulnerabilities
+#   raptor-sca fix /path/to/project          Show fix plan (safe default)
+#   raptor-sca fix /path/to/project --apply  Apply fixes in-place
+#   raptor-sca check PyPI django 4.2.10      Pre-install safety verdict
+#   raptor-sca upgrade npm lodash 4.17.4 4.17.21  Upgrade impact
+#   raptor-sca diff old.json new.json        Delta between scans
+#
+
+set -euo pipefail
+
+# Resolve symlinks to find the real script location
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if [ ! -f "$RAPTOR_DIR/libexec/raptor-sca-run" ]; then
+    echo "raptor-sca: cannot find raptor-sca-run at $RAPTOR_DIR/libexec/" >&2
+    exit 1
+fi
+
+# Strip env vars that could inject code into the Python process.
+# Covers loader hijack (LD_*, DYLD_*), Python interpreter hooks
+# (PYTHON*), and TLS/SSL behaviour overrides.
+for _var in \
+    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
+    DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH \
+    GCONV_PATH \
+    OPENSSL_CONF SSLKEYLOGFILE \
+    BASH_ENV ENV ; do
+    unset "$_var"
+done
+# Strip the entire PYTHON* family — PYTHONWARNINGS / PYTHONFAULTHANDLER /
+# PYTHONIOENCODING etc. all influence interpreter behaviour and several
+# accept module-import forms that are exploitable.
+for _var in $(env | sed -n 's/^\(PYTHON[A-Z0-9_]*\)=.*/\1/p'); do
+    unset "$_var"
+done
+unset _var
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "raptor-sca: python3 not found" >&2
+    exit 1
+fi
+
+export RAPTOR_DIR
+# Trust marker — libexec scripts refuse to run without one of
+# CLAUDECODE or _RAPTOR_TRUSTED. We've just stripped the env, so
+# direct invocation through this shim is the safe path.
+export _RAPTOR_TRUSTED=1
+exec python3 "$RAPTOR_DIR/libexec/raptor-sca-run" "$@"

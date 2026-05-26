@@ -29,6 +29,15 @@ from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from core.build.build_flags import BuildFlagsContext, extract_flags
+from core.function_taxonomy import (
+    DEVICE_CONTROL_FUNCS,
+    IPC_FUNCS,
+    KERNEL_USERSPACE_FUNCS,
+    NETWORK_INGEST_FUNCS,
+    PROCESS_BOUNDARY_FUNCS,
+    SCAN_FAMILY_FUNCS,
+    STREAM_INPUT_FUNCS,
+)
 from packages.source_intel.aliases import (
     ALL_WUR_ALIASES,
 )
@@ -78,6 +87,42 @@ ALL_GRADES: Tuple[str, ...] = (
     GRADE_SAME_PATH,
     GRADE_DOMINATES,
 )
+
+
+# Source-side L1 calls are composed locally from the shared function catalog.
+# The shared catalog deliberately omits ubiquitous import-table signals such
+# as read/fread, so this scanner adds those back only for source-code call-site
+# evidence. argv/envp/environ stay scanner-local because they are identifiers,
+# not function names.
+_SOURCE_SIDE_FD_READ_FUNCS: FrozenSet[str] = frozenset({
+    "read",
+    "fread",
+})
+
+# The shared taxonomy sets are intentionally broader for binary fingerprinting.
+# Keep only call sites that directly ingest bytes for L1 source evidence.
+_SOURCE_SIDE_SOCKET_INPUT_FUNCS: FrozenSet[str] = NETWORK_INGEST_FUNCS - frozenset({
+    "accept",
+    "bind",
+    "listen",
+})
+_SOURCE_SIDE_STREAM_INPUT_FUNCS: FrozenSet[str] = (
+    STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS
+) - frozenset({
+    "sscanf",
+    "vsscanf",
+    "swscanf",
+})
+
+_C_L1_SOURCE_CALLS: Dict[str, str] = {
+    **{name: "fd" for name in sorted(_SOURCE_SIDE_FD_READ_FUNCS)},
+    **{name: "socket" for name in sorted(_SOURCE_SIDE_SOCKET_INPUT_FUNCS)},
+    **{name: "stream" for name in sorted(_SOURCE_SIDE_STREAM_INPUT_FUNCS)},
+    **{name: "env" for name in sorted(PROCESS_BOUNDARY_FUNCS)},
+    **{name: "kernel_user" for name in sorted(KERNEL_USERSPACE_FUNCS)},
+    **{name: "ipc" for name in sorted(IPC_FUNCS)},
+    **{name: "device_control" for name in sorted(DEVICE_CONTROL_FUNCS)},
+}
 
 
 @dataclass(frozen=True)
@@ -193,6 +238,23 @@ class BoundaryEvidence:
     """
 
     boundary_fn: str  # "copy_from_user", "copy_to_user", etc.
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CLevelSourceEvidence:
+    """C/C++ L1 source observation for /understand and /validate.
+
+    Unlike ``BoundaryEvidence`` (kernel/userspace privilege crossings),
+    this captures ordinary user-space input origins that seed taint:
+    process arguments, environment variables, stream/socket reads, and
+    fd-level reads. It is informational context for the LLM rather than
+    a direct verdict override.
+    """
+
+    source_kind: str  # "argv" | "env" | "stream" | "socket" | "fd"
+    source_name: str  # argv/envp/getenv/read/recv/fgets/etc.
     location: Tuple[str, int]
     enclosing_function: Optional[str] = None
 
@@ -462,6 +524,11 @@ class SourceIntelResult:
     #: (copy_from_user, copy_to_user, get_user, put_user, etc.).
     #: Informational; feeds Stage D LLM privilege/data-flow context.
     boundary_crossings: Tuple[BoundaryEvidence, ...] = ()
+
+    #: L1 source table expansion: C/C++ user-controlled inputs
+    #: (read/recv/fgets/argv/env/getenv, etc.). Informational; feeds
+    #: Stage D LLM source/taint context for /understand + /validate.
+    c_level_sources: Tuple[CLevelSourceEvidence, ...] = ()
 
     #: Axis 4 expansion: LSM (Linux Security Module) hook calls.
     #: Informational; indicates policy-enforcement points.
@@ -739,6 +806,7 @@ def analyze(
     null_guard_observations: List[NullGuardEvidence] = []
     boundary_observations: List[BoundaryEvidence] = []
     lsm_observations: List[LsmEvidence] = []
+    c_level_source_observations: List[CLevelSourceEvidence] = []
     double_free_observations: List[DoubleFreeEvidence] = []
     paired_free_observations: List[PairedFreeEvidence] = []
 
@@ -820,6 +888,7 @@ def analyze(
             discovered_alias_tuple,
         )
     )
+    c_level_source_observations.extend(_scan_c_level_source_inputs(target))
 
     return SourceIntelResult(
         target=str(target),
@@ -836,6 +905,7 @@ def analyze(
         warns=tuple(warn_observations),
         null_guards=tuple(null_guard_observations),
         boundary_crossings=tuple(boundary_observations),
+        c_level_sources=tuple(c_level_source_observations),
         lsm_hooks=tuple(lsm_observations),
         double_frees=tuple(double_free_observations),
         paired_frees=tuple(paired_free_observations),
@@ -1907,6 +1977,168 @@ def _scan_alias_observations(target: Path) -> List[AttributeEvidence]:
         seen_files += 1
         observations.extend(_scan_alias_in_file(entry))
     return observations
+
+
+def _scan_c_level_source_inputs(target: Path) -> List[CLevelSourceEvidence]:
+    """Best-effort C/C++ L1 source table scanner.
+
+    Coccinelle rules handle many structural axes, but L1 inputs include
+    process-boundary shapes (``argv``/``envp``) and ubiquitous calls such
+    as ``read`` that are deliberately omitted from import-based fuzz
+    prioritisation. This bounded source scan records them as prompt
+    context without changing verdict policy.
+    """
+    files: List[Path] = []
+    if target.is_file() and target.suffix.lower() in _C_CPP_EXTS:
+        files = [target]
+    elif target.is_dir():
+        for entry in sorted(target.rglob("*")):
+            if len(files) >= 500:
+                break
+            if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS:
+                files.append(entry)
+
+    observations: List[CLevelSourceEvidence] = []
+    seen: set[Tuple[str, int, str, str]] = set()
+    for path in files:
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        in_block_comment = False
+        for line_no, line in enumerate(lines, start=1):
+            if _PREPROC_LINE_RE.match(line):
+                continue
+            stripped, in_block_comment = _strip_c_source_comments_and_literals(
+                line, in_block_comment=in_block_comment,
+            )
+            if not stripped.strip():
+                continue
+            for name, kind in _C_L1_SOURCE_CALLS.items():
+                if not _line_has_c_source_call(stripped, name):
+                    continue
+                key = (str(path), line_no, kind, name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                observations.append(CLevelSourceEvidence(
+                    source_kind=kind,
+                    source_name=name,
+                    location=(str(path), line_no),
+                    enclosing_function=_enclosing_function(str(path), line_no),
+                ))
+            if _line_mentions_argv_source(stripped):
+                key = (str(path), line_no, "argv", "argv")
+                if key not in seen:
+                    seen.add(key)
+                    observations.append(CLevelSourceEvidence(
+                        source_kind="argv",
+                        source_name="argv",
+                        location=(str(path), line_no),
+                        enclosing_function=_enclosing_function(str(path), line_no),
+                    ))
+            if _line_mentions_env_source(stripped):
+                key = (str(path), line_no, "env", "envp")
+                if key not in seen:
+                    seen.add(key)
+                    observations.append(CLevelSourceEvidence(
+                        source_kind="env",
+                        source_name="envp",
+                        location=(str(path), line_no),
+                        enclosing_function=_enclosing_function(str(path), line_no),
+                    ))
+    return observations
+
+
+def _strip_c_source_comments_and_literals(
+    line: str, *, in_block_comment: bool = False,
+) -> Tuple[str, bool]:
+    """Remove C/C++ comments and string/char literals from one line.
+
+    The C-level source pass is intentionally lightweight, but it should
+    not record ``read(`` inside comments, diagnostics, or example strings.
+    Keep non-literal code characters so word-boundary call/use regexes can
+    still match the surrounding statement.
+    """
+    out: List[str] = []
+    i = 0
+    quote: Optional[str] = None
+    while i < len(line):
+        ch = line[i]
+        nxt = line[i + 1] if i + 1 < len(line) else ""
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                out.extend("  ")
+                i += 2
+            else:
+                out.append(" ")
+                i += 1
+            continue
+        if quote is not None:
+            if ch == "\\":
+                out.append(" ")
+                if i + 1 < len(line):
+                    out.append(" ")
+                    i += 2
+                else:
+                    i += 1
+                continue
+            out.append(" ")
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            out.extend(" " * (len(line) - i))
+            break
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            out.extend("  ")
+            i += 2
+            continue
+        if ch in {'"', "'"}:
+            quote = ch
+            out.append(" ")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), in_block_comment
+
+
+def _line_has_c_source_call(line: str, name: str) -> bool:
+    if not re.search(r"\b" + re.escape(name) + r"\s*\(", line):
+        return False
+    # Function prototypes/declarations are not source observations.
+    # This intentionally stays conservative: calls embedded in assignment
+    # statements (``n = read(...)``) do not match this declaration shape.
+    return not bool(
+        re.match(
+            r"^\s*(?:extern\s+|static\s+|inline\s+|"
+            r"[A-Za-z_][\w_]*\s+)+[*\s]*"
+            + re.escape(name)
+            + r"\s*\([^;{}]*\)\s*;\s*$",
+            line,
+        )
+    )
+
+
+def _line_mentions_argv_source(line: str) -> bool:
+    return bool(
+        re.search(r"\bargv\s*(?:\[|,)", line)
+        or re.search(r"\bchar\s*\*\s*argv\s*\[", line)
+        or re.search(r"\bchar\s*\*\s*\*\s*argv\b", line)
+    )
+
+
+def _line_mentions_env_source(line: str) -> bool:
+    return bool(
+        re.search(r"\benvp\s*(?:\[|,)", line)
+        or re.search(r"\benviron\s*\[", line)
+        or re.search(r"\bchar\s*\*\s*envp\s*\[", line)
+        or re.search(r"\bchar\s*\*\s*\*\s*envp\b", line)
+    )
 
 
 def _scan_project_alias_observations(

@@ -20,9 +20,9 @@ pytestmark = _pytest.mark.skipif(
 )
 
 
-import pytest
+import pytest  # noqa: E402
 
-from core.sandbox import seccomp
+from core.sandbox import seccomp  # noqa: E402
 
 
 class TestScmpActTrace:

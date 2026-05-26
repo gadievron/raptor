@@ -1,0 +1,2297 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-08T18:44:27Z",
+    "license": "Derived signal: presence + public URL only. Source URLs are public observable facts; the PoC code itself is NOT fetched or stored.",
+    "name": "GitHub PoC URLs (derived from Exploit-DB index)",
+    "provenance": "Parses the Exploit-Database files_exploits.csv ``source_url`` / ``application_url`` columns for github.com URLs. Same network fetch as the EDB build.",
+    "rows_scanned": 47037,
+    "url": "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
+  },
+  "signals": {
+    "CVE-1999-0502": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d617ae3894222cfbbf6951fcd68fd2d1c1b15c6/modules/exploits/multi/ssh/sshexec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2008-4250": {
+      "github_poc_urls": [
+        "https://github.com/ohnozzy/Exploit/blob/cde7b69c7b314eda76ebae0948dacfc622bccd74/MS08_067.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2009-2526": {
+      "github_poc_urls": [
+        "https://github.com/ohnozzy/Exploit/blob/3805e38e389ea222eba109ace10a835805c012f9/MS09_050.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2009-2532": {
+      "github_poc_urls": [
+        "https://github.com/ohnozzy/Exploit/blob/3805e38e389ea222eba109ace10a835805c012f9/MS09_050.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2009-3103": {
+      "github_poc_urls": [
+        "https://github.com/ohnozzy/Exploit/blob/3805e38e389ea222eba109ace10a835805c012f9/MS09_050.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2009-3960": {
+      "github_poc_urls": [
+        "https://github.com/tsluyter/exploits/blob/50229fd73a5dc60edce0c833dfb8248251467470/adobe_xml_inject.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2010-0886": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/browser/java_ws_arginject_altjvm.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2010-1423": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/browser/java_ws_arginject_altjvm.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2010-4742": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/fileformat/moxa_mediadbplayback.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2011-0647": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/emc/replication_manager_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2011-3011": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/http/ca_arcserve_rpc_authbypass.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2011-4929": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/unix/webapp/redmine_scm_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-0261": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/multi/http/op5_license.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-0262": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/multi/http/op5_welcome.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-3274": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/misc/hp_imc_uam.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-3993": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/72caeaa72f843ec3534e272427c3915ef498b2f9/modules/exploits/multi/browser/firefox_proto_crmfrequest.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-4705": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/scada/codesys_gateway_server_traversal.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-6636": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/android/browser/webview_addjavascriptinterface.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2012-6664": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/tftp/distinct_tftp_traversal.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-0074": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/5d0b532b20a4c86ee4f43a053a72a76bef9b7e19/modules/exploits/windows/browser/ms13_022_silverlight_script_object.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-0757": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d617ae3894222cfbbf6951fcd68fd2d1c1b15c6/modules/exploits/multi/http/git_client_command_exec.rb",
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/multi/browser/firefox_svg_plugin.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-0758": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d617ae3894222cfbbf6951fcd68fd2d1c1b15c6/modules/exploits/multi/http/git_client_command_exec.rb",
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/multi/browser/firefox_svg_plugin.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-1710": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/72caeaa72f843ec3534e272427c3915ef498b2f9/modules/exploits/multi/browser/firefox_proto_crmfrequest.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-2492": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/misc/fb_cnct_group.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-3896": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/5d0b532b20a4c86ee4f43a053a72a76bef9b7e19/modules/exploits/windows/browser/ms13_022_silverlight_script_object.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-4710": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/android/browser/webview_addjavascriptinterface.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-6040": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/mw6/mw6aztec.html",
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/mw6/mw6datamatrix.html",
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/mw6/mw6maxicode.html"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-6282": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/57e4bcbf710228afe288191f4c99a553c22c34d3/modules/exploits/android/local/put_user_vroot.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2013-7390": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_file_upload.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-0094": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/struts_code_exec_classloader.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-0112": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/struts_code_exec_classloader.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-0114": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/struts_code_exec_classloader.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-0334": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/cmsmadesimple-1.11.9.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1201": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/lorex/lorex-report.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1303": {
+      "github_poc_urls": [
+        "https://github.com/Fire30/PS4-2014-1303-POC/tree/fe7cc108db4ec2843324fc36ecdd18e7f8947caa",
+        "https://github.com/RKX1209/CVE-2014-1303/tree/3dfd218acbf61c4fe6fb8f72a0cabc5a6711a5e5"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1603": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/getsimplecms-3.3.1.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1806": {
+      "github_poc_urls": [
+        "https://github.com/tyranid/ExploitRemotingService"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1836": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/impresscms-1.3.5.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-1903": {
+      "github_poc_urls": [
+        "https://github.com/0x00string/oldays/blob/ace197a0a8f3c2b8111ffe55596bf1dca8a3fdd6/CVE-2014-1903.pl"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-2021": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/c7855f3d4fd1f5e30ed04d8273befe982e583bfb/pocs/cve-2014-2021"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-2022": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/c7855f3d4fd1f5e30ed04d8273befe982e583bfb/pocs/cve-2014-2022"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-2023": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/c7855f3d4fd1f5e30ed04d8273befe982e583bfb/pocs/cve-2014-2023"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-2921": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/pimcore-2.1.0.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-2922": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/pimcore-2.1.0.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-3659": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-3671": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-3828": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/linux/http/centreon_sqli_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-3829": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/linux/http/centreon_sqli_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-3997": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc_pmp_it360_sqli.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-4936": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/browser/malwarebytes_update_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5005": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_file_upload.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5006": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_file_upload.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5007": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_file_upload.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5377": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_deviceexpert-5.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5445": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_netflow_it360_file_dl.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-5446": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_netflow_it360_file_dl.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6034": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_opmanager_socialit_it360.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6035": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_opmanager_socialit_it360.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6036": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_opmanager_socialit_it360.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6038": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_admin.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6039": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_admin.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-6271": {
+      "github_poc_urls": [
+        "https://github.com/HackerFantastic/Public/blob/777a32d7277e778386e650632fdd9643f0d812ac/exploits/trendmicro_IWSVA_shellshock.py",
+        "https://github.com/HackerFantastic/Public/blob/8f5283534c3868814afc66d9e72963eced49c27b/exploits/rsshellshock.py",
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-62771": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7146": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/mantisbt_php_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7169": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7196": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7227": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7862": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_dc9_admin.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7863": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_failservlet.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7864": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_failservlet.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7866": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_opmanager_socialit_it360.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7868": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_opmanager_socialit_it360.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-7910": {
+      "github_poc_urls": [
+        "https://github.com/d3vpp/metasploit-modules"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-8146": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/i-c-u-fail.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-8147": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/i-c-u-fail.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-8498": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_pmp_privesc.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-8499": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/ManageEngine/me_pmp_privesc.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-8598": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/mantisbt_php_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2014-9322": {
+      "github_poc_urls": [
+        "https://github.com/RKX1209/CVE-2014-9322/tree/f5a215466ebe007338e845c715228f93232b95eb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-0313": {
+      "github_poc_urls": [
+        "https://github.com/SecurityObscurity/cve-2015-0313"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-0779": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/zenworks_zcm_rce.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-0936": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/7352029497707d865b10e8d0beb93b3368ca64b6/modules/exploits/linux/ssh/ceragon_fibeair_known_privkey.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1158": {
+      "github_poc_urls": [
+        "https://github.com/0x00string/oldays/blob/ab7fdbce3f614fa4f8b62ea9b79bce2da0a0f278/CVE-2015-1158.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1172": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/unix/webapp/wp_holding_pattern_file_upload.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1187": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/linux/http/multi_ncc_ping_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1592": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1375600780aee9f630bebb7dd42f2b384cf1cf55/modules/exploits/unix/webapp/sixapart_movabletype_storable_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1676": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1677": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1678": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1679": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1680": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-1701": {
+      "github_poc_urls": [
+        "https://github.com/hfiref0x/CVE-2015-1701"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2219": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/b08d1ad8d8d6c0f5cb63cc44e3ff75efb9edb7b3/modules/exploits/windows/local/lenovo_systemupdate.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2370": {
+      "github_poc_urls": [
+        "https://github.com/monoxgas/Trebuchet"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2843": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/a2602bf514c1a2a0973336b0b827dde71434b8a1/modules/exploits/linux/http/goautodial_3_rce_command_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2845": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/a2602bf514c1a2a0973336b0b827dde71434b8a1/modules/exploits/linux/http/goautodial_3_rce_command_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2862": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/kaseya-vsa-vuln.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2863": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/kaseya-vsa-vuln.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2993": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2994": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt",
+        "https://github.com/rapid7/metasploit-framework/blob/3123175ac75c38bec5165e01cda05e3b38287003/modules/exploits/multi/http/sysaid_auth_file_upload.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2995": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2996": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2997": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2998": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-2999": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-3000": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-3001": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/advisories/sysaid-14.4-multiple-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-3224": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/32e1a1987531a94ea64227fa4f688036184ba83b/modules/exploits/multi/http/rails_web_console_v2_code_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-3337": {
+      "github_poc_urls": [
+        "https://github.com/pandujar/elasticpwn/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-3864": {
+      "github_poc_urls": [
+        "https://github.com/NorthBit/Metaphor"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-4852": {
+      "github_poc_urls": [
+        "https://github.com/roo7break/serialator/blob/6df65972890424eda0c780b29ca398689a7b4ca9/serialator.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-5112": {
+      "github_poc_urls": [
+        "https://github.com/smgorelik/Windows-RCE-exploits/tree/b50e23c6a4616d951203a83a6112b5900a8f7291/Web/Flash"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-5477": {
+      "github_poc_urls": [
+        "https://github.com/robertdavidgraham/cve-2015-5477/blob/34137c71a7fb4e3fa894b045583e67d7b46d62cc/tkill.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-6128": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-6132": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-6133": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-6589": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/a2842a650de88c582e963493d5e2711aa4a1b747/exploits/kazPwn.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-6922": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/0b23cd69269e20a5dfcd2c58d84583bca7117727/advisories/kaseya-vsa-vuln-2.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-7450": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/e96013cd0fdaba6a7a3b1205025fc7c56790e85c/modules/exploits/windows/misc/ibm_websphere_java_deserialize.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-7808": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/master//modules/exploits/multi/http/vbulletin_unserialize.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2015-8088": {
+      "github_poc_urls": [
+        "https://github.com/hardenedlinux/offensive_poc/blob/0cfe3764a0388e3715b018d1d59ef801f8b16b73/CVE-2015-8088/cve-2015-8088-poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0041": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0051": {
+      "github_poc_urls": [
+        "https://github.com/koczkatamas/CVE-2016-0051"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0100": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0165": {
+      "github_poc_urls": [
+        "https://github.com/leeqwind/HolicPOC/blob/b31d63ffeaf9c6b9591897ae72b3db2532c1425c/windows/win32k/CVE-2016-0165/x86.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0189": {
+      "github_poc_urls": [
+        "https://github.com/theori-io/cve-2016-0189"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-0772": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/11f6ebda59ad878377df78351f8ab580660d0024/pocs/cve-2016-0772"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1003": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3155af679a7a6fb63d38d7049b4a53e6c0303c3f/modules/exploits/multi/http/phpmailer_arg_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10033": {
+      "github_poc_urls": [
+        "https://github.com/opsxcq/exploit-CVE-2016-10033/commit/1f6642cf116ecb6b6b96b5ec966915d5100adfe3",
+        "https://github.com/rapid7/metasploit-framework/blob/1f4ff30adb09c836dc9cb5f2c2024a244cebd08d/modules/exploits/unix/webapp/wp_phpmailer_host_header.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1004": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/3155af679a7a6fb63d38d7049b4a53e6c0303c3f/modules/exploits/multi/http/phpmailer_arg_injection.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10174": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/f2eff0fdb735bec0f0302cf2e10d6325284417bc/exploits/netgearPwn.rb",
+        "https://github.com/rapid7/metasploit-framework/blob/e04f01ed6bdf974821f892f104635e688b89e756/modules/exploits/linux/http/netgear_wnr2000_rce.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10175": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/f2eff0fdb735bec0f0302cf2e10d6325284417bc/exploits/netgearPwn.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10176": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/f2eff0fdb735bec0f0302cf2e10d6325284417bc/exploits/netgearPwn.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-10504": {
+      "github_poc_urls": [
+        "https://github.com/uclouvain/openjpeg/issues/835"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1209": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/8cd9a9b6708c4a175d5175879169188dc8014a51/modules/exploits/multi/http/wp_ninja_forms_unauthenticated_file_upload.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1524": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/cc98dd9728526699df3a67f819f91f3b21d4895e/advisories/netgear_nms_rce.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1525": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/cc98dd9728526699df3a67f819f91f3b21d4895e/advisories/netgear_nms_rce.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1560": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/dfcd5742c14a64f055849e7867cc33ae6f57a38e/modules/exploits/linux/ssh/exagrid_known_privkey.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1561": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/dfcd5742c14a64f055849e7867cc33ae6f57a38e/modules/exploits/linux/ssh/exagrid_known_privkey.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1593": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/672cd9454b2d7d2992089dc788a21dd128fb851b/advisories/novell-service-desk-7.1.0.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1757": {
+      "github_poc_urls": [
+        "https://github.com/gdbinit/mach_race"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1825": {
+      "github_poc_urls": [
+        "https://github.com/bazad/physmem/tree/376a35d0644391341bc4da7e145d1b3357005926"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1827": {
+      "github_poc_urls": [
+        "https://github.com/bazad/flow_divert-heap-overflow/tree/f9392454619360cd7532fa4f6d45a999b2d46623"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1828": {
+      "github_poc_urls": [
+        "https://github.com/bazad/flow_divert-heap-overflow/tree/f9392454619360cd7532fa4f6d45a999b2d46623"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-1910": {
+      "github_poc_urls": [
+        "https://github.com/vah13/SAP_exploit/tree/bd4a9decb9a7fde64b58c3f1bbee23ba74e7622d"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-2386": {
+      "github_poc_urls": [
+        "https://github.com/vah13/SAP_exploit/tree/bd4a9decb9a7fde64b58c3f1bbee23ba74e7622d"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-2388": {
+      "github_poc_urls": [
+        "https://github.com/vah13/SAP_exploit/tree/bd4a9decb9a7fde64b58c3f1bbee23ba74e7622d"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-2563": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/999963dfda3f90f96687272d914967f2364a6651/pocs/cve-2016-2563"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3087": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/blob/bf31676e55f0010adf9634269f86a61cc44e7102/CVE-2016-3087/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3088": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/43d8c4c5e7450d46eba2f18e6e0b6ba70c6dc671/modules/exploits/multi/http/apache_activemq_upload_jsp.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3115": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/e8fe09e2123f07f09e3f8e34fc4e3e58fe804fd4/pocs/cve-2016-3115"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3116": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/1b0c76ba7bb87cfd9ab36e4ca5e5e72cb9fdc0ca/pocs/cve-2016-3116"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3235": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/005d34991b4cdacc4594007ed56e12c669e2758a/modules/exploits/windows/fileformat/office_ole_multiple_dll_hijack.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-3309": {
+      "github_poc_urls": [
+        "https://github.com/siberas/CVE-2016-3309_Reloaded"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-4657": {
+      "github_poc_urls": [
+        "https://github.com/LiveOverflow/lo_nintendoswitch/tree/f69ac68de64480de6be4b38b091c1bdad2a88d1c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5195": {
+      "github_poc_urls": [
+        "https://github.com/FireFart/dirtycow/blob/2580beeef4063124df89d0f650e5f199fcdd09ff/dirty.c",
+        "https://github.com/dirtycow/dirtycow.github.io/blob/866a2fdf425d084d7a9576e866db1a80c640f841/dirtyc0w.c",
+        "https://github.com/dirtycow/dirtycow.github.io/blob/ad8cfe63c1db2a27b609226c040a3ce3299fff3a/pokemon.c",
+        "https://github.com/gbonacini/CVE-2016-5195/blob/fd9929d60ab928a46356506e414d8961661febb5/dcow.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5330": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/1d617ae3894222cfbbf6951fcd68fd2d1c1b15c6/modules/exploits/windows/misc/vmhgfs_webdav_dll_sideload.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5674": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5675": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5676": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5677": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5678": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5679": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5680": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/5c241a6710b7138445888fbc046d33ffdc3fd4dc/advisories/nuuo-nvr-vulns.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-5725": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/6be7b9626c061d097f567d26dff16c59e34624b5/pocs/cve-2016-5725"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6277": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/fe4f20c0cc503ff11dd241ac7bc5c5ad03c532f9/modules/exploits/linux/http/netgear_r7000_cgibin_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6415": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/tree/5fde02dfdf148580b4c580ac47daeef485b3c600/CVE-2016-6415"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6563": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/6c6221445cc3d016fdf8ed6a690b9dab043ec475/modules/exploits/linux/http/dlink_hnap_login_bof.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6598": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/b122b534f2eb936b107834b58129024ebc734034/advisories/bmc-track-it-11.4.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6599": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/b122b534f2eb936b107834b58129024ebc734034/advisories/bmc-track-it-11.4.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6600": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/dc2fe2d4a01ef7ee0cf444b2d435a8cd39cd7069/advisories/webnms-5.2-sp1-pwn.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6601": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/dc2fe2d4a01ef7ee0cf444b2d435a8cd39cd7069/advisories/webnms-5.2-sp1-pwn.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6602": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/dc2fe2d4a01ef7ee0cf444b2d435a8cd39cd7069/advisories/webnms-5.2-sp1-pwn.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6603": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/dc2fe2d4a01ef7ee0cf444b2d435a8cd39cd7069/advisories/webnms-5.2-sp1-pwn.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-6754": {
+      "github_poc_urls": [
+        "https://github.com/secmob/BadKernel/blob/4de85a771d1f2560eb29d159a1d44c381f8c39b1/exploit.html"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-7200": {
+      "github_poc_urls": [
+        "https://github.com/theori-io/chakra-2016-11"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-7201": {
+      "github_poc_urls": [
+        "https://github.com/theori-io/chakra-2016-11"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-7255": {
+      "github_poc_urls": [
+        "https://github.com/IOActive/I-know-where-your-page-lives",
+        "https://github.com/rlarabee/exploits/tree/8b9eb646516d7f022a010f28018209f331c28975",
+        "https://github.com/tinysec/public/tree/master/CVE-2016-7255"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-7608": {
+      "github_poc_urls": [
+        "https://github.com/bazad/IOFireWireFamily-overflow/tree/abc3362cc5c901bb3ddc24032c128350af230855"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-7617": {
+      "github_poc_urls": [
+        "https://github.com/bazad/physmem/tree/376a35d0644391341bc4da7e145d1b3357005926"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-8655": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/kernel-exploits/blob/4a20cca563620340e7abc2bd1e7dca15d5d82e67/CVE-2016-8655/chocobo_root.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-8869": {
+      "github_poc_urls": [
+        "https://github.com/XiphosResearch/exploits/tree/master/Joomraa"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-8870": {
+      "github_poc_urls": [
+        "https://github.com/XiphosResearch/exploits/tree/master/Joomraa"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-9079": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/f4db90edeb7f03ce1e95f5898954cbea7e13ff6c/modules/exploits/windows/browser/firefox_smil_uaf.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-9244": {
+      "github_poc_urls": [
+        "https://github.com/0x00string/oldays/blob/bf7cf4127dba1aa9a0315a716ea778b66969f694/CVE-2016-9244.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-9651": {
+      "github_poc_urls": [
+        "https://github.com/secmob/pwnfest2016/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2016-9793": {
+      "github_poc_urls": [
+        "https://github.com/xairy/kernel-exploits/blob/1b230097e769d7d13dce1e24b51d4aba1e2a0cc7/CVE-2016-9793/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0101": {
+      "github_poc_urls": [
+        "https://github.com/leeqwind/HolicPOC/blob/82638c9e55ca9232c208f9aa091da420882cd8d8/windows/win32k/CVE-2017-0101/x86.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0143": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0144": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb",
+        "https://github.com/worawit/MS17-010/blob/20301cc5a96fa367d46d88291637247cc6252488/zzz_exploit.py",
+        "https://github.com/worawit/MS17-010/blob/873c5453680a0785415990379a4b36ba61f82a4d/eternalblue_exploit8.py",
+        "https://github.com/worawit/MS17-010/blob/eafb47d715fe38045c9ea6dc4cb75ca0ef5487ce/eternalblue_exploit7.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0145": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0146": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0147": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0148": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/942959f7e8b3dee0031726d166002acae115694e/modules/auxiliary/scanner/smb/smb_ms17_010.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0199": {
+      "github_poc_urls": [
+        "https://github.com/bhdresh/CVE-2017-0199/tree/75a63c09f8291f45155a7af916c6708bd1d6f9b9",
+        "https://github.com/rapid7/metasploit-framework/blob/5bbb4d755a7a31fe6020864192cff660dc1ca6e3/modules/exploits/windows/fileformat/office_word_hta.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0263": {
+      "github_poc_urls": [
+        "https://github.com/leeqwind/HolicPOC/tree/d53ad7685759f8261f882a11fc7a0313a5e8bacb/windows/win32k/CVE-2017-0263/windows/win32k/CVE-2017-0263/x86.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0781": {
+      "github_poc_urls": [
+        "https://github.com/ojasookert/CVE-2017-0781/blob/e46c3cd22cf650ea60c46a487e545ba4e971186d/CVE-2017-0781.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-0785": {
+      "github_poc_urls": [
+        "https://github.com/ojasookert/CVE-2017-0785/blob/170f675146029077602a079e1ce6a1792d0e824d/CVE-2017-0785.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-1000112": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/kernel-exploits/blob/4a20cca563620340e7abc2bd1e7dca15d5d82e67/CVE-2017-1000112/poc.c",
+        "https://github.com/xairy/kernel-exploits/blob/4d2d39875258c44718353c256aec17973d248e76/CVE-2017-1000112/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-1000117": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/202c936868328a4fe665c9d2ea82b8f8a2610b6e/modules/exploits/multi/http/git_submodule_command_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-1000405": {
+      "github_poc_urls": [
+        "https://github.com/bindecy/HugeDirtyCowPOC/blob/ee7476d9a2049d7ac2e0d05b5d1e68930305c8ae/main.c",
+        "https://github.com/hardenedlinux/offensive_poc/blob/99c6b0b540d5550d757315aa0cb8f8edf0c41e2f/CVE-2017-1000405/huge_dirty_cow.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-10271": {
+      "github_poc_urls": [
+        "https://github.com/kkirsche/CVE-2017-10271/blob/808a8432a5f816c76a81795a25b44a5e61ec6ca5/CVE-2017-10271.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-1092": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/eabe4001c2567f031ac6aebcce9130c033ffd96c/modules/exploits/multi/http/ibm_openadmin_tool_soap_welcomeserver_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-11176": {
+      "github_poc_urls": [
+        "https://github.com/lexfo/linux/blob/6f67e70a049874df3f5ee5bafb0d5857b907b175/cve-2017-11176.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-11517": {
+      "github_poc_urls": [
+        "https://github.com/m4p0/Geutebrueck_GCore_X64_RCE_BO"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-11882": {
+      "github_poc_urls": [
+        "https://github.com/embedi/CVE-2017-11882/tree/2f28b55bab1434c643be6274c06c2dba08915453"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-12542": {
+      "github_poc_urls": [
+        "https://github.com/skelsec/CVE-2017-12542/blob/f9b72fa320af81c93c7a51fef260918d28c27c78/exploit_1.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-12611": {
+      "github_poc_urls": [
+        "https://github.com/brianwrf/S2-053-CVE-2017-12611/blob/a587bbdc79843fe44ad3fe0439d7add3f887bc31/exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-12617": {
+      "github_poc_urls": [
+        "https://github.com/cyberheartmi9/CVE-2017-12617"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-12718": {
+      "github_poc_urls": [
+        "https://github.com/sgayou/medfusion-4000-research/blob/3a85c1084bd41ca0b09fd05dcc5242663967ee98/doc/README.md"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-13253": {
+      "github_poc_urls": [
+        "https://github.com/tamirzb/CVE-2017-13253/tree/d479670b8c6d8e0e3b878b89c140146bb5b03440"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-13868": {
+      "github_poc_urls": [
+        "https://github.com/bazad/ctl_ctloutput-leak/blob/9a641da1b15bba1e1965505539b8840a33707925/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-16929": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/d0fd5f37563175dbd58ab863b2d40f2d3130cbfe/pocs/cve-2017-16930"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-16930": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/d0fd5f37563175dbd58ab863b2d40f2d3130cbfe/pocs/cve-2017-16930"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-16994": {
+      "github_poc_urls": [
+        "https://github.com/hardenedlinux/offensive_poc/blob/99c6b0b540d5550d757315aa0cb8f8edf0c41e2f/CVE-2017-16994/mincore.c",
+        "https://github.com/hardenedlinux/offensive_poc/tree/99c6b0b540d5550d757315aa0cb8f8edf0c41e2f/CVE-2017-5123"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-16995": {
+      "github_poc_urls": [
+        "https://github.com/rlarabee/exploits/blob/db64753f2335a01825f78d66665adfff3670653e/cve-2017-16995/cve-2017-16995.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-17411": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/blob/5777612e4a7d06f4e1811ca654bcb22c050078bf/CVE-2017-17411/exploit-CVE-2017-17411.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-17562": {
+      "github_poc_urls": [
+        "https://github.com/elttam/advisories/blob/c778394dfe454083ebdfb52f660fd3414ee8adb8/CVE-2017-17562/makemyday.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-17932": {
+      "github_poc_urls": [
+        "https://github.com/kartone/exploits/blob/d35b81246d16a0ca9c167571a557381af45a3fc4/AllMediaServer_0.95_exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-18016": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/352d69d518b9b9c0f4983f1254418f0e9755cbb2/pocs/cve-2017-18016"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-18344.": {
+      "github_poc_urls": [
+        "https://github.com/xairy/kernel-exploits/blob/dd408533bfdf018b7391a408657391e993da186c/CVE-2017-18344/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-2388": {
+      "github_poc_urls": [
+        "https://github.com/bazad/IOFireWireFamily-null-deref/tree/ecfae9e873289a54ba09e3e585a041d3167e2fde"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-2671": {
+      "github_poc_urls": [
+        "https://github.com/danieljiang0415/android_kernel_crash_poc/blob/ea761bde605588c9462db09f5bf416559ff32ed4/panic.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-3248": {
+      "github_poc_urls": [
+        "https://github.com/quentinhardy/scriptsAndExploits/blob/a744df018a1e0209f9a9f2e7a9a41536ff52c454/exploits/weblogic/exploit-CVE-2017-3248-bobsecq.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-3599": {
+      "github_poc_urls": [
+        "https://github.com/SECFORCE/CVE-2017-3599/blob/575707b35ab6b18fe87577392fc45b036f46e217/cve-2017-3599_poc.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-3730": {
+      "github_poc_urls": [
+        "https://github.com/guidovranken/CVE-2017-3730/blob/98cca4c8c706c6b3ff8b6f2fc9fb2e8c956f3263/crash-postfix.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-3881": {
+      "github_poc_urls": [
+        "https://github.com/artkond/cisco-rce/",
+        "https://github.com/artkond/cisco-rce/blob/d4f71e17aae2d5d411e47ca213f11a61fa17a3ec/c2960-lanbasek9-m-12.2.55.se1.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-4901": {
+      "github_poc_urls": [
+        "https://github.com/unamer/vmware_escape/tree/821430120e84151313c69eb4024b1e8e178249de/cve-2017-4901"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-4905": {
+      "github_poc_urls": [
+        "https://github.com/unamer/vmware_escape/tree/92c41771e8d3b0dfaa731e5a5cb22778b81afcff/CVE-2017-4905_and_uaf"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-4915": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/local-exploits/blob/b7da37d557636fdad1974dd407b9ff15139cd271/CVE-2017-4915/cve-2017-4915.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5123": {
+      "github_poc_urls": [
+        "https://github.com/nongiach/CVE/blob/5c2b0a15c89f2687e2a0c3fca7d2acc0d37273db/CVE-2017-5123/exploit/exploit_null_ptr_deref.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5124": {
+      "github_poc_urls": [
+        "https://github.com/Bo0oM/CVE-2017-5124/tree/265c2f139cd404b3ba0e12b498642979ca89036c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5135": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/blob/47d72af5b69bd4d2ec411b38313d33111a063c97/CVE-2017-5135/StringBleed-CVE-2017-5135.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5415": {
+      "github_poc_urls": [
+        "https://github.com/649/CVE-2017-5415/tree/209b7ae6882a18ae51b1222a68c040a3bc9a8bc5"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5638": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/tree/17cf725d64f33ef51b820dea4fc1e6133f579d64/CVE-2017-5638",
+        "https://github.com/rapid7/metasploit-framework/blob/173633263853c7717caa658a9b98350b985cda02/modules/exploits/multi/http/struts2_content_type_ognl.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5689": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/tree/d7e879222d058f8b87b7681342834470ab4ba536/CVE-2017-5689"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-5899": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/local-exploits/blob/3c5cd80a7c59ccd29a2c2a1cdbf71e0de8e66c11/CVE-2017-5899/exploit.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6008": {
+      "github_poc_urls": [
+        "https://github.com/cbayet/Exploit-CVE-2017-6008"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6074": {
+      "github_poc_urls": [
+        "https://github.com/xairy/kernel-exploits/blob/0c3cef1d8aea824d07978fc71bfaa4b1d3bea267/CVE-2017-6074/poc.c",
+        "https://github.com/xairy/kernel-exploits/blob/0c3cef1d8aea824d07978fc71bfaa4b1d3bea267/CVE-2017-6074/trigger.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6334": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/4fdd77f19aefd02368a237a1d22f2b58c4fa496f/modules/exploits/linux/http/netgear_dnslookup_cmd_exec.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6553": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/69755f6ac372cf28b7fb0a35fdcb45c7b5bd728c/modules/exploits/linux/misc/quest_pmmasterd_bof.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6736": {
+      "github_poc_urls": [
+        "https://github.com/artkond/cisco-snmp-rce/tree/2a039fbe424038ca6f6db100ad28b1e7d3aa046b"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6979": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6989": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6994": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6995": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6996": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6997": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6998": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-6999": {
+      "github_poc_urls": [
+        "https://github.com/doadam/ziVA"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7089": {
+      "github_poc_urls": [
+        "https://github.com/Bo0oM/CVE-2017-7089/tree/7355e388e49c77ba0cac70cd486fdb94c03b26b5"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7269": {
+      "github_poc_urls": [
+        "https://github.com/edwardz246003/IIS_exploit/blob/153460c909a6799c9b4d369517d224fecd414695/exploit.py",
+        "https://github.com/rapid7/metasploit-framework/blob/72388a957fefd8b00ec173509691e8321d7c0cb5/modules/exploits/windows/iis/iis_webdav_scstoragepathfromurl.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7308": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/kernel-exploits/blob/4a20cca563620340e7abc2bd1e7dca15d5d82e67/CVE-2017-7308/poc.c",
+        "https://github.com/xairy/kernel-exploits/blob/44fcbaafcb2988d3cbfee5d417b17368e15c78bf/CVE-2017-7308/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7442": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/c5021bf6652c73a433ec7f53fa4789a823069fff/modules/exploits/windows/fileformat/nitro_reader_jsapi.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7494": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/ae22b4ccf4a3dde77ec339d83091b057aa7e9a77/modules/exploits/linux/samba/is_known_pipename.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7533": {
+      "github_poc_urls": [
+        "https://github.com/hardenedlinux/offensive_poc/blob/4a71e00b07be66606a7cc7c9b1f2213e89188ab7/CVE-2017-7533/exploit.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-7981": {
+      "github_poc_urls": [
+        "https://github.com/xdrr/vulnerability-research/blob/c76aec169646047ba199471f3b24a5a0c86af865/webapp/tuleap/2017.04.tuleap-auth-ci.md"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8046": {
+      "github_poc_urls": [
+        "https://github.com/m3ssap0/spring-break_cve-2017-8046"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8291": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/03e4ee91c2473775c2a8f28aa36c2023da2854bf/modules/exploits/unix/fileformat/ghostscript_type_confusion.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8422": {
+      "github_poc_urls": [
+        "https://github.com/stealth/plasmapulsar/blob/921a61b16938b7d69c2abbe3848dffc8f9238168/smb0k.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8464": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/tree/master/CVE-2017-8464"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8570": {
+      "github_poc_urls": [
+        "https://github.com/rxwx/CVE-2017-8570/tree/a015d3a98699e9f46d038640b45f1932499b9649"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8759": {
+      "github_poc_urls": [
+        "https://github.com/Voulnet/CVE-2017-8759-Exploit-sample"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8779": {
+      "github_poc_urls": [
+        "https://github.com/guidovranken/rpcbomb/blob/fe53048af2d4fb78c911e71a30f21afcffbbf5e1/rpcbomb.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8798": {
+      "github_poc_urls": [
+        "https://github.com/tintinweb/pub/tree/edf0b0693dc18decd51e186b3ae8e6f635958967/pocs/cve-2017-8798"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8849": {
+      "github_poc_urls": [
+        "https://github.com/stealth/plasmapulsar/blob/921a61b16938b7d69c2abbe3848dffc8f9238168/smb0k.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-8895": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/63490261341ab798d5ed1e5c7f14c46230500506/modules/exploits/windows/backupexec/ssl_uaf.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-9417": {
+      "github_poc_urls": [
+        "https://github.com/649/BroadPWN/tree/2ffd7ad310aab18a8e0efe8ec788df5cf6135051"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-9769": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/12198a088132f047e0a86724bc5ebba92a73ac66/modules/exploits/windows/local/razer_zwopenprocess.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-9791": {
+      "github_poc_urls": [
+        "https://github.com/nixawk/labs/blob/943764ccb3b36a419729062f23972fd0d726bd24/CVE-2017-9791/exploit_S2-048.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2017-9798": {
+      "github_poc_urls": [
+        "https://github.com/hannob/optionsbleed/blob/e297ce13cfb0f338b2cabfb81a70349fd6925f82/optionsbleed"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-0114": {
+      "github_poc_urls": [
+        "https://github.com/zi0Black/POC-CVE-2018-0114/tree/d3bddb421726a9eddbabfd6a1ca58ff4abca93af"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-0296": {
+      "github_poc_urls": [
+        "https://github.com/yassineaboukir/CVE-2018-0296"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-0886": {
+      "github_poc_urls": [
+        "https://github.com/preempt/credssp/tree/8864c372f76a8226d83e105c63ab1c2c6948f7c7"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-0952": {
+      "github_poc_urls": [
+        "https://github.com/atredispartners/CVE-2018-0952-SystemCollector"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-1000115": {
+      "github_poc_urls": [
+        "https://github.com/649/Memcrashed-DDoS-Exploit/tree/3422efc009a43451281d165e8b9979189c405ff1"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-1002105": {
+      "github_poc_urls": [
+        "https://github.com/evict/poc_CVE-2018-1002105/blob/ed5da79aadad0049d11f89fcb9ed65f987a331a1/unauth_poc.py",
+        "https://github.com/evict/poc_CVE-2018-1002105/blob/f704f2e593fbb686b4a5799dc13e8bfcec13f3c3/poc.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-10933": {
+      "github_poc_urls": [
+        "https://github.com/blacknbunny/libSSH-Authentication-Bypass/blob/5dc55fbf5518f2e11503f08fa84a3640e60c7ec9/libsshauthbypass.py",
+        "https://github.com/jas502n/CVE-2018-10933/blob/05ee62e7ed7d4cd10e71ea10b28da990e37a24f4/libssh-CVE-2018-10933-jas502n.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-1111": {
+      "github_poc_urls": [
+        "https://github.com/kkirsche/CVE-2018-1111/blob/e889762d796a8a2a8cb574b173e6cb215befac1a/main.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-11776": {
+      "github_poc_urls": [
+        "https://github.com/hook-s3c/CVE-2018-11776-Python-PoC/blob/343bf070cc8649803ea865bd64543234fec1a4f6/exploitS2-057-cmd.py",
+        "https://github.com/mazen160/struts-pwn_CVE-2018-11776/blob/ffaefa75242315913a8f695b6d5eab8b6143794d/struts-pwn.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-13784": {
+      "github_poc_urls": [
+        "https://github.com/ambionics/prestashop-exploits/blob/3bcb6af9954c03f269623c4752788f8de80602b9/prestashop_aes_cbc/prestashop_cbc_read.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-15685": {
+      "github_poc_urls": [
+        "https://github.com/matt-/CVE-2018-15685"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-15982": {
+      "github_poc_urls": [
+        "https://github.com/smgorelik/Windows-RCE-exploits/blob/e86ff9c71fafa6298a05730e3b104df54f4d3eb7/Documents/Office%2BFlash/CVE-2018-15982_%23PoC%23.zip"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-16323": {
+      "github_poc_urls": [
+        "https://github.com/ttffdd/XBadManners/blob/800e9188da9358d932829e33e3c20e9c3466bc62/XBadManners.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-18955": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/kernel-exploits/blob/0792c978066a34ce50f7786d6abd0eb8df218a98/CVE-2018-18955/exploit.dbus.sh",
+        "https://github.com/bcoles/kernel-exploits/blob/4be5baae0135c9370420a21134f980b21a5ac1ab/CVE-2018-18955/exploit.cron.sh",
+        "https://github.com/bcoles/kernel-exploits/blob/a2b01a7421b84bb539d2ca845db5e35f4f86d351/CVE-2018-18955/exploit.polkit.sh",
+        "https://github.com/bcoles/kernel-exploits/blob/d56a3f69e76a4c203d57222f25ace10b654631d0/CVE-2018-18955/exploit.ldpreload.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-19914": {
+      "github_poc_urls": [
+        "https://github.com/domainmod/domainmod/issues/87"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-20009": {
+      "github_poc_urls": [
+        "https://github.com/domainmod/domainmod/issues/88"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-20010": {
+      "github_poc_urls": [
+        "https://github.com/domainmod/domainmod/issues/88"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-20011": {
+      "github_poc_urls": [
+        "https://github.com/domainmod/domainmod/issues/88"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-20250": {
+      "github_poc_urls": [
+        "https://github.com/WyAtu/CVE-2018-20250/blob/5a2df20fe3d28137ab4553153294abfb3c059be9/exp.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-2380": {
+      "github_poc_urls": [
+        "https://github.com/erpscanteam/CVE-2018-2380/tree/ef45ad496a5da36b17e59194ba061b54cccac0b0"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-2628": {
+      "github_poc_urls": [
+        "https://github.com/brianwrf/CVE-2018-2628/blob/7ddf44ecac0c679ccf0a05c21f36991f448bb2a2/exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-4193": {
+      "github_poc_urls": [
+        "https://github.com/Synacktiv/CVE-2018-4193/tree/7b08cb8207e6a0889c405aa25409f3a646ecf01f"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-4386": {
+      "github_poc_urls": [
+        "https://github.com/Fire30/bad_hoist/tree/e26ca0d2dd3c34bfaa421249bd9486a5c0ee64c4"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-4441": {
+      "github_poc_urls": [
+        "https://github.com/Cryptogenic/PS4-6.20-WebKit-Code-Execution-Exploit/tree/90979dd089ca5cbbc70e3549fb48792d3c69aab2"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-4878": {
+      "github_poc_urls": [
+        "https://github.com/smgorelik/Windows-RCE-exploits/tree/722e4b96a91afdb9b9b11a9354a5a1625fcf1d53/Documents/Office%2BFlash#cve-2018-4878-flash-exploit"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-5234": {
+      "github_poc_urls": [
+        "https://github.com/embedi/ble_norton_core/tree/921360695146ff59f52fc8e215ae00b9ad077bad"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-5407": {
+      "github_poc_urls": [
+        "https://github.com/bbbrumley/portsmash/tree/e3e7447ba04e1a8a5637cabadf3403faf94f7a56"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-5702": {
+      "github_poc_urls": [
+        "https://github.com/taviso/rbndr/tree/a189ffd9447ba78aa2702c5649d853b6fb612e3b"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-5999": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/787b92c549c7a8ddd53740ef0fbc1e04c12a18b6/advisories/asuswrt-lan-rce.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-6000": {
+      "github_poc_urls": [
+        "https://github.com/pedrib/PoC/blob/787b92c549c7a8ddd53740ef0fbc1e04c12a18b6/advisories/asuswrt-lan-rce.txt"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-6546": {
+      "github_poc_urls": [
+        "https://github.com/securifera/CVE-2018-6546-Exploit/blob/675265122a17dbe6cdef7eb86f2714332170ca13/plays_service_poc.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-6794": {
+      "github_poc_urls": [
+        "https://github.com/kirillwow/ids_bypass"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-6871": {
+      "github_poc_urls": [
+        "https://github.com/jollheef/libreoffice-remote-arbitrary-file-disclosure/tree/7eb75ff6662e50783824df97c34f6c7f58e71ce5"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-7466": {
+      "github_poc_urls": [
+        "https://github.com/incredibleindishell/exploit-code-by-me/tree/70ab010fa559abec85f327dbd33f4fbaa7a9ce04/TestLink%20-below%201.9.17-%20Remote%20Code%20Execution"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-7600": {
+      "github_poc_urls": [
+        "https://github.com/a2u/CVE-2018-7600/blob/2c623a6a9ea641119cf7ee75cd344fb32047169b/exploit.py",
+        "https://github.com/dreadlocked/Drupalgeddon2/blob/16cac1b2336d38642f75eb7b7e2c833b2c3f49b1/drupalgeddon2.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-8174": {
+      "github_poc_urls": [
+        "https://github.com/smgorelik/Windows-RCE-exploits/blob/d250b7daa07c59f5bed8b19ee3bc5a700ffca584/Web/VBScript/README.md"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-8897": {
+      "github_poc_urls": [
+        "https://github.com/can1357/CVE-2018-8897"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2018-9995": {
+      "github_poc_urls": [
+        "https://github.com/ezelf/CVE-2018-9995_dvr_credentials/blob/529a711e3db8c7265473bf122276fb295e5b973d/getDVR_Credentials.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0211": {
+      "github_poc_urls": [
+        "https://github.com/cfreal/exploits/blob/ba026fae59974037d744a90cef09224f751bc3e4/CVE-2019-0211-apache/cfreal-carpediem.php"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0227": {
+      "github_poc_urls": [
+        "https://github.com/RhinoSecurityLabs/CVEs/blob/d5d317bb211af59d0708fd602d83bd80b61ae37b/CVE-2019-0227/CVE-2019-0227.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0708": {
+      "github_poc_urls": [
+        "https://github.com/0xeb-bp/bluekeep/tree/334443948296e8624c76a5ae30a2562658afd176",
+        "https://github.com/n1xbyte/CVE-2019-0708/blob/b44a1ec077c56f0400cb2cb6faf40180b87459a6/crashpoc.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0803": {
+      "github_poc_urls": [
+        "https://github.com/ExpLife0011/CVE-2019-0803/tree/141d9c78b3e6c993a5f6e046b8d0262f17fa0e77"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0841": {
+      "github_poc_urls": [
+        "https://github.com/SandboxEscaper/polarbearrepo/tree/5fd3a1e3652bba36ee95186945c5cc1c5f006143/CVE-2019-0841-BYPASS",
+        "https://github.com/SandboxEscaper/polarbearrepo/tree/fd73afeafbe363ed28e0521f46894574a58b3d72/ByeBear"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-0863": {
+      "github_poc_urls": [
+        "https://github.com/SandboxEscaper/polarbearrepo/tree/763b757ead0ee8043a7edb5fdc2d437ae0f7b009/angrypolarbearbug2"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11043": {
+      "github_poc_urls": [
+        "https://github.com/neex/phuip-fpizdam/tree/8d12169a8c47be30677d1b97a402c42a9cf6b77f"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1125": {
+      "github_poc_urls": [
+        "https://github.com/bitdefender/swapgs-attack-poc/tree/b799ae28142619bdaa342dec2f145845c469e459"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1132": {
+      "github_poc_urls": [
+        "https://github.com/Vlad-tri/CVE-2019-1132/blob/4064d5ee1275197175f786b6c8c66ea4d3a6c9cc/main.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11703": {
+      "github_poc_urls": [
+        "https://github.com/x41sec/advisories/tree/master/X41-2019-002"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11704": {
+      "github_poc_urls": [
+        "https://github.com/x41sec/advisories/tree/master/X41-2019-001"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11705": {
+      "github_poc_urls": [
+        "https://github.com/x41sec/advisories/tree/master/X41-2019-003"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11706": {
+      "github_poc_urls": [
+        "https://github.com/x41sec/advisories/tree/master/X41-2019-004"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-11708": {
+      "github_poc_urls": [
+        "https://github.com/0vercl0k/CVE-2019-11708/tree/1cdf26140f17de8a620e90f4f6ea3865e18e49ad"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1184": {
+      "github_poc_urls": [
+        "https://github.com/0vercl0k/stuffz/blob/0e9bfc282368500843bb2edb7585cff4413a72af/CVE-2019-1184/CVE-2019-1184.cc"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1215": {
+      "github_poc_urls": [
+        "https://github.com/bluefrostsecurity/CVE-2019-1215/tree/933ef44310770a873071c3394cd663f8a172628e"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-12181": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/local-exploits/blob/aee19e0c138a5861167e6e13f7737b63ca71999f/CVE-2019-12181/SUroot"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-12255": {
+      "github_poc_urls": [
+        "https://github.com/dazhouzhou/vxworks-poc/tree/master/CVE-2019-12255"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1322": {
+      "github_poc_urls": [
+        "https://github.com/apt69/COMahawk"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-13272": {
+      "github_poc_urls": [
+        "https://github.com/bcoles/kernel-exploits/blob/a0b44c8c987bb33ab6535415cac3a4a9df09106e/CVE-2019-13272/poc.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1405": {
+      "github_poc_urls": [
+        "https://github.com/apt69/COMahawk"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-14221": {
+      "github_poc_urls": [
+        "https://github.com/cccaaasser/1CRM-CVE/blob/master/CVE-2019-14221.md"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-14378": {
+      "github_poc_urls": [
+        "https://github.com/vishnudevtj/exploits/blob/bdbe2647969150c63ee3b34da5a2deb056e64f0b/qemu/CVE-2019-14378/exp.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1458": {
+      "github_poc_urls": [
+        "https://github.com/piotrflorczyk/cve-2019-1458_POC/blob/243ed92a0141bdcdcfeef554fc2a35534fc2c68c/cve-2019-1458.cpp"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-15126": {
+      "github_poc_urls": [
+        "https://github.com/akabe1/kr00ker/blob/5ce817049db45ce6bc53d98e2bf1117bcd88e400/Kr00ker.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-15943": {
+      "github_poc_urls": [
+        "https://github.com/bi7s/CVE/blob/167311338fa70430612f9c2741c42936342d692d/CVE-2019-15943/README.md"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-18634": {
+      "github_poc_urls": [
+        "https://github.com/Plazmaz/CVE-2019-18634/blob/b348e738a83fd4180b3ec26ed216535547f3bb8a/self-contained.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-1978": {
+      "github_poc_urls": [
+        "https://github.com/trustedsec/cve-2019-19781/blob/cc0b7f56330c0bc61152df39b53c92fcf7ffa578/citrixmash.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-19781": {
+      "github_poc_urls": [
+        "https://github.com/projectzeroindia/CVE-2019-19781/blob/0d33ecf1841b90410813a0239be2fc08939da4c4/CVE-2019-19781.sh"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-4279": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/c1572c89a802dfc36253f95f29af7bda890b2b71/modules/exploits/windows/ibm/ibm_was_dmgr_java_deserialization_rce.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-5736": {
+      "github_poc_urls": [
+        "https://github.com/feexd/pocs/tree/a5aac58e0935a505c034b5f9e6cf35c1fc67471d/CVE-2019-5736"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-6977": {
+      "github_poc_urls": [
+        "https://github.com/cfreal/exploits/blob/1a671d1d8510e93a0b2607261e9b779562585fe2/CVE-2019-6977-imagecolormatch/exploit.php"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-7304": {
+      "github_poc_urls": [
+        "https://github.com/initstring/dirty_sock/blob/6d7515eba1e045276770aa0c781e9b33f039b497/dirty_sockv1.py",
+        "https://github.com/initstring/dirty_sock/blob/6d7515eba1e045276770aa0c781e9b33f039b497/dirty_sockv2.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-8352": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/c1572c89a802dfc36253f95f29af7bda890b2b71/modules/exploits/windows/ibm/ibm_was_dmgr_java_deserialization_rce.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-9692": {
+      "github_poc_urls": [
+        "https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/multi/http/cmsms_showtime2_rce.rb"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019-9810": {
+      "github_poc_urls": [
+        "https://github.com/0vercl0k/CVE-2019-11708/tree/1cdf26140f17de8a620e90f4f6ea3865e18e49ad"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2019‑5678": {
+      "github_poc_urls": [
+        "https://github.com/RhinoSecurityLabs/CVEs/blob/0e318a283b00cf42ceb8b898e756deb62082c3aa/CVE-2019-5678/CVE%E2%80%912019%E2%80%915678.html"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-0601": {
+      "github_poc_urls": [
+        "https://github.com/ollypwn/cve-2020-0601/tree/d957153ee016c69674769b64bf87b49f7d91120e"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-0609": {
+      "github_poc_urls": [
+        "https://github.com/ollypwn/BlueGate/tree/62416fc0b771809b46c9b8f90cc19b5b7069c66e"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-0610": {
+      "github_poc_urls": [
+        "https://github.com/ollypwn/BlueGate/tree/62416fc0b771809b46c9b8f90cc19b5b7069c66e"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-0796": {
+      "github_poc_urls": [
+        "https://github.com/chompie1337/SMBGhost_RCE_PoC/tree/92c9f46e46334c3bc3645ace3014622efd11704a",
+        "https://github.com/danigargu/CVE-2020-0796/tree/02df8af47f8d47fd17edb03b69da8bf6272cc544",
+        "https://github.com/eerykitty/CVE-2020-0796-PoC/tree/5378663af950bbb24ef79d4a9050b0e008396caa"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-11108": {
+      "github_poc_urls": [
+        "https://github.com/Frichetten/CVE-2020-11108-PoC/blob/16cca4100e4e15f903d6cf08afec028bb12cf115/cve-2020-11108-rce.py",
+        "https://github.com/Frichetten/CVE-2020-11108-PoC/blob/3559713cfd9fb0c58d0d10c412b8e9c1f6c8eb75/root-cve-2020-11108-rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-1938": {
+      "github_poc_urls": [
+        "https://github.com/YDHCUI/CNVD-2020-10487-Tomcat-Ajp-lfi/blob/8bd38f4cf22331ecf4e48096a78c5931509c26be/CNVD-2020-10487-Tomcat-Ajp-lfi.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-3956": {
+      "github_poc_urls": [
+        "https://github.com/aaronsvk/CVE-2020-3956/blob/da0b5c0b043f535d9de90c39f86f6825a567274a/exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-5902": {
+      "github_poc_urls": [
+        "https://github.com/Critical-Start/Team-Ares/tree/e3fe665ccea204e28187524372fbbc6c3a9cdda2/CVE-2020-5902"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-7246": {
+      "github_poc_urls": [
+        "https://github.com/TobinShields/qdPM9.1_Exploit/blob/b135e99b54228740f84c6a821d0c56fdaa694797/qdPM9.1_exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-8617": {
+      "github_poc_urls": [
+        "https://github.com/knqyf263/CVE-2020-8617/blob/92a64e68cf77a5b938e0d9c04524fa6147ccb785/exploit.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2020-8813": {
+      "github_poc_urls": [
+        "https://github.com/mhaskar/CVE-2020-8813/blob/4877c2b2f378ce5937f56b259b69b02840514d4c/Cacti-postauth-rce.py",
+        "https://github.com/mhaskar/CVE-2020-8813/blob/dfb48378f39249ff54ecf24ccd3b89db26971ccf/Cacti-preauth-rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-22555": {
+      "github_poc_urls": [
+        "https://github.com/google/security-research/blob/d4d6a96c9c8b00929559a84f3d7560903b6413c2/pocs/linux/cve-2021-22555/exploit.c"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25155": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25156": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25157": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25158": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25159": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25160": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25161": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2021-25162": {
+      "github_poc_urls": [
+        "https://github.com/alephsecurity/research/blob/2de795d7ec0cf6219805feff9ff823a526dd92aa/PoCs/Aruba/full_rce.py"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2024-46528": {
+      "github_poc_urls": [
+        "https://github.com/advisories/GHSA-p26r-gfgc-c47h"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2024-52302": {
+      "github_poc_urls": [
+        "https://github.com/d3sca/CVE-2024-52302"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-2011": {
+      "github_poc_urls": [
+        "https://github.com/datagoboom/CVE-2025-2011"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-26263": {
+      "github_poc_urls": [
+        "https://github.com/DRAGOWN/CVE-2025-26263"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-26264": {
+      "github_poc_urls": [
+        "https://github.com/DRAGOWN/CVE-2025-26264"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-27007": {
+      "github_poc_urls": [
+        "https://github.com/absholi7ly/CVE-2025-27007-OttoKit-exploit/"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-49683": {
+      "github_poc_urls": [
+        "https://github.com/nu11secur1ty/CVE-mitre/tree/main/2025/CVE-2025-49683"
+      ],
+      "has_github_poc": true
+    },
+    "CVE-2025-49730": {
+      "github_poc_urls": [
+        "https://github.com/nu11secur1ty/Windows11Exploits/tree/main/2025/CVE-2025-49730"
+      ],
+      "has_github_poc": true
+    }
+  }
+}

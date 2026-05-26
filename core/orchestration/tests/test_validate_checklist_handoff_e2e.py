@@ -299,3 +299,46 @@ def test_e2e_pointer_drives_full_reuse_and_demotion(tmp_path):
     # Live path untouched.
     assert paths_by_id["p-live"]["proximity"] == 8
     assert paths_by_id["p-live"]["blockers"] == []
+
+
+# ---------------------------------------------------------------------------
+# C2-followup: --allow-unreachable threads through the agentic
+# post-pass into the prompt that drives the claude-code validation
+# sub-agent.
+# ---------------------------------------------------------------------------
+
+
+def test_build_validate_prompt_default_omits_allow_unreachable_note():
+    """Sanity: default prompt has no in-isolation-mode notice."""
+    from pathlib import Path
+    from core.orchestration.agentic_passes import _build_validate_prompt
+    prompt = _build_validate_prompt(
+        target=Path("/tmp/x"),
+        agentic_out_dir=Path("/tmp/x/out"),
+        validate_dir=Path("/tmp/x/validate"),
+        analysis_report=Path("/tmp/x/report.json"),
+        selection_file=Path("/tmp/x/sel.json"),
+        selected_count=3,
+    )
+    assert "OPERATOR FLAG: --allow-unreachable" not in prompt
+
+
+def test_build_validate_prompt_with_allow_unreachable_includes_notice():
+    """C2-followup: the operator flag surfaces as a prompt section
+    so the claude-code sub-agent knows to thread it into the
+    PipelineConfig when invoking the validation pipeline."""
+    from pathlib import Path
+    from core.orchestration.agentic_passes import _build_validate_prompt
+    prompt = _build_validate_prompt(
+        target=Path("/tmp/x"),
+        agentic_out_dir=Path("/tmp/x/out"),
+        validate_dir=Path("/tmp/x/validate"),
+        analysis_report=Path("/tmp/x/report.json"),
+        selection_file=Path("/tmp/x/sel.json"),
+        selected_count=3,
+        allow_unreachable=True,
+    )
+    assert "OPERATOR FLAG: --allow-unreachable" in prompt
+    assert "allow_unreachable=True" in prompt
+    assert "PipelineConfig" in prompt
+    assert "demote_unreachable_paths" in prompt

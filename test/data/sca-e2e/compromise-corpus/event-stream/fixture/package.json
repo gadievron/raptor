@@ -1,0 +1,8 @@
+{
+  "name": "event-stream-fixture",
+  "version": "0.0.1",
+  "description": "fixture pinning the compromised event-stream version (2018)",
+  "dependencies": {
+    "event-stream": "3.3.6"
+  }
+}

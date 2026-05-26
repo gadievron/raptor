@@ -1,0 +1,116 @@
+{
+  "azure-identity": [
+    "azure.identity"
+  ],
+  "azure-storage-blob": [
+    "azure.storage.blob"
+  ],
+  "beautifulsoup4": [
+    "bs4"
+  ],
+  "discord-py": [
+    "discord"
+  ],
+  "django-rest-framework": [
+    "rest_framework"
+  ],
+  "djangorestframework": [
+    "rest_framework"
+  ],
+  "elasticsearch-dsl": [
+    "elasticsearch_dsl"
+  ],
+  "google-api-python-client": [
+    "googleapiclient"
+  ],
+  "google-cloud-storage": [
+    "google.cloud.storage"
+  ],
+  "ipython": [
+    "IPython"
+  ],
+  "jupyterlab": [
+    "jupyterlab"
+  ],
+  "memcached": [
+    "memcache"
+  ],
+  "msgpack-python": [
+    "msgpack"
+  ],
+  "mysql-connector-python": [
+    "mysql.connector"
+  ],
+  "opencv-python": [
+    "cv2"
+  ],
+  "opencv-python-headless": [
+    "cv2"
+  ],
+  "pillow": [
+    "PIL"
+  ],
+  "pip": [
+    "pip"
+  ],
+  "protobuf": [
+    "google.protobuf"
+  ],
+  "psycopg": [
+    "psycopg"
+  ],
+  "psycopg2": [
+    "psycopg2"
+  ],
+  "psycopg2-binary": [
+    "psycopg2"
+  ],
+  "pycryptodome": [
+    "Crypto"
+  ],
+  "pycryptodomex": [
+    "Cryptodome"
+  ],
+  "pyjwt": [
+    "jwt"
+  ],
+  "pymongo": [
+    "pymongo",
+    "bson",
+    "gridfs"
+  ],
+  "pymongo-stubs": [],
+  "pymysql": [
+    "pymysql"
+  ],
+  "python-dateutil": [
+    "dateutil"
+  ],
+  "pyyaml": [
+    "yaml"
+  ],
+  "rich-click": [
+    "rich_click"
+  ],
+  "ruamel.yaml": [
+    "ruamel.yaml"
+  ],
+  "scikit-image": [
+    "skimage"
+  ],
+  "scikit-learn": [
+    "sklearn"
+  ],
+  "setuptools": [
+    "setuptools",
+    "pkg_resources",
+    "distutils"
+  ],
+  "types-requests": [],
+  "umemcache": [
+    "umemcache"
+  ],
+  "wheel": [
+    "wheel"
+  ]
+}

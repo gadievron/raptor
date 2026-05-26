@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Collect calibration project samples — clone curated OSS projects,
+run SCA, store sanitised scan output.
+
+Wraps :func:`packages.sca.calibration.project_samples.collect_project_samples`.
+For each project in the curated list, the collector:
+
+  1. Shallow-clones to a transient temp dir.
+  2. Runs raptor-sca against it.
+  3. Writes findings to
+     packages/sca/data/calibration/project_samples/<eco>/<name>.json.
+  4. Discards the clone — only RAPTOR-generated scan output is kept.
+
+Output is MIT-licensed (RAPTOR-generated). Project source is never
+redistributed.
+
+Usage:
+
+    packages/sca/scripts/raptor-sca-collect-samples
+    packages/sca/scripts/raptor-sca-collect-samples --out custom/dir
+    packages/sca/scripts/raptor-sca-collect-samples --only-licenses MIT,Apache-2.0,BSD
+
+Exit codes:
+  0  every sample succeeded
+  1  one or more samples failed (others may still have written)
+  2  invalid arguments
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Collect calibration project samples — clones curated OSS "
+            "projects, runs SCA, stores sanitised scan output."
+        ),
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="output dir (defaults to "
+             "packages/sca/data/calibration/project_samples/)",
+    )
+    parser.add_argument(
+        "--only-licenses", type=str, default=None,
+        help="comma-separated list of acceptable license SPDX "
+             "IDs/expressions; samples whose declared license "
+             "doesn't match are skipped",
+    )
+    parser.add_argument(
+        "--clone-timeout", type=int, default=120,
+        help="git clone timeout per project (default 120s)",
+    )
+    parser.add_argument(
+        "--sca-timeout", type=int, default=300,
+        help="raptor-sca timeout per project (default 300s)",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="emit per-sample status lines",
+    )
+    args = parser.parse_args()
+
+    out_dir = args.out
+    if out_dir is None:
+        out_dir = (
+            _REPO_ROOT / "packages" / "sca" / "data" /
+            "calibration" / "project_samples"
+        )
+    only_licenses = None
+    if args.only_licenses:
+        only_licenses = [
+            s.strip() for s in args.only_licenses.split(",") if s.strip()
+        ]
+
+    from packages.sca.calibration.project_samples import (
+        collect_project_samples,
+    )
+    results = collect_project_samples(
+        out_dir=out_dir,
+        only_licenses=only_licenses,
+        git_clone_timeout=args.clone_timeout,
+        sca_timeout=args.sca_timeout,
+    )
+
+    any_failed = False
+    for r in results:
+        prefix = "raptor-sca-collect-samples:"
+        slug = f"{r.ecosystem}/{r.project}"
+        if r.error:
+            any_failed = True
+            print(f"{prefix} {slug} FAILED: {r.error}", file=sys.stderr)
+        else:
+            status = "ok" if r.written else "unchanged"
+            print(f"{prefix} {slug} {status} ({r.finding_count} findings)")
+    if not results:
+        print("raptor-sca-collect-samples: no samples processed", file=sys.stderr)
+        return 2
+    return 1 if any_failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

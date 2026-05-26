@@ -24,8 +24,8 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from packages.coccinelle.models import SpatchMatch, SpatchResult
-from packages.coccinelle.prereqs import (
+from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
+from packages.coccinelle.prereqs import (  # noqa: E402
     PrereqFacts,
     evaluate_finding,
     gather_prereqs,
@@ -105,7 +105,8 @@ def test_gather_prereqs_parses_def_and_call_messages(tmp_path):
     """Cocci result shape: ``def:<name>`` and ``call:<name>``
     messages → indexed into ``facts.defs`` and ``facts.calls``."""
     (tmp_path / "x.c").write_text("\n")
-    rules_dir = tmp_path / "rules"; rules_dir.mkdir()
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
 
     fake_results = [SpatchResult(
         rule="function_inventory",
@@ -137,7 +138,8 @@ def test_gather_prereqs_ignores_unknown_message_shapes(tmp_path):
     """Future rule additions may emit other COCCIRESULT shapes;
     the gather pass stays neutral and ignores them."""
     (tmp_path / "x.c").write_text("\n")
-    rules_dir = tmp_path / "rules"; rules_dir.mkdir()
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
 
     fake_results = [SpatchResult(
         rule="function_inventory",

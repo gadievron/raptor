@@ -143,7 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--hunt-tool", choices=("auto", "llm", "cocci"), default="auto",
+        "--hunt-tool", choices=("auto", "llm", "cocci", "slopsquat"), default="auto",
         help=(
             "Backend for --hunt. ``llm`` = the multi-model LLM with "
             "sandboxed Read/Grep/Glob (default before this flag, works "
@@ -151,9 +151,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "match — C/C++ targets only, deterministic, dramatically "
             "more precise on structural patterns; uses 1 LLM call to "
             "translate the pattern into a .cocci rule, then spatch "
-            "does the matching. ``auto`` = cocci when spatch is "
-            "installed AND the target has C/C++ source, otherwise llm. "
-            "Has no effect on --trace."
+            "does the matching. ``slopsquat`` = offline supply-chain hunt "
+            "for LLM-hallucinated package names: parses the target's "
+            "dependency manifests and flags names matching the slopsquat "
+            "shape (no LLM, no network, no API key; --hunt pattern and "
+            "--model are ignored). "
+            "``auto`` = cocci when spatch is installed AND the target has "
+            "C/C++ source, otherwise llm. Has no effect on --trace."
         ),
     )
     return p
@@ -278,6 +282,9 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     from packages.code_understanding.dispatch.hunt_cocci_dispatch import (
         cocci_hunt_dispatch, repo_looks_c_cpp,
     )
+    from packages.code_understanding.dispatch.hunt_slopsquat_dispatch import (
+        SLOPSQUAT_MODEL, slopsquat_hunt_dispatch,
+    )
     from packages.coccinelle.runner import is_available as spatch_available
 
     target = Path(args.target).resolve()
@@ -289,19 +296,29 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     # default. Explicit ``cocci`` honours the operator's choice
     # (the dispatch surfaces a clean error if spatch is missing or
     # the repo isn't C/C++ — better UX than a silent fallback).
+    # ``slopsquat`` is explicit-only (never auto): a deterministic,
+    # network-free supply-chain hunt that ignores model and pattern.
     use_cocci = False
+    use_slopsquat = args.hunt_tool == "slopsquat"
     if args.hunt_tool == "cocci":
         use_cocci = True
     elif args.hunt_tool == "auto":
         use_cocci = spatch_available() and repo_looks_c_cpp(str(target))
-    backend_label = "cocci" if use_cocci else "llm"
+    backend_label = "slopsquat" if use_slopsquat else ("cocci" if use_cocci else "llm")
 
-    models, missing = _resolve_models(args.model)
-    if missing:
-        raise SystemExit(
-            "Unable to resolve --model entries: " + ", ".join(missing) +
-            "\nCheck models.json or set the relevant *_API_KEY env var."
-        )
+    # slopsquat is offline, deterministic, and model-independent — it needs
+    # no LLM key. Drive the hunt() orchestration with a single sentinel
+    # handle (the substrate only reads .model_name); the dispatch ignores it.
+    # Every other backend resolves the operator's --model list normally.
+    if use_slopsquat:
+        models = [SLOPSQUAT_MODEL]
+    else:
+        models, missing = _resolve_models(args.model)
+        if missing:
+            raise SystemExit(
+                "Unable to resolve --model entries: " + ", ".join(missing) +
+                "\nCheck models.json or set the relevant *_API_KEY env var."
+            )
 
     # Per-model budget = total / N, with a small per-model floor.
     # The cocci backend uses far less of this (1 LLM call to write
@@ -313,6 +330,10 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
 
     def _bound_dispatch(model, pattern, repo_path):
+        if use_slopsquat:
+            # No LLM, no network — zero cost.
+            cost_by_model[model.model_name] = 0.0
+            return slopsquat_hunt_dispatch(model, pattern, repo_path)
         if use_cocci:
             # cocci dispatch tracks no per-call cost callback (only one
             # small LLM round-trip) — record a nominal value so the

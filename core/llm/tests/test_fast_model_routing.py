@@ -130,7 +130,7 @@ def test_no_primary_model_no_population() -> None:
     cfg.retry_delay_remote = 0.0
     cfg.enable_caching = False
     from pathlib import Path
-    cfg.cache_dir = Path("/tmp")
+    cfg.cache_dir = Path(".")
     cfg.cache_ttl_seconds = None
     cfg.cache_max_entries = None
     cfg.enable_cost_tracking = False

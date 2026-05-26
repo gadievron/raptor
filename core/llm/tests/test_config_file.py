@@ -471,7 +471,7 @@ class TestGenerateSampleConfig:
     def test_no_api_key_in_json_body(self):
         from core.llm.detection import generate_sample_config
         sample = generate_sample_config()
-        lines = [l for l in sample.splitlines() if not l.strip().startswith("//")]
+        lines = [line for line in sample.splitlines() if not line.strip().startswith("//")]
         data = json.loads("\n".join(lines))
         for model in data["models"]:
             assert "api_key" not in model

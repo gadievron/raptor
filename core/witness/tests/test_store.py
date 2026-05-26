@@ -7,18 +7,11 @@ hash-mismatch rejection, tolerant load on malformed manifests.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-
-# core/witness/tests/test_store.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
-from core.witness.store import WitnessStore, WitnessStoreError  # noqa: E402
-from core.witness.types import (  # noqa: E402
+from core.witness.store import WitnessStore, WitnessStoreError
+from core.witness.types import (
     Witness,
     WitnessOutcome,
     WitnessSource,
@@ -293,7 +286,7 @@ def test_put_rejects_non_json_outcome_detail(tmp_path):
         bytes_hash=compute_bytes_hash(data),
         source=WitnessSource.FUZZ,
         observed_outcome=WitnessOutcome.EXIT_SIGNAL,
-        outcome_detail={"path_obj": Path("/tmp/foo")},  # not JSON-safe
+        outcome_detail={"path_obj": tmp_path},  # Path is not JSON-safe
     )
     with pytest.raises(WitnessStoreError, match="JSON-serialisable"):
         store.put(w, data)
@@ -348,3 +341,104 @@ def test_witness_store_error_importable_from_init(tmp_path):
     from core.witness import WitnessStoreError as imported
     from core.witness.store import WitnessStoreError as direct
     assert imported is direct
+
+
+def test_concurrent_same_hash_writes_do_not_race(tmp_path):
+    """N threads writing the SAME bytes concurrently must all
+    succeed. Pre-fix the atomic write used a shared ``.bin.tmp`` /
+    ``.json.tmp`` suffix per blob; concurrent writers raced on
+    that file and ``os.replace`` raised ``FileNotFoundError`` for
+    the losers (the first ``replace`` consumed the shared tempfile).
+    Per-(pid, thread) suffix on the tempfile name fixed it.
+
+    PR E surfaced this: LLM exploits with identical bytes across
+    findings are realistic and could trigger the race once
+    crash_agent or a future caller goes multi-threaded. The end
+    state was always correct (dedup-by-hash works); only the
+    losing callers' exceptions were the bug.
+    """
+    import threading
+    N = 16
+    shared_bytes = b"// identical exploit text across findings\n"
+    shared_hash = compute_bytes_hash(shared_bytes)
+    store = WitnessStore(tmp_path / "witnesses")
+    errors = []
+    barrier = threading.Barrier(N)
+
+    def worker(tid):
+        try:
+            barrier.wait()
+            w = Witness(
+                bytes_hash=shared_hash,
+                bytes_len=len(shared_bytes),
+                source=WitnessSource.LLM_EMIT_RUN,
+                observed_outcome=WitnessOutcome.NOT_RUN,
+                outcome_detail={"finding_id": f"F-{tid}"},
+            )
+            store.put(w, shared_bytes)
+        except Exception as e:  # noqa: BLE001
+            errors.append((tid, type(e).__name__, str(e)))
+
+    threads = [
+        threading.Thread(target=worker, args=(i,)) for i in range(N)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"concurrent put() raised on {len(errors)}/{N} threads"
+    # End state: one blob, one manifest (last-write-wins on outcome_detail)
+    blobs = list((tmp_path / "witnesses" / "blobs").glob("*"))
+    manifests = list(
+        (tmp_path / "witnesses" / "manifests").glob("*.json")
+    )
+    assert len(blobs) == 1
+    assert len(manifests) == 1
+    loaded = store.get_witness(shared_hash)
+    assert loaded.outcome_detail["finding_id"].startswith("F-")
+
+
+def test_concurrent_distinct_hash_writes_succeed(tmp_path):
+    """Distinct hashes from concurrent writers: also must succeed.
+    This was already safe pre-fix (each writer's hash was unique
+    so tempfile names didn't collide) — pin it as a regression
+    guard."""
+    import threading
+    N = 8
+    PER = 20
+    store = WitnessStore(tmp_path / "witnesses")
+    errors = []
+    barrier = threading.Barrier(N)
+
+    def worker(tid):
+        try:
+            barrier.wait()
+            for i in range(PER):
+                data = f"thread-{tid}-write-{i}".encode()
+                w = Witness(
+                    bytes_hash=compute_bytes_hash(data),
+                    bytes_len=len(data),
+                    source=WitnessSource.LLM_EMIT_RUN,
+                    observed_outcome=WitnessOutcome.NOT_RUN,
+                    outcome_detail={"finding_id": f"F-{tid}-{i}"},
+                )
+                store.put(w, data)
+        except Exception as e:  # noqa: BLE001
+            errors.append((tid, type(e).__name__, str(e)))
+
+    threads = [
+        threading.Thread(target=worker, args=(i,)) for i in range(N)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    blobs = list((tmp_path / "witnesses" / "blobs").glob("*"))
+    manifests = list(
+        (tmp_path / "witnesses" / "manifests").glob("*.json")
+    )
+    assert len(blobs) == N * PER
+    assert len(manifests) == N * PER

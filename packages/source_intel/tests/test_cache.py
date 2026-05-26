@@ -27,7 +27,8 @@ def test_cache_distinguishes_different_targets(tmp_path):
     """Two different targets must produce distinct keys."""
     a = tmp_path / "a"
     b = tmp_path / "b"
-    a.mkdir(); b.mkdir()
+    a.mkdir()
+    b.mkdir()
     (a / "x.c").write_text("int x(void){return 0;}\n")
     (b / "x.c").write_text("int y(void){return 1;}\n")
 
@@ -58,9 +59,11 @@ def test_cache_invalidates_when_rules_dir_changes(tmp_path):
     """Two different rules dirs produce different keys for the same
     target — rule-set version is part of the cache key."""
     (tmp_path / "x.c").write_text("int main(void){return 0;}\n")
-    rules_a = tmp_path / "rules_a"; rules_a.mkdir()
+    rules_a = tmp_path / "rules_a"
+    rules_a.mkdir()
     (rules_a / "r.cocci").write_text("@@\n@@\n")
-    rules_b = tmp_path / "rules_b"; rules_b.mkdir()
+    rules_b = tmp_path / "rules_b"
+    rules_b.mkdir()
     (rules_b / "r.cocci").write_text("@@\n@@\n@@\n")  # different content
 
     c = SourceIntelCache()

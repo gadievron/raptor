@@ -223,7 +223,7 @@ def test_audit_mode_writes_jsonl(tmp_path):
     # We want at least one record about our write — be lenient
     # about which one (the kernel may emit multiple file-* entries
     # for one Python write).
-    parsed = [json.loads(l) for l in lines if l.strip()]
+    parsed = [json.loads(line) for line in lines if line.strip()]
     matching = [r for r in parsed if "audited" in r.get("path", "")]
     assert matching, (
         f"no audit record matched our test path; got {len(parsed)} "
@@ -325,8 +325,8 @@ def test_audit_verbose_records_extended_categories(tmp_path):
     assert jsonl_path.exists(), (
         "audit_verbose=True did not produce .sandbox-denials.jsonl"
     )
-    records = [json.loads(l) for l in
-                jsonl_path.read_text().splitlines() if l.strip()]
+    records = [json.loads(line) for line in
+                jsonl_path.read_text().splitlines() if line.strip()]
     # Filter out control-plane records (audit_summary, markers).
     data = [r for r in records if "syscall" in r]
     assert data, f"expected data records, got: {records!r}"
@@ -368,8 +368,8 @@ def test_audit_summary_record_emitted(tmp_path):
         if jsonl_path.exists() and jsonl_path.stat().st_size > 0:
             break
         time.sleep(0.05)
-    records = [json.loads(l) for l in
-                jsonl_path.read_text().splitlines() if l.strip()]
+    records = [json.loads(line) for line in
+                jsonl_path.read_text().splitlines() if line.strip()]
     summaries = [r for r in records if r.get("type") == "audit_summary"]
     assert len(summaries) == 1, (
         f"expected exactly one audit_summary record, got "
@@ -422,9 +422,9 @@ def test_audit_budget_drops_when_cap_hit(tmp_path):
         if decision == audit_budget.KEEP:
             streamer._append_record(record)
     streamer.stop()
-    records = [json.loads(l) for l in
+    records = [json.loads(line) for line in
                 (audit_dir / seatbelt_audit.DENIALS_FILE)
-                .read_text().splitlines() if l.strip()]
+                .read_text().splitlines() if line.strip()]
     markers = [r for r in records
                 if r.get("type") in ("category_budget_exceeded",
                                      "category_budget_exceeded_sampling")]

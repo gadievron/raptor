@@ -63,7 +63,7 @@ class TestRenderDataflowValidationLines:
             "n_tier3_retry": 1,
         }
         out = render_dataflow_validation_lines(dv, indent="   ")
-        tier_line = [l for l in out if "by tier:" in l][0]
+        tier_line = [line for line in out if "by tier:" in line][0]
         assert "2 Tier 1" in tier_line
         assert "Tier 2" not in tier_line  # zero — omitted
         assert "1 Tier 3" in tier_line
@@ -76,7 +76,7 @@ class TestRenderDataflowValidationLines:
             "n_tier3_retry": 0,
         }
         out = render_dataflow_validation_lines(dv)
-        assert not any("by tier:" in l for l in out)
+        assert not any("by tier:" in line for line in out)
 
     def test_tier4_smt_subline_when_any_outcome_fired(self):
         dv = {
@@ -85,7 +85,7 @@ class TestRenderDataflowValidationLines:
             "n_tier4_smt_refuted": 1,
         }
         out = render_dataflow_validation_lines(dv)
-        smt_line = [l for l in out if "Tier 4 SMT:" in l][0]
+        smt_line = [line for line in out if "Tier 4 SMT:" in line][0]
         assert "1 refuted" in smt_line
         assert "1 witness" in smt_line
         assert "disagreement" not in smt_line  # zero — omitted
@@ -99,7 +99,7 @@ class TestRenderDataflowValidationLines:
             "path_conditions_by_cwe": {"CWE-190": 1, "CWE-476": 3},
         }
         out = render_dataflow_validation_lines(dv)
-        pc_line = [l for l in out if "path_conditions populated:" in l][0]
+        pc_line = [line for line in out if "path_conditions populated:" in line][0]
         assert "4" in pc_line
         # Sort: CWE-476 first (count 3), CWE-190 second (count 1).
         idx_476 = pc_line.index("CWE-476")
@@ -113,7 +113,7 @@ class TestRenderDataflowValidationLines:
             "path_conditions_by_cwe": {},
         }
         out = render_dataflow_validation_lines(dv)
-        pc_line = [l for l in out if "path_conditions populated:" in l][0]
+        pc_line = [line for line in out if "path_conditions populated:" in line][0]
         assert pc_line.endswith(": 2")  # no parenthetical breakdown
 
     def test_downgrades_recommended_only(self):
@@ -122,7 +122,7 @@ class TestRenderDataflowValidationLines:
             "n_recommended_downgrades": 2,
         }
         out = render_dataflow_validation_lines(dv)
-        dl = [l for l in out if "downgrades:" in l][0]
+        dl = [line for line in out if "downgrades:" in line][0]
         assert "2 flagged" in dl
         assert "applied:" not in dl
 
@@ -134,7 +134,7 @@ class TestRenderDataflowValidationLines:
             "n_soft_downgrades": 1,
         }
         out = render_dataflow_validation_lines(dv)
-        dl = [l for l in out if "downgrades:" in l][0]
+        dl = [line for line in out if "downgrades:" in line][0]
         assert "3 flagged" in dl
         assert "2 hard" in dl
         assert "1 soft (consensus override)" in dl

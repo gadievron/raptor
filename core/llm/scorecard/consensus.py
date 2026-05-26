@@ -145,34 +145,39 @@ def record_consensus_outcomes(
         for model, verdict in verdicts.items():
             with_majority = (verdict == majority_says_exploitable)
             outcome = "correct" if with_majority else "incorrect"
+            # This model's per-finding result — used both for the resolved
+            # model snapshot (model_version) and, on disagreement, the sample.
+            this_model_result = next(
+                (r for r in this_finding_per_model
+                 if str(r.get("analysed_by") or r.get("model") or "") == model),
+                None,
+            )
+            # Concrete snapshot the provider served (e.g. gemini-2.5-pro-002);
+            # None when unavailable so the cell stays alias-keyed, never guessed.
+            model_version = (this_model_result or {}).get("resolved_model")
             sample = None
-            if outcome == "incorrect":
+            if outcome == "incorrect" and this_model_result is not None:
                 # Capture the minority model's OWN reasoning. If we
                 # can't find it in ``per_finding_results`` (caller
                 # didn't supply, or the per-model record is missing),
                 # skip the sample rather than fall back to the
                 # primary's reasoning — that would mis-attribute the
                 # majority's text to the dissenter.
-                this_model_result = next(
-                    (r for r in this_finding_per_model
-                     if str(r.get("analysed_by") or r.get("model") or "") == model),
-                    None,
-                )
-                if this_model_result is not None:
-                    reasoning = str(this_model_result.get("reasoning") or "")
-                    sample = {
-                        "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
-                        "other_reasoning": (
-                            f"majority of {len(verdicts)} models voted "
-                            f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
-                        ),
-                    }
+                reasoning = str(this_model_result.get("reasoning") or "")
+                sample = {
+                    "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
+                    "other_reasoning": (
+                        f"majority of {len(verdicts)} models voted "
+                        f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
+                    ),
+                }
             try:
                 scorecard.record_event(
                     decision_class=decision_class,
                     model=model,
                     event_type=EventType.MULTI_MODEL_CONSENSUS,
                     outcome=outcome,
+                    model_version=model_version,
                     sample=sample,
                 )
                 n_recorded += 1

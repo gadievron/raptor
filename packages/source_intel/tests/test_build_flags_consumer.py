@@ -26,7 +26,7 @@ from packages.source_intel.analyze import SourceIntelResult
 
 
 def _finding(snippet: str, rule_id: str = "cpp/unbounded-write",
-             file_path: str = "/tmp/x.c") -> Finding:
+             file_path: str = "x.c") -> Finding:
     return Finding(
         finding_id="t",
         producer="codeql",

@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Validate the calibration corpus — emit a metrics report.
+
+Wraps :func:`packages.sca.calibration.validate.validate_corpus`.
+Computes top-N precision + Spearman correlation between
+``raptor_risk_estimate`` and the corpus's exploitation signals,
+writes the report to
+``packages/sca/data/calibration/validation/<date>.json``.
+
+Re-tuning ``risk.py`` weights is an OPERATOR DECISION based on
+the report — this script never auto-mutates weights.
+
+Exit codes:
+  0  validated_v1 (passes thresholds)
+  1  needs_retune OR unverified (insufficient samples)
+  2  invalid arguments / corpus dir missing
+
+Usage:
+
+    packages/sca/scripts/raptor-sca-validate-corpus
+    packages/sca/scripts/raptor-sca-validate-corpus --corpus custom/dir
+    packages/sca/scripts/raptor-sca-validate-corpus --threshold-top-20 0.6
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Validate the SCA calibration corpus and emit a metrics "
+            "report. Re-tuning risk.py weights is an operator "
+            "decision based on the report — this script never "
+            "auto-mutates weights."
+        ),
+    )
+    parser.add_argument(
+        "--corpus", type=Path, default=None,
+        help="corpus directory (defaults to "
+             "packages/sca/data/calibration/)",
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="report output file (defaults to "
+             "<corpus>/validation/<date>.json)",
+    )
+    parser.add_argument(
+        "--threshold-top-20", type=float, default=0.5,
+        help="top-20 precision threshold for validated_v1 verdict "
+             "(default 0.5)",
+    )
+    parser.add_argument(
+        "--threshold-spearman", type=float, default=0.4,
+        help="Spearman correlation threshold for validated_v1 "
+             "verdict (default 0.4)",
+    )
+    args = parser.parse_args()
+
+    corpus_dir = args.corpus
+    if corpus_dir is None:
+        corpus_dir = _REPO_ROOT / "packages" / "sca" / "data" / "calibration"
+    if not corpus_dir.is_dir():
+        print(
+            f"raptor-sca-validate-corpus: corpus dir not found: "
+            f"{corpus_dir}",
+            file=sys.stderr,
+        )
+        return 2
+
+    from packages.sca.calibration.validate import validate_corpus
+    report = validate_corpus(
+        corpus_dir,
+        out_path=args.out,
+        threshold_top_20=args.threshold_top_20,
+        threshold_spearman=args.threshold_spearman,
+    )
+
+    prefix = "raptor-sca-validate-corpus:"
+    print(f"{prefix} verdict: {report.verdict}")
+    print(f"{prefix} findings_total: {report.findings_total}")
+    print(f"{prefix} findings_with_score: {report.findings_with_score}")
+    print(f"{prefix} findings_with_signal: {report.findings_with_signal}")
+    print(f"{prefix} top_20_precision: {report.top_20_precision:.3f}")
+    print(f"{prefix} top_50_precision: {report.top_50_precision:.3f}")
+    if report.spearman_rho is not None:
+        print(f"{prefix} spearman_rho: {report.spearman_rho:.3f}")
+    else:
+        print(f"{prefix} spearman_rho: undefined "
+              "(too few findings or constant scores)")
+    for note in report.notes:
+        print(f"{prefix} note: {note}")
+
+    if report.verdict == "validated_v1":
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

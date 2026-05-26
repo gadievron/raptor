@@ -36,8 +36,8 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod
-from packages.coccinelle.models import SpatchMatch, SpatchResult
+from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod  # noqa: E402
+from packages.coccinelle.models import SpatchMatch, SpatchResult  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -199,13 +199,13 @@ def test_matches_to_variants_preserves_unrelated_paths():
             ),
         ],
     )
-    variants = mod._spatch_matches_to_variants(result, "/tmp/some-repo")
+    variants = mod._spatch_matches_to_variants(result, "./some-repo")
     assert variants[0]["file"] == "/usr/include/sys/socket.h"
 
 
 def test_matches_to_variants_handles_empty_result():
     result = SpatchResult(rule="r", matches=[])
-    assert mod._spatch_matches_to_variants(result, "/tmp/repo") == []
+    assert mod._spatch_matches_to_variants(result, "./repo") == []
 
 
 # ---------------------------------------------------------------------
@@ -214,7 +214,7 @@ def test_matches_to_variants_handles_empty_result():
 
 
 def test_dispatch_rejects_empty_pattern():
-    out = mod.cocci_hunt_dispatch(_fake_model(), "", "/tmp/whatever")
+    out = mod.cocci_hunt_dispatch(_fake_model(), "", "./whatever")
     assert len(out) == 1
     assert "error" in out[0]
     assert "non-empty" in out[0]["error"]

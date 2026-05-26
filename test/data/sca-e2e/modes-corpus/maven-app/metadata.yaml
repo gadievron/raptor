@@ -1,0 +1,8 @@
+name: maven-app
+ecosystem: Maven
+shape: |
+  pom.xml (2 vulnerable Maven pins) + Dockerfile (eclipse-temurin:11-jdk).
+  Tests scan/bump/fix against a realistic Maven-project shape.
+deliberately_vulnerable_pins:
+  - org.apache.logging.log4j:log4j-core@2.14.1   # Log4Shell (CVE-2021-44228)
+  - com.fasterxml.jackson.core:jackson-databind@2.9.10  # multiple CVEs

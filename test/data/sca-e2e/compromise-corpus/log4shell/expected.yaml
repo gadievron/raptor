@@ -1,0 +1,10 @@
+# Detection requirements for log4shell.
+#
+# At least one finding matching EVERY entry below must fire,
+# otherwise the fixture fails.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: critical
+    require_kev: true
+    cve_id: CVE-2021-44228

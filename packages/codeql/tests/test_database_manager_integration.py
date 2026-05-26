@@ -20,6 +20,13 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
+# Module-level marker — the file's own docstring describes the tests
+# as timing-sensitive and "marked slow"; the decorator was missing.
+# These tests spawn multiprocessing.Process workers to exercise the
+# real concurrent-write race window.
+pytestmark = pytest.mark.slow
 
 
 # Module-level worker — spawn pickles by name, so it must not be nested

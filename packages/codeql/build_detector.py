@@ -1243,7 +1243,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 # operator-visible cause swallowed. Defensive
                 # slicing: take the last non-empty line, or the
                 # whole stderr if there's only one line.
-                stderr_lines = [l for l in (result.stderr or "").split("\n") if l.strip()]
+                stderr_lines = [line for line in (result.stderr or "").split("\n") if line.strip()]
                 tail = stderr_lines[-1] if stderr_lines else "(no stderr)"
                 logger.warning(f"Build script crashed: {tail}")
                 return None

@@ -99,6 +99,7 @@ def test_classify_size_source_recognizes_user_controlled_multiplied(tmp_path):
     assert _classify_size_source(str(f), 3, "kmalloc") == "user_controlled"
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",

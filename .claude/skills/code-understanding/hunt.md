@@ -18,6 +18,8 @@ One of:
 
 **Disambiguation:** `FIND-*` or `EP-*` → ID lookup in findings.json / context-map.json. `sink:` prefix → filter by sink type. Everything else → treat as a freeform pattern description.
 
+**Backends (`--hunt-tool`):** The default is the multi-model LLM hunt described below (any language). Two deterministic backends bypass the LLM: `cocci` (Coccinelle AST match, C/C++ only) and `slopsquat`. The `slopsquat` backend is an offline, network-free, no-API-key supply-chain hunt — it parses the target's dependency manifests and flags package names matching the AI-hallucination shape (popular prefix + generic suffix, lookalike-character substitution, untrusted scope). Use it at comprehension time to catch likely-hallucinated imports in LLM-generated code *before* installing them; the `--hunt` pattern is ignored. Registry verification (publish date, downloads, maintainer) is a separate, networked concern handled by `/sca`.
+
 ## Purpose
 
 Answer: *"Is this the only place this happens, or did the same mistake get made everywhere?"*

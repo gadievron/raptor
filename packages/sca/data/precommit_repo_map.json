@@ -1,0 +1,178 @@
+{
+  "_doc": "Curated map from pre-commit ``repo:`` URLs (canonicalised — strip protocol + .git suffix, lowercase) to the underlying registry package they wrap. Lets the precommit parser emit Dependency rows with the right ecosystem so OSV CVE matching fires against the actual tool, not against a GitHub-only purl. Update by appending; never remove (older configs still benefit).",
+  "_schema": {
+    "<canonical_repo>": {
+      "ecosystem": "PyPI | npm | RubyGems | etc.",
+      "name": "<registry package name>"
+    }
+  },
+
+  "github.com/astral-sh/ruff-pre-commit": {
+    "ecosystem": "PyPI",
+    "name": "ruff"
+  },
+  "github.com/astral-sh/uv-pre-commit": {
+    "ecosystem": "PyPI",
+    "name": "uv"
+  },
+  "github.com/psf/black": {
+    "ecosystem": "PyPI",
+    "name": "black"
+  },
+  "github.com/psf/black-pre-commit-mirror": {
+    "ecosystem": "PyPI",
+    "name": "black"
+  },
+  "github.com/pre-commit/mirrors-mypy": {
+    "ecosystem": "PyPI",
+    "name": "mypy"
+  },
+  "github.com/pre-commit/mirrors-eslint": {
+    "ecosystem": "npm",
+    "name": "eslint"
+  },
+  "github.com/pre-commit/mirrors-prettier": {
+    "ecosystem": "npm",
+    "name": "prettier"
+  },
+  "github.com/pre-commit/mirrors-isort": {
+    "ecosystem": "PyPI",
+    "name": "isort"
+  },
+  "github.com/pre-commit/mirrors-autopep8": {
+    "ecosystem": "PyPI",
+    "name": "autopep8"
+  },
+  "github.com/pre-commit/mirrors-yapf": {
+    "ecosystem": "PyPI",
+    "name": "yapf"
+  },
+  "github.com/pre-commit/mirrors-pyright": {
+    "ecosystem": "npm",
+    "name": "pyright"
+  },
+  "github.com/pre-commit/pre-commit-hooks": {
+    "ecosystem": "PyPI",
+    "name": "pre-commit-hooks"
+  },
+  "github.com/pre-commit/pygrep-hooks": {
+    "ecosystem": "PyPI",
+    "name": "pygrep-hooks"
+  },
+  "github.com/pycqa/flake8": {
+    "ecosystem": "PyPI",
+    "name": "flake8"
+  },
+  "github.com/pycqa/isort": {
+    "ecosystem": "PyPI",
+    "name": "isort"
+  },
+  "github.com/pycqa/bandit": {
+    "ecosystem": "PyPI",
+    "name": "bandit"
+  },
+  "github.com/pycqa/pylint": {
+    "ecosystem": "PyPI",
+    "name": "pylint"
+  },
+  "github.com/pycqa/autoflake": {
+    "ecosystem": "PyPI",
+    "name": "autoflake"
+  },
+  "github.com/pycqa/pydocstyle": {
+    "ecosystem": "PyPI",
+    "name": "pydocstyle"
+  },
+  "github.com/asottile/pyupgrade": {
+    "ecosystem": "PyPI",
+    "name": "pyupgrade"
+  },
+  "github.com/asottile/blacken-docs": {
+    "ecosystem": "PyPI",
+    "name": "blacken-docs"
+  },
+  "github.com/asottile/yesqa": {
+    "ecosystem": "PyPI",
+    "name": "yesqa"
+  },
+  "github.com/asottile/setup-cfg-fmt": {
+    "ecosystem": "PyPI",
+    "name": "setup-cfg-fmt"
+  },
+  "github.com/asottile/dead": {
+    "ecosystem": "PyPI",
+    "name": "dead"
+  },
+  "github.com/commitizen-tools/commitizen": {
+    "ecosystem": "PyPI",
+    "name": "commitizen"
+  },
+  "github.com/dosisod/refurb": {
+    "ecosystem": "PyPI",
+    "name": "refurb"
+  },
+  "github.com/econchick/interrogate": {
+    "ecosystem": "PyPI",
+    "name": "interrogate"
+  },
+  "github.com/tox-dev/pyproject-fmt": {
+    "ecosystem": "PyPI",
+    "name": "pyproject-fmt"
+  },
+  "github.com/python-jsonschema/check-jsonschema": {
+    "ecosystem": "PyPI",
+    "name": "check-jsonschema"
+  },
+  "github.com/jendrikseipp/vulture": {
+    "ecosystem": "PyPI",
+    "name": "vulture"
+  },
+  "github.com/sqlalchemyorg/zimports": {
+    "ecosystem": "PyPI",
+    "name": "zimports"
+  },
+  "github.com/scop/pre-commit-shfmt": {
+    "ecosystem": "PyPI",
+    "name": "shfmt-py"
+  },
+  "github.com/koalaman/shellcheck-precommit": {
+    "ecosystem": "PyPI",
+    "name": "shellcheck-py"
+  },
+  "github.com/rubocop/rubocop": {
+    "ecosystem": "RubyGems",
+    "name": "rubocop"
+  },
+  "github.com/standardrb/standard": {
+    "ecosystem": "RubyGems",
+    "name": "standard"
+  },
+  "github.com/google/yapf": {
+    "ecosystem": "PyPI",
+    "name": "yapf"
+  },
+  "github.com/google/yamllint": {
+    "ecosystem": "PyPI",
+    "name": "yamllint"
+  },
+  "github.com/adrienverge/yamllint": {
+    "ecosystem": "PyPI",
+    "name": "yamllint"
+  },
+  "github.com/igorshubovych/markdownlint-cli": {
+    "ecosystem": "npm",
+    "name": "markdownlint-cli"
+  },
+  "github.com/jorisroovers/gitlint": {
+    "ecosystem": "PyPI",
+    "name": "gitlint"
+  },
+  "github.com/codespell-project/codespell": {
+    "ecosystem": "PyPI",
+    "name": "codespell"
+  },
+  "github.com/charliermarsh/ruff-pre-commit": {
+    "ecosystem": "PyPI",
+    "name": "ruff"
+  }
+}

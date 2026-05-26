@@ -72,6 +72,18 @@ class ZipEntryCountExceeded(Exception):
     """
 
 
+class ZipTotalBytesExceeded(Exception):
+    """Raised when the CUMULATIVE extracted-bytes total exceeds the caller's
+    ``max_total_bytes``.
+
+    The per-member size and entry-count caps bound each member and the count,
+    but NOT the aggregate — N members each just under ``max_member_bytes``
+    still sum to N×64 MiB in memory. ``max_total_bytes`` (opt-in) bounds the
+    sum and ALWAYS raises (never truncates), so a caller extracting to disk
+    can't be handed a silently-incomplete result.
+    """
+
+
 def extract_files_from_zip(
     source: Union[bytes, str, os.PathLike, io.IOBase],
     *,
@@ -82,6 +94,7 @@ def extract_files_from_zip(
     allow_absolute_paths: bool = False,
     expected_count: Optional[int] = None,
     raise_on_entry_count: bool = False,
+    max_total_bytes: Optional[int] = None,
 ) -> Dict[str, bytes]:
     """Walk ``source`` (a zip archive) and return selected members
     as a ``{key: bytes}`` dict.
@@ -157,6 +170,7 @@ def extract_files_from_zip(
         return found
 
     try:
+        total_bytes = 0
         for i, info in enumerate(zf.infolist()):
             # In-memory cap. EOCD pre-flight catches the common bomb
             # case but some archives (unusual but valid) have a
@@ -195,7 +209,7 @@ def extract_files_from_zip(
                 # member's compressed-data bounds — we don't have
                 # to defend against over-read separately.
                 with zf.open(info) as f:
-                    found[key] = f.read()
+                    data = f.read()
             except (zipfile.BadZipFile, OSError, RuntimeError) as e:
                 # ``RuntimeError`` covers password-protected entries
                 # in older Python versions; ``BadZipFile`` covers
@@ -206,6 +220,15 @@ def extract_files_from_zip(
                     info.filename, e,
                 )
                 continue
+            # Aggregate-size cap: bound the SUM of materialised bytes, not just
+            # per-member/count. Always raises (never silently truncates).
+            if max_total_bytes is not None:
+                total_bytes += len(data)
+                if total_bytes > max_total_bytes:
+                    raise ZipTotalBytesExceeded(
+                        f"zip extraction exceeds {max_total_bytes} bytes "
+                        f"(bomb-shape); refusing")
+            found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break
     finally:

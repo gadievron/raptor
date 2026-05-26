@@ -266,9 +266,14 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
         save_json(output_dir / "findings.json", {"findings": merged})
 
     # --- Merge SARIF ---
+    # Top-level *.sarif are the code-scan outputs; SCA writes its SARIF
+    # to the sca/ subdir (<run>/sca/findings.sarif), so include that too
+    # or merged.sarif would silently omit dependency findings.
     sarif_paths: List[str] = []
     for run_dir in run_dirs:
         for sarif_file in run_dir.glob("*.sarif"):
+            sarif_paths.append(str(sarif_file))
+        for sarif_file in (run_dir / "sca").glob("*.sarif"):
             sarif_paths.append(str(sarif_file))
 
     sarif_files_merged = len(sarif_paths)

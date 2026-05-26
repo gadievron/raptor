@@ -442,7 +442,9 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
     # successful-looking line over a real failure"). The terminal-
     # safe form keeps the output reviewable without escaping
     # surprises.
-    safe_name = lambda s: _escape_nonprintable(str(s))
+    def safe_name(s):
+        return _escape_nonprintable(str(s))
+
     for name, status in results:
         n = safe_name(name)
         s = safe_name(status)

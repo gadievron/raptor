@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Refresh the SCA calibration corpus from public ground-truth sources.
+
+Wraps :func:`packages.sca.calibration.build_corpus`. Designed for both
+operator-driven runs and the scheduled GHA refresh workflow.
+
+Exit codes:
+  0  every source attempted produced output (changed or unchanged)
+  1  at least one source failed (network down, schema drift); other
+     sources still wrote what they could.
+  2  invalid arguments / unwriteable output dir.
+
+Usage:
+
+    packages/sca/scripts/raptor-sca-build-corpus
+    packages/sca/scripts/raptor-sca-build-corpus --out custom/dir
+    packages/sca/scripts/raptor-sca-build-corpus --sources kev,epss
+    packages/sca/scripts/raptor-sca-build-corpus --offline    # skip; for tests
+
+The default output dir is ``packages/sca/data/calibration/`` relative
+to RAPTOR's repo root. Override with ``--out`` for ad-hoc snapshots.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# parents[3] climbs:
+#   [0] scripts/   (this script's directory)
+#   [1] sca/       (the package)
+#   [2] packages/  (the packages root)
+#   [3] <repo root>
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Refresh the SCA calibration corpus from public sources "
+            "(CISA KEV, FIRST EPSS, etc.). See "
+            "packages/sca/data/calibration/ATTRIBUTION.md for the "
+            "full source list and licensing."
+        ),
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="output directory (defaults to "
+             "packages/sca/data/calibration/ relative to repo root)",
+    )
+    parser.add_argument(
+        "--sources", type=str, default=None,
+        help="comma-separated subset of sources to refresh "
+             "(default: all). Available: kev, epss",
+    )
+    parser.add_argument(
+        "--offline", action="store_true",
+        help="don't fetch — exits 0 with a no-op log line. For "
+             "test environments without network.",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="emit per-source result lines",
+    )
+    args = parser.parse_args()
+
+    if args.offline:
+        print("raptor-sca-build-corpus: --offline; no fetches attempted.")
+        return 0
+
+    out_dir = args.out
+    if out_dir is None:
+        out_dir = _REPO_ROOT / "packages" / "sca" / "data" / "calibration"
+
+    sources = None
+    if args.sources:
+        sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+
+    from packages.sca.calibration import build_corpus
+    results = build_corpus(out_dir=out_dir, sources=sources)
+
+    any_failed = False
+    any_changed = False
+    for r in results:
+        prefix = "raptor-sca-build-corpus:"
+        if r.error:
+            any_failed = True
+            print(f"{prefix} {r.source} FAILED: {r.error}", file=sys.stderr)
+        else:
+            any_changed = any_changed or r.written
+            status = "updated" if r.written else "unchanged"
+            print(f"{prefix} {r.source} {status} ({r.record_count} records)")
+    if args.verbose and not any_changed and not any_failed:
+        print("raptor-sca-build-corpus: corpus already current; no writes.")
+    return 1 if any_failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

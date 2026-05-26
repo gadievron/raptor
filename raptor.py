@@ -86,6 +86,112 @@ def _extract_target(args: list) -> str | None:
     return None
 
 
+def _rewrite_target_arg(args: list, old: str, new: str) -> list:
+    """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
+    ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
+    flags = ("--repo", "--binary", "--url")
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in flags and i + 1 < len(args) and args[i + 1] == old:
+            out += [a, new]
+            i += 2
+            continue
+        matched = next((f for f in flags if a == f"{f}={old}"), None)
+        out.append(f"{matched}={new}" if matched else a)
+        i += 1
+    return out
+
+
+_CACHE_NAME_ALLOWED = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _safe_cache_name(archive_name: str, sha: str) -> str:
+    """Content-cache dir name: ``<sanitised archive name>-<sha>`` — readable
+    *and* collision-free. The archive name is attacker-influenced, so it's
+    reduced to a safe charset, stripped of leading separators, and length-capped
+    before the sha (which alone guarantees uniqueness) is appended.
+    """
+    base = "".join(c if c in _CACHE_NAME_ALLOWED else "_" for c in archive_name)
+    base = base.strip("._-")[:64] or "archive"
+    return f"{base}-{sha}"
+
+
+def _unpack_archive_target(target: str, args: list, out_dir: Path):
+    """Extract an archive ``target`` into a CONTENT-ADDRESSED shared cache and
+    point the scan at it.
+
+    The extraction lives at ``<out_dir.parent>/_sources/<archive_sha256>/`` —
+    automatically project-scoped (``<project>/_sources/…`` in project mode,
+    ``out/_sources/…`` otherwise) and deduped by content: one copy per distinct
+    archive shared across every run in that scope, never a per-run copy. A
+    second scan of the same archive is a cache hit (no re-extraction). The
+    extracted source persists (findings stay navigable; downstream can read the
+    flagged code); a ``<out_dir>/_source`` symlink makes each run navigable.
+
+    Returns ``(new_args, target_identity)`` — args with the target rewritten to
+    the cache dir and the manifest archive-identity block — or ``None`` if
+    extraction failed (caller should fail the run rather than scan the archive).
+    """
+    import shutil
+    import tempfile
+
+    from core.archive import extract_to_dir
+    from core.run.provenance import archive_snapshot
+
+    snap = archive_snapshot(target)
+    if snap is None:
+        return None
+    sha = snap["archive_sha256"]
+    sources_root = out_dir.parent / "_sources"
+    sources_root.mkdir(parents=True, exist_ok=True)
+    # <name>-<sha> so the dir is self-describing ("what is this?") while the sha
+    # keeps it unique/collision-free.
+    cache_name = _safe_cache_name(snap["archive_name"], sha)
+    canonical = sources_root / cache_name
+
+    if canonical.exists():
+        print(f"[*] Reusing extracted {snap['format']} archive (cache hit {sha[:12]})")
+    else:
+        # Extract to a unique temp sibling, then atomically promote to <sha>/.
+        # Presence of <sha>/ therefore means a COMPLETE extraction, and a
+        # concurrent run racing us just loses the os.replace harmlessly.
+        tmp = Path(tempfile.mkdtemp(dir=sources_root, prefix=".extract-"))
+        try:
+            stats = extract_to_dir(target, tmp)
+        except Exception as e:
+            # Broad on purpose: extraction runs on attacker-controlled input,
+            # so ANY failure (ArchiveError, an unforeseen OSError/ValueError, or
+            # a MemoryError from an oversized archive) must fail the run
+            # gracefully — never crash raptor with a traceback.
+            shutil.rmtree(tmp, ignore_errors=True)
+            print(f"✗ archive extraction failed for {target}: {e}", file=sys.stderr)
+            return None
+        try:
+            os.replace(tmp, canonical)
+        except OSError:
+            shutil.rmtree(tmp, ignore_errors=True)  # lost the race; canonical is there
+        print(f"[*] Unpacked {stats['format']} archive: {stats['files']} files (cache {sha[:12]})")
+
+    # Acquisition stamp only — {source, archive_sha256, archive_name, format}.
+    # The extracted tree's content-equivalence id is the coverage store's to
+    # derive from the inventory, not a second source of truth recorded here.
+    identity = {"source": "archive", **snap}
+
+    # Local navigation aid: <out_dir>/_source -> the cached tree (relative).
+    try:
+        link = out_dir / "_source"
+        if not link.exists():
+            link.symlink_to(os.path.relpath(canonical, out_dir))
+    except OSError:
+        pass
+
+    new_args = _rewrite_target_arg(args, target, str(canonical))
+    return new_args, identity
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -94,6 +200,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     into the downstream script args, and marks the run complete or failed.
     """
     target = _extract_target(args)
+
     try:
         out_dir = get_output_dir(command, target_path=target)
     except TargetMismatchError as e:
@@ -108,7 +215,20 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
 
-    start_run(out_dir, command, target=target)
+    # Archive target: unpack into the content-addressed shared cache
+    # (<out_dir.parent>/_sources/<sha>), scan the extracted tree, and record the
+    # archive<->tree binding in the manifest. Deduped across runs; a re-scan of
+    # the same archive is a cache hit.
+    target_identity = None
+    if target and Path(target).is_file():
+        from core.archive import is_archive
+        if is_archive(target):
+            res = _unpack_archive_target(target, args, out_dir)
+            if res is None:
+                return 1  # extraction failed (message printed); no run sealed yet
+            args, target_identity = res
+
+    start_run(out_dir, command, target=target, target_identity=target_identity)
 
     # SAGE: Pre-scan recall
     try:
@@ -231,6 +351,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             pass
 
     if rc == 0:
+        # Engine versions + deterministically_reproducible are filled by the
+        # lifecycle itself now (core.run.complete_run), uniformly for every
+        # command — no per-command manifest wiring here.
         complete_run(out_dir)
     else:
         fail_run(out_dir, error=f"exit code {rc}")
@@ -401,6 +524,78 @@ def mode_scan(args: list) -> int:
 
     return _run_with_lifecycle("scan", scanner_script, args,
                               "Running static analysis with Semgrep...")
+
+
+def mode_sca(args: list) -> int:
+    """Run mechanical Software Composition Analysis.
+
+    Delegates to ``libexec/raptor-sca-run`` which manages the run-lifecycle
+    metadata itself; we don't wrap with ``_run_with_lifecycle`` (which
+    is shaped for the Semgrep/CodeQL/AFL++ external-tool workflow).
+    """
+    script_root = Path(__file__).parent
+    sca_shim = script_root / "libexec" / "raptor-sca-run"
+    if not sca_shim.exists():
+        print(f"✗ SCA shim not found: {sca_shim}")
+        return 1
+
+    # Translate ``--repo <p>`` into the positional target the shim
+    # expects, so ``raptor.py sca --repo /path`` matches the convention
+    # of the other modes. When a subcommand follows --repo (e.g.,
+    # ``raptor.py sca --repo /path fix --apply``), the path must be
+    # inserted AFTER the subcommand so the libexec dispatch sees
+    # ``fix /path --apply`` rather than ``/path fix --apply``.
+    # Source of truth lives in packages.sca.cli.SUBCOMMANDS — import
+    # it here to keep the lists in lock-step.
+    from packages.sca.cli import SUBCOMMANDS
+    _SCA_SUBCOMMANDS = set(SUBCOMMANDS)
+    forwarded: list = []
+    target_from_repo = None
+    repo_seen = False
+    skip_next = False
+    for i, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--repo" and i + 1 < len(args):
+            if repo_seen:
+                print("raptor.py sca: --repo specified more than once; "
+                      f"using the last value ({args[i + 1]!r})",
+                      file=sys.stderr)
+            target_from_repo = args[i + 1]
+            repo_seen = True
+            skip_next = True
+            continue
+        forwarded.append(arg)
+    if target_from_repo is not None:
+        # Insert after the subcommand if one is present, else at front.
+        sub_idx = next(
+            (i for i, a in enumerate(forwarded) if a in _SCA_SUBCOMMANDS),
+            None,
+        )
+        if sub_idx is None:
+            forwarded.insert(0, target_from_repo)
+        else:
+            forwarded.insert(sub_idx + 1, target_from_repo)
+
+    cmd = [sys.executable, str(sca_shim)] + forwarded
+    try:
+        from core.config import RaptorConfig
+        # Trust marker — libexec/raptor-sca-run refuses to run without
+        # one of CLAUDECODE / _RAPTOR_TRUSTED in env. ``get_safe_env``'s
+        # allowlist (in this branch) doesn't include the markers, so we
+        # set the trust marker explicitly here. ``raptor.py`` is itself
+        # a trusted entry point.
+        env = RaptorConfig.get_safe_env()
+        env["_RAPTOR_TRUSTED"] = "1"
+        result = subprocess.run(cmd, env=env)
+        return result.returncode
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+        return 130
+    except Exception as e:
+        print(f"\n✗ Error running raptor-sca: {e}")
+        return 1
 
 
 def mode_fuzz(args: list) -> int:
@@ -701,6 +896,7 @@ def main():
     # Route to appropriate mode
     mode_handlers = {
         'scan': mode_scan,
+        'sca': mode_sca,
         'fuzz': mode_fuzz,
         'web': mode_web,
         'agentic': mode_agentic,

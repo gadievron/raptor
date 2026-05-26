@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -69,29 +70,42 @@ class TestGetOutputDir(unittest.TestCase):
                         "must produce distinct dir names")
 
 
-def _mock_project(d, name="myapp", target="/tmp/vulns"):
-    """Create a mock for _resolve_active_project that returns test values."""
-    return patch("core.run.output._resolve_active_project",
-                 return_value=(d, name, target))
+@contextmanager
+def _mock_project(d, name="myapp", target=None):
+    """Patch ``_resolve_active_project`` to return synthetic (output_dir,
+    name, target) values for the test.
+
+    ``target`` defaults to ``<d>/vulns`` so every per-test scratch dir
+    gets a hermetic project-target path under it. Yields the resolved
+    target string so the test body can build matching subdirs / sibling
+    "other" paths against the same scratch root — no hardcoded /tmp
+    literals leak into the assertions."""
+    if target is None:
+        target = str(Path(d) / "vulns")
+    with patch("core.run.output._resolve_active_project",
+               return_value=(d, name, target)):
+        yield target
 
 
 class TestTargetMismatch(unittest.TestCase):
 
     def test_matching_target_ok(self):
         with TemporaryDirectory() as d:
-            with _mock_project(d):
-                get_output_dir("scan", target_path="/tmp/vulns")
+            with _mock_project(d) as target:
+                get_output_dir("scan", target_path=target)
 
     def test_subdirectory_target_ok(self):
         with TemporaryDirectory() as d:
-            with _mock_project(d):
-                get_output_dir("scan", target_path="/tmp/vulns/src/parser")
+            with _mock_project(d) as target:
+                subdir = str(Path(target) / "src" / "parser")
+                get_output_dir("scan", target_path=subdir)
 
     def test_different_target_raises(self):
         with TemporaryDirectory() as d:
             with _mock_project(d):
+                other = str(Path(d) / "other")
                 with self.assertRaises(TargetMismatchError) as ctx:
-                    get_output_dir("scan", target_path="/tmp/other")
+                    get_output_dir("scan", target_path=other)
                 self.assertIn("outside project", str(ctx.exception))
                 self.assertIn("/project create", str(ctx.exception))
                 self.assertIn("/project use none", str(ctx.exception))
@@ -99,31 +113,35 @@ class TestTargetMismatch(unittest.TestCase):
     def test_no_project_target_skips_check(self):
         with TemporaryDirectory() as d:
             with _mock_project(d, target=""):
-                get_output_dir("scan", target_path="/tmp/anything")
+                anywhere = str(Path(d) / "anywhere")
+                get_output_dir("scan", target_path=anywhere)
 
     def test_caller_dir_mismatch_raises(self):
         """RAPTOR_CALLER_DIR is used for mismatch check when no explicit target."""
         with TemporaryDirectory() as d:
-            env = {"RAPTOR_CALLER_DIR": "/tmp/other"}
-            with patch.dict(os.environ, env):
-                with _mock_project(d):
+            with _mock_project(d):
+                other = str(Path(d) / "other")
+                env = {"RAPTOR_CALLER_DIR": other}
+                with patch.dict(os.environ, env):
                     with self.assertRaises(TargetMismatchError):
                         get_output_dir("scan")
 
     def test_caller_dir_matches(self):
         """RAPTOR_CALLER_DIR matching project target is fine."""
         with TemporaryDirectory() as d:
-            env = {"RAPTOR_CALLER_DIR": "/tmp/vulns"}
-            with patch.dict(os.environ, env):
-                with _mock_project(d):
+            with _mock_project(d) as target:
+                env = {"RAPTOR_CALLER_DIR": target}
+                with patch.dict(os.environ, env):
                     get_output_dir("scan")
 
     def test_explicit_out_skips_check(self):
         with TemporaryDirectory() as d:
             with _mock_project(d):
-                result = get_output_dir("scan", explicit_out="/tmp/manual",
-                                        target_path="/tmp/other")
-                self.assertEqual(result, Path("/tmp/manual").resolve())
+                manual = str(Path(d) / "manual")
+                other = str(Path(d) / "other")
+                result = get_output_dir("scan", explicit_out=manual,
+                                        target_path=other)
+                self.assertEqual(result, Path(manual).resolve())
 
 
 class TestUniqueRunSuffix(unittest.TestCase):

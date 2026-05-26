@@ -231,7 +231,7 @@ def test_cpuinfo_flags_preserved_from_host(tmp_path):
     persona = build_persona(tmp_path, cpu_count=1)
     content = Path(persona.files["/proc/cpuinfo"]).read_text()
     fake_flags_line = next(
-        l for l in content.splitlines() if l.startswith("flags")
+        line for line in content.splitlines() if line.startswith("flags")
     )
     _, _, fake_flags = fake_flags_line.partition(":")
     assert fake_flags.strip() == host_flags
@@ -284,13 +284,13 @@ def test_cpuinfo_microcode_is_plausible_revision(tmp_path):
     which is rare on production systems)."""
     persona = build_persona(tmp_path, cpu_count=1)
     content = Path(persona.files["/proc/cpuinfo"]).read_text()
-    micro_lines = [l for l in content.splitlines() if "microcode" in l]
+    micro_lines = [line for line in content.splitlines() if "microcode" in line]
     assert micro_lines, "no microcode line in cpuinfo"
     # All microcode values present, none all-zero, all valid hex.
-    for l in micro_lines:
-        value = l.partition(":")[2].strip()
-        assert value.startswith("0x"), l
-        assert int(value, 16) > 0, f"microcode is zero/empty: {l!r}"
+    for line in micro_lines:
+        value = line.partition(":")[2].strip()
+        assert value.startswith("0x"), line
+        assert int(value, 16) > 0, f"microcode is zero/empty: {line!r}"
 
 
 def test_cpuinfo_bogomips_is_not_round_hundred(tmp_path):
@@ -298,14 +298,14 @@ def test_cpuinfo_bogomips_is_not_round_hundred(tmp_path):
     Real CPUs report values like 4799.95 / 4399.99 / etc."""
     persona = build_persona(tmp_path, cpu_count=1)
     content = Path(persona.files["/proc/cpuinfo"]).read_text()
-    bogo_lines = [l for l in content.splitlines() if l.startswith("bogomips")]
+    bogo_lines = [line for line in content.splitlines() if line.startswith("bogomips")]
     assert bogo_lines
-    for l in bogo_lines:
-        value = float(l.partition(":")[2].strip())
+    for line in bogo_lines:
+        value = float(line.partition(":")[2].strip())
         # Must be slightly off from a round hundred. 4800.00 → fail,
         # 4399.99 → pass.
         assert int(value * 100) % 100 != 0, (
-            f"bogomips is too round: {l!r}"
+            f"bogomips is too round: {line!r}"
         )
 
 
@@ -314,7 +314,7 @@ def test_cpuinfo_bugs_line_is_empty(tmp_path):
     Must be empty value."""
     persona = build_persona(tmp_path, cpu_count=1)
     content = Path(persona.files["/proc/cpuinfo"]).read_text()
-    bugs_lines = [l for l in content.splitlines() if l.startswith("bugs")]
+    bugs_lines = [line for line in content.splitlines() if line.startswith("bugs")]
     assert bugs_lines
     for line in bugs_lines:
         _, _, value = line.partition(":")
@@ -393,12 +393,12 @@ def test_cpu_possible_matches_online(tmp_path):
 def test_proc_stat_has_aggregate_plus_n_per_cpu_lines(tmp_path):
     persona = build_persona(tmp_path, cpu_count=4)
     stat = Path(persona.files["/proc/stat"]).read_text()
-    cpu_lines = [l for l in stat.splitlines() if l.startswith("cpu")]
+    cpu_lines = [line for line in stat.splitlines() if line.startswith("cpu")]
     # Expected: 1 aggregate "cpu " + 4 per-cpu lines "cpu0".."cpu3"
     assert len(cpu_lines) == 5
     assert cpu_lines[0].startswith("cpu ")
     for i in range(4):
-        assert any(l.startswith(f"cpu{i} ") for l in cpu_lines)
+        assert any(line.startswith(f"cpu{i} ") for line in cpu_lines)
 
 
 def test_proc_stat_includes_required_kernel_fields(tmp_path):

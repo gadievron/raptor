@@ -425,10 +425,13 @@ def run_landlock_audit(
         # ============== PARENT after target fork ==============
         # Close the read end of go-pipe and capture-write ends —
         # the target owns them now.
-        _close_safely(p_go_r); p_go_r = -1
+        _close_safely(p_go_r)
+        p_go_r = -1
         if capture_output:
-            _close_safely(out_w); out_w = -1
-            _close_safely(err_w); err_w = -1
+            _close_safely(out_w)
+            out_w = -1
+            _close_safely(err_w)
+            err_w = -1
 
         # ----- Fork the tracer -----
         with warnings.catch_warnings():
@@ -465,6 +468,10 @@ def run_landlock_audit(
                     str(target_pid), str(audit_run_dir),
                     str(t_ready_w), config_path,
                 ]
+                # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
+                # tracer_env is a hand-crafted dict with 2 keys only
+                # (PYTHONPATH + PATH). No inheritance — strictly
+                # safer than the default os.environ-copy path.
                 os.execvpe(sys.executable, tracer_argv, tracer_env)
             except FileNotFoundError:
                 os._exit(127)
@@ -477,14 +484,16 @@ def run_landlock_audit(
         # Parent doesn't keep the tracer's signalling write end;
         # without closing it the read below would never see EOF
         # if the tracer dies before signalling.
-        _close_safely(t_ready_w); t_ready_w = -1
+        _close_safely(t_ready_w)
+        t_ready_w = -1
 
         # Wait for tracer to signal ready (or die).
         ready = b""
         try:
             ready = os.read(t_ready_r, 1)
         finally:
-            _close_safely(t_ready_r); t_ready_r = -1
+            _close_safely(t_ready_r)
+            t_ready_r = -1
         if not ready:
             # Tracer failed before signalling. Reap it for diag,
             # kill the still-blocked target, raise.
@@ -516,7 +525,8 @@ def run_landlock_audit(
         try:
             os.write(p_go_w, b"G")
         finally:
-            _close_safely(p_go_w); p_go_w = -1
+            _close_safely(p_go_w)
+            p_go_w = -1
 
         # Drain stdio capture pipes while waiting for target exit.
         # Simple sequential read since we don't expect huge stderr
@@ -528,11 +538,13 @@ def run_landlock_audit(
             try:
                 stdout_bytes = _read_to_eof(out_r)
             finally:
-                _close_safely(out_r); out_r = -1
+                _close_safely(out_r)
+                out_r = -1
             try:
                 stderr_bytes = _read_to_eof(err_r)
             finally:
-                _close_safely(err_r); err_r = -1
+                _close_safely(err_r)
+                err_r = -1
 
         # waitpid the target.
         target_rc = -1

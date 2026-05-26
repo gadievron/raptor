@@ -156,7 +156,8 @@ def run_autonomous_workflow(args):
         llm_client=llm_client,
         exploit_validator=exploit_validator,
         multi_turn_analyzer=multi_turn,
-        enable_visualization=not args.no_visualizations
+        enable_visualization=not args.no_visualizations,
+        allow_unreachable=getattr(args, "allow_unreachable", False),
     )
 
     # Analyze each SARIF file
@@ -298,6 +299,18 @@ Examples:
     parser.add_argument("--min-files", type=int, default=3, help="Min files to detect language")
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI")
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
+    parser.add_argument(
+        "--allow-unreachable",
+        action="store_true",
+        help=(
+            "Disable the reachability prefilter's NOT_CALLED short-"
+            "circuit. Full LLM analysis runs on dead-code findings "
+            "instead of being skipped. Use for in-isolation review "
+            "(CTF / vendor snippet / exploit research / intentional "
+            "dead-code audit). UNCERTAIN cases always flow through "
+            "regardless of this flag."
+        ),
+    )
     # ``--max-findings`` default 20 is intentionally HIGHER than
     # ``raptor_agentic.py``'s default 10: codeql-only mode does one
     # pass per finding (filter + summarise), while agentic does the

@@ -84,13 +84,13 @@ logger = logging.getLogger(__name__)
 # — operator saw "git clone failed" with no signal that the proxy
 # allowlist was the missing piece. Add them so the egress proxy
 # accepts the redirected hosts.
-from ._proxy_hosts import proxy_hosts_for_git as _proxy_hosts_for_git
+from ._proxy_hosts import proxy_hosts_for_git as _proxy_hosts_for_git  # noqa: E402
 # Backwards-compat re-export — historical callers + tests reference
 # ``core.git.clone._PROXY_HOSTS`` directly. Kept as the static-default
 # tuple (no operator override applied) so existing semantics hold;
 # new call sites should use ``_proxy_hosts_for_git()`` to pick up the
 # operator override config.
-from ._proxy_hosts import _DEFAULT_GIT_HOSTS as _PROXY_HOSTS  # noqa: F401
+from ._proxy_hosts import _DEFAULT_GIT_HOSTS as _PROXY_HOSTS  # noqa: F401, E402
 
 
 def get_safe_git_env() -> Dict[str, str]:

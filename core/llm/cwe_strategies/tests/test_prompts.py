@@ -318,9 +318,9 @@ class TestE2EBundledStrategies:
         assert "truncated" not in out
         assert len(out.encode("utf-8")) <= DEFAULT_MAX_BYTES
 
-    def test_all_seven_bundled_might_truncate(self):
-        """All 7 strategies rendered together MAY exceed the default
-        budget. Pin behaviour: either fits, or truncates cleanly."""
+    def test_all_bundled_might_truncate(self):
+        """All bundled strategies rendered together MAY exceed the
+        default budget. Pin behaviour: either fits, or truncates cleanly."""
         all_strats = load_all()
         out = render_strategies(all_strats)
         # Either no truncation OR clean truncation marker.

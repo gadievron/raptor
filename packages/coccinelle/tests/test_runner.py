@@ -53,11 +53,11 @@ class TestAvailability:
 
 class TestParseResults:
     def test_parse_single_result(self):
-        data = {"file": "/tmp/a.c", "line": 10, "col": 5}
+        data = {"file": "./a.c", "line": 10, "col": 5}
         output = f"{RESULT_PREFIX}{json.dumps(data)}\n"
         matches = _parse_results(output, "test_rule")
         assert len(matches) == 1
-        assert matches[0].file == "/tmp/a.c"
+        assert matches[0].file == "./a.c"
         assert matches[0].line == 10
         assert matches[0].rule == "test_rule"
 
@@ -72,7 +72,7 @@ class TestParseResults:
 
     def test_parse_ignores_non_result_lines(self):
         output = "init_defs_builtins: /usr/lib/coccinelle/standard.h\n"
-        output += "HANDLING: /tmp/test.c\n"
+        output += "HANDLING: ./test.c\n"
         output += f'{RESULT_PREFIX}{{"file":"a.c","line":1}}\n'
         matches = _parse_results(output, "r")
         assert len(matches) == 1
@@ -91,7 +91,7 @@ class TestParseErrors:
     def test_ignores_info_lines(self):
         stderr = (
             "init_defs_builtins: /usr/lib/coccinelle/standard.h\n"
-            "HANDLING: /tmp/test.c\n"
+            "HANDLING: ./test.c\n"
         )
         assert _parse_errors(stderr) == []
 

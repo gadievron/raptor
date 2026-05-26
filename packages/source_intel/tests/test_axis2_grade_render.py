@@ -20,11 +20,11 @@ from packages.source_intel.render import derive_evidence_strings
 
 def _result_with_abort(grade):
     return SourceIntelResult(
-        target="/tmp/x",
+        target="src",
         aborts=(
             AbortEvidence(
                 macro="panic",
-                location=("/tmp/x/f.c", 50),
+                location=("src/f.c", 50),
                 enclosing_function="do_thing",
                 grade=grade,
             ),

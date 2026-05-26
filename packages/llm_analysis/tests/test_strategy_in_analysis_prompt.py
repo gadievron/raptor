@@ -250,3 +250,69 @@ class TestStrategyInSystemPrompt:
         assert "Bug-class lenses" in sys
         # NOT in the user message (which carries untrusted content).
         assert "Bug-class lenses" not in user
+
+
+# ---------------------------------------------------------------------------
+# lifecycle_drift end-to-end: dumpability signals reach the live prompt,
+# and the deliberately-narrow signals do NOT over-fire on unrelated code.
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleDriftReachesPrompt:
+    def test_get_dumpable_call_selects_lifecycle_drift(self):
+        """A function calling get_dumpable() pulls the lifecycle_drift
+        lens into the system prompt — exemplar and all. This is the full
+        chain: signal -> picker -> render -> system message."""
+        bundle = build_analysis_prompt_bundle(
+            rule_id="x", level="warning",
+            file_path="kernel/ptrace.c",
+            start_line=1, end_line=40,
+            message="access check",
+            function_name="__ptrace_may_access",
+            function_calls_made=["get_dumpable"],
+        )
+        sys = _system_message(bundle)
+        assert "## Strategy: lifecycle_drift" in sys
+        # The worked exemplar — the actual content the LLM reads.
+        assert "CVE-2026-46333" in sys
+
+    def test_dumpable_keyword_selects_lifecycle_drift(self):
+        bundle = build_analysis_prompt_bundle(
+            rule_id="x", level="warning",
+            file_path="src/foo.c",
+            start_line=1, end_line=10,
+            message="m",
+            function_name="check_dumpable",
+        )
+        sys = _system_message(bundle)
+        assert "## Strategy: lifecycle_drift" in sys
+
+    def test_does_not_overfire_on_unrelated_finding(self):
+        """Regression guard for the over-trigger risk flagged in review:
+        with the broad ptrace/cred paths and the commit_creds magnet
+        removed, a plain command-injection finding must NOT drag in
+        lifecycle_drift."""
+        bundle = build_analysis_prompt_bundle(
+            rule_id="py/command-injection", level="warning",
+            file_path="src/runner.py",
+            start_line=10, end_line=15,
+            message="subprocess.call with user input",
+            cwe_id="CWE-78",
+        )
+        sys = _system_message(bundle)
+        assert "## Strategy: lifecycle_drift" not in sys
+
+    def test_cwe_863_does_not_collide_with_auth_privilege(self):
+        """lifecycle_drift dropped CWE-863 to avoid colliding with
+        auth_privilege. A bare CWE-863 finding (no dumpability signals)
+        selects auth_privilege, not lifecycle_drift."""
+        bundle = build_analysis_prompt_bundle(
+            rule_id="x", level="warning",
+            file_path="src/foo.c",
+            start_line=1, end_line=10,
+            message="authorization check",
+            cwe_id="CWE-863",
+        )
+        sys = _system_message(bundle)
+        assert "## Strategy: auth_privilege" in sys
+        assert "## Strategy: lifecycle_drift" not in sys

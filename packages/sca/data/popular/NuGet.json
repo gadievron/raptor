@@ -1,0 +1,22 @@
+[
+  "AutoMapper",
+  "Dapper",
+  "FluentAssertions",
+  "FluentValidation",
+  "MediatR",
+  "Microsoft.AspNetCore.Mvc",
+  "Microsoft.EntityFrameworkCore",
+  "Microsoft.Extensions.DependencyInjection",
+  "Microsoft.Extensions.Logging",
+  "Moq",
+  "NLog",
+  "Newtonsoft.Json",
+  "Polly",
+  "RestSharp",
+  "Serilog",
+  "StackExchange.Redis",
+  "Swashbuckle.AspNetCore",
+  "System.Text.Json",
+  "xunit",
+  "xunit.runner.visualstudio"
+]

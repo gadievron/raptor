@@ -1,0 +1,19 @@
+# Detection requirements for the May 2026 node-ipc compromise.
+#
+# Three malicious versions (9.1.6 / 9.2.3 / 12.0.1) carry an 80KB
+# obfuscated credential-stealer payload. Detection signals at scan
+# time:
+#  * vuln_dep (medium) — the OSV record carries the "Malicious code
+#    in node-ipc" advisory; severity floor is medium because OSV
+#    doesn't carry CVSS for malware records.
+#  * yanked_version (medium) — npm yanked the malicious versions
+#    after disclosure; the yank marker itself is detection-grade.
+#
+# low_bus_factor (info) also fires on this package — useful color,
+# not load-bearing as a primary signal.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: medium
+  - kind: yanked_version
+    severity_floor: medium

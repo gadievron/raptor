@@ -240,8 +240,18 @@ class HttpClient(Protocol):
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
+        max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> Dict[str, Any]:
-        """GET ``url``, parse response as JSON."""
+        """GET ``url``, parse response as JSON.
+
+        ``max_bytes`` caps the response size at the transport layer.
+        Defaults to ``DEFAULT_MAX_BYTES`` (50 MB) — adequate for
+        ~99.9% of registry-metadata responses. Callers querying
+        endpoints known to exceed that (notably ``registry.npmjs.org``
+        for popular scoped namespaces like ``@grafana/runtime`` which
+        ships > 50 MB of cumulative version metadata) should raise it
+        explicitly.
+        """
         ...
 
     def get_bytes(

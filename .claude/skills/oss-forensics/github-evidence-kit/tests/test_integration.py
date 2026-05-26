@@ -104,7 +104,7 @@ class TestGitHubAPIIntegration:
 
         assert obs is not None
         assert obs.issue_number == 1
-        assert obs.is_pull_request == True
+        assert obs.is_pull_request is True
         assert obs.verification.source == EvidenceSource.GITHUB
 
     def test_fetch_real_issue(self, collector):

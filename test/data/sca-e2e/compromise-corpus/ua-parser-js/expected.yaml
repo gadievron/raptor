@@ -1,0 +1,28 @@
+# Detection requirements for ua-parser-js compromise (Oct 2021).
+#
+# Multiple independent signals fire for this incident:
+#  * vuln_dep (high) — the OSV / GHSA advisory carries CVE-2021-43163
+#    with malware-classification.
+#  * sentinel_match (critical) — SCA carries a known-malicious-package
+#    sentinel list; ua-parser-js@0.7.29 / 0.8.0 / 1.0.0 are on it.
+#  * yanked_version (medium) — the malicious versions were yanked
+#    from npm after public disclosure; a scan today sees the yank
+#    marker, which is itself a "this version is bad" signal.
+#
+# Requiring all three documents the multi-detector convergence we
+# expect for high-profile compromises. A SCA that fires only one
+# of them surfaces a coverage regression.
+
+must_detect:
+  - kind: vuln_dep
+    severity_floor: high
+    reachability: imported
+    # The fixture includes index.js which require()s ua-parser-js.
+    # SCA's reachability layer must flip the verdict from
+    # not_reachable to imported, otherwise the risk-score path
+    # under-weights this finding and CI gates on severity may
+    # let it slide.
+  - kind: sentinel_match
+    severity_floor: critical
+  - kind: yanked_version
+    severity_floor: medium

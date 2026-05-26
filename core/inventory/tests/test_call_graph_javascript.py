@@ -424,3 +424,96 @@ def test_js_nested_class_marked_nested():
     inners = [c for c in g.classes if c.name == "Inner"]
     if inners:
         assert inners[0].nested is True
+
+
+# ---------------------------------------------------------------------------
+# argument_identifiers extraction — load-bearing for downstream
+# function-as-argument registration detection (Express, Fastify, etc.).
+# Tests pin: bare identifiers captured, non-identifiers (strings,
+# arrows, member accesses, object literals) skipped, ordering preserved.
+# ---------------------------------------------------------------------------
+
+
+def test_js_argument_identifiers_bare_function_arg():
+    g = extract_call_graph_javascript(
+        "app.get('/users', listUsers);\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["app", "get"])
+    assert call.argument_identifiers == ["listUsers"]
+
+
+def test_js_argument_identifiers_multiple():
+    g = extract_call_graph_javascript(
+        "app.use(authMiddleware, loggingMiddleware);\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["app", "use"])
+    assert call.argument_identifiers == ["authMiddleware", "loggingMiddleware"]
+
+
+def test_js_argument_identifiers_skip_string_literal():
+    g = extract_call_graph_javascript(
+        "router.post('/login', loginHandler);\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["router", "post"])
+    # String literal '/login' filtered; only loginHandler kept.
+    assert call.argument_identifiers == ["loginHandler"]
+
+
+def test_js_argument_identifiers_skip_arrow_function():
+    g = extract_call_graph_javascript(
+        "app.get('/x', (req, res) => res.send('ok'));\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["app", "get"])
+    # Inline arrow function not a bare identifier — skipped.
+    assert call.argument_identifiers == []
+
+
+def test_js_argument_identifiers_skip_member_access():
+    g = extract_call_graph_javascript(
+        "app.get('/x', controller.handle);\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["app", "get"])
+    # Member access `controller.handle` not a bare identifier — skipped.
+    # (Captured elsewhere when invoked as a call; here as an arg
+    # value we conservatively skip — bare references are the
+    # load-bearing case.)
+    assert call.argument_identifiers == []
+
+
+def test_js_argument_identifiers_empty_no_args():
+    g = extract_call_graph_javascript(
+        "init();\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["init"])
+    assert call.argument_identifiers == []
+
+
+def test_js_argument_identifiers_preserves_order():
+    g = extract_call_graph_javascript(
+        "compose(first, second, third);\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["compose"])
+    assert call.argument_identifiers == ["first", "second", "third"]
+
+
+def test_js_argument_identifiers_round_trips_via_dict():
+    """Schema round-trip: argument_identifiers survives
+    to_dict/from_dict serialisation."""
+    g = extract_call_graph_javascript(
+        "app.get('/x', handler);\n"
+    )
+    d = g.to_dict()
+    g2 = FileCallGraph.from_dict(d)
+    call = next(c for c in g2.calls if c.chain == ["app", "get"])
+    assert call.argument_identifiers == ["handler"]
+
+
+def test_js_argument_identifiers_omitted_from_dict_when_empty():
+    """Backwards-compat: argument_identifiers absent from dict
+    when empty (inventory size discipline)."""
+    g = extract_call_graph_javascript(
+        "init();\n"
+    )
+    d = g.to_dict()
+    init_entry = next(c for c in d["calls"] if c["chain"] == ["init"])
+    assert "argument_identifiers" not in init_entry

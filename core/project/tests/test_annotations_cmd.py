@@ -89,7 +89,7 @@ class TestPrintAnnotations(unittest.TestCase):
             output = buf.getvalue()
             # The login row should show source=human (project-level),
             # not source=llm (run-a).
-            login_line = [l for l in output.splitlines() if "login" in l][0]
+            login_line = [line for line in output.splitlines() if "login" in line][0]
             assert "human" in login_line
 
     def test_filter_by_status(self):
@@ -193,7 +193,8 @@ class TestPrintAnnotations(unittest.TestCase):
             assert "2 annotation(s)" in output
 
     def test_since_filter_excludes_old(self):
-        import os, time
+        import os
+        import time
         with TemporaryDirectory() as d:
             project = _build_project(Path(d))
             # Backdate the run-level annotation file by 30 days.

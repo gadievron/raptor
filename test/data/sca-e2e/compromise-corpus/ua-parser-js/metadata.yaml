@@ -1,0 +1,22 @@
+incident: ua-parser-js compromise
+ecosystem: npm
+package: ua-parser-js
+malicious_versions:
+  - "0.7.29"
+  - "0.8.0"
+  - "1.0.0"
+disclosure_date: 2021-10-22
+classification: maintainer-account compromise
+references:
+  - CVE-2021-43163
+  - https://github.com/advisories/GHSA-pjwm-rvh2-c87w
+  - https://github.com/faisalman/ua-parser-js/issues/536
+  - https://www.cisa.gov/news-events/alerts/2021/10/22/malware-discovered-popular-npm-package-ua-parser-js
+expected_signal_summary: |
+  Attacker hijacked the maintainer account and published versions
+  with malicious preinstall script that dropped a coinminer +
+  credential stealer. The install_hook signal is the load-bearing
+  one: a SCA that catches the CVE but not the install-hook would
+  have alerted operators only AFTER public disclosure; an
+  install_hook detector running at install-time would have caught
+  it pre-disclosure.

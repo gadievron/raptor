@@ -12,8 +12,11 @@ from core.project.schema import (
 class TestValidateProject(unittest.TestCase):
 
     def _valid(self):
+        # ``target`` here is opaque to the schema validator — it just
+        # checks the field is a non-empty string. Relative path keeps
+        # the fixture portable and avoids hardcoded host paths.
         return {
-            "version": 1, "name": "test", "target": "/tmp/code",
+            "version": 1, "name": "test", "target": "./target",
             "output_dir": "out/test", "created": "2026-04-06",
         }
 

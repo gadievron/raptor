@@ -146,8 +146,8 @@ def _balance_subsample(
     seed: int = 0,
 ) -> List[Tuple[Finding, GroundTruth]]:
     """Pick target entries with TP/FP balance close to 50/50."""
-    tps = [(f, l) for f, l in findings_with_labels if l.verdict == VERDICT_TRUE_POSITIVE]
-    fps = [(f, l) for f, l in findings_with_labels if l.verdict == VERDICT_FALSE_POSITIVE]
+    tps = [(f, label) for f, label in findings_with_labels if label.verdict == VERDICT_TRUE_POSITIVE]
+    fps = [(f, label) for f, label in findings_with_labels if label.verdict == VERDICT_FALSE_POSITIVE]
     n_tp = min(len(tps), target // 2)
     n_fp = min(len(fps), target - n_tp)
     n_tp = min(len(tps), target - n_fp)

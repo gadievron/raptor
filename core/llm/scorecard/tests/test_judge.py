@@ -105,6 +105,35 @@ class TestMultiJudgeDispute:
         assert _stat(scorecard, dc, "gpt-4",       EventType.JUDGE_REVIEW) == (1, 0)
         assert _stat(scorecard, dc, "gemini",      EventType.JUDGE_REVIEW) == (1, 0)
 
+    def test_resolved_model_recorded_as_model_version(self, scorecard):
+        """Regression: the primary's and EACH judge's resolved snapshot must
+        land in the cell model_version. Previously tasks.py dropped
+        resolved_model from the judge_analyses projection, so judge cells were
+        always model_version=None."""
+        results = {"f1": {
+            "rule_id": "py/sqli",
+            "judge": "disputed",
+            "is_exploitable": False,
+            "analysed_by": "claude-opus",
+            "resolved_model": "claude-opus-4-7",
+            "reasoning": "x",
+            "judge_analyses": [
+                {"model": "gpt-4", "resolved_model": "gpt-4-0613",
+                 "is_exploitable": False, "reasoning": "a"},
+                {"model": "gemini", "resolved_model": "gemini-2.5-pro-002",
+                 "is_exploitable": False, "reasoning": "b"},
+            ],
+        }}
+        record_judge_outcomes(
+            scorecard,
+            results_by_id=results,
+            primary_verdicts_before_judge={"f1": True},
+        )
+        dc = "agentic:py/sqli"
+        assert scorecard.get_stat(dc, "claude-opus").model_version == "claude-opus-4-7"
+        assert scorecard.get_stat(dc, "gpt-4").model_version == "gpt-4-0613"
+        assert scorecard.get_stat(dc, "gemini").model_version == "gemini-2.5-pro-002"
+
     def test_panel_kept_primary(self, scorecard):
         """Primary said exploitable; 1 judge dissented but the other
         agreed. With 3 voters (primary + 2 judges) and 2-vs-1

@@ -64,8 +64,19 @@ class AnalysisTask(DispatchTask):
     name = "analysis"
     model_role = "analysis"
 
-    def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE):
+    def __init__(
+        self,
+        profile: ModelDefenseProfile = CONSERVATIVE,
+        *,
+        allow_unreachable: bool = False,
+    ):
         self.profile = profile
+        # Operator's --allow-unreachable; threaded into the prompt
+        # builder so the system message switches from "engagement
+        # required" to "informational only" Stage C text. The
+        # substrate-side enricher skip is independent — that runs
+        # in the reachability pre-pass before AnalysisTask exists.
+        self.allow_unreachable = bool(allow_unreachable)
         self._tls = threading.local()
 
     def get_models(self, role_resolution):
@@ -87,6 +98,7 @@ class AnalysisTask(DispatchTask):
         si_blocks = evidence_blocks_for_finding(finding)
         bundle = build_analysis_prompt_bundle_from_finding(
             finding, profile=self.profile, extra_blocks=si_blocks,
+            allow_unreachable=self.allow_unreachable,
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -108,6 +120,120 @@ class AnalysisTask(DispatchTask):
         from packages.cvss import score_finding
         score_finding(out)
         return out
+
+
+def _is_sca_finding(f: Dict) -> bool:
+    """Canonical "is this an SCA finding?" check.
+
+    Recognises three identification methods because the SCA pipeline
+    has tagged findings differently over time:
+      * ``source_type == "dependency"`` (the post-2026 canonical
+        marker — set by ``packages/sca/findings.py``)
+      * ``vuln_type`` starting with ``sca:`` (set on the
+        ``JoinedFinding`` wrapper at serialisation)
+      * ``rule_id`` starting with ``sca:`` (older code path, still
+        emitted by some consumers that bypass the joiner)
+
+    Broad-by-design: ANY SCA-shaped finding (vulnerable-dependency,
+    hygiene, license, supply-chain) matches. Dispatch sites that
+    only act on vuln-dep findings should use
+    ``_is_sca_vuln_finding`` instead — that's the narrower check.
+    """
+    return (
+        f.get("source_type") == "dependency"
+        or f.get("vuln_type", "").startswith("sca:")
+        or f.get("rule_id", "").startswith("sca:")
+    )
+
+
+def _is_sca_vuln_finding(f: Dict) -> bool:
+    """Narrower companion to ``_is_sca_finding``: only ``sca:
+    vulnerable_dependency`` findings, NOT hygiene / license /
+    supply-chain.
+
+    ExploitTask + PatchTask both want this narrower predicate —
+    you don't generate an exploit-PoC or a manifest patch for
+    "lockfile_missing" or "low_bus_factor". Hygiene findings are
+    SCA-shaped but not actionable in those task families.
+
+    Recognises the vuln-specific subtype via:
+      * ``vuln_type`` starting with ``sca:vulnerable_dependency``
+      * ``rule_id`` starting with ``sca:vulnerable_dependency``
+
+    Does NOT key on ``source_type=="dependency"`` alone — that
+    field is set on every SCA finding (hygiene included) and
+    wouldn't discriminate.
+    """
+    return (
+        f.get("vuln_type", "").startswith("sca:vulnerable_dependency")
+        or f.get("rule_id", "").startswith("sca:vulnerable_dependency")
+    )
+
+
+def _sca_exploit_priority(f: Dict) -> float:
+    """Score an SCA finding for exploit-target ranking (higher = better target)."""
+    sca = f.get("sca", {})
+    score = 0.0
+    if sca.get("in_kev"):
+        score += 50.0
+    epss = sca.get("epss")
+    if epss is not None:
+        score += float(epss) * 30.0
+    reach = sca.get("reachability", "not_evaluated")
+    if reach == "likely_called":
+        score += 20.0
+    elif reach == "imported":
+        score += 10.0
+    cvss = sca.get("cvss_score")
+    if cvss is not None:
+        score += float(cvss)
+    return score
+
+
+def _build_sca_exploit_prompt(finding: Dict) -> str:
+    """Build an exploit-oriented prompt for an SCA vulnerability finding."""
+    sca = finding.get("sca", {})
+    lines = [
+        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
+        f"Advisory: {finding.get('finding_id', 'unknown')}",
+        f"Severity: {finding.get('severity', 'unknown')}",
+        f"Description: {finding.get('description', 'N/A')}",
+    ]
+    if sca.get("cvss_score"):
+        lines.append(f"CVSS: {sca['cvss_score']}")
+    if sca.get("in_kev"):
+        lines.append("KEV: YES — known exploited in the wild")
+    if sca.get("epss"):
+        lines.append(f"EPSS: {sca['epss']:.1%}")
+    lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
+    if sca.get("fixed_version"):
+        lines.append(f"Fixed in: {sca['fixed_version']}")
+    lines.append(f"Declared in: {finding.get('file_path', 'unknown')}")
+    lines.append("")
+    lines.append("Generate a proof-of-concept exploit that demonstrates this "
+                 "vulnerability is exploitable in a project that imports this "
+                 "dependency. Focus on the specific advisory and version.")
+    return "\n".join(lines)
+
+
+def _build_sca_patch_prompt(finding: Dict) -> str:
+    """Build a patch prompt for an SCA vulnerability finding."""
+    sca = finding.get("sca", {})
+    lines = [
+        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
+        f"Advisory: {finding.get('finding_id', 'unknown')}",
+        f"Severity: {finding.get('severity', 'unknown')}",
+        f"Description: {finding.get('description', 'N/A')}",
+    ]
+    if sca.get("fixed_version"):
+        lines.append(f"Fixed version: {sca['fixed_version']}")
+    lines.append(f"Manifest: {finding.get('file_path', 'unknown')}")
+    lines.append("")
+    lines.append("Generate a minimal patch that upgrades this dependency to "
+                 "the fixed version. Show the exact manifest change needed. "
+                 "If no fixed version exists, suggest a workaround or "
+                 "alternative package.")
+    return "\n".join(lines)
 
 
 class ExploitTask(DispatchTask):
@@ -134,8 +260,12 @@ class ExploitTask(DispatchTask):
             if prior.get("is_exploitable"):
                 selected.append(f)
                 continue
-            # SCA findings: select if reachable or KEV-listed
-            if f.get("rule_id", "").startswith("sca:vulnerable_dependency"):
+            # SCA findings: select if reachable or KEV-listed.
+            # ``_is_sca_vuln_finding`` is the narrower predicate —
+            # only ``sca:vulnerable_dependency`` matches; hygiene /
+            # license / supply-chain SCA findings are SCA-shaped
+            # but not exploit-PoC targets.
+            if _is_sca_vuln_finding(f):
                 sca = f.get("sca", {})
                 reachability = sca.get("reachability", "")
                 in_kev = sca.get("in_kev", False)
@@ -143,9 +273,23 @@ class ExploitTask(DispatchTask):
                     selected.append(f)
                 elif in_kev and reachability != "not_reachable":
                     selected.append(f)
+        # Highest-priority SCA findings first so a budget-cutoff
+        # truncation upstream catches the most-actionable rows.
+        # Code-shaped findings keep priority 0 (the score helper
+        # only adds for SCA fields), so they sort below SCA hits
+        # — acceptable: code findings already came in with
+        # ``is_exploitable=True`` from prior_results, meaning
+        # they've been pre-validated and don't need re-ranking
+        # here.
+        selected.sort(
+            key=lambda f: _sca_exploit_priority(f) if _is_sca_finding(f) else 0,
+            reverse=True,
+        )
         return selected
 
     def build_prompt(self, finding):
+        if _is_sca_finding(finding):
+            return _build_sca_exploit_prompt(finding)
         # Phase D: inject source_intel structural evidence for
         # memory-corruption findings so the exploit generator sees the
         # same structural context the analysis step saw (allocations,
@@ -206,14 +350,19 @@ class PatchTask(DispatchTask):
             if prior.get("is_exploitable"):
                 selected.append(f)
                 continue
-            # SCA findings with a known fix version get a manifest patch
-            if f.get("rule_id", "").startswith("sca:vulnerable_dependency"):
+            # SCA findings with a known fix version get a manifest patch.
+            # Narrower than ``_is_sca_finding`` because hygiene /
+            # license / supply-chain findings aren't patch-targets
+            # even though they're SCA-shaped.
+            if _is_sca_vuln_finding(f):
                 sca = f.get("sca", {})
                 if sca.get("fixed_version"):
                     selected.append(f)
         return selected
 
     def build_prompt(self, finding):
+        if _is_sca_finding(finding):
+            return _build_sca_patch_prompt(finding)
         # Phase D: inject source_intel structural evidence so the
         # patch generator sees the structural context (allocations,
         # hazards, sanitizer-shaped sites) when crafting a fix.
@@ -515,6 +664,9 @@ class JudgeTask(DispatchTask):
                 primary["is_exploitable"] = final
                 primary["judge_analyses"] = [
                     {"model": ja.get("analysed_by", "?"),
+                     # Carry the resolved snapshot through so judge scorecard
+                     # outcomes record model_version (else it's always None).
+                     "resolved_model": ja.get("resolved_model"),
                      "is_exploitable": ja.get("is_exploitable"),
                      "reasoning": ja.get("reasoning", "")}
                     for ja in judge_analyses

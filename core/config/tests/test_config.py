@@ -187,8 +187,8 @@ class TestGetOutDir:
         startswith refactor for simplicity" that would have
         broken legitimate operator paths.
         """
-        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": "/tmp/usr-local-foo"}):
-            # Resolved → /tmp/usr-local-foo, parent /tmp exists,
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": "./usr-local-foo"}):
+            # Resolved → ./usr-local-foo (cwd-relative; parent exists),
             # so no ValueError on the system-path check; should
             # return the resolved path.
             try:

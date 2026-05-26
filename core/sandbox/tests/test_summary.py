@@ -298,8 +298,10 @@ class TestThreadSafety:
 
         threads = [threading.Thread(target=worker, args=(tmp_path / f"d{i}",))
                    for i in range(4)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
         # All non-None observations should be one of the four target dirs
         valid = {tmp_path / f"d{i}" for i in range(4)}
         for r in results:
@@ -318,8 +320,10 @@ class TestThreadSafety:
                 summary_mod.record_denial(f"cmd-t{tid}-{i}", 1, "network")
 
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
         jsonl = tmp_path / summary_mod.DENIALS_FILE
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
@@ -685,8 +689,8 @@ class TestAdversarial:
             suggested_fix="EVIL_FIX",
             ts="EVIL_TS",
         )
-        records = [json.loads(l) for l in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if l]
+        records = [json.loads(line) for line in
+                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
         r = records[0]
         # Explicit args win — the rogue details didn't override
         assert r["type"] == "seccomp"
@@ -702,8 +706,8 @@ class TestAdversarial:
         summary_mod.set_active_run_dir(tmp_path)
         for i in range(20):
             summary_mod.record_denial(f"cmd{i}", 1, "network")
-        records = [json.loads(l) for l in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if l]
+        records = [json.loads(line) for line in
+                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
         # Exactly the cap, no more (slight overcount allowed by the
         # lock-free design — assert <= cap+1 to be tolerant)
         assert len(records) <= summary_mod.MAX_DENIALS_PER_RUN
@@ -723,8 +727,8 @@ class TestAdversarial:
         summary_mod.set_active_run_dir(run2)
         for i in range(2):
             summary_mod.record_denial(f"r2c{i}", 1, "network")
-        run2_records = [json.loads(l) for l in
-                        (run2 / summary_mod.DENIALS_FILE).read_text().splitlines() if l]
+        run2_records = [json.loads(line) for line in
+                        (run2 / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
         assert len(run2_records) == 2
 
     # ADV3
@@ -752,8 +756,8 @@ class TestAdversarial:
         summary_mod.set_active_run_dir(tmp_path)
         long_cmd = "x" * 10_000  # well over MAX_CMD_LEN
         summary_mod.record_denial(long_cmd, 1, "network")
-        records = [json.loads(l) for l in
-                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if l]
+        records = [json.loads(line) for line in
+                   (tmp_path / summary_mod.DENIALS_FILE).read_text().splitlines() if line]
         assert len(records[0]["cmd"]) <= summary_mod.MAX_CMD_LEN
         # Truncation marker present
         assert records[0]["cmd"].endswith("…")

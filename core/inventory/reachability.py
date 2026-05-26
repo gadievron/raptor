@@ -179,6 +179,13 @@ class _FunctionCalledIndex:
     # Files with a wildcard import — visited so the wildcard branch
     # can yield UNCERTAIN via ``_wildcard_could_provide``.
     files_with_wildcard_import: Tuple[int, ...]
+    # U4: function name → file paths whose function-like macro bodies
+    # invoke it (C/C++). A function reachable only via such a macro reads
+    # NOT_CALLED in the static graph (tree-sitter doesn't expand macros);
+    # the resolver maps a hit here to UNCERTAIN. Global membership —
+    # consulted independent of the per-token candidate buckets, because
+    # the macro-defining file may not otherwise mention the target.
+    macro_targets: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 # Keyed on ``id(inventory)``; identity-checked on read so a fresh
@@ -196,6 +203,7 @@ def _build_function_called_index(
     files_by_token: Dict[str, Set[int]] = {}
     non_wildcard: Set[int] = set()
     wildcard: Set[int] = set()
+    macro_targets: Dict[str, Set[str]] = {}
 
     def _add(token: str, i: int) -> None:
         if not token:
@@ -240,6 +248,10 @@ def _build_function_called_index(
             non_wildcard.add(i)
         if INDIRECTION_WILDCARD_IMPORT in flags:
             wildcard.add(i)
+        # U4: function-like-macro call targets (C/C++).
+        mpath = fr.get("path") or ""
+        for name in (cg.get("macro_call_targets") or []):
+            macro_targets.setdefault(name, set()).add(mpath)
 
     return _FunctionCalledIndex(
         files_by_token={
@@ -247,6 +259,9 @@ def _build_function_called_index(
         },
         files_with_non_wildcard_masking=tuple(sorted(non_wildcard)),
         files_with_wildcard_import=tuple(sorted(wildcard)),
+        macro_targets={
+            k: tuple(sorted(v)) for k, v in macro_targets.items()
+        },
     )
 
 
@@ -430,6 +445,42 @@ def function_called(
                     file_has_evidence = True
                     evidence.append((path, int(call.get("line", 0) or 0)))
 
+        # Same-file bare-name fast-path. When chain is
+        # ``[target_func]`` AND this file's path-derived module
+        # matches target_module, treat as a hit. The import-map
+        # path can't address this case: a function defined in the
+        # same file isn't "imported", so it has no import-map
+        # entry for its name to resolve against.
+        #
+        # Particularly load-bearing for C/C++ (no symbol-level
+        # imports for in-file functions) — pre-fix the resolver
+        # said NOT_CALLED for every C bare-name same-file call,
+        # which cascaded to false-negative reachability for any
+        # function called only by another same-file function in
+        # a longer reach chain. Also fixes the equivalent Python
+        # / JS / Go / Rust gap when a same-file caller uses the
+        # bare-name form.
+        #
+        # Defensive: skip when the bare name is shadowed by an
+        # import in THIS file. The import-map path above is
+        # authoritative for shadowed bare-name calls (Python
+        # shadows the local def with the import at module scope;
+        # JS / TS behaves the same with named-import binding).
+        if not file_has_evidence:
+            file_module = _file_path_to_module(path)
+            if file_module == target_module:
+                for call in calls:
+                    chain = call.get("chain") or []
+                    if len(chain) != 1 or chain[0] != target_func:
+                        continue
+                    if chain[0] in imports:
+                        continue
+                    file_has_evidence = True
+                    evidence.append(
+                        (path, int(call.get("line", 0) or 0)),
+                    )
+                    break
+
         if file_has_evidence:
             continue
 
@@ -467,6 +518,19 @@ def function_called(
             _wildcard_could_provide(imports, target_module, target_func)
         ):
             uncertain_reasons.append((path, INDIRECTION_WILDCARD_IMPORT))
+
+    # U4: function-like-macro masking (C/C++). A function whose only
+    # invocation is inside a macro body reads NOT_CALLED — tree-sitter
+    # sees the macro name, not the expanded call. Map such targets to
+    # UNCERTAIN (never suppress). Global membership: the macro-defining
+    # file need not appear in the per-token candidate buckets, so this is
+    # checked off the index directly. Skipped when direct evidence exists
+    # (CALLED wins anyway) — but harmless either way since CALLED takes
+    # precedence over uncertain_reasons below.
+    for mpath in index.macro_targets.get(target_func, ()):
+        if exclude_test_files and _is_test_file(mpath):
+            continue
+        uncertain_reasons.append((mpath, "func_like_macro"))
 
     if evidence:
         return ReachabilityResult(
@@ -783,6 +847,15 @@ class _AdjacencyIndex:
     # ``definitive`` set for these, but they are NOT dead code;
     # consumers should treat them as entry points.
     framework_callable: Set[InternalFunction] = field(default_factory=set)
+    # Functions referenced as identifier arguments to a framework
+    # registration call (``http.HandleFunc("/x", handler)``,
+    # ``app.get("/users", listUsers)``, etc.). Sister to
+    # ``framework_callable`` but covers the JS / Go pattern where
+    # the framework registers handlers via call arguments rather
+    # than decorators. Populated from CallSite.argument_identifiers
+    # which the JS + Go extractors emit (other languages populate
+    # an empty list — the set just stays empty for them).
+    framework_registered: Set[InternalFunction] = field(default_factory=set)
     # ``qualified_name -> InternalFunction`` for project-defined
     # functions reachable via cross-package import. Used by
     # callers_of() to follow ExternalFunction → InternalFunction
@@ -934,6 +1007,50 @@ def _get_or_build_index(
                 if fn.line == df_line:
                     idx.framework_callable.add(fn)
                     break
+
+    # Pass 1.3b: scan call sites for framework registration —
+    # ``http.HandleFunc("/x", handler)``, ``app.get("/users",
+    # listUsers)``, etc. The JS / Go pattern that mirrors Python's
+    # decorator-based framework dispatch: a handler function is
+    # passed as an identifier argument to a recognised registration
+    # method. The CallSite.argument_identifiers field carries the
+    # identifier args; ``_FRAMEWORK_REGISTRATION_TAILS`` curates
+    # the chain tails we treat as registration. Chain-length-2
+    # gate parallels the decorator detector — bare ``get(handler)``
+    # calls don't qualify (too generic), but ``app.get(handler)``
+    # does.
+    #
+    # Same-file matching only: the registered function must be
+    # defined in the same file as the registration call. Cross-file
+    # resolution (handler in handlers.js, registration in
+    # routes.js) is a follow-up — would require resolving the
+    # identifier through the file's import map, which is more
+    # invasive. Same-file covers the common Go pattern (handlers
+    # + main in same file or small package) and small Express apps.
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        for call in cg.get("calls") or []:
+            if not isinstance(call, dict):
+                continue
+            chain = call.get("chain") or []
+            if len(chain) < 2:
+                continue
+            tail = str(chain[-1])
+            if tail not in _FRAMEWORK_REGISTRATION_TAILS:
+                continue
+            arg_idents = call.get("argument_identifiers") or []
+            for ident in arg_idents:
+                candidates = idx.definitions.get((path, ident), set())
+                # Function defined in same file — register all
+                # matching InternalFunctions (only one per
+                # (path, name) typically, unless overloaded).
+                for fn in candidates:
+                    idx.framework_registered.add(fn)
 
     # Pass 1.4: capture class metadata from call_graph data. Maps
     # each method's InternalFunction to its owning class, and
@@ -1251,6 +1368,13 @@ def _get_or_build_index(
 # pass-through decorators (``cache``, ``lru_cache``, ``property``,
 # ``staticmethod``, ``dataclass``) MUST NOT be in this set —
 # they don't register entry points.
+#
+# The chain-length-2 gate in ``_decorators_indicate_framework_dispatch``
+# excludes naked single-name decorators (``@receiver(...)``,
+# ``@shared_task``). For names where the framework-dispatch
+# interpretation is unambiguous even at length 1, see
+# ``_FRAMEWORK_DISPATCH_NAKED_NAMES`` below — these get an exception
+# to the chain-length gate.
 _FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
     # HTTP route methods (Flask / FastAPI / Starlette / Bottle / etc.)
     "route", "get", "post", "put", "patch", "delete", "head", "options",
@@ -1276,31 +1400,115 @@ _FRAMEWORK_DISPATCH_TAILS: FrozenSet[str] = frozenset({
 })
 
 
+# Chain tails recognised as framework registration calls — the JS /
+# Go pattern where a handler is passed as an identifier argument to a
+# routing or middleware-registration method. For
+# ``app.get("/x", handler)``, the chain tail is ``get`` and ``handler``
+# is the registered function. The set is curated against:
+# Express / Fastify / Koa / Hono (HTTP verb methods + ``use`` + ``route``),
+# Go net/http (``Handle``, ``HandleFunc``), gin / echo (capitalised HTTP
+# verbs + ``Use`` + ``Group``), chi (mixed-case verbs + ``Method`` /
+# ``MethodFunc`` / ``Mount``). The chain-length-2 gate (matching
+# ``_decorators_indicate_framework_dispatch``'s philosophy) keeps bare
+# ``get(...)`` / ``use(...)`` calls from being treated as registration:
+# they're far more likely user-defined helpers than framework calls.
+#
+# FALSE-POSITIVE awareness:
+#   * ``map.get(key)`` shape: any chain ending in ``get`` matches.
+#     Mitigation: tail-set excludes the most generic verbs that double
+#     as Map/Set accessors (``set``, ``has``); registered HTTP verbs
+#     (``get``/``post``/etc.) cannot be cleanly disambiguated without
+#     receiver-type tracking. Accepted: a function passed as the 2nd
+#     arg to a ``somethign.get(...)`` call would be promoted as
+#     framework_registered — but in practice ``map.get`` takes 1
+#     argument (the key), and 2-arg ``.get(key, default)`` calls
+#     don't pass identifier-function arguments. False-positive
+#     promotion costs accuracy on dead-code findings (the consumer
+#     skips a demotion that might have been correct); silencing
+#     real frameworks costs false negatives. Bias toward
+#     admitting the framework case.
+_FRAMEWORK_REGISTRATION_TAILS: FrozenSet[str] = frozenset({
+    # Express / Fastify / Koa / Hono — lowercase HTTP verbs + use + route.
+    "get", "post", "put", "patch", "delete", "head", "options",
+    "all", "use", "route", "param",
+    # Go gin / echo — capitalised HTTP verbs + Use + Group + Static.
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+    "Any", "Use", "Group", "Static",
+    # Go chi — mixed-case verbs + Method/MethodFunc + Mount + Handle.
+    "Get", "Post", "Put", "Patch", "Delete", "Head", "Options",
+    "Method", "MethodFunc", "Mount",
+    # Go net/http — Handle + HandleFunc on *http.ServeMux + http pkg.
+    "Handle", "HandleFunc",
+})
+
+
+# Single-name decorators where the framework-dispatch interpretation
+# is unambiguous enough to override the chain-length-2 gate. Entries
+# here MUST be distinctive enough that collision with user-defined
+# pass-through decorators is rare. Generic names (``task``,
+# ``fixture``, ``register``, ``handler``) are deliberately excluded
+# because a project's own ``@task`` / ``@fixture`` is more likely to
+# be a pass-through than framework dispatch — false-positive
+# promotion of pass-through-decorated dead code is the worse error
+# (silences real findings) vs false-negative on framework code
+# (caught by the chain-length-2 form which projects more commonly
+# use via ``@pytest.fixture`` / ``@celery.task``).
+#
+# Conservative starter set covers the highest-value cases where the
+# bare form is idiomatic AND the name is distinctive:
+#   * Django signals: ``@receiver(post_save, sender=User)`` — bare
+#     ``receiver`` is the standard import-pattern; chain-length-1
+#     is the dominant usage.
+#   * Celery shared tasks: ``@shared_task`` — the import-then-bare
+#     form is the recommended Celery pattern for app-agnostic tasks.
+#   * Celery periodic tasks: ``@periodic_task(...)`` — distinctive
+#     enough not to collide.
+#   * dramatiq: ``@actor`` — domain-specific term, unlikely to be a
+#     user-defined pass-through.
+_FRAMEWORK_DISPATCH_NAKED_NAMES: FrozenSet[str] = frozenset({
+    "receiver",
+    "shared_task",
+    "periodic_task",
+    "actor",
+})
+
+
 def _decorators_indicate_framework_dispatch(
     decorators: Iterable[Any],
 ) -> bool:
     """True iff any decorator on the function matches the
     framework-dispatch registration shape.
 
-    Heuristic: chain length >= 2 (decorator is a method on an
-    imported object, e.g. ``app.route``) AND the tail name is in
-    ``_FRAMEWORK_DISPATCH_TAILS``. Single-name decorators
-    (``@cache``, ``@property``) are pass-through and never flagged.
+    Two acceptance shapes:
 
-    The chain-length-2 requirement excludes both pass-through
-    decorators AND naked dispatch tokens like a bare ``@register``
-    function — the latter could be either pass-through or
-    registration; we're conservative because flagging too many
-    things as framework-callable suppresses legitimate dead-code
-    warnings.
+      * **Chain length >= 2**: decorator is a method on an imported
+        object (e.g. ``app.route``, ``pytest.fixture``,
+        ``celery_app.task``). Tail name must be in
+        ``_FRAMEWORK_DISPATCH_TAILS``. This is the dominant form
+        across the supported frameworks and the safer signal —
+        pass-through decorators are typically single names.
+      * **Chain length 1**: bare single-name decorator whose name is
+        in the narrower ``_FRAMEWORK_DISPATCH_NAKED_NAMES`` set.
+        Reserved for distinctive framework-only names (Django
+        ``@receiver``, Celery ``@shared_task``, etc.) where the
+        bare form is idiomatic. Generic names (``task``,
+        ``fixture``, ``register``) deliberately NOT in this set —
+        their bare form is more likely a user pass-through.
+
+    The split keeps the resolver from over-promoting pass-through
+    decorators (which would silence legitimate dead-code findings)
+    while admitting the bare framework-decorator patterns that
+    Django / Celery / dramatiq projects commonly use.
     """
     for chain in decorators:
         if not isinstance(chain, (list, tuple)):
             continue
-        if len(chain) < 2:
+        if not chain:
             continue
         tail = str(chain[-1])
-        if tail in _FRAMEWORK_DISPATCH_TAILS:
+        if len(chain) >= 2 and tail in _FRAMEWORK_DISPATCH_TAILS:
+            return True
+        if len(chain) == 1 and tail in _FRAMEWORK_DISPATCH_NAKED_NAMES:
             return True
     return False
 
@@ -1593,6 +1801,41 @@ def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
                     idx.qualified_to_internal[alias_full] = target_internal
                     added += 1
     return added
+
+
+def _file_path_to_module(rel_path: str) -> Optional[str]:
+    """Universal file-path → module conversion used by the same-file
+    bare-name fast-path in ``function_called``.
+
+    ``c/heartbeat.c`` → ``c.heartbeat``;
+    ``packages/foo/bar.py`` → ``packages.foo.bar``;
+    ``src/api/handler.rs`` → ``src.api.handler``.
+
+    Matches the convention ``core.orchestration.reachability_enrichment.
+    _path_to_module`` uses for the prepass — the prepass passes module-
+    qualified names like ``c.heartbeat.read_u16_be`` to function_called,
+    so the resolver needs to recognise the same module form to match
+    same-file bare-name calls against them.
+
+    Differs from ``_path_derived_module`` above: this helper is
+    language-agnostic (strips ANY single suffix) and emits just the
+    module, not a function-qualified candidate list. The two helpers
+    serve different fast-paths and intentionally diverge in scope.
+
+    Returns ``None`` for paths with no extension (extensionless
+    scripts, Makefile-shaped artefacts) — those don't participate
+    in module-style namespacing.
+    """
+    if not rel_path:
+        return None
+    from pathlib import PurePosixPath
+    p = PurePosixPath(rel_path.replace("\\", "/"))
+    if not p.suffix:
+        return None
+    parts = list(p.with_suffix("").parts)
+    if not parts:
+        return None
+    return ".".join(parts)
 
 
 def _path_derived_module(
@@ -1890,6 +2133,522 @@ def is_framework_callable(
     """
     idx = _get_or_build_index(inventory, exclude_test_files=exclude_test_files)
     return target in idx.framework_callable
+
+
+def is_registered_via_call(
+    inventory: Dict[str, Any],
+    target: InternalFunction,
+    *,
+    exclude_test_files: bool = True,
+) -> bool:
+    """True iff ``target`` is passed as an identifier argument to a
+    recognised framework registration call (``http.HandleFunc("/x",
+    target)``, ``app.get("/users", target)``, ``router.use(target)``,
+    etc.). Sister to :func:`is_framework_callable` but for the JS / Go
+    pattern where the framework registers handlers via call arguments
+    rather than decorators.
+
+    Same-file matching only: ``target`` must be defined in the same
+    file as the registration call. Cross-file resolution (handler in
+    handlers.js, registration in routes.js) requires walking the
+    file's import map and is a documented limitation — same as
+    ``is_framework_callable``'s cross-file caveats for decorators.
+
+    See ``_FRAMEWORK_REGISTRATION_TAILS`` for the registration-call
+    pattern set.
+    """
+    idx = _get_or_build_index(inventory, exclude_test_files=exclude_test_files)
+    return target in idx.framework_registered
+
+
+def module_aborts_on_load(
+    inventory: Dict[str, Any],
+    file_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the module-load-abort record for ``file_path`` if the
+    inventory builder detected an unconditional top-of-module abort
+    (``raise ImportError`` / ``throw new Error`` / ``init() panic`` /
+    ``compile_error!``), else ``None``.
+
+    When non-None, no function defined in the file (at or below the
+    abort's line) is reachable through normal import / link: the
+    file's top-level execution aborts before those bindings complete.
+    Consumers treat this as a whole-file reachability gate that
+    supersedes in-file call edges — a function called only by peers
+    in the same aborting file is still dead, because the file never
+    finishes loading.
+
+    The returned dict carries ``line`` (1-indexed location of the
+    abort) and ``summary`` (short label, e.g. ``"raise ImportError"``)
+    — see :class:`core.inventory.module_load_abort.ModuleLoadAbort`.
+    Detected at inventory-build time and stored on the file record;
+    this accessor is a simple path-keyed lookup (no index build).
+    """
+    if not file_path:
+        return None
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") == normalised:
+            abort = file_record.get("module_aborts_on_load")
+            return abort if isinstance(abort, dict) else None
+    return None
+
+
+def build_excluded(
+    inventory: Dict[str, Any],
+    file_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the build-exclusion record for ``file_path`` if the inventory
+    builder detected that the file is never compiled (e.g. Go
+    ``//go:build ignore``), else ``None``.
+
+    When non-None, NO function in the file is reachable: the translation unit
+    is excluded from the build, so nothing in it is compiled or linked —
+    regardless of in-file call edges or external linkage. Unlike
+    :func:`module_aborts_on_load` this is whole-file with no line threshold
+    (a compile-time, not runtime, property). HEURISTIC, not sound: a build
+    constraint is config-dependent (a forced build / alternate tag set could
+    include the file), so consumers surface-only — demote / annotate, never
+    hard-suppress.
+
+    The returned dict carries ``line`` (constraint location, display-only)
+    and ``summary`` (e.g. ``"//go:build ignore"``). Path-keyed lookup, no
+    index build — mirrors :func:`module_aborts_on_load`.
+    """
+    if not file_path:
+        return None
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") == normalised:
+            rec = file_record.get("build_excluded")
+            return rec if isinstance(rec, dict) else None
+    return None
+
+
+def is_lexically_dead(
+    inventory: Dict[str, Any],
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """True iff ``name`` (at ``line``, when given) is defined inside a
+    lexically dead scope — an always-false guard (``if False:`` /
+    ``if (false) {…}`` / ``#[cfg(any())]``) whose body never executes
+    or compiles, so the function never binds (S3).
+
+    Consumers treat this like a per-function reachability gate that
+    supersedes in-scope call edges: two dead-scope functions calling
+    each other read as mutually CALLED in the static graph, but the
+    whole scope is dead. Detected at inventory-build time and stored
+    as ``lexical_dead=True`` on the matching item; this accessor is a
+    path/name-keyed lookup (no index build).
+
+    Match is exact on ``(name, line)`` when ``line > 0`` — defensive
+    against shadowed names / overloads. With ``line == 0`` it matches
+    by name within the file (first hit wins). Returns ``False`` when
+    the file or function isn't found (false-negative-safe: never
+    claims dead when uncertain).
+    """
+    if not file_path or not name:
+        return False
+    normalised = file_path.replace("\\", "/")
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        if rec_path.replace("\\", "/") != normalised:
+            continue
+        for item in file_record.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("name") != name:
+                continue
+            if line and item.get("line_start") != line:
+                continue
+            return bool(item.get("lexical_dead"))
+        return False
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Entry-point forward reachability (U7) — "is this reachable from a real
+# entry, or only from an orphaned/dead chain?"
+# ---------------------------------------------------------------------------
+#
+# ``function_called`` answers the 1-hop "does anything call this name?" — it
+# reads CALLED for a function whose only caller is itself dead (a cluster of
+# mutually-calling functions with no external entry: the dead-island). This
+# adds the transitive answer: a function is reachable-from-entry iff it OR
+# some function in its reverse-closure is an entry point. If none is, and
+# the entry model is closeable for the language and no indirection could
+# hide an entry edge, it's NO_PATH_FROM_ENTRY.
+#
+# Entry model per language (what can be invoked from outside the project's
+# own call graph):
+#   * any language: framework_callable / framework_registered (runtime
+#     dispatch), and a function named ``main``.
+#   * C/C++: non-``static`` functions (external linkage — another TU may
+#     call them). SOUND + closeable: the static/extern split is total.
+#   * Go: exported (Capitalized) functions.
+#   * Rust: ``pub`` functions.
+#   * JS/TS: exported functions.
+#   * Java: ``public`` methods.
+#   * Python: module-level public (non-``_``) functions.
+#   * unknown language: treat every function as an entry → never flags
+#     (false-negative-safe).
+#
+# Completeness: where the entry model isn't a closed signal, or an ancestor
+# file uses call-masking indirection (getattr / reflection / func-like
+# macros) that could hide an entry edge, return UNCERTAIN rather than claim
+# NO_PATH_FROM_ENTRY. Surface-only consumers treat UNCERTAIN as "analyze".
+
+# Per-language reachability profile — the declarative entry model. Adding a
+# language's entry behaviour is one PROFILES entry; the entry accessors below
+# derive from it instead of inline ``if language ==`` chains.
+#
+#   entry_model:
+#     "sound"     — closed linkage/visibility signal; a NO_PATH_FROM_ENTRY
+#                   verdict is trustworthy (C/C++ static-vs-extern, Go
+#                   exported, Rust pub). entry_reachability may return NO_PATH.
+#     "heuristic" — entries identifiable but the model isn't closed (dynamic
+#                   dispatch / reflection); NO_PATH would be surface-only.
+#                   (No language uses this yet — the Python/Java dead-island
+#                   coverage units flip it on; today nothing is "heuristic".)
+#     "none"      — no visibility-based entry signal; functions fall through
+#                   to UNCERTAIN + the 1-hop NOT_CALLED logic (py/js/java/…).
+#   visibility_entry: how a function's visibility marks it an external entry —
+#     "non_static" (C/C++) | "go_exported" | "rust_pub" | "" (none).
+#   has_go_init / has_java_web: language-specific framework-dispatch entries.
+@dataclass(frozen=True)
+class ReachabilityProfile:
+    language: str
+    entry_model: str = "none"
+    visibility_entry: str = ""
+    has_go_init: bool = False
+    has_java_web: bool = False
+
+
+PROFILES: Dict[str, ReachabilityProfile] = {
+    "c":    ReachabilityProfile("c", "sound", "non_static"),
+    "cpp":  ReachabilityProfile("cpp", "sound", "non_static"),
+    "go":   ReachabilityProfile("go", "sound", "go_exported", has_go_init=True),
+    "rust": ReachabilityProfile("rust", "sound", "rust_pub"),
+    "java": ReachabilityProfile("java", "none", has_java_web=True),
+    "python":     ReachabilityProfile("python", "none"),
+    "javascript": ReachabilityProfile("javascript", "none"),
+    "typescript": ReachabilityProfile("typescript", "none"),
+    "ruby":       ReachabilityProfile("ruby", "none"),
+    "csharp":     ReachabilityProfile("csharp", "none"),
+    "php":        ReachabilityProfile("php", "none"),
+}
+
+_DEFAULT_PROFILE = ReachabilityProfile("")
+
+
+def _profile(language: str) -> ReachabilityProfile:
+    return PROFILES.get(language or "", _DEFAULT_PROFILE)
+
+
+# Languages whose entry model is a closed, sound signal — DERIVED from the
+# profiles (a NO_PATH verdict is trustworthy only for these). Kept as a
+# frozenset for the entry_reachability soundness gate.
+_CLOSEABLE_ENTRY_LANGS = frozenset(
+    lang for lang, p in PROFILES.items() if p.entry_model == "sound"
+)
+
+# Java servlet / filter lifecycle methods — invoked by the container, no
+# in-project caller. (init/destroy are generic names too; treating them as
+# entries is the conservative, false-negative-safe direction.)
+_JAVA_SERVLET_METHODS = frozenset({
+    "doGet", "doPost", "doPut", "doDelete", "doHead", "doOptions",
+    "doTrace", "service", "doFilter", "init", "destroy",
+})
+# Method-level annotation tail-names whose presence marks the method as
+# framework-dispatched: the container / framework invokes it directly, so it
+# needs no in-project caller to be reachable. Only annotations that denote a
+# *no-caller* dispatch belong here — ``@Async`` / ``@Transactional`` are
+# deliberately excluded because they merely wrap a normally-called method
+# (it still has an in-project caller), so treating them as entries would
+# wrongly shield a genuinely-dead async/transactional method from demotion.
+_JAVA_METHOD_DISPATCH_ANNOTATIONS = frozenset({
+    # JAX-RS / Spring MVC routing
+    "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "Path",
+    "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
+    "DeleteMapping", "PatchMapping",
+    # Spring bean factory + container lifecycle callbacks
+    "Bean", "PostConstruct", "PreDestroy",
+    # Spring events + scheduling (container-invoked, no in-project caller)
+    "EventListener", "Scheduled",
+    # Message-driven listeners (Spring Messaging / Kafka / Rabbit / JMS / STOMP)
+    "KafkaListener", "RabbitListener", "JmsListener",
+    "MessageMapping", "SubscribeMapping", "StreamListener",
+    # JPA / Hibernate entity lifecycle callbacks (persistence-provider-invoked)
+    "PrePersist", "PostPersist", "PreUpdate", "PostUpdate",
+    "PreRemove", "PostRemove", "PostLoad",
+    # JAXB property bindings — the getter is accessed reflectively by the XML
+    # marshaller, not via a static call. (Jackson @JsonProperty/@JsonGetter is
+    # the same pattern for JSON; add when a consumer surfaces it.)
+    "XmlElement", "XmlAttribute", "XmlValue", "XmlElementWrapper",
+})
+# Class-level stereotype annotation tail-names. A framework instantiates the
+# annotated class and reaches its PUBLIC methods with no in-project caller —
+# either the DI container dispatching into bean methods (via injected
+# references / proxies), or a persistence provider / (de)serialiser accessing
+# the class's properties reflectively (Hibernate dirty-checking + hydration,
+# JAXB XML marshalling). Private / protected / package-private methods stay
+# reachable only through the static closure from those public entries, so they
+# are NOT promoted here. Tail-matched, so javax.* and jakarta.* both resolve.
+_JAVA_CLASS_STEREOTYPES = frozenset({
+    # Spring DI / web stereotypes
+    "Component", "Service", "Repository", "Controller", "RestController",
+    "Configuration", "ControllerAdvice", "RestControllerAdvice",
+    # JPA / Jakarta Persistence entity classes — getters/setters are accessed
+    # reflectively by the provider and by serializers, not via static calls.
+    "Entity", "Embeddable", "MappedSuperclass",
+    # JAXB-bound classes — properties accessed reflectively by the XML
+    # marshaller. (Jackson @JsonRootName etc. is the JSON analogue.)
+    "XmlRootElement", "XmlType",
+})
+
+
+def _annotation_tail(annotation: Any) -> str:
+    """``@org.springframework...RequestMapping("/x")`` → ``RequestMapping``.
+
+    Strips a fully-qualified prefix, any argument list, and a leading ``@``
+    (the extractor stores attributes already ``@``-stripped, but be defensive).
+    """
+    return str(annotation).split("(")[0].strip().split(".")[-1].lstrip("@")
+
+
+def _java_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A Java method dispatched by a framework / DI container with no
+    in-project caller — servlet lifecycle method, method-level dispatch
+    annotation, or a public method of a stereotyped (container-managed) class.
+
+    Adding an entry only ever *grows* the reachable set, so this can never
+    suppress real code or demote live code; the worst case is failing to
+    demote a genuinely-dead annotated method (under-claiming dead code).
+    """
+    if name in _JAVA_SERVLET_METHODS:
+        return True
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _JAVA_METHOD_DISPATCH_ANNOTATIONS:
+            return True
+    # Class stereotype → only the bean's PUBLIC methods are container-dispatched.
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _JAVA_CLASS_STEREOTYPES:
+                return True
+    return False
+
+
+def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
+    """Is this inventory item an externally-invocable entry point under its
+    language's linkage/visibility model? (Framework dispatch is handled
+    separately off the adjacency index.)
+
+    Visibility/linkage is only treated as an entry signal for the
+    *closeable-entry* languages (C/C++ static-vs-extern, Go exported, Rust
+    pub) — there it's total and sound. For fuzzy languages (Python / JS /
+    Java) a public symbol is NOT reliably an entry (a public app function
+    may be plain dead code, not a library API), so we don't treat it as
+    one; those functions fall through to UNCERTAIN and the caller's
+    existing 1-hop NOT_CALLED logic, leaving their behavior unchanged.
+    ``main`` and framework dispatch are entries in every language.
+    """
+    name = item.get("name") or ""
+    if name == "main":
+        return True
+    p = _profile(language)
+    # Go runs every ``func init()`` automatically at package load — init
+    # and its call tree are reachable even with no explicit caller.
+    if p.has_go_init and name == "init":
+        return True
+    # Java framework-dispatched entries with no in-project caller: servlet
+    # lifecycle methods, method-level dispatch annotations (routing, Spring
+    # events/scheduling/messaging, bean factories, JPA callbacks), and public
+    # methods of stereotyped (container-managed) classes. Without this, live
+    # container-managed handlers (doPost, @EventListener, @Service methods)
+    # read not_called and get surface-demoted.
+    if p.has_java_web and _java_framework_entry(name, item):
+        return True
+    # Visibility/linkage entry signal (only for languages whose model is a
+    # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
+    # fall through to UNCERTAIN + 1-hop NOT_CALLED, behaviour unchanged).
+    if not p.visibility_entry:
+        return False
+    vis = (item.get("metadata") or {}).get("visibility")
+    if p.visibility_entry == "non_static":
+        # External linkage = potential entry from another TU. NOTE: a
+        # ``static`` function whose ADDRESS is stored in a non-static /
+        # exported object (an ops/vtable dispatch table) is externally
+        # reachable too, but the call graph doesn't track address-taking —
+        # such functions can read NO_PATH_FROM_ENTRY. Surface-only keeps this
+        # from silencing them; tracking address-of is a substrate follow-up.
+        return vis != "static"
+    if p.visibility_entry == "go_exported":
+        return vis == "exported" or name[:1].isupper()
+    if p.visibility_entry == "rust_pub":
+        return vis in ("public", "pub")
+    return False
+
+
+_ENTRY_SET_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset"]] = {}
+_ENTRY_SET_CACHE_MAX = 8
+
+
+def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
+    """Set of InternalFunction entry points (visibility/linkage model +
+    framework dispatch). Cached per-inventory by identity."""
+    inv_id = id(inventory)
+    cached = _ENTRY_SET_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    entries: Set[InternalFunction] = set()
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict):
+            continue
+        lang = fr.get("language") or ""
+        path = fr.get("path") or ""
+        for item in fr.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind", "function") != "function":
+                continue
+            if _item_is_entry(item, lang):
+                entries.add(InternalFunction(
+                    file_path=path, name=item.get("name") or "",
+                    line=int(item.get("line_start") or 0),
+                ))
+    idx = _get_or_build_index(inventory, exclude_test_files=True)
+    entries |= idx.framework_callable
+    entries |= idx.framework_registered
+    frozen = frozenset(entries)
+    _ENTRY_SET_CACHE[inv_id] = (inventory, frozen)
+    if len(_ENTRY_SET_CACHE) > _ENTRY_SET_CACHE_MAX:
+        _ENTRY_SET_CACHE.pop(next(iter(_ENTRY_SET_CACHE)), None)
+    return frozen
+
+
+# (reachable_set, closure_truncated) per inventory.
+_ENTRY_REACHABLE_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset", bool]] = {}
+# Closure depth for the entry set. Far above any realistic call-chain
+# depth so reachability isn't lost to truncation (a truncated closure
+# would falsely read deep-reachable functions as NO_PATH). It's a single
+# cached BFS bounded by the graph size, so a high cap costs nothing extra.
+_ENTRY_CLOSURE_MAX_DEPTH = 100_000
+
+
+def _entry_reachable_set(
+    inventory: Dict[str, Any],
+) -> Tuple["frozenset", bool]:
+    """``(reachable_set, truncated)``. ``reachable_set`` is every
+    InternalFunction reachable from any entry (entries + their forward
+    closure). ``truncated`` is True if the closure hit the depth cap — in
+    which case the set may be incomplete and callers must not claim
+    NO_PATH from a miss.
+
+    One cached forward_closure (not a reverse walk per query), so
+    membership is O(1) and the prepass can query every function cheaply.
+    """
+    inv_id = id(inventory)
+    cached = _ENTRY_REACHABLE_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1], cached[2]
+    entries = _entry_functions(inventory)
+    fc = forward_closure(
+        inventory, entries, max_depth=_ENTRY_CLOSURE_MAX_DEPTH,
+    )
+    reachable = set(entries)
+    reachable.update(
+        n for n in fc.nodes if isinstance(n, InternalFunction)
+    )
+    frozen = frozenset(reachable)
+    _ENTRY_REACHABLE_CACHE[inv_id] = (inventory, frozen, fc.truncated)
+    if len(_ENTRY_REACHABLE_CACHE) > _ENTRY_SET_CACHE_MAX:
+        _ENTRY_REACHABLE_CACHE.pop(next(iter(_ENTRY_REACHABLE_CACHE)), None)
+    return frozen, fc.truncated
+
+
+def _file_language(inventory: Dict[str, Any], file_path: str) -> Optional[str]:
+    norm = file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if isinstance(fr, dict) and (fr.get("path") or "").replace("\\", "/") == norm:
+            return fr.get("language")
+    return None
+
+
+def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
+    norm = file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
+            continue
+        cg = fr.get("call_graph") or {}
+        if set(cg.get("indirection") or []) & _MASKING_FLAGS:
+            return True
+        if cg.get("macro_call_targets"):
+            return True
+        return False
+    return False
+
+
+def entry_reachability(
+    inventory: Dict[str, Any],
+    target: InternalFunction,
+    *,
+    max_depth: int = 50,
+) -> str:
+    """``"reachable"`` | ``"no_path_from_entry"`` | ``"uncertain"``.
+
+    Reachable iff ``target`` is in the entry-reachable set (entries + their
+    forward closure). NO_PATH_FROM_ENTRY only when the language's entry
+    model is closeable AND no file on a path that could reach the target
+    carries call-masking indirection that might hide an entry edge;
+    otherwise UNCERTAIN (the false-negative-safe default). Surface-only:
+    consumers surface the verdict, they do not suppress on it.
+
+    Perf: the reachable set is one cached forward-closure, so the common
+    "reachable" answer is an O(1) membership test. The reverse-closure walk
+    (for the masking check) runs ONLY for the non-reachable minority.
+    """
+    reachable, truncated = _entry_reachable_set(inventory)
+    if target in reachable:
+        return "reachable"
+    if truncated:
+        # The closure was depth-capped, so the reachable set may be
+        # incomplete — a deep-reachable function could be missing. Don't
+        # claim NO_PATH off an incomplete set.
+        return "uncertain"
+    # Not reachable from any entry. Decide confident-dead vs uncertain.
+    lang = _file_language(inventory, target.file_path)
+    if lang not in _CLOSEABLE_ENTRY_LANGS:
+        return "uncertain"          # fuzzy entry model (py/js/...) → don't claim
+    # Call-masking indirection (reflection / func-like macros) in the
+    # target's file, or in any function that transitively calls it, could
+    # hide an entry edge the static graph didn't capture → don't claim
+    # dead. This reverse walk only runs for the not-reachable minority.
+    if _file_has_masking(inventory, target.file_path):
+        return "uncertain"
+    rc = reverse_closure(inventory, target, max_depth=max_depth)
+    for fn in rc.nodes:
+        if isinstance(fn, InternalFunction) and _file_has_masking(
+            inventory, fn.file_path,
+        ):
+            return "uncertain"
+    return "no_path_from_entry"
 
 
 def callees_of(
@@ -2471,6 +3230,10 @@ __all__ = [
     "forward_closure",
     "function_called",
     "is_framework_callable",
+    "entry_reachability",
+    "is_lexically_dead",
+    "is_registered_via_call",
+    "module_aborts_on_load",
     "parse_evidence_entry",
     "reverse_closure",
     "shortest_path",

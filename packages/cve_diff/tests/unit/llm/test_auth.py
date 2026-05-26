@@ -130,7 +130,7 @@ def test_dispatcher_socket_overrides_other_paths(
     """``RAPTOR_LLM_SOCKET`` set → dispatcher route wins over both
     env-direct and Claude Code fallback. The dispatcher's
     ``CredentialStore`` handles auth; cve-diff doesn't see keys."""
-    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/fake.sock")
+    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "./fake.sock")
     # Even WITH Anthropic key set, dispatcher route still wins:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "would-be-direct")
     decision = resolve_auth(model_id)
@@ -145,7 +145,7 @@ def test_dispatcher_skips_claudecode_fallback_for_anthropic():
     """Dispatcher route is a real auth path; Anthropic-with-dispatcher
     must NOT fall through to claudecode (which would dispatch via
     Claude Code OAuth instead of Anthropic API)."""
-    os.environ["RAPTOR_LLM_SOCKET"] = "/tmp/fake.sock"
+    os.environ["RAPTOR_LLM_SOCKET"] = "./fake.sock"
     try:
         decision = resolve_auth("claude-opus-4-7")
         assert decision.provider == "anthropic"

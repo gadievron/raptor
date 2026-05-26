@@ -101,8 +101,8 @@ class TestProxyAuditModeHostGate:
                 # or upstream connect refused), which is a 502/504, not
                 # the 403 the host-allowlist deny would have produced.
                 assert status != 403, (
-                    f"audit mode incorrectly returned 403 (denied) for "
-                    f"non-allowlisted host; expected fall-through")
+                    "audit mode incorrectly returned 403 (denied) for "
+                    "non-allowlisted host; expected fall-through")
             finally:
                 events = proxy.unregister_sandbox(token)
         finally:

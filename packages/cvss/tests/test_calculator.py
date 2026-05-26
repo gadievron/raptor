@@ -236,3 +236,84 @@ class TestScoreFindings:
     def test_empty_list(self):
         from packages.cvss import score_findings
         score_findings([])  # Should not raise
+
+
+class TestScoreForLabel:
+    """Tests for ``score_for_label`` — the inverse of the
+    ``_SEVERITY`` threshold table. Returns a representative
+    numeric for advisories that ship a label but no parseable
+    CVSS vector."""
+
+    def test_critical_returns_lower_bound(self):
+        from packages.cvss import score_for_label
+        # Lower bound of the Critical tier per CVSS v3.1's
+        # severity-rating table (table 14 in the spec).
+        assert score_for_label("critical") == 9.0
+
+    def test_high_returns_lower_bound(self):
+        from packages.cvss import score_for_label
+        assert score_for_label("high") == 7.0
+
+    def test_medium_returns_lower_bound(self):
+        from packages.cvss import score_for_label
+        assert score_for_label("medium") == 4.0
+
+    def test_low_returns_lower_bound(self):
+        from packages.cvss import score_for_label
+        assert score_for_label("low") == 0.1
+
+    def test_none_returns_zero(self):
+        from packages.cvss import score_for_label
+        # CVSS "None" tier means no impact. Distinct from a
+        # missing label (which returns None at the function level).
+        assert score_for_label("none") == 0.0
+
+    def test_info_returns_subloss_value(self):
+        """``info`` is operator-convenience (commented-out deps,
+        hand-tagged low-risk findings). Not in CVSS proper but
+        the SCA pipeline labels findings ``info`` in several
+        paths; we map it to a sub-Low value so consumers that
+        receive an ``info``-labelled finding without a numeric
+        don't crash."""
+        from packages.cvss import score_for_label
+        assert score_for_label("info") == 1.0
+
+    def test_case_insensitive(self):
+        """Upstream advisories capitalise inconsistently
+        (``"CRITICAL"`` from NVD, ``"Critical"`` from GHSA,
+        ``"critical"`` from PYSEC). All three must resolve."""
+        from packages.cvss import score_for_label
+        assert score_for_label("CRITICAL") == 9.0
+        assert score_for_label("Critical") == 9.0
+        assert score_for_label("critical") == 9.0
+
+    def test_whitespace_tolerant(self):
+        """Hand-edited advisories sometimes ship leading /
+        trailing whitespace. Strip before lookup."""
+        from packages.cvss import score_for_label
+        assert score_for_label("  high  ") == 7.0
+
+    def test_unknown_returns_none(self):
+        from packages.cvss import score_for_label
+        assert score_for_label("bogus") is None
+
+    def test_empty_returns_none(self):
+        from packages.cvss import score_for_label
+        assert score_for_label("") is None
+        assert score_for_label(None) is None
+
+    def test_monotone_in_severity(self):
+        """The label→score direction must be monotone-increasing
+        across CVSS tiers, matching v3.1's severity-rating
+        order. Pins the table so a future drift in ``_SEVERITY``
+        — e.g. someone adding an out-of-order tier — breaks
+        here loudly rather than silently flipping rank order
+        in downstream risk-formula consumers."""
+        from packages.cvss import score_for_label
+        scores = [
+            score_for_label(label)
+            for label in ("none", "low", "medium", "high", "critical")
+        ]
+        assert scores == sorted(scores), (
+            f"label→score is not monotone: {scores}"
+        )

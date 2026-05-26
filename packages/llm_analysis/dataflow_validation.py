@@ -787,6 +787,22 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
             "LLM reasoning excerpt: " + _sanitize_for_prompt(excerpt)
         )
 
+    # RAPTOR's own prior verified outcomes for this finding (Tier-3
+    # retrieval). Self-collects from the active project's sibling runs;
+    # best-effort, empty (no prior corpus) -> no block. These carry
+    # scanned-repo-derived fields (file paths), so they go INSIDE the
+    # untrusted envelope, not trusted_parts; the renderer already
+    # tag-forgery-defangs the values.
+    try:
+        from core.verified_outcome import exemplar_block_for_finding
+        ve_block = exemplar_block_for_finding(
+            {"id": rule_id, "cwe_id": cwe, "file": file_path},
+        )
+        if ve_block:
+            untrusted_inner.append(ve_block)
+    except Exception:
+        pass
+
     parts = list(trusted_parts)
     if untrusted_inner:
         parts.append(

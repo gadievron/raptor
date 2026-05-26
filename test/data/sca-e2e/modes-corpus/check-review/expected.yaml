@@ -1,0 +1,20 @@
+# Coord-style fixture: ``raptor-sca check <eco> <name> <version>``
+# against a package with at least one open CVE — verdict Review.
+#
+# requests 2.32.5 has OSV-tracked advisories (e.g. CVE-2026-25645)
+# that trigger Review. Exit code: Clean=0, Review=1, Block=2 —
+# both verdict text and exit code are load-bearing.
+#
+# Pin choice: requests has reliable OSV coverage; Review is stable
+# until requests genuinely clears every open advisory (rare for any
+# package this popular). The fixture decays gracefully — if 2.32.5
+# ever reaches Clean, the assertion just needs updating to the new
+# Review-bearing version.
+
+mode: check
+args: [PyPI, requests, "2.32.5"]
+expected:
+  exit_code: 1
+  stdout_contains:
+    - "Verdict"
+    - "Review"

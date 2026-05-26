@@ -46,6 +46,14 @@ pyyaml==6.0.3
 # ImportError fallback to operator-stripped environments.
 defusedxml==0.7.1
 
+# Required by packages/sca for PEP 440 / PEP 508 version + specifier
+# parsing — the engine used to match CVE-affected version ranges against
+# resolved dependency versions. The code has an ImportError fallback to
+# best-effort comparison, but without ``packaging`` the engine misses
+# almost every range-bounded CVE (catch rate drops to ~0% on the
+# compromise-detection corpus). Pin alongside the SCA hard deps.
+packaging==25.0
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 
@@ -68,3 +76,8 @@ defusedxml==0.7.1
 # require these.
 # cryptography==45.0.4
 # cbor2==6.0.1
+
+# SCA hard deps (defusedxml, packaging, pyyaml) are pinned above. The
+# only remaining optional one:
+#   - tomli      : TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+)
+# pip install "tomli; python_version<'3.11'"

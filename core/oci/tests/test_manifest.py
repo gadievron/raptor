@@ -94,7 +94,7 @@ def test_parse_image_manifest_skips_malformed_layers():
             {"digest": "sha256:" + "d" * 64, "size": 999},
         ],
     })
-    digests = [l.digest for l in parsed.layers]
+    digests = [line.digest for line in parsed.layers]
     assert digests == ["sha256:" + "a" * 64, "sha256:" + "d" * 64]
 
 

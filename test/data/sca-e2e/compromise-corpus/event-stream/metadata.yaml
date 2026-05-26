@@ -1,0 +1,20 @@
+incident: event-stream / flatmap-stream Copay bitcoin-wallet stealer
+ecosystem: npm
+package: event-stream
+malicious_versions:
+  - "3.3.6"   # the version that pulled in malicious flatmap-stream@0.1.1
+disclosure_date: 2018-11-26
+classification: maintainer-handover compromise
+references:
+  - https://github.com/dominictarr/event-stream/issues/116
+  - https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident.html
+  - https://snyk.io/vuln/SNYK-JS-EVENTSTREAM-72638
+expected_signal_summary: |
+  Original maintainer handed event-stream off to an attacker who
+  added flatmap-stream as a dependency, then injected a Copay-
+  wallet-targeting payload via a Buffer.from() decode in
+  flatmap-stream's compiled output. Classic example of "the
+  direct dep wasn't malicious, the new transitive was". A SCA
+  flagging the direct dep here proves we catch the propagation
+  via OSV/GHSA's advisory-on-event-stream entry even when the
+  payload itself lives in the transitive.

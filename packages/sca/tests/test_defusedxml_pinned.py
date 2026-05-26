@@ -1,25 +1,65 @@
-"""Regression: defusedxml must be installed and active for SCA XML parsing.
+"""Regression: defusedxml must be installed and active in the SCA POM parser.
 
-`requirements.txt` pins defusedxml so SCA pom.xml / .csproj parsing
-uses the safe parser. These tests fail loudly if a future install
-accidentally drops the pin or if defusedxml's billion-laughs defense
-regresses.
+The dedicated POM parser at ``packages/sca/parsers/pom.py`` uses
+defusedxml's ``ElementTree`` to read target-repo ``pom.xml`` files.
+These tests fail loudly if a future install accidentally drops the
+defusedxml pin or if its billion-laughs defense regresses.
+
+(Pre-feat/sca, POM parsing lived inline in ``packages/sca/agent.py``
+and the import flag was ``_DEFUSED_XML``. On feat/sca the parser
+lives in its own module and the flag is ``_AVAILABLE``.)
 """
 
+import importlib
 
-def test_defusedxml_is_pinned_and_importable():
-    """The dep must import cleanly — that's the structural pin check.
 
-    We deliberately don't probe a specific consumer module
-    (`packages.sca.agent`, `packages.sca.parsers.pom`, etc.) because
-    the SCA refactor in feat/sca migrates the defusedxml import from
-    the monolithic agent into per-ecosystem parsers. Testing the dep
-    itself is shape-agnostic and stays correct across that change.
-    """
-    import defusedxml  # noqa: F401
-    import defusedxml.ElementTree  # noqa: F401
-    assert defusedxml.__version__, (
-        "defusedxml imported but reports no version — install is broken."
+def test_sca_pom_parser_uses_defusedxml():
+    pom_parser = importlib.import_module("packages.sca.parsers.pom")
+    assert pom_parser._AVAILABLE, (
+        "packages.sca.parsers.pom fell back to xml.etree.ElementTree "
+        "because defusedxml is not installed. Pin "
+        "``defusedxml==0.7.1`` in requirements.txt — billion-laughs "
+        "payloads (CWE-776) expand on the stdlib parser."
+    )
+
+
+def test_sca_nuget_parser_uses_defusedxml():
+    """``.csproj`` / ``.fsproj`` / ``.vbproj`` files come from the
+    target repo. Without defusedxml, an attacker-controlled XXE
+    payload can exfil filesystem content or DoS the parser.
+    Surfaced 2026-05-21 by semgrep dogfood — historically silently
+    fell back to stdlib ``ElementTree``."""
+    nuget_parser = importlib.import_module("packages.sca.parsers.nuget")
+    assert nuget_parser._AVAILABLE, (
+        "packages.sca.parsers.nuget fell back to stdlib ElementTree "
+        "because defusedxml is not installed."
+    )
+
+
+def test_sca_license_pom_uses_defusedxml():
+    """Maven POM fetched from Maven Central for license extraction.
+    Trusted-network input, but defense-in-depth — refuse stdlib."""
+    lic = importlib.import_module("packages.sca.license")
+    assert lic._DEFUSEDXML_AVAILABLE, (
+        "packages.sca.license fell back to stdlib for POM parsing."
+    )
+
+
+def test_sca_maven_registry_uses_defusedxml():
+    """Maven Central POM parsed by the registry client. Same
+    defense-in-depth reasoning."""
+    mvn = importlib.import_module("packages.sca.registries.maven")
+    assert mvn._DEFUSEDXML_AVAILABLE, (
+        "packages.sca.registries.maven fell back to stdlib XML parser."
+    )
+
+
+def test_sca_nuget_registry_uses_defusedxml():
+    """``.nuspec`` from NuGet registry. Same defense-in-depth
+    reasoning."""
+    ng = importlib.import_module("packages.sca.registries.nuget")
+    assert ng._DEFUSEDXML_AVAILABLE, (
+        "packages.sca.registries.nuget fell back to stdlib XML parser."
     )
 
 

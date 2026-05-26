@@ -46,6 +46,7 @@ def mark_unreachable_low_priority(
     target_path: Path,
     *,
     inventory: Optional[Dict[str, Any]] = None,
+    allow_unreachable: bool = False,
 ) -> int:
     """Walk ``checklist["files"][*]["items"]`` and mark functions
     that are provably dead (NOT_CALLED) as ``priority="low"``.
@@ -56,7 +57,25 @@ def mark_unreachable_low_priority(
     (avoids a redundant tree walk when a sibling consumer
     already built one).
 
-    Returns the count of functions marked low-priority.
+    ``allow_unreachable=True`` is the operator-opt-out for the
+    in-isolation use case (CTF challenges, vendor reference
+    snippets, exploit-research targets, intentional dead-code
+    review). When set, NOT_CALLED functions do NOT receive the
+    ``priority="low"`` demotion — the analysis prompt won't
+    surface a "Verdict: NOT_CALLED" line, and the LLM is asked to
+    evaluate the function's inherent vulnerability shape rather
+    than its deployment reachability. Framework-callable /
+    registered-via-call annotations are STILL applied (they're
+    affirmative reachability evidence regardless of mode).
+
+    Returns the count of functions marked low-priority. Zero when
+    ``allow_unreachable=True`` (nothing demoted) but still mutates
+    the checklist with framework_callable / registered_via_call
+    annotations for functions that are *affirmatively* reachable. A
+    framework handler shadowed by a whole-file dead witness (its file
+    aborts on load / is build-excluded, or it's in an always-false
+    guard) is NOT annotated framework-reachable — its registration
+    never runs, so the dead witness wins even in isolation mode.
     """
     if not isinstance(checklist, dict):
         return 0
@@ -69,7 +88,13 @@ def mark_unreachable_low_priority(
             from core.inventory.builder import build_inventory
             import tempfile
             with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target_path), td)
+                # Union/raw view in isolation mode so the reachability
+                # query graph matches the operator's declared intent
+                # (review everything, incl. #if 0 code).
+                inventory = build_inventory(
+                    str(target_path), td,
+                    allow_unreachable=allow_unreachable,
+                )
         except Exception as e:                      # noqa: BLE001
             logger.debug(
                 "reachability_enrichment: inventory build failed (%s); "
@@ -78,8 +103,10 @@ def mark_unreachable_low_priority(
             return 0
 
     try:
-        from core.inventory.reachability import (
-            Verdict, function_called,
+        from core.inventory.reach_audit import classify_reachability
+        from core.inventory.reach_witness import (
+            Reachability,
+            verdict_from_classification,
         )
     except ImportError:
         return 0
@@ -116,17 +143,33 @@ def mark_unreachable_low_priority(
             if not isinstance(name, str) or not name:
                 continue
 
-            qualified = f"{module}.{name}"
-            try:
-                result = function_called(inventory, qualified)
-            except ValueError:
-                continue
-            if result.verdict != Verdict.NOT_CALLED:
-                continue
+            line = int(func.get("line_start") or 0)
 
-            func["priority"] = "low"
-            func["priority_reason"] = "reachability:not_called"
-            marked += 1
+            # ONE entry-aware classifier — the same precedence the CodeQL
+            # prefilter and /validate demoter use (module_aborts →
+            # lexical_dead → build_excluded → framework / registration →
+            # entry-reachability → 1-hop called/not_called). Single source of
+            # truth; no parallel precedence chain here to drift out of sync.
+            verdict = classify_reachability(
+                inventory, rel_path, name, line, module,
+            )
+            if verdict_from_classification(verdict).status is (
+                Reachability.UNREACHABLE
+            ):
+                # Surface-only soft-demote. allow_unreachable (the in-isolation
+                # opt-out) skips the demotion so the analysis prompt emits no
+                # dead-code verdict line. Covers module_aborts / lexical_dead /
+                # build_excluded / no_path_from_entry / not_called uniformly.
+                if allow_unreachable:
+                    continue
+                func["priority"] = "low"
+                func["priority_reason"] = f"reachability:{verdict}"
+                marked += 1
+            elif verdict in ("framework_callable", "registered_via_call"):
+                # Affirmative reachability evidence (framework dispatch /
+                # function-as-argument registration) — annotate, never demote,
+                # in both modes. (reachable / called / uncertain: leave as-is.)
+                func["priority_reason"] = f"reachability:{verdict}"
 
     if marked:
         logger.info(

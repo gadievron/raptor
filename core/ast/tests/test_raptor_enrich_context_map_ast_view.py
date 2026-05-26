@@ -13,8 +13,18 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
+# Module-level marker — every test spawns the real
+# libexec/raptor-enrich-context-map-ast-view wrapper as a subprocess.
+# Top tests at 11s; opt-in via ``pytest -m integration``.
+pytestmark = pytest.mark.integration
+
+
+# parents[3] = core/ast/tests → core/ast → core → repo root. Anchor to
+# this file, not $RAPTOR_DIR, so the wrapper resolves within this
+# worktree (RAPTOR_DIR may point at a different checkout).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-enrich-context-map-ast-view"
 
 

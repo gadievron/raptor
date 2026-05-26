@@ -1,0 +1,14 @@
+# Detection requirements for a synthetic install-hook fixture.
+#
+# This is NOT a real-world compromise — it's a synthesised
+# manifest exercising the install_hook_suspicious detector,
+# which scans the LOCAL project's package.json scripts (not
+# transitive deps) for known-malicious shell-piping patterns.
+#
+# The preinstall script "curl … | bash" matches the regex in
+# packages/sca/supply_chain/install_hooks.py:_DANGEROUS_PATTERNS;
+# the detector flags it at severity high.
+
+must_detect:
+  - kind: install_hook_suspicious
+    severity_floor: high

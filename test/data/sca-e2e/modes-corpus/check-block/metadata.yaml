@@ -1,0 +1,7 @@
+name: check-block
+mode_exercised: check
+shape: |
+  Coord-style fixture. Asserts ``raptor-sca check`` returns Block
+  verdict for a KEV-listed CVE coordinate. log4j-core 2.14.1 is
+  the canonical Log4Shell smoke test — if SCA's check path doesn't
+  surface this as Block, the gating logic is broken.

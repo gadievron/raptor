@@ -41,6 +41,7 @@ def _finding(file_path: str, rule_id: str,
 # =====================================================================
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -68,10 +69,7 @@ def test_e2e_unchecked_alloc_field_fires(tmp_path):
     assert ae.shape == "field"
 
 
-@pytest.mark.skipif(
-    not shutil.which("spatch"),
-    reason="spatch not installed — skip real-spatch E2E",
-)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
@@ -105,6 +103,11 @@ def test_e2e_unchecked_alloc_local_fires_on_kstrdup(tmp_path):
     assert locals_[0].allocator == "kstrdup"
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not shutil.which("spatch"),
+    reason="spatch not installed — skip real-spatch E2E",
+)
 def test_e2e_unchecked_alloc_skips_checked_case(tmp_path):
     """When the field IS NULL-checked after the alloc, the rule
     must NOT fire — `when !=` clauses correctly exclude checked
@@ -197,23 +200,25 @@ def test_unchecked_alloc_irrelevant_for_uaf(tmp_path):
         assert v.validate(finding) == ValidatorVerdict.UNCERTAIN
 
 
-def test_unchecked_alloc_pure_helper():
+def test_unchecked_alloc_pure_helper(tmp_path):
     """Direct test of _unchecked_alloc_supports_finding."""
+    foo = str(tmp_path / "foo.c")
+    other = str(tmp_path / "other.c")
     finding = Finding(
         finding_id="t",
         producer="codeql",
         rule_id="cpp/null-dereference",
         message="t",
-        source=Step(file_path="/tmp/foo.c", line=10, column=1,
+        source=Step(file_path=foo, line=10, column=1,
                     snippet="x", label="source"),
-        sink=Step(file_path="/tmp/foo.c", line=11, column=1,
+        sink=Step(file_path=foo, line=11, column=1,
                   snippet="x", label="sink"),
         intermediate_steps=(),
         raw={},
     )
     matching = SourceIntelResult(allocations=(AllocationEvidence(
         allocator="kstrdup",
-        location=("/tmp/foo.c", 10),
+        location=(foo, 10),
         shape="field",
         target_field="name",
     ),))
@@ -221,7 +226,7 @@ def test_unchecked_alloc_pure_helper():
 
     wrong_file = SourceIntelResult(allocations=(AllocationEvidence(
         allocator="kstrdup",
-        location=("/tmp/other.c", 10),
+        location=(other, 10),
         shape="field",
         target_field="name",
     ),))

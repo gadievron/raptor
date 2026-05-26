@@ -210,11 +210,11 @@ def test_network_deny_then_allow_idiom_pinned():
     DOES break — `(allow network-outbound)` followed by
     `(deny network*)` blocks the proxy port)."""
     p = seatbelt.build_profile(use_egress_proxy=True, proxy_port=4567)
-    lines = [l.strip() for l in p.splitlines() if l.strip()]
-    deny_idx = next(i for i, l in enumerate(lines)
-                    if l == "(deny network*)")
-    allow_idxs = [i for i, l in enumerate(lines)
-                   if l.startswith("(allow network-outbound")]
+    lines = [line.strip() for line in p.splitlines() if line.strip()]
+    deny_idx = next(i for i, line in enumerate(lines)
+                    if line == "(deny network*)")
+    allow_idxs = [i for i, line in enumerate(lines)
+                   if line.startswith("(allow network-outbound")]
     assert allow_idxs, "no allow-network-outbound clause emitted"
     # The allow MUST come after the deny so the more-specific
     # later rule wins. Inverting the order silently blocks the

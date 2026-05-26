@@ -149,6 +149,7 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestObserveJsonlAtomicity(unittest.TestCase):
     """The tracer writes each record via O_APPEND, which POSIX
     guarantees atomic for sub-PIPE_BUF writes (~4KB on Linux).
@@ -195,7 +196,7 @@ class TestObserveJsonlAtomicity(unittest.TestCase):
             # Parse every line directly (not via parse_observe_log,
             # which would silently swallow torn records).
             text = jsonl.read_text()
-            lines = [l for l in text.splitlines() if l.strip()]
+            lines = [line for line in text.splitlines() if line.strip()]
             self.assertGreater(
                 len(lines), 50,
                 f"workload should produce many records; got "

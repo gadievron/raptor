@@ -1021,7 +1021,8 @@ class TestUserLimitsInvalidUtf8(unittest.TestCase):
     """_load_user_limits must not crash on non-UTF-8 config files."""
 
     def test_invalid_utf8_config(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
         import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
@@ -1057,8 +1058,10 @@ class TestUserLimitsValidation(unittest.TestCase):
     """
 
     def test_rejects_negatives_accepts_zero(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
-        import json, tempfile
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
+        import json
+        import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
         saved_path = mod.preexec._CONFIG_PATH
@@ -1088,8 +1091,10 @@ class TestUserLimitsValidation(unittest.TestCase):
 
     def test_rejects_bool(self):
         """bool is an int subclass — exclude so `true` doesn't become 1."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
-        import json, tempfile
+        import core.sandbox as mod
+        from core.sandbox import state as mod_state
+        import json
+        import tempfile
         from pathlib import Path
         saved_cache = mod_state._user_limits_cache
         saved_path = mod.preexec._CONFIG_PATH
@@ -1438,7 +1443,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
         mod_state._landlock_warned_abi_v4 = self._saved_abi
 
     def test_warns_when_landlock_unavailable_but_target_set(self):
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         from unittest.mock import patch
         with TemporaryDirectory() as d:
             # Force check_landlock_available → False regardless of host kernel.
@@ -1452,7 +1457,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
         self.assertTrue(any("Landlock is unavailable" in m for m in cm.output))
 
     def test_warns_when_tcp_allowlist_on_abi_lt_4(self):
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         from unittest.mock import patch
         # Simulate ABI v3 kernel: Landlock available for fs, not for net.
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
@@ -1465,7 +1470,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_degradation_warning_throttled(self):
         """Opening many sandbox contexts on a degraded kernel warns ONCE."""
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         from unittest.mock import patch
         with TemporaryDirectory() as d:
             with patch.object(mod.landlock, "check_landlock_available", return_value=False), \
@@ -1481,7 +1486,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
     def test_warns_on_old_landlock_abi_v2(self):
         """Pre-5.19 kernels lack REFER — rename-across-dirs isn't blocked.
         Operator should see a WARNING so the gap is visible."""
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=1):
                 with patch.object(mod.probes, "check_mount_available", return_value=False):
@@ -1495,7 +1500,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_warns_on_old_landlock_abi_v3_only(self):
         """Pre-6.2 kernels lack TRUNCATE but have REFER (ABI 2)."""
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=2):
                 with patch.object(mod.probes, "check_mount_available", return_value=False):
@@ -1518,7 +1523,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_no_warning_on_abi_v4_with_tcp_allowlist(self):
         """On ABI v4+, allowed_tcp_ports is enforceable — no degradation warning."""
-        import core.sandbox as mod; 
+        import core.sandbox as mod 
         from unittest.mock import patch
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=4):

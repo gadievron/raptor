@@ -1,0 +1,31 @@
+[
+  {
+    "id": "GHSA-pjwm-rvh2-c87w",
+    "vuln_type": "sca:vulnerable_dependency",
+    "severity": "high",
+    "description": "ua-parser-js@0.7.29: Embedded malware",
+    "suppressed": false,
+    "sca": {
+      "ecosystem": "npm",
+      "name": "ua-parser-js",
+      "version": "0.7.29",
+      "in_kev": false,
+      "advisory": {
+        "id": "GHSA-pjwm-rvh2-c87w",
+        "aliases": ["CVE-2021-4229"]
+      }
+    }
+  },
+  {
+    "id": "GHSA-test-typosquat",
+    "vuln_type": "sca:supply_chain:typosquat_candidate",
+    "severity": "medium",
+    "description": "name 'foo-bar' is distance 1 from popular 'foobar'",
+    "suppressed": false,
+    "sca": {
+      "ecosystem": "npm",
+      "name": "foo-bar",
+      "version": "1.0.0"
+    }
+  }
+]

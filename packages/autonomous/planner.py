@@ -280,7 +280,7 @@ class FuzzingPlanner:
         crash_scores.sort(key=lambda x: x[1], reverse=True)
 
         # Log prioritisation
-        logger.info(f"Crash prioritisation (top 5):")
+        logger.info("Crash prioritisation (top 5):")
         for i, (crash, score, factors) in enumerate(crash_scores[:5], 1):
             logger.info(f"  {i}. {crash.crash_id} - Score: {score:.1f} - Factors: {', '.join(factors)}")
 

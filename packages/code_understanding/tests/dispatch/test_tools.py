@@ -5,7 +5,6 @@ The tools are JSON-string in/out; tests parse the JSON to inspect.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -67,7 +66,7 @@ class TestForRepo:
         # Symmetric with read_file's NUL guard — clean error rather than
         # bare ValueError from Path.resolve().
         with pytest.raises(ValueError, match="NUL byte"):
-            SandboxedTools.for_repo("/tmp/x\x00y")
+            SandboxedTools.for_repo("./x\x00y")
 
 
 # ---------------------------------------------------------------------------
@@ -534,13 +533,11 @@ class TestIsInside:
         assert _is_inside(sub, tmp_path) is True
 
     def test_path_outside_root(self, tmp_path):
-        # /tmp vs tmp_path/sub — disjoint
-        other = Path("/tmp")
+        # tmp_path.parent vs tmp_path/sub — definitionally disjoint
+        # (the parent of tmp_path can never be inside tmp_path/sub).
+        other = tmp_path.parent
         sub = tmp_path / "sub"
         sub.mkdir()
-        # Even though both might share a /tmp prefix, sub.is_relative_to(/tmp)
-        # depends on tmp_path being under /tmp. We're checking the inverse
-        # direction here: /tmp is NOT inside tmp_path.
         assert _is_inside(other, sub) is False
 
     def test_root_is_inside_itself(self, tmp_path):

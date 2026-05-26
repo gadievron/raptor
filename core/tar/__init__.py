@@ -37,7 +37,11 @@ Limitations:
     always returns bytes. Callers that want text decode themselves.
 """
 
-from .extract import extract_files_from_tar
+from .extract import (
+    TarEntryCountExceeded,
+    TarTotalBytesExceeded,
+    extract_files_from_tar,
+)
 from .safe_member import (
     DEFAULT_MAX_MEMBER_BYTES,
     UnsafeMemberReason,
@@ -47,6 +51,8 @@ from .safe_member import (
 
 __all__ = [
     "DEFAULT_MAX_MEMBER_BYTES",
+    "TarEntryCountExceeded",
+    "TarTotalBytesExceeded",
     "UnsafeMemberReason",
     "extract_files_from_tar",
     "is_safe_member",

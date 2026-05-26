@@ -157,7 +157,7 @@ class HackerProgressBarStageLifecycleTest(unittest.TestCase):
             bar.stage("osv")
             bar.done(summary="14 vuln")
             bar.end(summary="all good")
-        lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+        lines = [line for line in buf.getvalue().splitlines() if line.strip()]
         # Header + discovery + osv + done footer = 4 lines.
         self.assertEqual(len(lines), 4)
         self.assertIn("sca", lines[0])

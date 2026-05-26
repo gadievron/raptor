@@ -86,7 +86,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
             project_json = d / "myproj.json"
             project_json.write_text(json.dumps({
                 "name": "myproj",
-                "target": "/tmp/fake-target",
+                "target": str(d / "fake-target"),
                 "output_dir": str(src),
             }))
             export_project(src, zip_path, project_json_path=project_json)
@@ -113,7 +113,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
             project_json = d / "myproj.json"
             project_json.write_text(json.dumps({
                 "name": "myproj",
-                "target": "/tmp/fake-target",
+                "target": str(d / "fake-target"),
                 "output_dir": str(src),
             }))
             export_project(src, zip_path, project_json_path=project_json)
@@ -148,7 +148,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
             project_json = d / "myproj.json"
             project_json.write_text(json.dumps({
                 "name": "myproj",
-                "target": "/tmp/fake-target",
+                "target": str(d / "fake-target"),
                 "output_dir": str(src),
             }))
             export_project(src, zip_path, project_json_path=project_json)
@@ -197,7 +197,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
             project_json = d / "myproj.json"
             project_json.write_text(json.dumps({
                 "name": "myproj",
-                "target": "/tmp/fake-target",
+                "target": str(d / "fake-target"),
                 "output_dir": str(src),
             }))
             export_project(src, zip_path, project_json_path=project_json)
@@ -233,7 +233,7 @@ class TestExportImportRoundTrip(unittest.TestCase):
             project_json = d / "myproj.json"
             project_json.write_text(json.dumps({
                 "name": "myproj",
-                "target": "/tmp/fake-target",
+                "target": str(d / "fake-target"),
                 "output_dir": str(src),
             }))
             export_project(src, zip_path, project_json_path=project_json)

@@ -32,6 +32,13 @@ paths-ignore:
   # samples a future test adds.
   - "**/tests/fixtures/**"
   - "**/test_fixtures/**"
+  # SCA tests assert URL substrings against proxy_hosts allowlists, registry
+  # endpoints, and image refs (e.g. ``assert "registry.npmjs.org" in
+  # kwargs["proxy_hosts"]``). CodeQL's
+  # ``py/incomplete-url-substring-sanitization`` query reads these as
+  # host-validation checks — they aren't, they're shape assertions in
+  # tests. Same shape as the core/sandbox/tests/** exclusion above.
+  - packages/sca/**/tests/**
   # Intentionally vulnerable testbeds used by /scan and /codeql self-tests
   # (python_sql_injection.py, javascript_xss.js, smt_codeql_testbench.c).
   - test/data/**

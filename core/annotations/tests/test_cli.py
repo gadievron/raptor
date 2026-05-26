@@ -364,7 +364,8 @@ class TestLs:
         assert "src/a.py" in r.stdout
 
     def test_since_filter_excludes_old(self, tmp_path):
-        import os, time
+        import os
+        import time
         _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
         # Backdate the annotation file by 30 days.
         ann_file = tmp_path / "src" / "a.py.md"

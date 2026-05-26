@@ -191,34 +191,66 @@ def _build_crash_analysis_bundle(
 _CRASH_EXPLOIT_SYSTEM_PROMPT = """You are an expert binary exploitation specialist.
 Generate structured JSON output with exploit code and reasoning.
 
-CRITICAL: The exploit must actually run the target binary and send input to it to trigger the vulnerability.
-Do NOT generate code that just demonstrates the vulnerability in isolation.
+The exploit must trigger the vulnerability **inline within the PoC
+binary itself** — port the vulnerable code path from the target
+source into the PoC's main() and feed it the crashing input
+directly. Do NOT shell out to the target binary (execve, system,
+subprocess, fork+exec). RAPTOR runs the PoC under Landlock /
+seccomp / namespace isolation: the sandbox blocks the PoC from
+reading or executing files outside its own work directory, so any
+attempt to spawn the target will fail before the bug fires.
+Inlining the trigger also lets RAPTOR's sandbox observer surface
+sanitizer reports (ASAN / UBSAN / MSAN) on the PoC's stderr, which
+the witness-capture path classifies as ``SANITIZER_REPORT``
+outcomes — strictly more information than a clean exit.
 
 The exploit should:
-1. Use execve() or system() to run the target binary
-2. Send the exact crashing input bytes via stdin or a file
-3. Demonstrate that the vulnerability is triggered
+1. Reproduce the vulnerable function from the target source
+   (use source_location to find it, source the snippet from
+   the surrounding context the user provides).
+2. Construct an input that exercises the bug path — typically
+   the same bytes as the crash-input-hex block but tailored to
+   the inlined function's signature.
+3. Call the inlined function with that input, in main(), so the
+   bug fires on PoC execution.
 
-The "code" field must contain complete, compilable C++ code only.
+The "code" field must contain complete, compilable C or C++ code.
 The "reasoning" field can contain explanations and analysis."""
 
 
 _CRASH_EXPLOIT_TASK_INSTRUCTIONS = """The user message contains the crash context (prior analysis, crash details, the crashing input bytes in hex and ASCII), all wrapped as untrusted data. Identifiers (binary name, crash type, function, crash address) are passed through named slots; refer to slots by name.
 
-Create a working proof-of-concept exploit that demonstrates the vulnerability by sending the crashing input to the target binary.
+Create a self-contained proof-of-concept exploit that triggers the
+vulnerability **inside the PoC binary itself**. The PoC must NOT
+attempt to subprocess / execve / fork the target binary — RAPTOR's
+sandbox blocks cross-binary execution, and inlining the trigger
+lets sanitizers (ASAN / UBSAN / MSAN) fire on the PoC's stderr
+where the witness-capture path can observe them.
 
 The exploit must:
-1. Execute the target binary referenced by the binary_name slot
-2. Send the exact input bytes from the crash-input-hex untrusted block to trigger the vulnerability
-3. Demonstrate that the vulnerability can be reached and exploited
-4. Include full logging and visible terminal output showing the exploit in action
+1. Port the vulnerable function from the target source into the
+   PoC. The function_name and source_location slots tell you which
+   function and which file:line range to look at — the surrounding
+   source-context block (if provided) carries the snippet.
+2. Build an input that drives that function down the buggy path.
+   Usually the bytes in the crash-input-hex block, possibly
+   reshaped to match the function's parameter type (char *,
+   size_t, etc.).
+3. Call the inlined function with that input, in main(), so the
+   bug fires on PoC execution.
+4. Include visible output (stderr is fine — sanitizer reports go
+   there naturally) so the observer has something to record.
 
 Respond with valid JSON containing exactly these fields:
-- "code": The complete, compilable C++ exploit code as a string
+- "code": The complete, compilable C or C++ exploit code as a string
 - "reasoning": Any reasoning or explanation about the exploit technique
 
-The "code" field must contain ONLY valid C++ code that can be compiled with:
-g++ -o exploit exploit.cpp -fno-stack-protector"""
+The "code" field must contain valid C or C++ that the platform's
+default C++ compiler (``c++``, resolving to g++ on Linux, clang++ on
+macOS, etc.) can compile from a ``.cpp`` source file. Prefer plain C
+when the target source language is C — the C-style PoC is usually
+shorter and more portable. Either language is acceptable; pick what
+matches the target."""
 
 
 def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
@@ -296,7 +328,10 @@ class CrashAnalysisAgent:
                  llm_config: LLMConfig = None,
                  verify_exploits: bool = True,
                  judge_intent: bool = True,
-                 record_witnesses: bool = True):
+                 record_witnesses: bool = True,
+                 execute_exploits: bool = False,
+                 execute_timeout: int = 5,
+                 execute_sanitizers: Optional[list] = None):
         self.binary = Path(binary_path)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -325,6 +360,29 @@ class CrashAnalysisAgent:
         # failures are non-fatal.
         self.record_witnesses = record_witnesses
         self._witness_store = None  # lazy
+        # Execute the LLM-emitted exploit against the fuzzed binary
+        # in the sandbox after compile-verify, then thread the
+        # observed outcome (EXIT_SIGNAL / SANITIZER_REPORT / etc.)
+        # into the Witness. Default OFF — actually running LLM-
+        # generated code is a policy shift that needs operator
+        # opt-in even with the sandbox. Enable via
+        # ``--execute-exploits``. Requires ``verify_exploits``
+        # (compilation is a prerequisite for execution). The
+        # crash_agent path has a natural target (``self.binary``);
+        # the /agentic path stays NOT_RUN until a build harness
+        # lands.
+        self.execute_exploits = execute_exploits
+        self.execute_timeout = execute_timeout
+        # When set, the compiled exploit is built with these gcc
+        # sanitizer flags (e.g. ``["address"]`` → ``-fsanitize=address``)
+        # so runtime memory-safety bugs surface as ASAN reports
+        # — landing as ``WitnessOutcome.SANITIZER_REPORT`` rather
+        # than just ``EXIT_SIGNAL``. Default ``None`` keeps the
+        # historical no-instrumentation behaviour. Opt-in via
+        # ``--execute-sanitizers=address,undefined`` on
+        # ``raptor_fuzzing.py``. Only meaningful with
+        # ``execute_exploits=True``.
+        self.execute_sanitizers = execute_sanitizers
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -665,7 +723,19 @@ FULL LLM RESPONSE:
                 # /crash-analysis case of native binaries built from
                 # C/C++. Gated on ``self.verify_exploits`` so
                 # operators can opt out for time-sensitive runs.
-                if self.verify_exploits:
+                # When ``execute_exploits`` is on, we use the
+                # unified compile-and-execute path instead so the
+                # binary is reachable for the run before tempdir
+                # cleanup. Execution requires compile-verify (no
+                # binary → no run), so the flag combination
+                # ``execute_exploits=True, verify_exploits=False``
+                # silently falls back to compile-only — operator
+                # opted out of the prerequisite.
+                if self.verify_exploits and self.execute_exploits:
+                    self._compile_and_execute_exploit(
+                        crash_context, exploit_code,
+                    )
+                elif self.verify_exploits:
                     self._verify_exploit_compiles(crash_context, exploit_code)
 
                 # Intent-match judgement on the (possibly compile-
@@ -733,6 +803,51 @@ FULL LLM RESPONSE:
         )
         crash_context.exploit_compiled = compiled
         crash_context.exploit_compile_errors = errors
+
+    def _compile_and_execute_exploit(
+        self, crash_context: CrashContext, exploit_code: str,
+    ) -> None:
+        """Compile-verify AND sandbox-execute the LLM-emitted exploit.
+
+        Used when ``--execute-exploits`` is on. Replaces the compile-
+        only path: both the compiled binary and the executed outcome
+        live in the same tempdir scope, so the binary is reachable
+        for the run before cleanup.
+
+        Threads the executed outcome onto the crash context as
+        ``execute_outcome`` (string form of ``WitnessOutcome``) and
+        ``execute_detail`` (dict). The witness recorder consumes
+        those fields to upgrade the Witness from ``NOT_RUN`` to the
+        observed outcome.
+
+        Failures are non-fatal: a sandbox import failure, a binary
+        path that vanished, an unexpected ``compile_and_execute``
+        return shape — any of these leave ``execute_outcome=None``
+        and the witness ends up ``NOT_RUN`` as if execution had
+        been opted out. The exploit file on disk is unaffected.
+        """
+        from packages.llm_analysis.exploit_verify import compile_and_execute
+
+        target_file_path = ""
+        if crash_context.source_location:
+            target_file_path = crash_context.source_location.rsplit(
+                ":", 1
+            )[0]
+
+        compiled, errors, outcome, detail = compile_and_execute(
+            exploit_code,
+            target_file_path,
+            crash_context.crash_id,
+            target_binary_path=self.binary,
+            timeout=self.execute_timeout,
+            logger=logger,
+            sanitizers=self.execute_sanitizers,
+        )
+        crash_context.exploit_compiled = compiled
+        crash_context.exploit_compile_errors = errors
+        if outcome is not None:
+            crash_context.execute_outcome = outcome.value
+            crash_context.execute_detail = detail
 
     def _judge_exploit_intent(
         self, crash_context: CrashContext, exploit_code: str,
@@ -870,6 +985,21 @@ FULL LLM RESPONSE:
                 intent_verdict=intent_verdict,
                 intent_confidence=intent_confidence,
                 target_binary_path=self.binary,
+                # PR E: when execution actually ran, upgrade the
+                # Witness's observed_outcome from NOT_RUN to the
+                # observed one. ``execute_outcome`` is the
+                # WitnessOutcome enum *string* on the crash context
+                # (kept as string so the binary_analysis module
+                # doesn't depend on core.witness); convert back here.
+                executed_outcome=(
+                    self._resolve_execute_outcome(
+                        crash_context.execute_outcome,
+                    )
+                    if crash_context.execute_outcome else None
+                ),
+                executed_detail=(
+                    crash_context.execute_detail or None
+                ),
                 produced_by="crash-agent",
             )
             self._witness_store.put(witness, data)
@@ -882,6 +1012,26 @@ FULL LLM RESPONSE:
                 f"   · Witness record failed for "
                 f"{crash_context.crash_id}: {type(e).__name__}: {e}"
             )
+
+    @staticmethod
+    def _resolve_execute_outcome(value: Optional[str]):
+        """Map the string form on CrashContext back to WitnessOutcome.
+
+        ``CrashContext.execute_outcome`` is a string (enum ``.value``)
+        so the binary_analysis module doesn't depend on
+        ``core.witness``. The witness recorder re-lifts it into the
+        enum here. Unknown values fall back to ``UNKNOWN`` defensively
+        rather than raising — if a future code path writes an
+        unrecognised string we don't want to break the witness
+        record.
+        """
+        if not value:
+            return None
+        from core.witness import WitnessOutcome
+        try:
+            return WitnessOutcome(value)
+        except ValueError:
+            return WitnessOutcome.UNKNOWN
 
     def _signal_name(self, signal: str) -> str:
         """Convert signal number to name."""

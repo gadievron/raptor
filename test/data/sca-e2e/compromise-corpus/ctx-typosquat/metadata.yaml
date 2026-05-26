@@ -1,0 +1,21 @@
+incident: ctx PyPI namespace-hijack credential exfil
+ecosystem: PyPI
+package: ctx
+malicious_versions:
+  - "0.2.2"
+  - "0.2.5"
+  - "0.2.6"
+disclosure_date: 2022-05-22
+classification: namespace hijack (account takeover of dormant pkg)
+references:
+  - https://github.com/advisories/GHSA-78xx-fjgw-q6vw
+  - https://news.sophos.com/en-us/2022/05/24/the-malicious-package-ctx-was-published-on-pypi-and-included-os-environ-stealer-payload/
+expected_signal_summary: |
+  Attacker took over the lapsed PyPI namespace for ``ctx``,
+  pushed three malicious versions that exfiltrated environment
+  variables to a remote webhook. PyPI yanked the versions
+  post-disclosure. Two convergent signals fire on this fixture:
+  the OSV-tracked vuln_dep advisory + the yanked_version hygiene
+  marker. The fixture name says "typosquat" by historical
+  reflex; the attack class is actually namespace hijack of a
+  dormant project, not a typo.

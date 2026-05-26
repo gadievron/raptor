@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Refit the risk-score multipliers from the calibration corpus.
+
+Wraps :func:`packages.sca.calibration.refit.grid_search_refit`.
+Computes per-constant grid search + improvement gate; writes the
+report to ``packages/sca/data/calibration/refit/<date>.json``.
+
+By default DOES NOT modify ``risk.py`` — the refit produces a
+proposal that an operator (or the CI workflow) reviews. Pass
+``--apply`` to write the proposed values back to ``risk.py``.
+
+Exit codes:
+  0  proposed (refit ran, improvement gate passed; if --apply,
+     risk.py modified; if not, report-only)
+  1  rejected (improvement below threshold or no per-constant
+     improvement found)
+  2  insufficient_samples (corpus too small)
+  3  error (corpus missing / unreadable / invalid args)
+
+Usage:
+
+    libexec/raptor-sca-refit-calibration
+    libexec/raptor-sca-refit-calibration --corpus custom/dir
+    libexec/raptor-sca-refit-calibration --max-delta 0.05
+    libexec/raptor-sca-refit-calibration --apply
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Refit the SCA risk-score multipliers from the "
+            "calibration corpus. Per-constant grid search + "
+            "improvement gate. Default: report-only; pass --apply "
+            "to write proposed values back to risk.py."
+        ),
+    )
+    parser.add_argument(
+        "--corpus", type=Path, default=None,
+        help="corpus directory (defaults to "
+             "packages/sca/data/calibration/)",
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None,
+        help="report output file (defaults to "
+             "<corpus>/refit/<date>.json)",
+    )
+    parser.add_argument(
+        "--max-delta", type=float, default=None,
+        help="max ±relative delta per constant (default 0.10 = "
+             "±10%%)",
+    )
+    parser.add_argument(
+        "--improvement-threshold", type=float, default=None,
+        help="absolute top-20 precision improvement required to "
+             "ship the refit (default 0.05 = 5 percentage points)",
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="when refit status=proposed, write the new values "
+             "back to packages/sca/risk.py. Default: report-only.",
+    )
+    parser.add_argument(
+        "--ecosystem", default=None,
+        help="filter corpus to one ecosystem before fitting "
+             "(e.g. 'Maven', 'npm'). Useful for comparing per-"
+             "ecosystem optimal constants without introducing "
+             "per-eco constants in code — operator inspects the "
+             "diverged report to decide. Min sample size still "
+             "applies; ecosystems with <100 findings will be "
+             "rejected by the cold-start gate.",
+    )
+    parser.add_argument(
+        "--joint", action="store_true",
+        help="run the joint refitter (multi-pass coordinate "
+             "descent with random restarts) instead of the "
+             "single-pass per-constant search. Catches inter-"
+             "constant interactions the single-pass misses, at "
+             "the cost of ~30-150s wall on a real corpus. "
+             "Improvement gate is vs single-pass — a no-gain "
+             "joint refit confirms per-constant is at the basin "
+             "floor on this corpus. Writes the report to "
+             "<corpus>/refit/<date>.joint.json so it doesn't "
+             "clobber a same-day single-pass run.",
+    )
+    parser.add_argument(
+        "--joint-restarts", type=int, default=None,
+        help="number of random restarts for joint refit "
+             "(default 4). Higher is more robust to local "
+             "optima but linearly more expensive.",
+    )
+    parser.add_argument(
+        "--joint-seed", type=int, default=None,
+        help="seed for the joint refitter's random-restart "
+             "sampling. Deterministic when set — CI auto-PRs "
+             "should pass this so refits are reproducible.",
+    )
+    args = parser.parse_args()
+
+    corpus_dir = (
+        args.corpus
+        if args.corpus is not None
+        else _REPO_ROOT / "packages" / "sca" / "data" / "calibration"
+    )
+    if not corpus_dir.is_dir():
+        print(
+            f"raptor-sca-refit-calibration: corpus directory not "
+            f"found: {corpus_dir}", file=sys.stderr,
+        )
+        return 3
+
+    from packages.sca.calibration.refit import (
+        DEFAULT_IMPROVEMENT_THRESHOLD, DEFAULT_MAX_DELTA,
+        grid_search_refit, joint_grid_search_refit,
+    )
+    max_delta = (
+        args.max_delta if args.max_delta is not None
+        else DEFAULT_MAX_DELTA
+    )
+    improvement_threshold = (
+        args.improvement_threshold
+        if args.improvement_threshold is not None
+        else DEFAULT_IMPROVEMENT_THRESHOLD
+    )
+    if args.joint:
+        joint_kwargs = {}
+        if args.joint_restarts is not None:
+            joint_kwargs["restarts"] = args.joint_restarts
+        if args.joint_seed is not None:
+            joint_kwargs["seed"] = args.joint_seed
+        report = joint_grid_search_refit(
+            corpus_dir,
+            max_delta=max_delta,
+            improvement_threshold=improvement_threshold,
+            out_path=args.out,
+            ecosystem_filter=args.ecosystem,
+            **joint_kwargs,
+        )
+    else:
+        report = grid_search_refit(
+            corpus_dir,
+            max_delta=max_delta,
+            improvement_threshold=improvement_threshold,
+            out_path=args.out,
+            ecosystem_filter=args.ecosystem,
+        )
+
+    print(
+        f"raptor-sca-refit-calibration: status={report.status}, "
+        f"samples={report.sample_count}, "
+        f"baseline={report.overall_baseline_precision:.3f}, "
+        f"proposed={report.overall_proposed_precision:.3f}, "
+        f"improvement={report.improvement:+.3f}"
+    )
+    for note in report.notes:
+        print(f"  - {note}")
+
+    if report.status == "proposed":
+        if args.apply:
+            from packages.sca.calibration._apply_refit import (
+                apply_refit_to_risk_py, RefitApplyError,
+            )
+            risk_py = (
+                _REPO_ROOT / "packages" / "sca" / "risk.py"
+            )
+            try:
+                modified = apply_refit_to_risk_py(
+                    report.proposed_values, risk_py,
+                )
+            except RefitApplyError as e:
+                print(
+                    f"raptor-sca-refit-calibration: apply failed: {e}",
+                    file=sys.stderr,
+                )
+                return 3
+            print(
+                f"raptor-sca-refit-calibration: applied {modified} "
+                f"constant change(s) to {risk_py}"
+            )
+        return 0
+    if report.status == "rejected":
+        return 1
+    if report.status == "insufficient_samples":
+        return 2
+    return 3       # status == "error"
+
+
+if __name__ == "__main__":
+    sys.exit(main())

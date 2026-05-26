@@ -11,7 +11,7 @@ from packages.coccinelle.models import SpatchMatch, SpatchResult
 class TestSpatchMatch:
     def test_from_dict_full(self):
         d = {
-            "file": "/tmp/a.c",
+            "file": "a.c",
             "line": 10,
             "col": 5,
             "line_end": 10,
@@ -20,7 +20,7 @@ class TestSpatchMatch:
             "message": "found it",
         }
         m = SpatchMatch.from_dict(d)
-        assert m.file == "/tmp/a.c"
+        assert m.file == "a.c"
         assert m.line == 10
         assert m.column == 5
         assert m.line_end == 10
@@ -76,7 +76,7 @@ class TestSpatchResult:
     def test_to_dict(self):
         r = SpatchResult(
             rule="test",
-            rule_path="/tmp/test.cocci",
+            rule_path="test.cocci",
             matches=[SpatchMatch(file="a.c", line=1)],
             files_examined=["a.c"],
             elapsed_ms=100,

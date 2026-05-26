@@ -26,7 +26,8 @@ def _make_project_with_runs(tmpdir, run_specs):
         (run_dir / "findings.json").write_text("[]")
         time.sleep(0.01)  # Ensure different mtimes
 
-    project = Project(name="test", target="/tmp/code", output_dir=str(output_dir))
+    target = str(Path(tmpdir) / "code")
+    project = Project(name="test", target=target, output_dir=str(output_dir))
     return project
 
 
@@ -99,7 +100,8 @@ class TestClean(unittest.TestCase):
         with TemporaryDirectory() as d:
             output_dir = Path(d) / "empty"
             output_dir.mkdir()
-            p = Project(name="test", target="/tmp", output_dir=str(output_dir))
+            p = Project(name="test", target=str(Path(d) / "code"),
+                        output_dir=str(output_dir))
             stats = clean_project(p, keep=1)
             self.assertEqual(stats["deleted"], [])
             self.assertEqual(stats["kept"], [])

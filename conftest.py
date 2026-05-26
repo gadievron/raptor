@@ -48,3 +48,64 @@ if _existing and _existing != _conftest_dir:
         file=sys.stderr,
     )
 os.environ["RAPTOR_DIR"] = _conftest_dir
+
+
+# ---------------------------------------------------------------------------
+# Default-tier slow-test guard
+# ---------------------------------------------------------------------------
+#
+# Preventive backstop for the "a default-tier test is slow because it
+# does real I/O it should mock" class — real subprocess / network /
+# time.sleep / sandbox setup that turns a 30ms unit test into a 30s one.
+# faulthandler_timeout (set in tests.yml) catches a *hang*; this catches
+# slow-but-finishes, the day it lands, instead of in a later --durations
+# sweep.
+#
+# Activated ONLY when RAPTOR_MAX_TEST_SECONDS is set — tests.yml sets it
+# for the default-tier matrix; nightly.yml deliberately does NOT (its
+# `-m "slow or integration"` tests are legitimately slow), and local
+# `pytest` is unaffected. The guard FLAGS, it does not kill: every test
+# still runs to completion; the session then fails at the end naming the
+# offenders, so the signal is "this test got slow", not "killed mid-run".
+#
+# A genuinely-heavy test is not a bug — mark it @pytest.mark.slow (moves
+# it to the nightly tier, out of this guard's scope).
+
+_MAX_TEST_SECONDS = os.environ.get("RAPTOR_MAX_TEST_SECONDS")
+_slow_test_threshold = float(_MAX_TEST_SECONDS) if _MAX_TEST_SECONDS else None
+_slow_test_overruns: "list[tuple[str, float]]" = []
+
+
+def pytest_runtest_logreport(report):
+    """Record any test whose CALL phase exceeds the threshold."""
+    if _slow_test_threshold is None:
+        return
+    if report.when == "call" and report.duration > _slow_test_threshold:
+        _slow_test_overruns.append((report.nodeid, report.duration))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail an otherwise-green session if any test overran the threshold."""
+    if _slow_test_threshold is None or not _slow_test_overruns:
+        return
+    if session.exitstatus == 0:
+        session.exitstatus = 1
+
+
+def pytest_terminal_summary(terminalreporter):
+    if _slow_test_threshold is None or not _slow_test_overruns:
+        return
+    tr = terminalreporter
+    tr.section("default-tier slow-test guard FAILED", red=True, bold=True)
+    tr.write_line(
+        f"{len(_slow_test_overruns)} test(s) exceeded "
+        f"RAPTOR_MAX_TEST_SECONDS={_slow_test_threshold}s in the default tier."
+    )
+    tr.write_line(
+        "A default-tier test this slow is almost always real I/O that "
+        "should be mocked (subprocess / network / time.sleep / sandbox "
+        "setup). Fix it — or, if the cost is genuine, mark it "
+        "@pytest.mark.slow so it runs in the nightly tier instead.",
+    )
+    for nodeid, dur in sorted(_slow_test_overruns, key=lambda x: -x[1]):
+        tr.write_line(f"  {dur:7.1f}s  {nodeid}")

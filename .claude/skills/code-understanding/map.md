@@ -48,6 +48,15 @@ Find all locations where external input enters the application:
 
 For each: record file path, line number, and what data it accepts.
 
+For each source, also assign a **`trust_level`** — the provenance of the data it introduces, i.e. how attacker-controllable it is *at the point it enters*:
+
+- `attacker_controlled` — the attacker supplies it directly: HTTP body/query/headers/cookies, `argv`/stdin, `recv`/socket reads, uploaded file contents, webhook payloads before signature verification.
+- `persistent_store` — read from storage that may hold attacker data written in an earlier request: DB rows, cache, message queues, files written by another actor. Cross-class flow out of here is the "stored" vuln family (stored XSS / stored cmd-injection) — note it for Stage B.
+- `internal_value` — server-generated, not attacker-influenced: UUIDs / sequence IDs the server mints, JWT claims *after* signature verification, values checked against a closed allow-list.
+- `runtime_constant` — fixed before any request: compile-time constants, hardcoded config, env vars loaded at startup.
+
+When a value combines inputs, take the most-attacker-controlled (`attacker_controlled` > `persistent_store` > `internal_value` > `runtime_constant`). These labels correspond to L1-L4 respectively for anyone coming from that vocabulary.
+
 **[MAP-2] Trust Boundary Identification**
 
 Identify where the code makes (or should make) trust decisions:
@@ -90,7 +99,8 @@ Produce a brief summary covering:
   "sources": [
     {
       "type": "http_route",
-      "entry": "POST /api/v2/query @ src/routes/query.py:34"
+      "entry": "POST /api/v2/query @ src/routes/query.py:34",
+      "trust_level": "attacker_controlled"
     }
   ],
   "sinks": [

@@ -127,6 +127,24 @@ def test_gitlab_saas():
 
 
 # ---------------------------------------------------------------------------
+# Elastic registry — auth-host split
+# ---------------------------------------------------------------------------
+
+
+def test_elastic_registry_returns_two_hosts():
+    """``docker.elastic.co`` uses a separate ``docker-auth.elastic.co``
+    for token issuance — same auth-host split as Docker Hub. Both
+    hosts must be in the sandbox allowlist; an absent auth host
+    surfaces as repeated proxy DENYs during manifest fetch. Surfaced
+    by the May 2026 200-project sweep against Elasticsearch
+    Maven artefacts that pull this base image."""
+    hosts = registry_hosts_for(
+        "docker.elastic.co/elasticsearch/elasticsearch:8.13.0",
+    )
+    assert hosts == ["docker.elastic.co", "docker-auth.elastic.co"]
+
+
+# ---------------------------------------------------------------------------
 # Unknown / self-hosted
 # ---------------------------------------------------------------------------
 

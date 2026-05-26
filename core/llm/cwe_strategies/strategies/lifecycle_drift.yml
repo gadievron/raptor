@@ -1,0 +1,95 @@
+name: lifecycle_drift
+description: |
+  Context drift of an invariant in a kernel task's lifecycle. A state
+  field is set under some precondition P (the task owns an mm,
+  credentials have been committed) and later consumed on a path where
+  P no longer holds — a kernel thread, a task mid-exit, a task whose
+  mm was swapped out. The value's bit pattern is correct at
+  write-time; its security meaning is wrong at read-time. Distinct
+  from auth_privilege's TOCTOU angle (a value that *changes* between
+  check and use): here the value need not change at all — the
+  precondition that made it meaningful is simply absent in this
+  lifecycle phase. Scope, stated honestly: the signals below fire
+  ONLY on the kernel ptrace / mm-dumpability surface (get_dumpable,
+  __ptrace_may_access) — this is a precise, low-false-positive lens for
+  that one shape today, NOT a general context-drift detector. The
+  addendum describes the general method, but the picker is mechanical:
+  broadening to sibling bugs (other mm-conditional accessors,
+  credential / namespace lifecycle) means adding signals plus a worked
+  exemplar as those bugs surface in other subsystems.
+
+signals:
+  # Intentionally narrow — the precise signal is "this function calls
+  # an mm-conditional accessor like get_dumpable()". Broad paths
+  # (kernel/cred.c, fs/exec.c) and tokens (ptrace, commit_creds) were
+  # dropped: they made the strategy a magnet for every function in the
+  # cred/exec/ptrace neighbourhood and collided with auth_privilege.
+  paths:
+    - kernel/ptrace.c
+  includes:
+    - linux/ptrace.h
+    - linux/sched/mm.h
+  function_keywords:
+    - dumpable
+  function_calls:
+    - get_dumpable
+    - __get_dumpable
+    - set_dumpable
+    - ptrace_may_access
+    - __ptrace_may_access
+  # No `cwes:` on purpose. CWE-863 (incorrect authorization) is the
+  # consequence, but auth_privilege already claims it; sharing the tag
+  # makes both strategies tie on the dominant signal and split the
+  # prompt budget. The bespoke function_calls above are the precise,
+  # low-false-positive trigger.
+
+key_questions:
+  - "Does this code read a state field/flag it did NOT just compute — one set at a different lifecycle stage (mm acquired at exec, credentials committed)?"
+  - "What precondition made that value meaningful when written (e.g. 'the task owns an mm')? Is that precondition guaranteed on every path that reaches this read?"
+  - "If the precondition does NOT hold here (kernel thread, task mid-exit, swapped-out mm), what does the field carry — stale, default, or meaningless — and does the consumer still treat it as authoritative?"
+  - "This is not a check/use race: the value need not change. Does a security decision here consume a field whose invariant simply doesn't apply in the task's current lifecycle phase?"
+
+prompt_addendum: |
+  Context-drift bugs are invisible at the read site: the value is the
+  right type, usually the right bit pattern, and the code reads
+  correctly under local inspection. The defect is temporal — a value
+  established under precondition P is consumed on a path where P no
+  longer holds, so its meaning silently changed between write and
+  read. Identify every state field the function reads but did not just
+  compute. For each, find the write site(s) and the precondition that
+  made it meaningful, then ask whether that precondition is guaranteed
+  at this read. The canonical shape: an access-control helper
+  (``*_may_access``, ``*_check_*``) that derives a verdict from an
+  mm-conditional field — e.g. ``get_dumpable()`` — without first
+  guarding on ``task->mm != NULL``, so kernel threads and exiting
+  tasks reach the consumer with a field that carries no meaning. This
+  is NOT a check/use race: the field need not change; the precondition
+  under which it was authoritative is simply absent in this lifecycle
+  phase.
+
+exemplars:
+  - cve: CVE-2026-46333
+    title: ptrace dumpability — __ptrace_may_access() trusts get_dumpable() for
+      tasks without an mm
+    pattern: |
+      __ptrace_may_access() reads get_dumpable(task) as one of its
+      access-control inputs. get_dumpable() reports the dumpability
+      flag of the task's mm. For tasks that have no mm — kernel
+      threads, processes mid-exit, processes whose mm was swapped
+      out — there is no mm to carry the invariant, yet the call still
+      returns a value (stale or default) that the check consumes as
+      authoritative.
+    why_buggy: |
+      The dumpability invariant ("this task's memory image is
+      non-dumpable") is only meaningful for a task that owns an mm.
+      The flag's bit pattern is correct at the time it was written
+      (when the mm existed); its semantics are wrong at read-time in
+      an mm-less context. __ptrace_may_access() trusted the returned
+      value as a valid security signal regardless of whether the task
+      had an mm, producing the wrong access decision for
+      kernel-thread / exiting / mm-less targets. Fixed by caching
+      last-known dumpability for tasks that had an mm, returning zero
+      for kernel threads, and gating mm-less access on CAP_SYS_PTRACE.
+      The lesson: a state field is only as trustworthy as the
+      precondition under which it was set — read it on a path where
+      that precondition fails and it lies.

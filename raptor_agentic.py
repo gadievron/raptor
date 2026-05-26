@@ -724,6 +724,26 @@ Examples:
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI (auto-detected if not specified)")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
 
+    # Reachability gating control
+    parser.add_argument(
+        "--allow-unreachable",
+        action="store_true",
+        help=(
+            "Admit findings on functions the reachability substrate "
+            "marks NOT_CALLED. Default behaviour filters / demotes "
+            "these and the analysis prompt asks the LLM to defer. "
+            "Use when evaluating code in isolation: CTF challenges, "
+            "vendor reference snippets, exploit-research targets, "
+            "deliberate dead-code review. Does NOT change handling "
+            "of UNCERTAIN cases — those always flow through to "
+            "avoid false confidence in non-reachability. Affects 4 "
+            "wiring sites: reachability_enrichment (no priority=low "
+            "demotion), CodeQL prefilter (no short-circuit), attack-"
+            "path demoter (no demote), analysis prompt (engagement "
+            "text → informational only)."
+        ),
+    )
+
     # Mitigation analysis options (NEW)
     parser.add_argument("--binary", help="Target binary for mitigation analysis (enables pre-exploit checks)")
     parser.add_argument("--check-mitigations", action="store_true",
@@ -864,6 +884,14 @@ Examples:
              "CodeQL pack/config check (core/security/codeql_trust.py). New "
              "trust checks read the same signal.",
     )
+
+    # SCA integration
+    parser.add_argument("--sca", action="store_true",
+                        help="Run /sca dependency analysis between scanning and validation")
+    parser.add_argument("--skip-sca-review", action="store_true",
+                        help="Skip LLM review stages in /sca (mechanical-only)")
+    parser.add_argument("--skip-sca-triage", action="store_true",
+                        help="Skip LLM triage stage in /sca")
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
@@ -1164,6 +1192,7 @@ Examples:
         reachability_prepass_result = run_reachability_prepass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
+            allow_unreachable=getattr(args, "allow_unreachable", False),
         )
         if reachability_prepass_result.ran:
             logger.info(
@@ -1241,6 +1270,11 @@ Examples:
             *sandbox_passthrough,
         ]
         logger.info("Running: Scanning code with Semgrep")
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # ``semgrep_cmd`` is a list of RAPTOR-constructed argv;
+        # env inherits from RAPTOR's own process (the operator's
+        # env). PYTHONUSERBASE inheritance is intentional — see
+        # F102 comment below.
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
@@ -1297,6 +1331,11 @@ Examples:
         if args.codeql_cli:
             codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
         logger.info("Running: Scanning code with CodeQL")
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        # Explicit ``env=RaptorConfig.get_safe_env()`` — strips
+        # DANGEROUS_ENV_VARS (LD_PRELOAD / DYLD_* / GCONV_PATH
+        # etc.) per the env-allowlist convention. Semgrep's rule
+        # can't infer that the helper is safety-strip-aware.
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
@@ -1409,6 +1448,25 @@ Examples:
                 print("⚠️  CodeQL scan failed — continuing with existing findings")
             else:
                 print("⚠️  CodeQL scan failed — no findings from any scanner")
+            # Surface the captured stderr so the operator can see WHY codeql
+            # exited non-zero. Pre-fix the agentic wrapper threw away
+            # codeql_stderr and only logged "rc={rc}", leaving the operator
+            # to spelunk through out/codeql_*/ to find the actual reason
+            # (often empty on early failure — language detector returns
+            # before writing any report).
+            stderr_tail = (codeql_stderr or "").rstrip().splitlines()[-15:]
+            if stderr_tail:
+                print("   CodeQL stderr (last 15 lines):")
+                for line in stderr_tail:
+                    print(f"     {line}")
+            if any("No CodeQL-supported languages detected" in line for line in stderr_tail):
+                print(
+                    "   Hint: language auto-detection rejected every candidate "
+                    "(typically because the target has no build files — go.mod, "
+                    "package.json, pyproject.toml, CMakeLists.txt, etc.). "
+                    "Pass --languages cpp,python,javascript,go (or a subset) "
+                    "to bypass auto-detection."
+                )
             logger.warning(f"CodeQL scan failed - rc={rc}")
             if args.codeql_only:
                 print("❌ CodeQL-only mode failed")
@@ -1519,6 +1577,51 @@ Examples:
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
+    # PHASE 1b: SCA — DEPENDENCY ANALYSIS (opt-in via --sca)
+    # ========================================================================
+    sca_result = None
+    sca_findings_path = None
+    if args.sca:
+        print("\n" + "=" * 70)
+        print("SCA — DEPENDENCY ANALYSIS")
+        print("=" * 70)
+
+        try:
+            from packages.sca.pipeline import run_sca, RunOptions as ScaRunOptions
+
+            sca_out = out_dir / "sca"
+            sca_out.mkdir(exist_ok=True)
+            sca_options = ScaRunOptions(
+                enable_llm_review=not args.skip_sca_review,
+                enable_triage=not args.skip_sca_triage,
+            )
+            sca_result = run_sca(
+                target=original_repo_path,
+                output_dir=sca_out,
+                options=sca_options,
+            )
+            sca_findings_path = sca_out / "findings.json"
+
+            print("\n✓ SCA complete:")
+            print(f"  - Dependencies analysed: {sca_result.deps_analysed}")
+            print(f"  - Vulnerability findings: {sca_result.vuln_findings}")
+            print(f"  - Hygiene findings: {sca_result.hygiene_findings}")
+            print(f"  - Supply-chain findings: {sca_result.supply_chain_findings}")
+            if sca_result.llm_reviews_run:
+                print(f"  - LLM reviews: {sca_result.llm_reviews_run}")
+            if sca_result.triage_run:
+                print("  - Triage: completed")
+            logger.info("SCA complete: %d vulns, %d hygiene, %d supply-chain",
+                        sca_result.vuln_findings, sca_result.hygiene_findings,
+                        sca_result.supply_chain_findings)
+        except ImportError:
+            print("⚠️  SCA package not available — skipping dependency analysis")
+            logger.warning("SCA import failed — packages/sca not installed")
+        except Exception as e:
+            print(f"⚠️  SCA failed: {e}")
+            logger.error("SCA phase failed: %s", e, exc_info=True)
+
+    # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION
     # ========================================================================
     # Run validation phase (handles all modes: skip, dedup-only, full validation)
@@ -1534,6 +1637,7 @@ Examples:
         skip_dedup=args.skip_dedup,
         skip_feasibility=not (args.binary or args.check_mitigations),
         external_llm=llm_env.external_llm,
+        sca_findings_path=sca_findings_path,
     )
 
     # ========================================================================
@@ -1615,6 +1719,32 @@ Examples:
 
                 if args.codeql or args.codeql_only:
                     print(f"  - CodeQL dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+
+                # Witness summary — recorded by ``AutonomousSecurityAgentV2``
+                # when ``--no-record-witnesses`` wasn't passed. Lives under
+                # ``<autonomous_out>/witnesses/``. Silent when empty.
+                from core.reporting import render_witness_summary
+                witness_block = render_witness_summary(
+                    autonomous_out / "witnesses",
+                )
+                if witness_block:
+                    print(f"\n  Witnesses ({autonomous_out / 'witnesses'}):")
+                    for line in witness_block.splitlines():
+                        # Strip one level of leading indent so it sits
+                        # consistently under the analysis-complete bullets.
+                        print(f"  {line}")
+
+                # ZKPoX eligibility — FREE surfacing (design trigger
+                # model): classification only, no bundle assembly,
+                # no execution. Shows how many witnesses are ZK-proof
+                # candidates.
+                from packages.zkpox import render_run_eligibility
+                elig_block = render_run_eligibility(
+                    autonomous_out / "witnesses",
+                )
+                if elig_block:
+                    for line in elig_block.splitlines():
+                        print(f"  {line}")
         else:
             print("⚠️  Analysis failed or produced no output")
             if stderr:
@@ -1661,6 +1791,7 @@ Examples:
                 deep_validate=getattr(args, "deep_validate", False),
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
+                allow_unreachable=getattr(args, "allow_unreachable", False),
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
@@ -1689,6 +1820,7 @@ Examples:
             agentic_out_dir=out_dir,
             analysis_report=validate_input_report,
             block_cc_dispatch=block_cc_dispatch,
+            allow_unreachable=getattr(args, "allow_unreachable", False),
         )
         if postpass_result.ran:
             logger.info(f"Post-pass validated {postpass_result.selected_count} findings "
@@ -1729,6 +1861,16 @@ Examples:
                     "languages": list(codeql_metrics.get('languages_detected', {}).keys()) if codeql_metrics else [],
                 },
             },
+            "sca": {
+                "enabled": args.sca,
+                "completed": sca_result is not None,
+                "deps_analysed": sca_result.deps_analysed if sca_result else 0,
+                "vuln_findings": sca_result.vuln_findings if sca_result else 0,
+                "hygiene_findings": sca_result.hygiene_findings if sca_result else 0,
+                "supply_chain_findings": sca_result.supply_chain_findings if sca_result else 0,
+                "llm_reviews": sca_result.llm_reviews_run if sca_result else 0,
+                "triage_run": sca_result.triage_run if sca_result else False,
+            },
             "exploitability_validation": {
                 "completed": bool(validation_result),
                 "skipped": args.skip_dedup,
@@ -1751,6 +1893,8 @@ Examples:
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
+            "sca_findings": str(sca_findings_path) if sca_findings_path and sca_findings_path.exists() else None,
+            "sca_report": str(out_dir / "sca" / "report.md") if sca_result else None,
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
             "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,
@@ -2274,6 +2418,12 @@ Examples:
             "analysis_models": orch_meta.get("analysis_models", []),
             "aggregate_models": orch_meta.get("aggregate_models", []),
             "aggregated": orch_meta.get("aggregated", False),
+        }, manifest={
+            # Only the in-process fact the lifecycle can't see for itself: the
+            # models that fired. Engines (from the scan phase) and
+            # deterministically_reproducible=False (agentic is LLM-mediated)
+            # are filled uniformly by core.run.complete_run.
+            "models": orch_meta.get("fired_models", []),
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline

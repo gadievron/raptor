@@ -135,6 +135,125 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
     )
 
 
+def _persist_proxy_events(
+    events,
+    *,
+    output,
+    target=None,
+):
+    """Append proxy events to ``<output>/proxy-events.jsonl``.
+
+    Safe-open machinery (O_NOFOLLOW + O_NONBLOCK + ``fstat`` regular-
+    file check, plus the target-pollution skip) is shared between
+    two callers in this module:
+
+      * Per-spawn write inside ``_run()`` — fires after each
+        sandboxed subprocess completes, capturing that spawn's
+        proxy-event slice as soon as the spawn returns.
+      * Block-level write inside ``sandbox()`` ``__exit__`` —
+        captures events recorded against the block token (i.e.,
+        from non-subprocess HTTPClient calls inside the with-
+        block, such as ``agent.py`` running ``analyse()`` in-
+        process). Caller pre-dedups against per-spawn events so a
+        single ``proxy-events.jsonl`` doesn't carry duplicates of
+        what the per-spawn writes already persisted.
+
+    No-op when:
+      * ``events`` is empty (no payload to write).
+      * ``output`` is ``None`` (no persistence target configured).
+      * ``output`` resolves inside ``target`` (target-pollution
+        skip — some callers pass ``output=target`` for writable
+        Landlock surface; persisting the JSONL there would
+        pollute the scanned tree).
+
+    Non-fatal on every write failure. Observability is nice-to-
+    have, not a reason to break the caller — the write failure
+    surfaces in a DEBUG log line so operators investigating
+    missing audit data can find the cause.
+    """
+    if not events or not output:
+        return
+
+    # Target-pollution skip: if the persistence target is inside
+    # the scanned tree, drop the write. See per-spawn site for
+    # the original rationale.
+    if target:
+        try:
+            _norm_out = os.path.realpath(output)
+            _norm_tgt = os.path.realpath(target)
+            if _norm_out == _norm_tgt or _norm_out.startswith(
+                _norm_tgt + os.sep
+            ):
+                logger.debug(
+                    "Sandbox: output (%s) lies within target (%s); "
+                    "skipping proxy-events.jsonl persistence to "
+                    "avoid polluting the scanned tree (in-memory "
+                    "events unaffected)", _norm_out, _norm_tgt,
+                )
+                return
+        except OSError:
+            # ``realpath`` raised — likely a dangling component.
+            # Fall through to the write attempt rather than break
+            # the scan over an observability check.
+            pass
+
+    from . import proxy as _proxy_mod
+    _log_path = os.path.join(output, _proxy_mod.PROXY_EVENTS_FILENAME)
+    try:
+        # Opened with O_NOFOLLOW + O_NONBLOCK so a child-planted
+        # symlink (→ ~/.ssh/authorized_keys etc.) can't redirect
+        # the write outside the sandbox boundary, and a child-
+        # planted FIFO without a reader can't hang the parent.
+        # fstat S_ISREG below confirms we got a regular file and
+        # not, e.g., a TTY device the child pre-opened.
+        _log_fd = os.open(
+            _log_path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT
+            | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            0o600,
+        )
+    except OSError as _log_err:
+        logger.debug(
+            "Sandbox: could not open %s for proxy-event "
+            "persistence: %s", _log_path, _log_err,
+        )
+        return
+    try:
+        _log_st = os.fstat(_log_fd)
+        if not stat.S_ISREG(_log_st.st_mode):
+            logger.debug(
+                "Sandbox: %s exists but is not a regular file "
+                "(mode=0o%o); skipping proxy event persistence",
+                _log_path, _log_st.st_mode,
+            )
+            os.close(_log_fd)
+            return
+        # Clear O_NONBLOCK for the actual append: only needed to
+        # stop a FIFO-open hang at the os.open() above; on a
+        # regular file it's harmless but pointless.
+        import fcntl as _fcntl
+        _flags = _fcntl.fcntl(_log_fd, _fcntl.F_GETFL)
+        _fcntl.fcntl(_log_fd, _fcntl.F_SETFL, _flags & ~os.O_NONBLOCK)
+        import json as _json
+        with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
+            for e in events:
+                _f.write(_json.dumps(e) + "\n")
+    except BaseException:
+        # os.fdopen takes ownership on success; on any pre-fdopen
+        # failure we still own the fd and must close.
+        try:
+            os.close(_log_fd)
+        except OSError:
+            pass
+        # Demoted from raise → debug-log: persistence failure
+        # shouldn't poison the caller, same posture as the open
+        # failure above.
+        logger.debug(
+            "Sandbox: could not write proxy events to %s",
+            _log_path, exc_info=True,
+        )
+
+
 def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
     """Check if cmd[0] resolves to a path visible inside the mount-ns
     bind tree.
@@ -1904,105 +2023,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"{existing} — {summary}" if existing else summary
             )
 
-            # Persist events to disk when an output dir is available.
-            # JSONL format (one JSON object per line) — append-friendly,
-            # streaming-friendly, trivially post-processable. Single
-            # append per sandbox() call, opened and closed to flush
-            # immediately (no open-file handle outliving this call).
-            # Non-fatal on write failure — observability is nice-to-
-            # have, not a reason to break the caller.
-            #
-            # Opened with O_NOFOLLOW + O_NONBLOCK and fstat-validated
-            # as a regular file to defeat two child-side TOCTOUs: a
-            # sandboxed child has write access to {output} and could
-            # pre-plant {output}/proxy-events.jsonl as either —
-            # (a) a symlink to ~/.bashrc / authorized_keys / daemon
-            #     log, in which case a following open would append
-            #     attacker-influenced JSON outside the sandbox
-            #     boundary (sandbox-escape write). O_NOFOLLOW blocks.
-            # (b) a FIFO with no reader, in which case open(O_WRONLY)
-            #     without O_NONBLOCK blocks the parent forever —
-            #     DoS against any RAPTOR caller that reuses `output`.
-            #     O_NONBLOCK + O_APPEND + fstat(S_ISREG) closes this.
-            #
-            # Invariant: never persist the JSONL into a path that lives
-            # under `target`. Some callers (e.g. packages/codeql/
-            # build_detector.py) intentionally pass output=target so
-            # Landlock engages on a writable repo for compile/build
-            # steps; writing proxy-events.jsonl there would pollute the
-            # user's scanned source tree. In-memory events on
-            # result.sandbox_info["proxy_events"] are unaffected.
-            _skip_target_pollution = False
-            try:
-                _norm_out = os.path.realpath(output) if output else None
-                _norm_tgt = os.path.realpath(target) if target else None
-                if _norm_out and _norm_tgt and (
-                    _norm_out == _norm_tgt
-                    or _norm_out.startswith(_norm_tgt + os.sep)
-                ):
-                    _skip_target_pollution = True
-                    logger.debug(
-                        f"Sandbox: output ({_norm_out}) lies within "
-                        f"target ({_norm_tgt}); skipping proxy-events."
-                        f"jsonl persistence to avoid polluting the "
-                        f"scanned tree (in-memory events unaffected)"
-                    )
-            except OSError:
-                # realpath() failed (e.g. dangling component, perm
-                # error). Fall back to the existing behaviour rather
-                # than break the scan over an observability check.
-                pass
-            if output and not _skip_target_pollution:
-                try:
-                    import json as _json
-                    _log_path = os.path.join(
-                        output, _proxy_mod.PROXY_EVENTS_FILENAME,
-                    )
-                    _log_fd = os.open(
-                        _log_path,
-                        os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                        | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-                        0o600,
-                    )
-                    try:
-                        _log_st = os.fstat(_log_fd)
-                        if not stat.S_ISREG(_log_st.st_mode):
-                            # Child-planted FIFO / socket / device.
-                            # Close and skip; don't raise — proxy
-                            # event persistence is observability,
-                            # not a hard dependency.
-                            os.close(_log_fd)
-                            logger.debug(
-                                f"Sandbox: {_log_path} exists but is "
-                                f"not a regular file "
-                                f"(mode=0o{_log_st.st_mode:o}); "
-                                f"skipping proxy event persistence"
-                            )
-                        else:
-                            # Clear O_NONBLOCK for the actual append.
-                            # O_NONBLOCK was only needed to stop a
-                            # FIFO-open-hang; on a regular file it's
-                            # harmless but also pointless.
-                            import fcntl as _fcntl
-                            _flags = _fcntl.fcntl(_log_fd, _fcntl.F_GETFL)
-                            _fcntl.fcntl(_log_fd, _fcntl.F_SETFL,
-                                         _flags & ~os.O_NONBLOCK)
-                            with os.fdopen(_log_fd, "a", encoding="utf-8") as _f:
-                                for e in events:
-                                    _f.write(_json.dumps(e) + "\n")
-                    except BaseException:
-                        # os.fdopen would take ownership on success;
-                        # on any pre-fdopen failure we still own fd.
-                        try:
-                            os.close(_log_fd)
-                        except OSError:
-                            pass
-                        raise
-                except OSError as _log_err:
-                    logger.debug(
-                        f"Sandbox: could not persist proxy events to "
-                        f"{output}/proxy-events.jsonl: {_log_err}"
-                    )
+            # Per-spawn persistence: write this subprocess's events
+            # to ``<output>/proxy-events.jsonl`` immediately. The
+            # block-level write at ``sandbox()`` ``__exit__`` covers
+            # events from non-subprocess code inside the with-block
+            # (e.g. ``agent.py``'s in-process ``analyse()``); both
+            # writers share the same safe-open helper + the target-
+            # pollution skip so the file format stays unified.
+            _persist_proxy_events(events, output=output, target=target)
 
         # Check for sandbox enforcement. Each category is only reported when
         # its layer is actually engaged for this call — prevents false
@@ -2077,12 +2105,64 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # only fires after the yield is reached. Acquiring immediately
     # before the yield ensures the matching release is guaranteed by
     # the finally below.
+    # Block-level proxy-event token: captures events from
+    # non-subprocess HTTPClient calls inside ``with sandbox():``.
+    # The per-spawn token inside ``_run()`` already captures
+    # subprocess-attributed events; this block token fills the gap
+    # for callers like ``agent.py`` that wrap pure-Python work in
+    # the sandbox (no subprocess via ``run()``). Persistence at
+    # ``__exit__`` dedups against ``_sandbox_events`` so a single
+    # ``proxy-events.jsonl`` doesn't carry duplicates of events
+    # that the per-spawn writer already persisted. Only acquired
+    # when audit-mode IS engaging — same operator-intent gate as
+    # the audit ref-count acquire below. Registered BEFORE the
+    # audit acquire so the audit-acquire-to-yield gap stays
+    # minimal (pinned by ``test_acquire_happens_immediately_
+    # before_yield``); if ``register_sandbox`` raises, the audit
+    # acquire never runs so there's no ref-count leak.
+    _block_token: Optional[int] = None
+    if (use_egress_proxy and _will_engage_audit and output
+            and proxy_instance is not None):
+        _block_token = proxy_instance.register_sandbox(
+            caller_label=(
+                f"{caller_label}:cm-block" if caller_label
+                else "sandbox:cm-block"
+            ),
+        )
     if use_egress_proxy and _will_engage_audit:
         proxy_instance.acquire_audit_log_only()
         _engaging_audit = True
     try:
         yield run
     finally:
+        # Drain + dedup + persist the block-token events before
+        # releasing the audit ref-count. Per-spawn events were
+        # fanned into BOTH the per-spawn token (already persisted
+        # by ``_run()``) AND the block token; dedup on
+        # ``(t, host, port)`` so the JSONL doesn't carry
+        # duplicates. ``_sandbox_events`` is the cumulative
+        # per-spawn view appended after each inner ``run()``.
+        if _block_token is not None and proxy_instance is not None:
+            try:
+                _block_events = proxy_instance.unregister_sandbox(
+                    _block_token,
+                )
+            except Exception:                       # noqa: BLE001
+                _block_events = []
+            if _block_events:
+                _seen = {
+                    (e.get("t"), e.get("host"), e.get("port"))
+                    for e in _sandbox_events
+                }
+                _block_only = [
+                    e for e in _block_events
+                    if (e.get("t"), e.get("host"), e.get("port"))
+                    not in _seen
+                ]
+                if _block_only:
+                    _persist_proxy_events(
+                        _block_only, output=output, target=target,
+                    )
         if use_egress_proxy and _engaging_audit:
             try:
                 proxy_instance.release_audit_log_only()

@@ -1,0 +1,3580 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:54:48Z",
+    "git_ref": "v4.2.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of rails-4.2",
+    "project_license": "MIT",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/rails/rails.git@v4.2.0. Project source not redistributed.",
+    "url": "https://github.com/rails/rails.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-8130"
+        ],
+        "fixed_versions": [
+          "12.3.3"
+        ],
+        "id": "GHSA-jppv-gw3r-w3q8",
+        "modified": "2024-02-19T05:32:17.994147+00:00",
+        "published": "2020-02-28T16:54:36+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-8130",
+          "https://github.com/ruby/rake/commit/5b8f8fc41a5d7d7d6a5d767e48464c60884d3aee",
+          "https://hackerone.com/reports/651518",
+          "https://github.com/advisories/GHSA-jppv-gw3r-w3q8",
+          "https://github.com/ruby/rake"
+        ],
+        "severity": {
+          "score": 6.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "OS Command Injection in Rake"
+      },
+      "cvss_score": 6.4,
+      "dep_name": "rake",
+      "dep_version": "10.3",
+      "ecosystem": "RubyGems",
+      "epss": 0.00547,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:rake:10.3:GHSA-jppv-gw3r-w3q8",
+      "in_kev": false,
+      "purl": "pkg:gem/rake@10.3",
+      "raptor_risk_estimate": 10.573011031199998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "railties/lib/rails/engine.rb:452",
+          "railties/lib/rails/test_unit/sub_test_task.rb:1",
+          "railties/lib/rails/generators/rails/plugin/plugin_generator.rb:359"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 64.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.303829,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.764038719999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2015-1840"
+        ],
+        "fixed_versions": [
+          "3.1.3",
+          "4.0.4",
+          "1.0.4"
+        ],
+        "id": "GHSA-4whc-pp4x-9pf3",
+        "modified": "2026-02-03T02:56:25.062596+00:00",
+        "published": "2017-10-24T18:33:36+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2015-1840",
+          "https://github.com/advisories/GHSA-4whc-pp4x-9pf3",
+          "https://github.com/rails/jquery-rails",
+          "https://github.com/rails/jquery-rails/blob/master/CHANGELOG.md",
+          "https://github.com/rails/jquery-ujs/blob/master/CHANGELOG.md"
+        ],
+        "severity": null,
+        "summary": "jquery-rails and jquery-ujs subject to Exposure of Sensitive Information"
+      },
+      "cvss_score": null,
+      "dep_name": "jquery-rails",
+      "dep_version": "4.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.00242,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-4whc-pp4x-9pf3",
+      "in_kev": false,
+      "purl": "pkg:gem/jquery-rails@4.0",
+      "raptor_risk_estimate": 4.227576560064329,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30169399999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.0659250885,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-11358",
+          "DRUPAL-CORE-2019-006"
+        ],
+        "fixed_versions": [
+          "3.4.0",
+          "4.3.4",
+          "2.1.9",
+          "2.2.2",
+          "1.19.0"
+        ],
+        "id": "GHSA-6c3j-c64m-qhgq",
+        "modified": "2026-03-13T21:56:20.301637+00:00",
+        "published": "2019-04-26T16:29:11+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/pull/4333",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc",
+          "https://github.com/django/django/commit/34ec52269ade54af31a021b12969913129571a3f"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "jquery-rails",
+      "dep_version": "4.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.02362,
+      "exploit_evidence": {
+        "edb_ids": [
+          52141
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-6c3j-c64m-qhgq",
+      "in_kev": false,
+      "purl": "pkg:gem/jquery-rails@4.0",
+      "raptor_risk_estimate": 11.41290720891749,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.316534,
+        "exploit_evidence_multiplier": 1.19,
+        "exposure_multiplier": 0.5,
+        "final": 3.1468428450823,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11022",
+          "CVE-2020-11022"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0",
+          "1.19.0"
+        ],
+        "id": "GHSA-gxr4-xjj5-5px2",
+        "modified": "2026-04-13T14:01:26.874485+00:00",
+        "published": "2020-04-29T22:18:55+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "jquery-rails",
+      "dep_version": "4.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.02456,
+      "exploit_evidence": {
+        "edb_ids": [
+          49766
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-gxr4-xjj5-5px2",
+      "in_kev": false,
+      "purl": "pkg:gem/jquery-rails@4.0",
+      "raptor_risk_estimate": 11.429068133053258,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.317192,
+        "exploit_evidence_multiplier": 1.19,
+        "exposure_multiplier": 0.5,
+        "final": 3.5669430028596,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11023",
+          "CVE-2020-11023"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0"
+        ],
+        "id": "GHSA-jpcq-cgw6-v4j6",
+        "modified": "2026-03-13T21:59:48.264015+00:00",
+        "published": "2020-04-29T22:19:14+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11023",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://lists.apache.org/thread.html/rda99599896c3667f2cc9e9d34c7b6ef5d2bbed1f4801e1d75a2b0679@%3Ccommits.nifi.apache.org%3E",
+          "https://lists.apache.org/thread.html/re4ae96fa5c1a2fe71ccbb7b7ac1538bd0cb677be270a2bf6e2f8d108%40%3Cissues.flink.apache.org%3E"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "jquery-rails",
+      "dep_version": "4.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.58214,
+      "exploit_evidence": {
+        "edb_ids": [
+          49767
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": true,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-jpcq-cgw6-v4j6",
+      "in_kev": true,
+      "purl": "pkg:gem/jquery-rails@4.0",
+      "raptor_risk_estimate": 31.081373627263297,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.707498,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.255368338614401,
+        "kev_multiplier": 1.32,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2015-9251"
+        ],
+        "fixed_versions": [
+          "1.12.2",
+          "3.0.0",
+          "4.2.0"
+        ],
+        "id": "GHSA-rmxg-73gg-4p98",
+        "modified": "2024-03-10T05:18:22.438189+00:00",
+        "published": "2018-01-22T13:32:06+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2015-9251",
+          "https://github.com/jquery/jquery/issues/2432",
+          "https://github.com/jquery/jquery/issues/2432#issuecomment-403761229",
+          "https://github.com/jquery/jquery/pull/2588",
+          "https://github.com/jquery/jquery/pull/2588/commits/c254d308a7d3f1eac4d0b42837804cfffcba4bb2"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Cross-Site Scripting (XSS) in jquery"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "jquery-rails",
+      "dep_version": "4.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.25594,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:jquery-rails:4.0:GHSA-rmxg-73gg-4p98",
+      "in_kev": false,
+      "purl": "pkg:gem/jquery-rails@4.0",
+      "raptor_risk_estimate": 8.990435395370058,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'jquery-rails'` found (also tried ['jquery_rails'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.479158,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.003008117289999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-33306"
+        ],
+        "fixed_versions": [
+          "3.1.22"
+        ],
+        "id": "GHSA-f27w-vcwj-c954",
+        "modified": "2026-03-25T21:48:59.466561+00:00",
+        "published": "2026-03-19T17:54:17+00:00",
+        "references": [
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/security/advisories/GHSA-f27w-vcwj-c954",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-33306",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/commit/831ce64cb0a9502130fa93a28bfd9527a5fa45c4",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/releases/tag/v3.1.22"
+        ],
+        "severity": null,
+        "summary": "bcrypt-ruby has an Integer Overflow that Causes Zero Key-Strengthening Iterations at Cost=31 on JRuby"
+      },
+      "cvss_score": null,
+      "dep_name": "bcrypt",
+      "dep_version": "3.1.7",
+      "ecosystem": "RubyGems",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:bcrypt:3.1.7:GHSA-f27w-vcwj-c954",
+      "in_kev": false,
+      "purl": "pkg:gem/bcrypt@3.1.7",
+      "raptor_risk_estimate": 6.5530710915,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "activemodel/lib/active_model/secure_password.rb:58"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30006299999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.675771749999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2015-8857"
+        ],
+        "fixed_versions": [
+          "2.4.24",
+          "2.7.2"
+        ],
+        "id": "GHSA-34r7-q49f-h37c",
+        "modified": "2024-02-16T08:16:42.823655+00:00",
+        "published": "2017-10-24T18:33:36+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2015-8857",
+          "https://github.com/mishoo/UglifyJS2/issues/751",
+          "https://github.com/lautis/uglifier/commit/4677bfe38142937ff952f95605bcec4618892c3e",
+          "https://github.com/mishoo/UglifyJS2",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/uglifier/CVE-2015-8857.yml"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Incorrect Handling of Non-Boolean Comparisons During Minification in uglify-js"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "uglifier",
+      "dep_version": "1.3.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.00268,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:uglifier:1.3.0:GHSA-34r7-q49f-h37c",
+      "in_kev": false,
+      "purl": "pkg:gem/uglifier@1.3.0",
+      "raptor_risk_estimate": 10.361753100759458,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'uglifier'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301876,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.05165590284,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-26298"
+        ],
+        "fixed_versions": [
+          "3.5.1"
+        ],
+        "id": "GHSA-q3wr-qw3g-3p4h",
+        "modified": "2026-03-13T22:15:49.601906+00:00",
+        "published": "2021-01-11T19:06:10+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-26298",
+          "https://github.com/vmg/redcarpet/commit/a699c82292b17c8e6a62e1914d5eccc252272793",
+          "https://github.com/advisories/GHSA-q3wr-qw3g-3p4h",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/redcarpet/CVE-2020-26298.yml",
+          "https://github.com/vmg/redcarpet"
+        ],
+        "severity": {
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:N/I:H/A:N"
+        },
+        "summary": "Injection/XSS in Redcarpet"
+      },
+      "cvss_score": 6.8,
+      "dep_name": "redcarpet",
+      "dep_version": "3.1.2",
+      "ecosystem": "RubyGems",
+      "epss": 0.00334,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:redcarpet:3.1.2:GHSA-q3wr-qw3g-3p4h",
+      "in_kev": false,
+      "purl": "pkg:gem/redcarpet@3.1.2",
+      "raptor_risk_estimate": 11.196765639299999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:24",
+          "guides/rails_guides/markdown.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 68.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302338,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.036951079999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-4064"
+        ],
+        "fixed_versions": [
+          "3.2.3"
+        ],
+        "id": "GHSA-3xg8-cc8f-9wv2",
+        "modified": "2023-11-08T04:10:24.443144+00:00",
+        "published": "2022-11-19T21:30:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-4064",
+          "https://github.com/petergoldstein/dalli/issues/932",
+          "https://github.com/petergoldstein/dalli/pull/933",
+          "https://github.com/petergoldstein/dalli/commit/48d594dae55934476fec61789e7a7c3700e0f50d",
+          "https://github.com/petergoldstein/dalli"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Unsanitized input leading to code injection in Dalli"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "dalli",
+      "dep_version": "2.2.1",
+      "ecosystem": "RubyGems",
+      "epss": 0.00301,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:dalli:2.2.1:GHSA-3xg8-cc8f-9wv2",
+      "in_kev": false,
+      "purl": "pkg:gem/dalli@2.2.1",
+      "raptor_risk_estimate": 6.089233738987499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "activesupport/lib/active_support/cache/mem_cache_store.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302107,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.738599955,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "low"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-18197"
+        ],
+        "fixed_versions": [
+          "1.10.5"
+        ],
+        "id": "GHSA-242x-7cm6-4w8j",
+        "modified": "2024-02-20T05:34:23.937104+00:00",
+        "published": "2022-05-24T16:59:28+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-18197",
+          "https://github.com/sparklemotion/nokogiri/issues/1943",
+          "https://access.redhat.com/errata/RHSA-2020:0514",
+          "https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=15746",
+          "https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=15768"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri affected by libxslt Use of Uninitialized Resource/Use After Free vulnerability"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.04534,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-242x-7cm6-4w8j",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 13.155328929374999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.331738,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.0956857499999995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-3537"
+        ],
+        "fixed_versions": [
+          "1.11.4"
+        ],
+        "id": "GHSA-286v-pcf5-25rc",
+        "modified": "2024-02-20T05:19:04.908048+00:00",
+        "published": "2022-05-24T19:02:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-3537",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=1956522",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2021-3537.yml",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://github.com/sparklemotion/nokogiri/blob/2edbbef95f1dc12c1ddc5ebda71b9159026245fe/CHANGELOG.md?plain=1#L722"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri Implements libxml2 version vulnerable to null pointer dereferencing"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00111,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-286v-pcf5-25rc",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 9.6811774395375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300777,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.347731535,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.9"
+        ],
+        "id": "GHSA-2qc6-mcvw-92cw",
+        "modified": "2024-12-02T05:50:34.398139+00:00",
+        "published": "2022-10-18T18:12:31+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-2qc6-mcvw-92cw",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": null,
+        "summary": "Update bundled libxml2 to v2.10.3 to resolve multiple CVEs"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-2qc6-mcvw-92cw",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-41098"
+        ],
+        "fixed_versions": [
+          "1.12.5"
+        ],
+        "id": "GHSA-2rr5-8q37-2w7h",
+        "modified": "2026-03-13T22:14:27.475207+00:00",
+        "published": "2021-09-27T20:12:47+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-2rr5-8q37-2w7h",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-41098",
+          "https://github.com/sparklemotion/nokogiri/commit/5bf729ff3cc84709ee3c3248c981584088bf9f6d",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2021-41098.yml",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Improper Restriction of XML External Entity Reference (XXE) in Nokogiri on JRuby"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00251,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-2rr5-8q37-2w7h",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.333446659687498,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301757,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.5447848749999995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.18.9"
+        ],
+        "id": "GHSA-353f-x4gh-cqq8",
+        "modified": "2026-02-04T03:08:45.682451+00:00",
+        "published": "2025-07-21T19:35:18+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-353f-x4gh-cqq8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-49794",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-49795",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-49796",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-6021"
+        ],
+        "severity": null,
+        "summary": "Nokogiri patches vendored libxml2 to resolve multiple CVEs"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-353f-x4gh-cqq8",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-13117"
+        ],
+        "fixed_versions": [
+          "1.10.5"
+        ],
+        "id": "GHSA-4hm9-844j-jmxp",
+        "modified": "2024-12-07T05:39:10.962514+00:00",
+        "published": "2022-05-24T16:49:06+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-13117",
+          "https://github.com/sparklemotion/nokogiri/issues/1943",
+          "https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=14471",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2019-13117.yml",
+          "https://gitlab.gnome.org/GNOME/libxslt/commit/c5eb6cf3aba0af048596106ed839b4ae17ecbcb1"
+        ],
+        "severity": null,
+        "summary": "Uninitialized read in Nokogiri gem"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.04376,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-4hm9-844j-jmxp",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 7.0000051559999985,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.330632,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.050241999999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-30560"
+        ],
+        "fixed_versions": [
+          "1.13.2"
+        ],
+        "id": "GHSA-59gp-qqm7-cw4j",
+        "modified": "2024-02-16T07:50:24.212564+00:00",
+        "published": "2022-05-24T19:09:47+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-fq42-c5rg-92c2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-30560",
+          "https://chromereleases.googleblog.com/2021/07/stable-channel-update-for-desktop.html",
+          "https://crbug.com/1219209",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2021-30560.yml"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri has vulnerable dependencies on libxml2 and libxslt"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00084,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-59gp-qqm7-cw4j",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.4336430788,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30058799999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.480677279999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.18.8"
+        ],
+        "id": "GHSA-5w6v-399v-w3cc",
+        "modified": "2026-02-04T02:49:28.572138+00:00",
+        "published": "2025-04-21T21:55:56+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-5w6v-399v-w3cc",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/issues/889",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/issues/890",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/releases/v2.13.8"
+        ],
+        "severity": null,
+        "summary": "Nokogiri updates packaged libxml2 to v2.13.8 to resolve CVE-2025-32414 and CVE-2025-32415"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-5w6v-399v-w3cc",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-14404"
+        ],
+        "fixed_versions": [
+          "1.8.5"
+        ],
+        "id": "GHSA-6qvp-r6r3-9p7h",
+        "modified": "2025-12-05T12:28:29.328953+00:00",
+        "published": "2019-01-17T14:05:03+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-14404",
+          "https://github.com/sparklemotion/nokogiri/issues/1785",
+          "https://access.redhat.com/errata/RHSA-2019:1543",
+          "https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=901817",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=1595985"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri NULL Pointer Dereference"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.20012,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-6qvp-r6r3-9p7h",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 16.125465228749995,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.440084,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.086543499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2012-6685"
+        ],
+        "fixed_versions": [
+          "1.5.4"
+        ],
+        "id": "GHSA-6wj9-77wq-jq7p",
+        "modified": "2023-11-08T03:57:12.130741+00:00",
+        "published": "2022-04-23T00:40:45+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2012-6685",
+          "https://github.com/sparklemotion/nokogiri/issues/693",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=1178970",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://nokogiri.org/CHANGELOG.html#154-2012-06-12"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Nokogiri is vulnerable to XML External Entity (XXE) attack"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00323,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-6wj9-77wq-jq7p",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.347263032187499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302261,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.554045875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-7595"
+        ],
+        "fixed_versions": [
+          "1.10.8"
+        ],
+        "id": "GHSA-7553-jr98-vx47",
+        "modified": "2024-03-08T05:17:10.482322+00:00",
+        "published": "2020-02-24T19:12:36+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-7595",
+          "https://github.com/sparklemotion/nokogiri/issues/1992",
+          "https://www.oracle.com/security-alerts/cpuoct2021.html",
+          "https://www.oracle.com/security-alerts/cpujul2022.html",
+          "https://www.oracle.com/security-alerts/cpujul2020.html"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "libxml as used in Nokogiri has an infinite loop in a certain end-of-file situation"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00473,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-7553-jr98-vx47",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.376047141562498,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.303311,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.573339625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.11.4"
+        ],
+        "id": "GHSA-7rrm-v45f-jp64",
+        "modified": "2024-11-30T05:34:40.164677+00:00",
+        "published": "2021-05-17T20:52:05+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-7rrm-v45f-jp64",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-3541",
+          "https://github.com/sparklemotion/nokogiri/commit/9b90a8854f74b5f672a437ba0043a503bc259d1b",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": null,
+        "summary": "Nokogiri updates packaged dependency on libxml2 from 2.9.10 to 2.9.12"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-7rrm-v45f-jp64",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-18258"
+        ],
+        "fixed_versions": [
+          "1.8.2"
+        ],
+        "id": "GHSA-882p-jqgm-f45g",
+        "modified": "2024-02-16T08:04:23.678693+00:00",
+        "published": "2018-04-13T16:17:46+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-18258",
+          "https://git.gnome.org/browse/libxml2/commit/?id=e2a9122b8dde53d320750451e9907a7dcb2ca8bb",
+          "https://github.com/advisories/GHSA-882p-jqgm-f45g",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2017-18258.yml",
+          "https://kc.mcafee.com/corporate/index?page=content&id=SB10284"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Uncontrolled resource consumption in nokogiri"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00678,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-882p-jqgm-f45g",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 10.760000701125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30474599999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.853080049999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-9050"
+        ],
+        "fixed_versions": [
+          "1.8.1"
+        ],
+        "id": "GHSA-8c56-cpmw-89x7",
+        "modified": "2023-11-08T03:59:28.531189+00:00",
+        "published": "2017-12-13T21:38:24+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-9050",
+          "https://security.gentoo.org/glsa/201711-01",
+          "http://www.debian.org/security/2017/dsa-3952",
+          "http://www.openwall.com/lists/oss-security/2017/05/15/1"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Out-of-bounds read in nokogiri"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00313,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-8c56-cpmw-89x7",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.345344091562499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302191,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.552759624999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.19.3"
+        ],
+        "id": "GHSA-c4rq-3m3g-8wgx",
+        "modified": "2026-05-09T10:44:28.215577+00:00",
+        "published": "2026-05-06T18:24:18+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-c4rq-3m3g-8wgx",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri CSS selector tokenizer has regular expression backtracking"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-c4rq-3m3g-8wgx",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 21.879984374999996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.943749999999996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-13118"
+        ],
+        "fixed_versions": [
+          "1.10.5"
+        ],
+        "id": "GHSA-cf46-6xxh-pc75",
+        "modified": "2024-03-11T05:32:08.740970+00:00",
+        "published": "2022-05-24T16:49:07+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-13118",
+          "https://github.com/sparklemotion/nokogiri/issues/1943",
+          "https://github.com/sparklemotion/nokogiri/commit/43a175339b47b8c604508813fc75b83f13cd173e",
+          "https://seclists.org/bugtraq/2019/Jul/37",
+          "https://seclists.org/bugtraq/2019/Jul/40"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "libxslt Type Confusion vulnerability that affects Nokogiri"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.01008,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cf46-6xxh-pc75",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.478710464999999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.307056,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.642153999999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.5"
+        ],
+        "id": "GHSA-cgx6-hpwq-fhv5",
+        "modified": "2024-12-07T05:31:32.419818+00:00",
+        "published": "2022-05-18T20:06:48+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-cgx6-hpwq-fhv5",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-29824",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/releases/v2.9.14"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H"
+        },
+        "summary": "Integer Overflow or Wraparound in libxml2 affects Nokogiri"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cgx6-hpwq-fhv5",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 25.089048749999996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.695499999999996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-5477"
+        ],
+        "fixed_versions": [
+          "1.10.4",
+          "1.0.7"
+        ],
+        "id": "GHSA-cr5j-953j-xw5p",
+        "modified": "2024-02-18T05:31:26.336802+00:00",
+        "published": "2019-08-19T19:27:23+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-5477",
+          "https://github.com/sparklemotion/nokogiri/issues/1915",
+          "https://github.com/sparklemotion/nokogiri/commit/5d30128343573a9428c86efc758ba2c66e9f12dc",
+          "https://github.com/tenderlove/rexical/commit/a652474dbc66be350055db3e8f9b3a7b3fd75926",
+          "https://hackerone.com/reports/650835"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri Command Injection Vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.06079,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-cr5j-953j-xw5p",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 17.577025534424997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.342553,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.224697530000002,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-24836"
+        ],
+        "fixed_versions": [
+          "1.13.4"
+        ],
+        "id": "GHSA-crjr-9rc5-ghw8",
+        "modified": "2024-02-16T08:26:57.925644+00:00",
+        "published": "2022-04-11T21:18:06+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-crjr-9rc5-ghw8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24836",
+          "https://github.com/sparklemotion/nokogiri/commit/e444525ef1634b675cd1cf52d39f4320ef0aecfd",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2022-24836.yml",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri Inefficient Regular Expression Complexity"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.0134,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-crjr-9rc5-ghw8",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.542419293749997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30938,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.684857499999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.2"
+        ],
+        "id": "GHSA-fq42-c5rg-92c2",
+        "modified": "2024-12-05T05:48:25.187357+00:00",
+        "published": "2022-02-25T20:32:09+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-fq42-c5rg-92c2",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": null,
+        "summary": "Vulnerable dependencies in Nokogiri"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-fq42-c5rg-92c2",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2016-4658"
+        ],
+        "fixed_versions": [
+          "1.7.1"
+        ],
+        "id": "GHSA-fr52-4hqw-p27f",
+        "modified": "2024-02-16T08:15:24.828530+00:00",
+        "published": "2018-08-21T19:03:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2016-4658",
+          "https://git.gnome.org/browse/libxml2/commit/?id=c1d1f7121194036608bf555f08d3062a36fd344b",
+          "https://security.gentoo.org/glsa/201701-37",
+          "https://support.apple.com/HT207141",
+          "https://support.apple.com/HT207142"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri does not forbid namespace nodes in XPointer ranges"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.17714,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-fr52-4hqw-p27f",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 20.494403759550003,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.423998,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.18019198,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.4"
+        ],
+        "id": "GHSA-gx8x-g87m-h5q6",
+        "modified": "2024-12-05T05:37:10.384695+00:00",
+        "published": "2022-04-11T21:38:11+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nekohtml/security/advisories/GHSA-9849-p7jc-9rmv",
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-gx8x-g87m-h5q6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24839",
+          "https://github.com/sparklemotion/nekohtml/commit/a800fce3b079def130ed42a408ff1d09f89e773d",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Denial of Service (DoS) in Nokogiri on JRuby"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-gx8x-g87m-h5q6",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 21.879984374999996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.943749999999996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-25032",
+          "PSF-2022-3"
+        ],
+        "fixed_versions": [
+          "1.13.4"
+        ],
+        "id": "GHSA-jc36-42cf-vqwj",
+        "modified": "2026-02-04T03:14:37.779397+00:00",
+        "published": "2022-03-26T00:00:33+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-v6gp-9mmm-c6p5",
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-25032",
+          "https://github.com/madler/zlib/issues/605",
+          "https://github.com/madler/zlib/commit/5c44459c3b28a9bd3283aaceab7c615f8020c531",
+          "https://www.oracle.com/security-alerts/cpujul2022.html"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri affected by zlib's Out-of-bounds Write vulnerability"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00089,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-jc36-42cf-vqwj",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.302359821562499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300623,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.523947624999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-3517"
+        ],
+        "fixed_versions": [
+          "1.11.4"
+        ],
+        "id": "GHSA-jw9f-hh49-cvp9",
+        "modified": "2024-03-08T05:19:55.668510+00:00",
+        "published": "2022-05-24T19:02:48+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-3517",
+          "https://github.com/sparklemotion/nokogiri/issues/2233",
+          "https://github.com/sparklemotion/nokogiri/issues/2274",
+          "https://www.oracle.com/security-alerts/cpuoct2021.html",
+          "https://www.oracle.com/security-alerts/cpujul2022.html"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:H"
+        },
+        "summary": "Nokogiri contains libxml Out-of-bounds Write vulnerability"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00107,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-jw9f-hh49-cvp9",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.110666622175,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300749,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.336781429999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.18.4"
+        ],
+        "id": "GHSA-mrxw-mxhj-p664",
+        "modified": "2026-02-04T04:34:58.905946+00:00",
+        "published": "2025-03-14T18:51:37+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-mrxw-mxhj-p664",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-55549",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-24855",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://gitlab.gnome.org/GNOME/libxslt/-/issues/127"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:N/I:H/A:H"
+        },
+        "summary": "Nokogiri updates packaged libxslt to v1.1.43 to resolve multiple CVEs"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-mrxw-mxhj-p664",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 22.755183749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.421499999999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-5029"
+        ],
+        "fixed_versions": [
+          "1.7.2"
+        ],
+        "id": "GHSA-pf6m-fxpq-fg8v",
+        "modified": "2024-02-16T08:13:08.873821+00:00",
+        "published": "2018-07-31T18:21:29+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-5029",
+          "https://github.com/sparklemotion/nokogiri/issues/1634",
+          "https://git.gnome.org/browse/libxslt/commit/?id=08ab2774b870de1c7b5a48693df75e8154addae5",
+          "https://github.com/advisories/GHSA-pf6m-fxpq-fg8v",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2017-5029.yml"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri implementation of libxslt lacks integer overflow checks"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.01232,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-pf6m-fxpq-fg8v",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.6921218224,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.308624,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.653933440000001,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.14.3"
+        ],
+        "id": "GHSA-pxvg-2qj5-37jq",
+        "modified": "2024-12-04T05:58:06.756486+00:00",
+        "published": "2023-04-11T21:48:01+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-pxvg-2qj5-37jq",
+          "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-28484",
+          "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2023-29469",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/commit/09a2dd453007f9c7205274623acdd73747c22d64"
+        ],
+        "severity": null,
+        "summary": "Nokogiri updates packaged libxml2 to v2.10.4 to resolve multiple CVEs"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-pxvg-2qj5-37jq",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-11068"
+        ],
+        "fixed_versions": [
+          "1.10.3"
+        ],
+        "id": "GHSA-qxcg-xjjg-66mj",
+        "modified": "2024-12-05T05:56:39.643416+00:00",
+        "published": "2022-05-13T01:21:57+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-11068",
+          "https://github.com/sparklemotion/nokogiri/issues/1892",
+          "https://github.com/sparklemotion/nokogiri/pull/1898",
+          "https://github.com/sparklemotion/nokogiri/commit/fe034aedcc59b566740567d621843731686676b9",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2019-11068.yml"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri vulnerable to libxslt protection mechanism bypass"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.01127,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-qxcg-xjjg-66mj",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 16.335353255025,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30788899999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.39241489,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-15412"
+        ],
+        "fixed_versions": [
+          "1.8.2"
+        ],
+        "id": "GHSA-r58r-74gx-6wx3",
+        "modified": "2024-02-16T08:12:36.174328+00:00",
+        "published": "2022-05-14T02:19:17+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-15412",
+          "https://github.com/sparklemotion/nokogiri/issues/1714",
+          "https://access.redhat.com/errata/RHSA-2017:3401",
+          "https://access.redhat.com/errata/RHSA-2018:0287",
+          "https://bugzilla.gnome.org/show_bug.cgi?id=783160"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri gem, via libxml, is affected by DoS vulnerabilities"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.02195,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-r58r-74gx-6wx3",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.9089467615,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.315365,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.7992694,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.16.5"
+        ],
+        "id": "GHSA-r95h-9x8f-r3f7",
+        "modified": "2026-02-04T08:21:25.725098+00:00",
+        "published": "2024-05-13T16:05:42+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-r95h-9x8f-r3f7",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/GHSA-r95h-9x8f-r3f7.yml",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://github.com/sparklemotion/nokogiri/releases/tag/v1.16.5",
+          "https://gitlab.gnome.org/GNOME/libxml2/-/commit/2876ac53"
+        ],
+        "severity": null,
+        "summary": "Nokogiri updates packaged libxml2 to v2.12.7 to resolve CVE-2024-34459"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-r95h-9x8f-r3f7",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.19.3"
+        ],
+        "id": "GHSA-v2fc-qm4h-8hqv",
+        "modified": "2026-05-09T10:44:28.032980+00:00",
+        "published": "2026-05-06T18:27:38+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-v2fc-qm4h-8hqv",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Nokogiri XSLT transform has a memory leak"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v2fc-qm4h-8hqv",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 15.461855624999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.440249999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-3518"
+        ],
+        "fixed_versions": [
+          "1.11.4"
+        ],
+        "id": "GHSA-v4f8-2847-rwm7",
+        "modified": "2024-03-09T05:19:27.542901+00:00",
+        "published": "2022-05-24T19:02:44+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-3518",
+          "https://www.oracle.com/security-alerts/cpuoct2021.html",
+          "https://www.oracle.com/security-alerts/cpujul2022.html",
+          "https://www.oracle.com/security-alerts/cpuapr2022.html",
+          "https://support.apple.com/kb/HT212605"
+        ],
+        "severity": {
+          "score": 8.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Nokogiri Implements libxml2 version vulnerable to use-after-free"
+      },
+      "cvss_score": 8.8,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.0025,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v4f8-2847-rwm7",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.471018925000001,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 88.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30174999999999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.50573,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.4"
+        ],
+        "id": "GHSA-v6gp-9mmm-c6p5",
+        "modified": "2024-12-05T05:39:12.688270+00:00",
+        "published": "2022-04-11T21:21:28+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-v6gp-9mmm-c6p5",
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-25032",
+          "https://github.com/advisories/GHSA-jc36-42cf-vqwj",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://github.com/sparklemotion/nokogiri/releases/tag/v1.13.4"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Out-of-bounds Write in zlib affects Nokogiri"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-v6gp-9mmm-c6p5",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 21.879984374999996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.943749999999996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-5815"
+        ],
+        "fixed_versions": [
+          "1.10.5"
+        ],
+        "id": "GHSA-vmfx-gcfq-wvm2",
+        "modified": "2024-02-16T08:22:10.222527+00:00",
+        "published": "2022-05-24T17:03:17+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-5815",
+          "https://github.com/sparklemotion/nokogiri/issues/2630",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2019-5815.yml",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://gitlab.gnome.org/GNOME/libxslt/commit/08b62c25871b38d5d573515ca8a065b4b8f64f6b"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri implementation of libxslt vulnerable to heap corruption"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00111,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vmfx-gcfq-wvm2",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 12.3065814909375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300777,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.526777375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-26247"
+        ],
+        "fixed_versions": [
+          "1.11.0"
+        ],
+        "id": "GHSA-vr8q-g5c7-m54m",
+        "modified": "2026-03-13T22:14:17.657172+00:00",
+        "published": "2020-12-30T18:35:06+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-vr8q-g5c7-m54m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-26247",
+          "https://github.com/sparklemotion/nokogiri/commit/9c87439d9afa14a365ff13e73adc809cb2c3d97b",
+          "https://hackerone.com/reports/747489",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2020-26247.yml"
+        ],
+        "severity": {
+          "score": 4.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Nokogiri::XML::Schema trusts input by default, exposing risk of XXE vulnerability"
+      },
+      "cvss_score": 4.3,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00717,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vr8q-g5c7-m54m",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 7.122445061212499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 43.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.305019,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.2133751649999995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.18.3"
+        ],
+        "id": "GHSA-vvfq-8hwr-qm4m",
+        "modified": "2026-02-04T03:58:31.466756+00:00",
+        "published": "2025-02-18T22:36:03+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-vvfq-8hwr-qm4m",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/GHSA-vvfq-8hwr-qm4m.yml",
+          "https://github.com/sparklemotion/nokogiri"
+        ],
+        "severity": null,
+        "summary": "Nokogiri updates packaged libxml2 to 2.13.6 to resolve CVE-2025-24928 and CVE-2024-56171"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-vvfq-8hwr-qm4m",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-16932"
+        ],
+        "fixed_versions": [
+          "1.8.1"
+        ],
+        "id": "GHSA-x2fm-93ww-ggvx",
+        "modified": "2024-02-20T05:41:56.164668+00:00",
+        "published": "2022-05-13T01:02:39+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-16932",
+          "https://github.com/sparklemotion/nokogiri/issues/1714",
+          "https://github.com/GNOME/libxml2/commit/899a5d9f0ed13b8e32449a08a361e0de127dd961",
+          "https://blog.clamav.net/2018/07/clamav-01001-has-been-released.html",
+          "https://bugzilla.gnome.org/show_bug.cgi?id=759579"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Nokogiri gem, via libxml, is affected by DoS vulnerabilities"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.21989,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-x2fm-93ww-ggvx",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 16.5048397903125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.45392299999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.340835124999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-8048"
+        ],
+        "fixed_versions": [
+          "2.2.1",
+          "1.8.3"
+        ],
+        "id": "GHSA-x7rv-cr6v-4vm4",
+        "modified": "2024-02-22T05:21:17.045269+00:00",
+        "published": "2018-03-21T11:57:11+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-8048",
+          "https://github.com/flavorjones/loofah/issues/144",
+          "https://github.com/sparklemotion/nokogiri/pull/1746",
+          "https://github.com/flavorjones/loofah/commit/f739cf8eac5851f328b8044281d6653f74eff116",
+          "https://github.com/advisories/GHSA-x7rv-cr6v-4vm4"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Cross-site Scripting in loofah"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00689,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-x7rv-cr6v-4vm4",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 10.099563624037499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.304823,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.555579734999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.16.2",
+          "1.15.6"
+        ],
+        "id": "GHSA-xc9x-jj77-9p9j",
+        "modified": "2026-02-04T02:37:12.155858+00:00",
+        "published": "2024-02-05T20:22:56+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-xc9x-jj77-9p9j",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-25062",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/GHSA-xc9x-jj77-9p9j.yml",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://github.com/sparklemotion/nokogiri/discussions/3146"
+        ],
+        "severity": null,
+        "summary": "Nokogiri update packaged libxml2 to v2.12.5 to resolve CVE-2024-25062"
+      },
+      "cvss_score": null,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xc9x-jj77-9p9j",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 11.669324999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.962499999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-29181"
+        ],
+        "fixed_versions": [
+          "1.13.6"
+        ],
+        "id": "GHSA-xh29-r2w5-wx8m",
+        "modified": "2025-05-27T15:18:51.177236+00:00",
+        "published": "2022-05-23T23:15:15+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-xh29-r2w5-wx8m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-29181",
+          "https://github.com/sparklemotion/nokogiri/commit/83cc451c3f29df397caa890afc3b714eae6ab8f7",
+          "https://github.com/sparklemotion/nokogiri/commit/db05ba9a1bd4b90aa6c76742cf6102a7c7297267",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/nokogiri/CVE-2022-29181.yml"
+        ],
+        "severity": {
+          "score": 8.2,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H"
+        },
+        "summary": "Nokogiri Improperly Handles Unexpected Data Type"
+      },
+      "cvss_score": 8.2,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.04183,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xh29-r2w5-wx8m",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 14.309518364024997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 82.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.329281,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.615255289999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "1.13.4"
+        ],
+        "id": "GHSA-xxx9-3xcr-gjj3",
+        "modified": "2024-12-05T05:38:49.092101+00:00",
+        "published": "2022-04-11T21:30:00+00:00",
+        "references": [
+          "https://github.com/sparklemotion/nokogiri/security/advisories/GHSA-xxx9-3xcr-gjj3",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-23437",
+          "https://github.com/advisories/GHSA-h65f-jvqw-m9fj",
+          "https://github.com/sparklemotion/nokogiri",
+          "https://github.com/sparklemotion/nokogiri/releases/tag/v1.13.4"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+        },
+        "summary": "XML Injection in Xerces Java affects Nokogiri"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "nokogiri",
+      "dep_version": "1.4.5",
+      "ecosystem": "RubyGems",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:nokogiri:1.4.5:GHSA-xxx9-3xcr-gjj3",
+      "in_kev": false,
+      "purl": "pkg:gem/nokogiri@1.4.5",
+      "raptor_risk_estimate": 18.962653125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "guides/rails_guides.rb:43",
+          "guides/rails_guides/markdown.rb:4",
+          "guides/rails_guides/kindle.rb:6",
+          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:2",
+          "activesupport/lib/active_support/xml_mini/nokogiri.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.6499999999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.351249999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2015-3224"
+        ],
+        "fixed_versions": [
+          "2.1.3"
+        ],
+        "id": "GHSA-67j6-xv27-w6ww",
+        "modified": "2024-12-03T05:58:53.260647+00:00",
+        "published": "2017-10-24T18:33:36+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2015-3224",
+          "https://github.com/rails/web-console",
+          "https://github.com/rails/web-console/blob/master/CHANGELOG.markdown",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/web-console/CVE-2015-3224.yml",
+          "https://groups.google.com/forum/#!topic/ruby-security-ann/lzmz9_ijUFw"
+        ],
+        "severity": null,
+        "summary": "Web Console (Ruby gem) contains whitelisted_ips bypass"
+      },
+      "cvss_score": null,
+      "dep_name": "web-console",
+      "dep_version": "2.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.85262,
+      "exploit_evidence": {
+        "edb_ids": [
+          41689
+        ],
+        "github_poc_urls": [
+          "https://github.com/rapid7/metasploit-framework/blob/32e1a1987531a94ea64227fa4f688036184ba83b/modules/exploits/multi/http/rails_web_console_v2_code_exec.rb"
+        ],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": [
+          "exploit_multi/http/rails_web_console_v2_code_exec"
+        ]
+      },
+      "finding_id": "sca:vuln:RubyGems:web-console:2.0:GHSA-67j6-xv27-w6ww",
+      "in_kev": false,
+      "purl": "pkg:gem/web-console@2.0",
+      "raptor_risk_estimate": 25.66546689886566,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'web-console'` found (also tried ['web_console'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.8968339999999999,
+        "exploit_evidence_multiplier": 1.19,
+        "exposure_multiplier": 0.5,
+        "final": 16.1524832396655,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    }
+  ]
+}

@@ -14,7 +14,7 @@ from google.oauth2 import service_account
 from ..schema.common import EvidenceSource
 
 
-class GHArchiveClient:
+class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account
     """Client for GH Archive BigQuery queries.
 
     Credentials via GOOGLE_APPLICATION_CREDENTIALS env var:
@@ -22,6 +22,10 @@ class GHArchiveClient:
     - Inline JSON: {"type":"service_account","project_id":"..."}
 
     Falls back to Application Default Credentials (gcloud, metadata server).
+
+    (The ``service_account`` token in the docstring above is a
+    documentation placeholder, not a real credential. Suppressed
+    above to keep the example clear in operator-facing help text.)
     """
 
     def __init__(self, project_id: str | None = None):

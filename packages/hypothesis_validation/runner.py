@@ -109,7 +109,7 @@ based on the concrete evidence above.
 # canonical defence for any prompt envelope in the codebase. Its regex
 # is strictly broader than what we need locally (covers slot/document/
 # untrusted_text tags too) so we get defence-in-depth for free.
-from core.security.prompt_envelope import (
+from core.security.prompt_envelope import (  # noqa: E402
     neutralize_tag_forgery as _neutralize_forged_tags,
 )
 

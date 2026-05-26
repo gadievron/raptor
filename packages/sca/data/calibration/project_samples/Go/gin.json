@@ -1,0 +1,1762 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:53:20Z",
+    "git_ref": "v1.9.1",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of gin",
+    "project_license": "MIT",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/gin-gonic/gin.git@v1.9.1. Project source not redistributed.",
+    "url": "https://github.com/gin-gonic/gin.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-3978",
+          "GO-2023-1988"
+        ],
+        "fixed_versions": [
+          "0.13.0"
+        ],
+        "id": "GHSA-2wrh-6pvc-2jm9",
+        "modified": "2026-02-04T02:28:47.077964+00:00",
+        "published": "2023-08-02T21:30:20+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-3978",
+          "https://go.dev/cl/514896",
+          "https://go.dev/issue/61615",
+          "https://pkg.go.dev/vuln/GO-2023-1988"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Improper rendering of text nodes in golang.org/x/net/html"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.00097,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-2wrh-6pvc-2jm9",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 10.007167912237499,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300679,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.276565323749999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-golang-2023-39325",
+          "CVE-2023-39325",
+          "GO-2023-2102"
+        ],
+        "fixed_versions": [
+          "0.17.0"
+        ],
+        "id": "GHSA-4374-p667-p6c8",
+        "modified": "2026-02-04T04:14:30.992308+00:00",
+        "published": "2023-10-11T20:35:43+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-39325",
+          "https://github.com/golang/go/issues/63417",
+          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/NG7IMPL55MVWU3LCI4JQJT3K2U5CHDV7",
+          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ODBY7RVMGZCBSTWF2OZGIZS57FNFUL67",
+          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/OXGWPQOJ3JNDW2XIYKIVJ7N7QUIFNM2Q"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "HTTP/2 rapid reset can cause excessive work in net/http"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.0015,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-4374-p667-p6c8",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 12.314065359374998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30105,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.1886609375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-golang-2023-45288",
+          "CVE-2023-45288",
+          "GO-2024-2687"
+        ],
+        "fixed_versions": [
+          "1.21.9",
+          "0.23.0",
+          "1.22.2"
+        ],
+        "id": "GHSA-4v7x-pqxf-cx7m",
+        "modified": "2026-02-04T03:53:00.039104+00:00",
+        "published": "2024-04-04T21:30:32+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-45288",
+          "https://go.dev/cl/576155",
+          "https://go.dev/issue/65051",
+          "https://groups.google.com/g/golang-announce/c/YgW0sx8mN3M",
+          "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/QRYFHIQ6XRKRYBI2F5UESH67BJBQXUPT"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "net/http, x/net/http2: close connections when receiving too many headers"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.69905,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-4v7x-pqxf-cx7m",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 18.161075886937496,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.7893349999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 18.877933193749996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-apisix-2023-44487",
+          "BIT-aspnet-core-2023-44487",
+          "BIT-contour-2023-44487",
+          "BIT-dotnet-2023-44487",
+          "BIT-dotnet-sdk-2023-44487",
+          "BIT-envoy-2023-44487",
+          "BIT-golang-2023-44487",
+          "BIT-jenkins-2023-44487",
+          "BIT-kong-2023-44487",
+          "BIT-nginx-2023-44487",
+          "BIT-nginx-gateway-2023-44487",
+          "BIT-nginx-ingress-controller-2023-44487",
+          "BIT-node-2023-44487",
+          "BIT-node-min-2023-44487",
+          "BIT-solr-2023-44487",
+          "BIT-tomcat-2023-44487",
+          "BIT-varnish-2023-44487",
+          "CVE-2023-44487"
+        ],
+        "fixed_versions": [
+          "1.28.0",
+          "0.17.0",
+          "11.0.0-M12",
+          "10.1.14",
+          "9.0.81",
+          "8.5.94",
+          "9.4.53",
+          "10.0.17",
+          "11.0.17",
+          "12.0.2",
+          "10.5.3"
+        ],
+        "id": "GHSA-qppj-fm5r-hxr3",
+        "modified": "2026-02-04T04:29:21.661957+00:00",
+        "published": "2023-10-10T21:28:24+00:00",
+        "references": [
+          "https://github.com/apple/swift-nio-http2/security/advisories/GHSA-qppj-fm5r-hxr3",
+          "https://github.com/h2o/h2o/security/advisories/GHSA-2m7v-gc89-fjqf",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-44487",
+          "https://github.com/caddyserver/caddy/issues/5877",
+          "https://github.com/dotnet/announcements/issues/277"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L/E:H"
+        },
+        "summary": "HTTP/2 Stream Cancellation Attack"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.94445,
+      "exploit_evidence": {
+        "edb_ids": [
+          52426
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": true,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-qppj-fm5r-hxr3",
+      "in_kev": true,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 62.686132707173556,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.9611149999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 50.378957178,
+        "kev_multiplier": 1.32,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "active",
+      "ssvc_automatable": "yes"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22870",
+          "GO-2025-3503"
+        ],
+        "fixed_versions": [
+          "0.36.0"
+        ],
+        "id": "GHSA-qxp5-gwg8-xv66",
+        "modified": "2026-05-05T15:56:00.976511+00:00",
+        "published": "2025-03-12T22:06:40+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22870",
+          "https://go-review.googlesource.com/q/project:net",
+          "https://go.dev/cl/654697",
+          "https://go.dev/issue/71984",
+          "https://groups.google.com/g/golang-announce/c/4t3lzH3I0eI/m/b42ImqrBAQAJ"
+        ],
+        "severity": {
+          "score": 4.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:L"
+        },
+        "summary": "HTTP Proxy bypass using IPv6 Zone IDs in golang.org/x/net"
+      },
+      "cvss_score": 4.4,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.00023,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-qxp5-gwg8-xv66",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 7.209954290550001,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 44.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300161,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.959696655,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22872",
+          "GO-2025-3595"
+        ],
+        "fixed_versions": [
+          "0.38.0"
+        ],
+        "id": "GHSA-vvgc-356p-c3xw",
+        "modified": "2026-02-05T02:43:52.985546+00:00",
+        "published": "2025-04-16T19:22:51+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22872",
+          "https://go.dev/cl/662715",
+          "https://go.dev/issue/73070",
+          "https://groups.google.com/g/golang-announce/c/ezSKR9vqbqA",
+          "https://pkg.go.dev/vuln/GO-2025-3595"
+        ],
+        "severity": null,
+        "summary": "golang.org/x/net vulnerable to Cross-site Scripting"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.00118,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GHSA-vvgc-356p-c3xw",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 6.5642265329999985,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300826,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.787386625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45338",
+          "GHSA-w32m-9786-jp63"
+        ],
+        "fixed_versions": [
+          "0.33.0"
+        ],
+        "id": "GO-2024-3333",
+        "modified": "2026-03-24T23:55:17.997380+00:00",
+        "published": "2024-12-18T20:22:06+00:00",
+        "references": [
+          "https://go.dev/cl/637536",
+          "https://go.dev/issue/70906",
+          "https://groups.google.com/g/golang-announce/c/wSCRmFnNmPA/m/Lvcd0mRMAwAJ"
+        ],
+        "severity": null,
+        "summary": "Non-linear parsing of case-insensitive content in golang.org/x/net/html"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.0003,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2024-3333",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 6.555220305,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30021,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.773488124999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-47911",
+          "GHSA-w4gw-w5jq-g9jh"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GO-2026-4440",
+        "modified": "2026-02-12T22:26:02.268751+00:00",
+        "published": "2026-02-05T17:23:14+00:00",
+        "references": [
+          "https://go.dev/cl/709876",
+          "https://github.com/golang/vulndb/issues/4440",
+          "https://groups.google.com/g/golang-announce/c/jnQcOYpiR2c"
+        ],
+        "severity": null,
+        "summary": "Quadratic parsing complexity in golang.org/x/net/html"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.00017,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4440",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 6.553889839499999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30011899999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.771434937499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-58190"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GO-2026-4441",
+        "modified": "2026-02-10T11:58:49.537868+00:00",
+        "published": "2026-02-05T17:23:17+00:00",
+        "references": [
+          "https://groups.google.com/g/golang-announce/c/jnQcOYpiR2c",
+          "https://github.com/golang/vulndb/issues/4441",
+          "https://go.dev/cl/709875"
+        ],
+        "severity": null,
+        "summary": "Infinite parsing loop in golang.org/x/net"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 0.00011,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4441",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 6.553275778499999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300077,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.770487312499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-33814"
+        ],
+        "fixed_versions": [
+          "0.53.0",
+          "1.25.10",
+          "1.26.3"
+        ],
+        "id": "GO-2026-4918",
+        "modified": "2026-05-08T22:29:22.153967+00:00",
+        "published": "2026-05-07T19:21:40+00:00",
+        "references": [
+          "https://go.dev/cl/761581",
+          "https://go.dev/cl/761640",
+          "https://go.dev/issue/78476",
+          "https://groups.google.com/g/golang-announce/c/qcCIEXso47M"
+        ],
+        "severity": null,
+        "summary": "Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in net/http/internal/http2 in golang.org/x/net"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/net",
+      "dep_version": "v0.10.0",
+      "ecosystem": "Go",
+      "epss": 8e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/net:v0.10.0:GO-2026-4918",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/net@v0.10.0",
+      "raptor_risk_estimate": 6.552968748,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (ListenAndServe, ListenAndServeTLS, Serve) found in source"
+        },
+        "evidence": [
+          "gin.go:18",
+          "gin.go:19",
+          "[symbol] ListenAndServe",
+          "[symbol] ListenAndServeTLS",
+          "[symbol] Serve",
+          "[symbol] Get",
+          "[symbol] Header.Get"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300056,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.770013499999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-24786",
+          "GO-2024-2611"
+        ],
+        "fixed_versions": [
+          "1.33.0"
+        ],
+        "id": "GHSA-8r3f-844c-mc37",
+        "modified": "2026-02-04T02:55:27.248824+00:00",
+        "published": "2024-03-06T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-24786",
+          "https://github.com/protocolbuffers/protobuf-go/commit/f01a588e5810b90996452eec4a28f22a0afae023",
+          "https://github.com/protocolbuffers/protobuf-go",
+          "https://github.com/protocolbuffers/protobuf-go/releases/tag/v1.33.0",
+          "https://go.dev/cl/569356"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Golang protojson.Unmarshal function infinite loop when unmarshaling certain forms of invalid JSON"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "google.golang.org/protobuf",
+      "dep_version": "v1.26.0-rc.1",
+      "ecosystem": "Go",
+      "epss": 0.00404,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:google.golang.org/protobuf:v1.26.0-rc.1:GHSA-8r3f-844c-mc37",
+      "in_kev": false,
+      "purl": "pkg:golang/google.golang.org/protobuf@v1.26.0-rc.1",
+      "raptor_risk_estimate": 12.36280645125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (Unmarshal) found in source"
+        },
+        "evidence": [
+          "render/protobuf.go:7",
+          "binding/protobuf.go:9",
+          "testdata/protoexample/test.pb.go:8",
+          "testdata/protoexample/test.pb.go:9",
+          "[symbol] Unmarshal"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302828,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.248835124999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-24786",
+          "GO-2024-2611"
+        ],
+        "fixed_versions": [
+          "1.33.0"
+        ],
+        "id": "GHSA-8r3f-844c-mc37",
+        "modified": "2026-02-04T02:55:27.248824+00:00",
+        "published": "2024-03-06T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-24786",
+          "https://github.com/protocolbuffers/protobuf-go/commit/f01a588e5810b90996452eec4a28f22a0afae023",
+          "https://github.com/protocolbuffers/protobuf-go",
+          "https://github.com/protocolbuffers/protobuf-go/releases/tag/v1.33.0",
+          "https://go.dev/cl/569356"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Golang protojson.Unmarshal function infinite loop when unmarshaling certain forms of invalid JSON"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "google.golang.org/protobuf",
+      "dep_version": "v1.30.0",
+      "ecosystem": "Go",
+      "epss": 0.00404,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:google.golang.org/protobuf:v1.30.0:GHSA-8r3f-844c-mc37",
+      "in_kev": false,
+      "purl": "pkg:golang/google.golang.org/protobuf@v1.30.0",
+      "raptor_risk_estimate": 12.36280645125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import + advisory symbol(s) (Unmarshal) found in source"
+        },
+        "evidence": [
+          "render/protobuf.go:7",
+          "binding/protobuf.go:9",
+          "testdata/protoexample/test.pb.go:8",
+          "testdata/protoexample/test.pb.go:9",
+          "[symbol] Unmarshal"
+        ],
+        "verdict": "likely_called"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.302828,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.248835124999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-28948",
+          "GO-2022-0603"
+        ],
+        "fixed_versions": [
+          "3.0.1"
+        ],
+        "id": "GHSA-hp87-p4gw-j4gq",
+        "modified": "2026-02-04T03:41:15.835669+00:00",
+        "published": "2022-05-20T00:00:17+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-28948",
+          "https://github.com/go-yaml/yaml/issues/665",
+          "https://github.com/go-yaml/yaml/issues/666",
+          "https://github.com/go-yaml/yaml/commit/8f96da9f5d5eff988554c1aae1784627c4bf6754",
+          "https://github.com/go-yaml/yaml/commit/f6f7691b1fdeb513f56608cd2c32c51f8194bf51"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "gopkg.in/yaml.v3 Denial of Service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "gopkg.in/yaml.v3",
+      "dep_version": "v3.0.0-20200313102051-9f266ea9e77c",
+      "ecosystem": "Go",
+      "epss": 0.01524,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:gopkg.in/yaml.v3:v3.0.0-20200313102051-9f266ea9e77c:GHSA-hp87-p4gw-j4gq",
+      "in_kev": false,
+      "purl": "pkg:golang/gopkg.in/yaml.v3@v3.0.0-20200313102051-9f266ea9e77c",
+      "raptor_risk_estimate": 12.57772780125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import found in non-test Go source"
+        },
+        "evidence": [
+          "render/yaml.go:7",
+          "binding/yaml.go:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.310668,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.514170125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-48795",
+          "GO-2023-2402"
+        ],
+        "fixed_versions": [
+          "0.40.2",
+          "0.17.0",
+          "3.4.0",
+          "0.0.0-20231218163308-9d2ee975ef9f"
+        ],
+        "id": "GHSA-45x7-px36-x8w8",
+        "modified": "2026-02-04T03:04:59.978109+00:00",
+        "published": "2023-12-18T19:22:09+00:00",
+        "references": [
+          "https://github.com/warp-tech/russh/security/advisories/GHSA-45x7-px36-x8w8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-48795",
+          "https://github.com/mwiede/jsch/issues/457",
+          "https://github.com/janmojzis/tinyssh/issues/81",
+          "https://github.com/hierynomus/sshj/issues/916"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Prefix Truncation Attack against ChaCha20-Poly1305 and Encrypt-then-MAC aka Terrapin"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.53559,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-45x7-px36-x8w8",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 20.21493734699079,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.674913,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.04451167591625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-47914",
+          "GO-2025-4135"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GHSA-f6x5-jh6r-wrfv",
+        "modified": "2026-03-24T12:41:42.204432+00:00",
+        "published": "2025-11-19T23:16:40+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-47914",
+          "https://go.dev/cl/721960",
+          "https://go.dev/issue/76364",
+          "https://go.googlesource.com/crypto",
+          "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "golang.org/x/crypto/ssh/agent vulnerable to panic if message is malformed due to out of bounds read"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.00014,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-f6x5-jh6r-wrfv",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 5.58166517928117,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300098,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.0120653050075,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22869",
+          "GO-2025-3487"
+        ],
+        "fixed_versions": [
+          "0.35.0"
+        ],
+        "id": "GHSA-hcg3-q754-cr77",
+        "modified": "2026-02-05T01:28:51.111278+00:00",
+        "published": "2025-04-12T00:30:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22869",
+          "https://github.com/golang/crypto/commit/7292932d45d55c7199324ab0027cc86e8198aa22",
+          "https://github.com/golang/crypto",
+          "https://go-review.googlesource.com/c/crypto/+/652135",
+          "https://go.dev/cl/652135"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "golang.org/x/crypto Vulnerable to Denial of Service (DoS) via Slow or Incomplete Key Exchange"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.00591,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-hcg3-q754-cr77",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 7.969754357088216,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.304137,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.75386335590625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-58181",
+          "GO-2025-4134"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GHSA-j5w8-q4qc-rx2x",
+        "modified": "2026-03-24T12:44:06.833500+00:00",
+        "published": "2025-11-19T23:01:20+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-58181",
+          "https://go.dev/cl/721961",
+          "https://go.dev/issue/76363",
+          "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA",
+          "https://pkg.go.dev/vuln/GO-2025-4134"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "golang.org/x/crypto/ssh allows an attacker to cause unbounded memory consumption"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.00046,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-j5w8-q4qc-rx2x",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 5.5844544793238455,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300322,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.015060002167499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45337",
+          "GO-2024-3321"
+        ],
+        "fixed_versions": [
+          "0.31.0"
+        ],
+        "id": "GHSA-v778-237x-gjrc",
+        "modified": "2026-02-05T02:28:51.578301+00:00",
+        "published": "2024-12-11T22:03:04+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-45337",
+          "https://github.com/golang/crypto/commit/b4f1988a35dee11ec3e05d6bf3e90b695fbd8909",
+          "https://github.com/golang/crypto",
+          "https://go.dev/cl/635315",
+          "https://go.dev/issue/70779"
+        ],
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass in golang.org/x/crypto"
+      },
+      "cvss_score": 9.1,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.30296,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GHSA-v778-237x-gjrc",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 14.115670481289738,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 90.99999999999999,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.512072,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.754426493809998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-47913",
+          "GHSA-56w8-48fp-6mgv"
+        ],
+        "fixed_versions": [
+          "0.43.0"
+        ],
+        "id": "GO-2025-4116",
+        "modified": "2026-05-08T10:29:23.046803+00:00",
+        "published": "2025-11-13T21:12:03+00:00",
+        "references": [
+          "https://go.dev/cl/700295",
+          "https://go.dev/issue/75178",
+          "https://github.com/advisories/GHSA-56w8-48fp-6mgv"
+        ],
+        "severity": null,
+        "summary": "Potential denial of service in golang.org/x/crypto/ssh/agent"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.7.0",
+      "ecosystem": "Go",
+      "epss": 0.00018,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.7.0:GO-2025-4116",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.7.0",
+      "raptor_risk_estimate": 4.212840635310569,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300126,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.7853204171249994,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-48795",
+          "GO-2023-2402"
+        ],
+        "fixed_versions": [
+          "0.40.2",
+          "0.17.0",
+          "3.4.0",
+          "0.0.0-20231218163308-9d2ee975ef9f"
+        ],
+        "id": "GHSA-45x7-px36-x8w8",
+        "modified": "2026-02-04T03:04:59.978109+00:00",
+        "published": "2023-12-18T19:22:09+00:00",
+        "references": [
+          "https://github.com/warp-tech/russh/security/advisories/GHSA-45x7-px36-x8w8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-48795",
+          "https://github.com/mwiede/jsch/issues/457",
+          "https://github.com/janmojzis/tinyssh/issues/81",
+          "https://github.com/hierynomus/sshj/issues/916"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Prefix Truncation Attack against ChaCha20-Poly1305 and Encrypt-then-MAC aka Terrapin"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.53559,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-45x7-px36-x8w8",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 20.21493734699079,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.674913,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.04451167591625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_exploitation": "poc",
+      "ssvc_automatable": "no"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-47914",
+          "GO-2025-4135"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GHSA-f6x5-jh6r-wrfv",
+        "modified": "2026-03-24T12:41:42.204432+00:00",
+        "published": "2025-11-19T23:16:40+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-47914",
+          "https://go.dev/cl/721960",
+          "https://go.dev/issue/76364",
+          "https://go.googlesource.com/crypto",
+          "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "golang.org/x/crypto/ssh/agent vulnerable to panic if message is malformed due to out of bounds read"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.00014,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-f6x5-jh6r-wrfv",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 5.58166517928117,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300098,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.0120653050075,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22869",
+          "GO-2025-3487"
+        ],
+        "fixed_versions": [
+          "0.35.0"
+        ],
+        "id": "GHSA-hcg3-q754-cr77",
+        "modified": "2026-02-05T01:28:51.111278+00:00",
+        "published": "2025-04-12T00:30:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22869",
+          "https://github.com/golang/crypto/commit/7292932d45d55c7199324ab0027cc86e8198aa22",
+          "https://github.com/golang/crypto",
+          "https://go-review.googlesource.com/c/crypto/+/652135",
+          "https://go.dev/cl/652135"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "golang.org/x/crypto Vulnerable to Denial of Service (DoS) via Slow or Incomplete Key Exchange"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.00591,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-hcg3-q754-cr77",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 7.969754357088216,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.304137,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.75386335590625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-58181",
+          "GO-2025-4134"
+        ],
+        "fixed_versions": [
+          "0.45.0"
+        ],
+        "id": "GHSA-j5w8-q4qc-rx2x",
+        "modified": "2026-03-24T12:44:06.833500+00:00",
+        "published": "2025-11-19T23:01:20+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-58181",
+          "https://go.dev/cl/721961",
+          "https://go.dev/issue/76363",
+          "https://groups.google.com/g/golang-announce/c/w-oX3UxNcZA",
+          "https://pkg.go.dev/vuln/GO-2025-4134"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "golang.org/x/crypto/ssh allows an attacker to cause unbounded memory consumption"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.00046,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-j5w8-q4qc-rx2x",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 5.5844544793238455,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300322,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.015060002167499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45337",
+          "GO-2024-3321"
+        ],
+        "fixed_versions": [
+          "0.31.0"
+        ],
+        "id": "GHSA-v778-237x-gjrc",
+        "modified": "2026-02-05T02:28:51.578301+00:00",
+        "published": "2024-12-11T22:03:04+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-45337",
+          "https://github.com/golang/crypto/commit/b4f1988a35dee11ec3e05d6bf3e90b695fbd8909",
+          "https://github.com/golang/crypto",
+          "https://go.dev/cl/635315",
+          "https://go.dev/issue/70779"
+        ],
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass in golang.org/x/crypto"
+      },
+      "cvss_score": 9.1,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.30296,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GHSA-v778-237x-gjrc",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 14.115670481289738,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 90.99999999999999,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.512072,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.754426493809998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-47913",
+          "GHSA-56w8-48fp-6mgv"
+        ],
+        "fixed_versions": [
+          "0.43.0"
+        ],
+        "id": "GO-2025-4116",
+        "modified": "2026-05-08T10:29:23.046803+00:00",
+        "published": "2025-11-13T21:12:03+00:00",
+        "references": [
+          "https://go.dev/cl/700295",
+          "https://go.dev/issue/75178",
+          "https://github.com/advisories/GHSA-56w8-48fp-6mgv"
+        ],
+        "severity": null,
+        "summary": "Potential denial of service in golang.org/x/crypto/ssh/agent"
+      },
+      "cvss_score": null,
+      "dep_name": "golang.org/x/crypto",
+      "dep_version": "v0.9.0",
+      "ecosystem": "Go",
+      "epss": 0.00018,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/crypto:v0.9.0:GO-2025-4116",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/crypto@v0.9.0",
+      "raptor_risk_estimate": 4.212840635310569,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/crypto\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300126,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.7853204171249994,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.559,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    }
+  ]
+}

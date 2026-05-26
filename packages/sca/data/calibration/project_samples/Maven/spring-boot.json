@@ -1,0 +1,1310 @@
+{
+  "_source": {
+    "fetched_at": "2026-05-09T19:53:40Z",
+    "git_ref": "v3.2.0",
+    "license": "MIT (RAPTOR-generated scan output)",
+    "name": "RAPTOR SCA scan of spring-boot",
+    "project_license": "Apache-2.0",
+    "provenance": "Scan output produced by RAPTOR's SCA pipeline against https://github.com/spring-projects/spring-boot.git@v3.2.0. Project source not redistributed.",
+    "url": "https://github.com/spring-projects/spring-boot.git"
+  },
+  "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-27772"
+        ],
+        "fixed_versions": [
+          "2.2.11.RELEASE"
+        ],
+        "id": "GHSA-cm59-pr5q-cw85",
+        "modified": "2026-03-13T21:59:19.426456+00:00",
+        "published": "2022-07-11T20:59:02+00:00",
+        "references": [
+          "https://github.com/JLLeitschuh/security-research/security/advisories/GHSA-cm59-pr5q-cw85",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-27772",
+          "https://github.com/spring-projects/spring-boot/commit/667ccdae84822072f9ea1a27ed5c77964c71002d",
+          "https://github.com/spring-projects/spring-boot"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:H"
+        },
+        "summary": "Temporary Directory Hijacking to Local Privilege Escalation Vulnerability in org.springframework.boot:spring-boot"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "org.springframework.boot:spring-boot",
+      "dep_version": "@project.version@",
+      "ecosystem": "Maven",
+      "epss": 0.00442,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-cm59-pr5q-cw85",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
+      "raptor_risk_estimate": 12.86490236265,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.303094,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.668151064999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22235"
+        ],
+        "fixed_versions": [
+          "3.3.11",
+          "3.4.5"
+        ],
+        "id": "GHSA-rc42-6c7j-7h5r",
+        "modified": "2026-02-04T02:35:01.941827+00:00",
+        "published": "2025-04-28T09:31:53+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22235",
+          "https://github.com/spring-projects/spring-boot",
+          "https://security.netapp.com/advisory/ntap-20250516-0010",
+          "https://spring.io/security/cve-2025-22235"
+        ],
+        "severity": {
+          "score": 7.3,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+        },
+        "summary": "Spring Boot EndpointRequest.to() creates wrong matcher if actuator endpoint is not exposed"
+      },
+      "cvss_score": 7.3,
+      "dep_name": "org.springframework.boot:spring-boot",
+      "dep_version": "@project.version@",
+      "ecosystem": "Maven",
+      "epss": 0.0039,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-rc42-6c7j-7h5r",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
+      "raptor_risk_estimate": 12.030516736125,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 73.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30273,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.972304612499999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-40973"
+        ],
+        "fixed_versions": [
+          "4.0.6",
+          "3.5.14"
+        ],
+        "id": "GHSA-wwpq-f5c3-7hvx",
+        "modified": "2026-05-08T12:14:21.677811+00:00",
+        "published": "2026-04-28T00:31:41+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-40973",
+          "https://github.com/spring-projects/spring-boot",
+          "https://spring.io/security/cve-2026-40973"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Spring Boot accepts predictable temp directory without ownership verification"
+      },
+      "cvss_score": 7.0,
+      "dep_name": "org.springframework.boot:spring-boot",
+      "dep_version": "@project.version@",
+      "ecosystem": "Maven",
+      "epss": 0.00016,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-wwpq-f5c3-7hvx",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
+      "raptor_risk_estimate": 11.469128117999999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300112,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.479787799999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-38820"
+        ],
+        "fixed_versions": [
+          "6.1.14"
+        ],
+        "id": "GHSA-4gc7-5j7h-4qph",
+        "modified": "2026-02-04T04:13:07.093622+00:00",
+        "published": "2024-10-18T06:30:32+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-38820",
+          "https://github.com/spring-projects/spring-framework/commit/23656aebc6c7d0f9faff1080981eb4d55eff296c",
+          "https://github.com/spring-projects/spring-framework",
+          "https://github.com/spring-projects/spring-framework/commits/v6.2.0-RC2",
+          "https://security.netapp.com/advisory/ntap-20241129-0003"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Spring Framework DataBinder Case Sensitive Match Exception"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "org.springframework:spring-context",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.01514,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4gc7-5j7h-4qph",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
+      "raptor_risk_estimate": 8.886904928174998,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.310598,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.428339417499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22233"
+        ],
+        "fixed_versions": [
+          "6.2.7",
+          "6.1.20"
+        ],
+        "id": "GHSA-4wp7-92pw-q264",
+        "modified": "2026-02-04T04:04:31.136084+00:00",
+        "published": "2025-05-16T21:32:12+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22233",
+          "https://github.com/spring-projects/spring-framework/issues/34801",
+          "https://github.com/spring-projects/spring-framework/commit/edfcc6ffb188e4614ec9b212e3208b666981851c",
+          "https://github.com/spring-projects/spring-framework/commit/ee62701f5634e904e42e218baad142cea2bcd332",
+          "https://github.com/spring-projects/spring-framework"
+        ],
+        "severity": {
+          "score": 3.1,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Spring Framework DataBinder Case Sensitive Match Exception"
+      },
+      "cvss_score": 3.1,
+      "dep_name": "org.springframework:spring-context",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.00083,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4wp7-92pw-q264",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
+      "raptor_risk_estimate": 5.084499495637499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 31.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300581,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.204752463749999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-22968"
+        ],
+        "fixed_versions": [
+          "5.3.19",
+          "5.2.21.RELEASE"
+        ],
+        "id": "GHSA-g5mm-vmx4-3rg7",
+        "modified": "2024-05-15T06:31:39.948317+00:00",
+        "published": "2022-04-15T00:00:32+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-22968",
+          "https://github.com/spring-projects/spring-framework/commit/833e750175349ab4fd502109a8b41af77e25cdea",
+          "https://github.com/spring-projects/spring-framework/commit/a7cf19cec5ebd270f97a194d749e2d5701ad2ab7",
+          "https://github.com/spring-projects/spring-framework",
+          "https://security.netapp.com/advisory/ntap-20220602-0004"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Improper handling of case sensitivity in Spring Framework"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "org.springframework:spring-context",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.2051,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-g5mm-vmx4-3rg7",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
+      "raptor_risk_estimate": 16.221028471874998,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.44357,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 15.012072187499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-34447"
+        ],
+        "fixed_versions": [
+          "1.78",
+          "1.0.19",
+          "2.73.6"
+        ],
+        "id": "GHSA-4h8f-2wvx-gg5w",
+        "modified": "2026-04-17T13:33:47.860105+00:00",
+        "published": "2024-05-03T18:30:37+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-34447",
+          "https://github.com/bcgit/bc-java/issues/1656",
+          "https://github.com/bcgit/bc-java",
+          "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902024%E2%80%9034447",
+          "https://www.bouncycastle.org/latest_releases.html"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Bouncy Castle Java Cryptography API vulnerable to DNS poisoning"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00104,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-4h8f-2wvx-gg5w",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 9.6801207429,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300728,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.00650709,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-8885"
+        ],
+        "fixed_versions": [
+          "1.78",
+          "1.0.2.6",
+          "2.0.1"
+        ],
+        "id": "GHSA-67mf-3cr5-8w23",
+        "modified": "2026-02-04T03:46:08.721482+00:00",
+        "published": "2025-08-12T12:30:32+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-8885",
+          "https://github.com/bcgit/bc-java/commit/3790993df5d28f661a64439a8664343437ed3865",
+          "https://github.com/bcgit/bc-java",
+          "https://github.com/bcgit/bc-java/blob/main/core/src/main/java/org/bouncycastle/asn1/ASN1ObjectIdentifier.java",
+          "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902025%E2%80%908885"
+        ],
+        "severity": null,
+        "summary": "Bouncy Castle for Java on All (API modules) allows Excessive Allocation"
+      },
+      "cvss_score": null,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00112,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-67mf-3cr5-8w23",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 6.563612471999999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300784,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.786438999999999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-29857"
+        ],
+        "fixed_versions": [
+          "1.78",
+          "1.0.2.5",
+          "2.3.1"
+        ],
+        "id": "GHSA-8xfc-gm6g-vgpv",
+        "modified": "2026-02-04T03:58:29.264718+00:00",
+        "published": "2024-05-14T15:32:54+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-29857",
+          "https://github.com/bcgit/bc-csharp/commit/56daa6eac526f165416d17f661422d60de0dfd63",
+          "https://github.com/bcgit/bc-java/commit/efc498ca4caa340ac2fe11f2efee06c1a294501f",
+          "https://github.com/bcgit/bc-java/commit/fee80dd230e7fba132d03a34f1dd1d6aae0d0281",
+          "https://github.com/bcgit/bc-csharp/wiki/CVE%E2%80%902024%E2%80%9029857"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Bouncy Castle certificate parsing issues cause high CPU usage during parameter evaluation."
+      },
+      "cvss_score": 5.3,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00191,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-8xfc-gm6g-vgpv",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 8.707499331262499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.30133699999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.206851026249998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-0636"
+        ],
+        "fixed_versions": [
+          "1.84"
+        ],
+        "id": "GHSA-c3fc-8qff-9hwx",
+        "modified": "2026-04-18T19:44:23.059931+00:00",
+        "published": "2026-04-17T18:31:50+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-0636",
+          "https://github.com/bcgit/bc-java/commit/d20cdb8430e09224114fec0179a71859929fcbde",
+          "https://github.com/bcgit/bc-java",
+          "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902026%E2%80%900636"
+        ],
+        "severity": null,
+        "summary": "Bouncy Castle has an LDAP injection"
+      },
+      "cvss_score": null,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00062,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-c3fc-8qff-9hwx",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 6.5584952969999994,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300434,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.7785421249999995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-30172"
+        ],
+        "fixed_versions": [
+          "1.78",
+          "2.3.1"
+        ],
+        "id": "GHSA-m44j-cfrm-g8qc",
+        "modified": "2026-02-04T03:43:31.596166+00:00",
+        "published": "2024-05-14T15:32:54+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-30172",
+          "https://github.com/bcgit/bc-java/commit/1b9fd9b545e691bfb3941a9f6a797660c8860f02",
+          "https://github.com/bcgit/bc-java/commit/9c165791b68a204678b48ec11e4e579754c2ea49",
+          "https://github.com/bcgit/bc-java/commit/ebe1c75579170072dc59b8dee2b55ce31663178f",
+          "https://github.com/bcgit/bc-csharp/wiki/CVE%E2%80%902024%E2%80%9030172"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Bouncy Castle crafted signature and public key can be used to trigger an infinite loop"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00075,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-m44j-cfrm-g8qc",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 8.691769135312498,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300525,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.187431031249998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-5598"
+        ],
+        "fixed_versions": [
+          "1.84"
+        ],
+        "id": "GHSA-p93r-85wp-75v3",
+        "modified": "2026-05-05T16:09:17.707462+00:00",
+        "published": "2026-04-17T18:31:50+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-5598",
+          "https://github.com/bcgit/bc-java/commit/8692e6b2b191fc4aafa32545c7a78bdb9bf110c5",
+          "https://github.com/bcgit/bc-java/commit/94abbd56413dfdac651fd878bc60253871ef5e87",
+          "https://github.com/bcgit/bc-java",
+          "https://github.com/bcgit/bc-java/wiki/CVE-2026-5598"
+        ],
+        "severity": null,
+        "summary": "Bouncy Castle Has Covert Timing Channel Vulnerability"
+      },
+      "cvss_score": null,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00018,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-p93r-85wp-75v3",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 6.553992183,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300126,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.771592875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-30171"
+        ],
+        "fixed_versions": [
+          "1.0.19",
+          "1.78",
+          "2.3.1"
+        ],
+        "id": "GHSA-v435-xc8x-wvr9",
+        "modified": "2026-02-04T04:32:27.816792+00:00",
+        "published": "2024-05-14T15:32:54+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-30171",
+          "https://github.com/bcgit/bc-csharp/commit/c984b8bfd8544dfc55dba91a02cbbbb9c580c217",
+          "https://github.com/bcgit/bc-java/commit/d7d5e735abd64bf0f413f54fd9e495fc02400fb0",
+          "https://github.com/bcgit/bc-java/commit/e0569dcb1dea9d421d84fc4c5c5688fe101afa2d",
+          "https://github.com/bcgit/bc-csharp/wiki/CVE%E2%80%902024%E2%80%9030171"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Bouncy Castle affected by timing side-channel for RSA key exchange (\"The Marvin Attack\")"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00102,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-v435-xc8x-wvr9",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 9.679818829575002,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.300714,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.0061343575,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-1272"
+        ],
+        "fixed_versions": [
+          "4.3.15",
+          "5.0.5"
+        ],
+        "id": "GHSA-4487-x383-qpph",
+        "modified": "2024-12-05T05:30:27.932883+00:00",
+        "published": "2018-10-17T20:27:47+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-1272",
+          "https://github.com/spring-projects/spring-framework/commit/ab2410c754b67902f002bfcc0c3895bd7772d39",
+          "https://github.com/spring-projects/spring-framework/commit/e02ff3a0da50744b0980d5d665fd242eedea767",
+          "https://access.redhat.com/errata/RHSA-2018:1320",
+          "https://access.redhat.com/errata/RHSA-2018:2669"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Possible privilege escalation in org.springframework:spring-core"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.02166,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-4487-x383-qpph",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 12.700923789374997,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.315162,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.666263937499998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2016-5007"
+        ],
+        "fixed_versions": [
+          "4.3.1",
+          "4.1.1"
+        ],
+        "id": "GHSA-8crv-49fr-2h6j",
+        "modified": "2024-12-02T05:54:00.856162+00:00",
+        "published": "2018-10-17T20:30:12+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2016-5007",
+          "https://github.com/spring-projects/spring-security/issues/3964",
+          "https://github.com/spring-projects/spring-framework/commit/a30ab30e4e9ae021fdda04e9abfc228476b846b5",
+          "https://github.com/spring-projects/spring-security/commit/e4c13e3c0ee7f06f59d3b43ca6734215ad7d8974",
+          "https://github.com/advisories/GHSA-8crv-49fr-2h6j"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Spring Security and Spring Framework may not recognize certain paths that should be protected"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.00155,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-8crv-49fr-2h6j",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 12.315024829687498,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.301085,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.189845468749997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-1271"
+        ],
+        "fixed_versions": [
+          "5.0.5",
+          "4.3.15"
+        ],
+        "id": "GHSA-g8hw-794c-4j9g",
+        "modified": "2024-03-17T05:16:56.536994+00:00",
+        "published": "2018-10-17T20:07:03+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-1271",
+          "https://github.com/spring-projects/spring-framework/commit/0e28bee0f155b9bf240b4bafc4646e4810cb23f8",
+          "https://github.com/spring-projects/spring-framework/commit/13356a7ee2240f740737c5c83bdccdacc30603ab",
+          "https://github.com/spring-projects/spring-framework/commit/695bf2961feffd35b5560ccc982a2189dcca611f",
+          "https://github.com/spring-projects/spring-framework/commit/91b803a2310344d925e5d4b1709bbcea90375548"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "Path Traversal in org.springframework:spring-core"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.90996,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-g8hw-794c-4j9g",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 23.40087371085,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.9369719999999999,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 24.945708285,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2015-5211"
+        ],
+        "fixed_versions": [
+          "4.2.2",
+          "4.1.8",
+          "3.2.15"
+        ],
+        "id": "GHSA-pgf9-h69p-pcgf",
+        "modified": "2024-03-05T18:16:14.318775+00:00",
+        "published": "2018-10-17T20:29:33+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2015-5211",
+          "https://github.com/spring-projects/spring-framework/commit/03f547eb9868f48f44d59b56067d4ac4740672c3",
+          "https://github.com/spring-projects/spring-framework/commit/2bd1daa75ee0b8ec33608ca6ab065ef3e1815543",
+          "https://github.com/spring-projects/spring-framework/commit/a95c3d820dbc4c3ae752f1b3ee22ee860b162402",
+          "https://github.com/advisories/GHSA-pgf9-h69p-pcgf"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H"
+        },
+        "summary": "Files or Directories Accessible to External Parties in org.springframework:spring-core"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.01918,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-pgf9-h69p-pcgf",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 14.50915639095,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.313426,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.163279494999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-1257"
+        ],
+        "fixed_versions": [
+          "5.0.6",
+          "4.3.17"
+        ],
+        "id": "GHSA-rcpf-vj53-7h2m",
+        "modified": "2024-12-03T06:11:33.435507+00:00",
+        "published": "2018-10-17T20:02:20+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-1257",
+          "https://github.com/spring-projects/spring-framework/commit/246a6db1cad205ca9b6fca00c544ab7443ba202",
+          "https://github.com/spring-projects/spring-framework/commit/ff2228fdaf131d57b5c8c5918ee8d07c6dd9bba",
+          "https://access.redhat.com/errata/RHSA-2018:1809",
+          "https://access.redhat.com/errata/RHSA-2018:3768"
+        ],
+        "severity": {
+          "score": 6.5,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Denial of Service in org.springframework:spring-core"
+      },
+      "cvss_score": 6.5,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.01176,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-rcpf-vj53-7h2m",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 10.8428221785,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 65.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.308232,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.04082985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2011-2730"
+        ],
+        "fixed_versions": [
+          "3.0.6",
+          "2.5.6.SEC03",
+          "2.5.7.SR023"
+        ],
+        "id": "GHSA-wv88-pf73-x22p",
+        "modified": "2024-12-05T05:34:13.113550+00:00",
+        "published": "2022-05-17T02:16:01+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2011-2730",
+          "https://github.com/spring-projects/spring-framework/commit/62ccc8dd7e645fb91705d44919abac838cb5ca3f",
+          "https://github.com/spring-projects/spring-framework/commit/9772eb8410e37cd0bdec0d1b133218446c778beb",
+          "https://github.com/spring-projects/spring-framework/commit/b8d86330d1fadc645630416c3aaebf131bf749fc",
+          "https://docs.google.com/document/d/1dc1xxO8UMFaGLOwgkykYdghGWm_2Gn0iCrxFsympqcE/edit"
+        ],
+        "severity": null,
+        "summary": "Improper Neutralization of Directives in Dynamically Evaluated Code in Spring Framework"
+      },
+      "cvss_score": null,
+      "dep_name": "org.springframework:spring-core",
+      "dep_version": "@spring-framework.version@",
+      "ecosystem": "Maven",
+      "epss": 0.46306,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-wv88-pf73-x22p",
+      "in_kev": false,
+      "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
+      "raptor_risk_estimate": 11.291268110999999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "SampleSpringXmlApplication.java:24",
+          "SampleSimpleApplication.java:22",
+          "SampleSecureApplication.java:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.624142,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.082203874999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+incident: synthetic install-hook detector test (not a real incident)
+ecosystem: npm
+package: synthetic-install-hook-fixture
+malicious_versions:
+  - "0.0.1"
+classification: synthetic / detector smoke test
+references:
+  - https://github.com/ossf/malicious-packages — real-world install-hook compromises that motivated the detector
+expected_signal_summary: |
+  This fixture exists purely to keep coverage of the
+  install_hook_suspicious detector. Real-world cases (event-stream,
+  ua-parser-js, coa/rc) carry the malicious script inside the
+  COMPROMISED PACKAGE's tarball, which the metadata-only corpus
+  doesn't unpack — so they fire vuln_dep / sentinel_match instead.
+  The install_hook detector fires on hooks in the LOCAL project's
+  package.json, not in transitive deps. This synthetic fixture
+  covers that path.

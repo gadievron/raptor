@@ -104,15 +104,16 @@ class TestBuildCmd:
         idx = cmd.index("--timeout")
         assert cmd[idx + 1] == "120"
 
-    def test_json_output_path(self):
+    def test_json_output_path(self, tmp_path):
+        out_path = tmp_path / "out.json"
         cmd = build_cmd(
             Path("/src"), "p/x",
-            json_output_path=Path("/tmp/out.json"),
+            json_output_path=out_path,
             semgrep_bin="semgrep",
         )
         assert "--json-output" in cmd
         idx = cmd.index("--json-output")
-        assert cmd[idx + 1] == "/tmp/out.json"
+        assert cmd[idx + 1] == str(out_path)
 
     def test_no_json_output_path_omits_flag(self):
         cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
@@ -322,6 +323,19 @@ class TestConfigToName:
 
 # Integration ------------------------------------------------------------------
 
+# Marked ``integration`` so pytest.ini's default
+# ``-m "not integration and not slow"`` deselects this class in
+# regular suite runs. Reason: the tests call ``run_rule(... "p/python"
+# ...)`` which downloads the ``p/python`` rule pack from semgrep.dev
+# at scan time. Two consequences:
+#   * The default suite shouldn't depend on outbound HTTPS to
+#     semgrep.dev — flaky on sandboxed CI, fails when an unrelated
+#     test in the same process has spun up the egress-proxy with a
+#     narrower allowlist.
+#   * 6-second wall per test (real semgrep invocation) is integration
+#     territory, not unit-test cadence.
+# Opt-in with ``pytest -m integration``.
+@pytest.mark.integration
 @pytest.mark.skipif(not is_available(), reason="semgrep not installed")
 class TestIntegration:
     """Real-semgrep tests. Skipped when binary unavailable."""

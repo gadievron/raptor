@@ -145,8 +145,8 @@ class TestFormatSmtWitness:
         assert "_anon_0 (= strlen(argv[1])) = 32" in out
         assert "_anon_1 = 7" in out
         # _anon_1 not decorated since it's not in the map
-        lines = [l for l in out.split("\n") if "_anon_1" in l]
-        assert all("(= " not in l for l in lines)
+        lines = [line for line in out.split("\n") if "_anon_1" in line]
+        assert all("(= " not in line for line in lines)
 
 
 # -- build_exploit_prompt_bundle integration -------------------------------

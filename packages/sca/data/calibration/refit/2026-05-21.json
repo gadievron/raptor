@@ -1,0 +1,117 @@
+{
+  "improvement": 0.0,
+  "improvement_threshold": 0.05,
+  "max_delta": 0.1,
+  "notes": [
+    "baseline top-20 precision = 1.000 on 4252 samples",
+    "_KEV_MULTIPLIER=1.188 rejected: cross-constraint violated: exploit_evidence_strictly_below_kev",
+    "_REACH_NOT_EVALUATED_MULTIPLIER=1.029 rejected: _REACH_NOT_EVALUATED_MULTIPLIER=1.0285000000000002 outside bounds [0.0, 1.0]",
+    "accepted on \u03c1 improvement +0.114 (P20 improvement +0.000)",
+    "joint improvement 0.000 \u2265 threshold 0.050; refit ready to apply"
+  ],
+  "overall_baseline_precision": 1.0,
+  "overall_proposed_precision": 1.0,
+  "per_constant": [
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 88.0,
+      "name": "_KEV_FLOOR",
+      "proposed": 96.80000000000001,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 1.32,
+      "name": "_KEV_MULTIPLIER",
+      "proposed": 1.4520000000000002,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 60.0,
+      "name": "_EXPLOIT_EVIDENCE_FLOOR",
+      "proposed": 66.0,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 1.19,
+      "name": "_EXPLOIT_EVIDENCE_MULTIPLIER",
+      "proposed": 1.309,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.3,
+      "name": "_EPSS_FLOOR_MULTIPLIER",
+      "proposed": 0.33,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.7,
+      "name": "_EPSS_RANGE_MULTIPLIER",
+      "proposed": 0.63,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.63,
+      "name": "_REACH_NOT_REACHABLE_MAX_REDUCTION",
+      "proposed": 0.5670000000000001,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": true,
+      "current": 0.935,
+      "name": "_REACH_NOT_EVALUATED_MULTIPLIER",
+      "proposed": 0.8415,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_FLOOR_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.5,
+      "name": "_EXPO_RANGE_MULTIPLIER",
+      "proposed": 0.5,
+      "proposed_precision": 1.0
+    },
+    {
+      "baseline_precision": 1.0,
+      "changed": false,
+      "current": 0.7,
+      "name": "_DEPTH_DECAY_BASE",
+      "proposed": 0.7,
+      "proposed_precision": 1.0
+    }
+  ],
+  "proposed_values": {
+    "_EPSS_FLOOR_MULTIPLIER": 0.33,
+    "_EPSS_RANGE_MULTIPLIER": 0.63,
+    "_EXPLOIT_EVIDENCE_FLOOR": 66.0,
+    "_EXPLOIT_EVIDENCE_MULTIPLIER": 1.309,
+    "_KEV_FLOOR": 96.80000000000001,
+    "_KEV_MULTIPLIER": 1.4520000000000002,
+    "_REACH_NOT_EVALUATED_MULTIPLIER": 0.8415,
+    "_REACH_NOT_REACHABLE_MAX_REDUCTION": 0.5670000000000001
+  },
+  "sample_count": 4252,
+  "snapshot_date": "2026-05-21",
+  "status": "proposed"
+}

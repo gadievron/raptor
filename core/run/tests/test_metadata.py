@@ -21,8 +21,12 @@ class TestRunLifecycle(unittest.TestCase):
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["command"], "scan")
             self.assertEqual(meta["status"], "running")
-            self.assertEqual(meta["version"], 1)
+            self.assertEqual(meta["version"], 2)
             self.assertIn("timestamp", meta)
+            # Provenance manifest is sealed at start.
+            self.assertIn("manifest", meta)
+            self.assertIn("source_control", meta["manifest"])
+            self.assertIn("environment", meta["manifest"])
 
     def test_start_with_extra(self):
         with TemporaryDirectory() as d:
@@ -39,6 +43,26 @@ class TestRunLifecycle(unittest.TestCase):
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "completed")
             self.assertEqual(meta["extra"]["findings_count"], 12)
+
+    def test_complete_merges_manifest_preserving_start_seal(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "agentic")
+            complete_run(out, manifest={
+                "models": [{
+                    "provider": "gemini", "alias": "gemini-2.5-pro",
+                    "resolved": "gemini-2.5-pro-002", "role": "primary",
+                    "calls": 3,
+                }],
+                "deterministically_reproducible": False,
+            })
+            m = load_json(out / RUN_METADATA_FILE)["manifest"]
+            # Start-sealed snapshots survive the end-of-run merge.
+            self.assertIn("source_control", m)
+            self.assertIn("environment", m)
+            # End-of-run provenance is merged in.
+            self.assertEqual(m["deterministically_reproducible"], False)
+            self.assertEqual(m["models"][0]["resolved"], "gemini-2.5-pro-002")
 
     def test_fail_updates_status(self):
         with TemporaryDirectory() as d:

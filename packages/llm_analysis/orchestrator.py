@@ -322,6 +322,7 @@ def orchestrate(
     deep_validate: bool = False,
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
+    allow_unreachable: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -510,6 +511,7 @@ def orchestrate(
                     result=result, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
                     duration=response.duration, quality=quality,
+                    resolved_model=response.resolved_model,
                 )
             else:
                 response = client.generate(
@@ -521,6 +523,7 @@ def orchestrate(
                     result={"content": response.content}, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
                     duration=response.duration,
+                    resolved_model=response.resolved_model,
                 )
 
         dispatch_mode = "external_llm"
@@ -684,7 +687,8 @@ def orchestrate(
             return prefilter_for_finding(client, item)
 
     analysis_results = dispatch_task(
-        AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
+        AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
+        findings, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
         prefilter_fn=prefilter_fn,
     )
@@ -713,7 +717,8 @@ def orchestrate(
             # primary path even though the same Claude model was
             # behind it.
             analysis_results = dispatch_task(
-                AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
+                AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
+        findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
 
@@ -1236,6 +1241,14 @@ def orchestrate(
         # on CC-prep / CC-fallback paths (no prefilter wiring).
         "fast_tier_short_circuits": (
             getattr(client, "short_circuits", 0) if client is not None else 0
+        ),
+        # Models that actually fired in-process during analysis, each with the
+        # provider-served snapshot when the SDK exposed one (alias-only
+        # otherwise). Feeds the run provenance manifest. Empty on CC-prep /
+        # subprocess-dispatch paths (no in-process client calls) — alias-level
+        # attribution still lives in `analysis_models` above.
+        "fired_models": (
+            client.get_fired_models() if client is not None else []
         ),
     }
 

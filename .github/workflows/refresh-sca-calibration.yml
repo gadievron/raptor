@@ -1,0 +1,185 @@
+name: Refresh SCA calibration corpus
+
+# Auto-PR refresh of the calibration corpus under
+# ``packages/sca/data/calibration/``. Pulls public ground-truth
+# signals (CISA KEV, FIRST EPSS, etc.) and opens a PR when any
+# source has shifted; no-ops when the corpus is current.
+#
+# Sources hit (all unauthenticated, MIT-redistribution-compatible):
+#   - cisa.gov KEV feed (Public Domain)
+#   - api.first.org EPSS feed (free for any use)
+#
+# See ``packages/sca/data/calibration/ATTRIBUTION.md`` for the full
+# source list and licensing.
+#
+# Tier 2 sources (Exploit-DB / Metasploit) ship as boolean-signal
+# only and are added incrementally as their fetchers land in
+# ``packages/sca/calibration/``.
+
+on:
+  schedule:
+    # Tuesday 06:00 UTC — staggered from the popular-package refresh
+    # workflow (Mondays) to spread out review load.
+    - cron: '0 6 * * 2'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Don't race when a previous scheduled run is still open / its PR
+# is still pending review.
+concurrency:
+  group: refresh-sca-calibration
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.12'
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          # The build script needs urllib3 (core.http dependency)
+          # plus pytest for the validation step. No other
+          # requirements-dev — keep this fast.
+          pip install 'urllib3==2.7.0,<3.0'
+
+      - name: Refresh corpus
+        # ``-v`` emits per-source ``updated/unchanged`` lines so the
+        # PR body can quote them. Exit 0 = at least one source
+        # succeeded; exit 1 = every source failed (transient global
+        # event, retried at next schedule).
+        run: packages/sca/scripts/raptor-sca-build-corpus -v
+
+      - name: License-compliance check
+        # Defence in depth: enforces the ATTRIBUTION.md cross-
+        # reference + rejects any forbidden ``body`` /
+        # ``shellcode`` / ``exploit_code`` fields that would mean
+        # license-restricted content snuck in. Pre-commit hook +
+        # CI = both gates.
+        run: python -m packages.sca.calibration._license_check
+
+      - name: Validate corpus
+        # Run the validation harness against the freshly-refreshed
+        # corpus. Emits ``packages/sca/data/calibration/validation/
+        # <date>.json`` with top-N precision + Spearman ρ + verdict.
+        # The verdict (validated_v1 / unverified / needs_retune)
+        # gets read at runtime by risk.py to set the
+        # ``calibration_status`` field on each finding's risk
+        # components.
+        #
+        # Exit codes are informational here — the script returns 1
+        # when the corpus is below thresholds OR when there aren't
+        # enough samples yet for a verdict. Either way we want the
+        # PR to land carrying the report, so we don't gate on the
+        # exit. Operators read the report directly.
+        run: |
+          set +e
+          packages/sca/scripts/raptor-sca-validate-corpus
+          echo "validate exit: $?"
+
+      - name: Diff?
+        # ``git diff --quiet`` exits non-zero iff there are changes
+        # under the calibration data dir (which now includes the
+        # validation report subtree).
+        id: diff
+        run: |
+          if git diff --quiet -- packages/sca/data/calibration/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit + push to refresh branch
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No third-party PR-creation action — supply-chain hardening.
+        # Uses git + ``gh`` CLI (GitHub-owned, pre-installed on
+        # ubuntu-latest runners). Stable branch name + force-push
+        # gives the same "weekly re-runs update the existing PR"
+        # semantics as a third-party bot, with one fewer dependency.
+        run: |
+          set -eu
+          BRANCH="auto/sca-calibration-refresh"
+          # Configure the bot identity. Using the GitHub-Actions
+          # service account so the auto-commit is clearly machine-
+          # generated; per-step ``GITHUB_TOKEN`` carries
+          # ``contents:write`` per the workflow's permissions block.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Commit only the calibration data dir — no stray
+          # workspace files. ``--allow-empty=false`` makes the
+          # ``git diff --quiet`` gate above the source of truth.
+          git checkout -B "$BRANCH"
+          git add packages/sca/data/calibration/
+          git commit -m "chore(sca): refresh calibration corpus
+
+          Auto-generated by .github/workflows/refresh-sca-calibration.yml.
+          Sources: CISA KEV (Public Domain), FIRST EPSS (free for any use).
+          See packages/sca/data/calibration/ATTRIBUTION.md for the full
+          source list and licensing."
+          # Force-push so weekly re-runs update the same branch (and
+          # therefore the same open PR). Safe: branch is namespaced
+          # ``auto/`` and never touched by humans.
+          git push --force origin "$BRANCH"
+
+      - name: Create or update PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # ``gh`` is GitHub's first-party CLI, pre-installed on
+        # ubuntu-latest runners. ``gh pr create`` no-ops when a PR
+        # already exists for the branch — we then fall through to
+        # ``gh pr edit`` to refresh the body.
+        run: |
+          set -eu
+          BRANCH="auto/sca-calibration-refresh"
+          BODY=$(cat <<'EOF'
+          Auto-PR from `.github/workflows/refresh-sca-calibration.yml`.
+
+          Refreshes the bundled `packages/sca/data/calibration/`
+          ground-truth signals used to validate the
+          `raptor_risk_estimate` weights in `packages/sca/risk.py`.
+
+          ## Per-source status
+
+          See the workflow run log for the per-source
+          `raptor-sca-build-corpus: <source> updated/unchanged
+          (N records)` output.
+
+          ## License compliance
+
+          All Tier 1 sources (KEV, EPSS) are MIT-redistribution
+          compatible and ship verbatim with per-file `_source`
+          attribution blocks. The license-compliance check runs
+          in CI and rejects any forbidden field names that would
+          indicate license-restricted content.
+
+          ## Review checklist
+
+          - [ ] Per-source counts look reasonable (≥ prior run)
+          - [ ] No license-restricted content in the diff
+          - [ ] `ATTRIBUTION.md` still covers every JSON file
+          EOF
+          )
+          # Idempotent create-or-update: ``gh pr create`` exits 1
+          # when a PR for the branch already exists — in that case
+          # we update the body so it always reflects the latest run.
+          if ! gh pr create \
+                --base main \
+                --head "$BRANCH" \
+                --title "chore(sca): refresh calibration corpus" \
+                --body "$BODY" 2>/dev/null; then
+            gh pr edit "$BRANCH" --body "$BODY"
+          fi

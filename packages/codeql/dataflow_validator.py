@@ -1010,7 +1010,7 @@ def main():
     # validator = DataflowValidator(llm_client)
     # validation = validator.validate_finding(finding, Path(args.repo))
 
-    print(f"Dataflow validation would analyze finding:")
+    print("Dataflow validation would analyze finding:")
     print(f"  Rule: {finding.get('ruleId')}")
     print(f"  Message: {finding.get('message', {}).get('text')}")
     print(f"  Has dataflow: {bool(finding.get('codeFlows'))}")

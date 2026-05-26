@@ -3,14 +3,11 @@
 import copy
 import json
 import os
-import sys
 import time
 import unittest.mock
 from pathlib import Path
 
-
-# core/orchestration/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[3]))
+import pytest
 
 from core.orchestration.understand_bridge import (
     find_understand_output,
@@ -216,14 +213,14 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(
             out_root, "understand_20260401_120000",
-            checklist={"target_path": "/tmp/vulns", "files": []},
+            checklist={"target_path": "./vulns", "files": []},
         )
 
         # validate_dir outside out/ with no siblings
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir == out_root / "understand_20260401_120000"
 
     def test_tier3_no_match_for_wrong_target(self, tmp_path, monkeypatch):
@@ -235,13 +232,13 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(
             out_root, "understand_20260401_120000",
-            checklist={"target_path": "/tmp/vulns", "files": []},
+            checklist={"target_path": "./vulns", "files": []},
         )
 
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/other")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./other")
         assert result_dir is None
 
     def test_returns_none_when_no_candidates(self, tmp_path, monkeypatch):
@@ -253,7 +250,7 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        result_dir, stale = find_understand_output(validate_dir, target_path="./vulns")
         assert result_dir is None
 
     def test_ignores_dirs_without_context_map(self, tmp_path):
@@ -512,6 +509,29 @@ class TestLoadUnderstandContextAttackSurface:
         assert len(surface["sources"]) == 1
         assert len(surface["sinks"]) == 1
         assert len(surface["trust_boundaries"]) == 1
+
+    def test_source_trust_level_survives_into_attack_surface(self, tmp_path):
+        """A source's trust_level (provenance, assigned by /understand
+        --map) must ride through the bridge into attack-surface.json so
+        /validate Stage B's prompt sees it — the bridge copies whole
+        source dicts, so the field is preserved without special-casing."""
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+
+        ctx = dict(MINIMAL_CONTEXT_MAP)
+        ctx["sources"] = [{
+            "type": "http_route",
+            "entry": "POST /api/query @ src/routes/query.py:34",
+            "trust_level": "attacker_controlled",
+        }]
+        _write_json(understand_dir / "context-map.json", ctx)
+
+        load_understand_context(understand_dir, validate_dir)
+
+        surface = json.loads((validate_dir / "attack-surface.json").read_text())
+        assert surface["sources"][0]["trust_level"] == "attacker_controlled"
 
     def test_does_not_raise_on_non_string_file_during_stale_filter(self, tmp_path):
         # _references_file does `f in stale_files` — list-typed file would
@@ -1721,7 +1741,10 @@ class TestEdgeCases:
 # raptor-build-checklist script
 # ---------------------------------------------------------------------------
 
+@pytest.mark.integration
 class TestBuildChecklistScript:
+    """Spawns the libexec/raptor-build-checklist binary as a real
+    subprocess — marker keeps the class out of default fast-tier runs."""
     def test_creates_checklist(self, tmp_path):
         """raptor-build-checklist creates checklist.json."""
         import subprocess

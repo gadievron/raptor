@@ -261,7 +261,7 @@ def test_cache_optional() -> None:
 # resolve_tag_to_sha (Phase 3.b.2)
 # ---------------------------------------------------------------------------
 
-from core.upstream_latest.github_releases import resolve_tag_to_sha
+from core.upstream_latest.github_releases import resolve_tag_to_sha  # noqa: E402
 
 
 def test_resolve_tag_lightweight_returns_commit_sha() -> None:

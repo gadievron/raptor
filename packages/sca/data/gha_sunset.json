@@ -1,0 +1,130 @@
+{
+  "_doc": "Curated list of GitHub Actions versions that have been sunset, deprecated, or carry known migration risk. Each entry maps an action's `<owner>/<repo>` to a list of sunset_records. The detector flags `uses: <action>@<version>` references where `version` matches an entry's `sunset_versions` (exact-match against the leading-`v` major or full tag). Update by appending; never remove past entries (future scans of historical workflows still benefit).",
+  "_schema": {
+    "<owner>/<repo>": [
+      {
+        "sunset_versions": ["v1", "v2"],
+        "sunset_date": "YYYY-MM-DD or null when unannounced",
+        "reason": "one-line explanation",
+        "replacement": "v3 or null",
+        "severity": "low|medium|high"
+      }
+    ]
+  },
+
+  "actions/upload-artifact": [
+    {
+      "sunset_versions": ["v1", "v2", "v3"],
+      "sunset_date": "2024-11-30",
+      "reason": "v3 sunset 2024-11-30; v4 changed archive/concurrency semantics — workflows on v3 fail outright",
+      "replacement": "v4",
+      "severity": "high"
+    }
+  ],
+  "actions/download-artifact": [
+    {
+      "sunset_versions": ["v1", "v2", "v3"],
+      "sunset_date": "2024-11-30",
+      "reason": "v3 sunset alongside upload-artifact@v3; v4 required for compatibility",
+      "replacement": "v4",
+      "severity": "high"
+    }
+  ],
+  "actions/checkout": [
+    {
+      "sunset_versions": ["v1"],
+      "sunset_date": "2022-04-01",
+      "reason": "v1 used Node 12 (EOL); v2+ required",
+      "replacement": "v4",
+      "severity": "medium"
+    },
+    {
+      "sunset_versions": ["v2"],
+      "sunset_date": "2024-06-30",
+      "reason": "v2 used Node 16 (EOL); GitHub announced workflow runner enforcement",
+      "replacement": "v4",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-node": [
+    {
+      "sunset_versions": ["v1", "v2"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1/v2 used deprecated Node runtimes; v3+ required",
+      "replacement": "v4",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-python": [
+    {
+      "sunset_versions": ["v1", "v2", "v3"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1-v3 used Node 12/16; v4+ required",
+      "replacement": "v5",
+      "severity": "medium"
+    }
+  ],
+  "actions/cache": [
+    {
+      "sunset_versions": ["v1", "v2"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1/v2 cache implementation deprecated; v3+ required",
+      "replacement": "v4",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-java": [
+    {
+      "sunset_versions": ["v1", "v2"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1/v2 used Node 12/16 runtimes; v3+ required",
+      "replacement": "v4",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-go": [
+    {
+      "sunset_versions": ["v1", "v2", "v3"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1-v3 used deprecated Node runtimes",
+      "replacement": "v5",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-dotnet": [
+    {
+      "sunset_versions": ["v1", "v2", "v3"],
+      "sunset_date": "2023-09-22",
+      "reason": "v1-v3 used deprecated Node runtimes",
+      "replacement": "v4",
+      "severity": "medium"
+    }
+  ],
+  "actions/setup-ruby": [
+    {
+      "sunset_versions": ["v1"],
+      "sunset_date": "2021-08-01",
+      "reason": "Officially deprecated; replaced by ruby/setup-ruby",
+      "replacement": "ruby/setup-ruby",
+      "severity": "high"
+    }
+  ],
+  "tj-actions/changed-files": [
+    {
+      "sunset_versions": ["v45.0.0", "v45.0.1", "v45.0.2", "v45.0.3", "v45.0.4", "v45.0.5", "v45.0.6", "v45.0.7"],
+      "sunset_date": "2025-03-14",
+      "reason": "Repository compromised 2025-03-14; v45.0.7 and prior in v45.x affected — pin to v46+ or use a fork. Operators who used a tag pin (not SHA) ran malicious code",
+      "replacement": "v46",
+      "severity": "high"
+    }
+  ],
+  "reviewdog/action-misspell": [
+    {
+      "sunset_versions": ["v1.0", "v1.1", "v1.2", "v1.3", "v1.4", "v1.5", "v1.6", "v1.7", "v1.8", "v1.9", "v1.10", "v1.11", "v1.12", "v1.13"],
+      "sunset_date": "2024-12-15",
+      "reason": "Repository transferred; older versions reference upstream deprecation",
+      "replacement": "v1.14",
+      "severity": "low"
+    }
+  ]
+}

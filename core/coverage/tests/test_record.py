@@ -26,13 +26,13 @@ class TestBuildFromManifest(unittest.TestCase):
     def test_builds_from_manifest(self):
         with TemporaryDirectory() as d:
             manifest = Path(d) / READS_MANIFEST
-            manifest.write_text("/tmp/src/auth.py\n/tmp/src/db.py\n/tmp/src/auth.py\n")
+            manifest.write_text("src/auth.py\nsrc/db.py\nsrc/auth.py\n")
             record = build_from_manifest(Path(d), "llm:validate")
             self.assertEqual(record["tool"], "llm:validate")
             # Deduplicated and sorted
             self.assertEqual(len(record["files_examined"]), 2)
-            self.assertIn("/tmp/src/auth.py", record["files_examined"])
-            self.assertIn("/tmp/src/db.py", record["files_examined"])
+            self.assertIn("src/auth.py", record["files_examined"])
+            self.assertIn("src/db.py", record["files_examined"])
 
     def test_returns_none_without_manifest(self):
         with TemporaryDirectory() as d:
@@ -41,17 +41,17 @@ class TestBuildFromManifest(unittest.TestCase):
     def test_includes_rules(self):
         with TemporaryDirectory() as d:
             manifest = Path(d) / READS_MANIFEST
-            manifest.write_text("/tmp/file.py\n")
+            manifest.write_text("file.py\n")
             record = build_from_manifest(Path(d), "test", rules_applied=["stage-a"])
             self.assertEqual(record["rules_applied"], ["stage-a"])
 
     def test_includes_extra_files(self):
         with TemporaryDirectory() as d:
             manifest = Path(d) / READS_MANIFEST
-            manifest.write_text("/tmp/a.py\n")
-            record = build_from_manifest(Path(d), "test", extra_files=["/tmp/b.py"])
-            self.assertIn("/tmp/a.py", record["files_examined"])
-            self.assertIn("/tmp/b.py", record["files_examined"])
+            manifest.write_text("a.py\n")
+            record = build_from_manifest(Path(d), "test", extra_files=["b.py"])
+            self.assertIn("a.py", record["files_examined"])
+            self.assertIn("b.py", record["files_examined"])
 
 
 class TestBuildFromSemgrep(unittest.TestCase):
@@ -61,7 +61,7 @@ class TestBuildFromSemgrep(unittest.TestCase):
             semgrep_json = Path(d) / "semgrep.json"
             semgrep_json.write_text(json.dumps({
                 "version": "1.67.0",
-                "paths": {"scanned": ["/tmp/src/auth.py", "/tmp/src/db.py"]},
+                "paths": {"scanned": ["src/auth.py", "src/db.py"]},
                 "results": [],
                 "errors": [],
             }))
@@ -76,13 +76,13 @@ class TestBuildFromSemgrep(unittest.TestCase):
         with TemporaryDirectory() as d:
             semgrep_json = Path(d) / "semgrep.json"
             semgrep_json.write_text(json.dumps({
-                "paths": {"scanned": ["/tmp/src/ok.py"]},
+                "paths": {"scanned": ["src/ok.py"]},
                 "results": [],
-                "errors": [{"path": "/tmp/src/bad.js", "message": "parse error"}],
+                "errors": [{"path": "src/bad.js", "message": "parse error"}],
             }))
             record = build_from_semgrep(Path(d), semgrep_json)
             self.assertEqual(len(record["files_failed"]), 1)
-            self.assertEqual(record["files_failed"][0]["path"], "/tmp/src/bad.js")
+            self.assertEqual(record["files_failed"][0]["path"], "src/bad.js")
 
     def test_returns_none_without_scanned(self):
         with TemporaryDirectory() as d:
@@ -358,7 +358,16 @@ class TestCleanupManifest(unittest.TestCase):
 
 class TestTrackReadHook(unittest.TestCase):
 
-    def _setup_project(self, project_dir, run_dir, target="/tmp/src"):
+    def _setup_project(self, project_dir, run_dir, target=None):
+        """Plant a synthetic project + active symlink under
+        ``~/.raptor/projects/`` so track_read_main resolves to the
+        test's run_dir. ``target`` should be passed explicitly so
+        it stays in sync with the file_path the test sends — when
+        omitted, defaults to a sentinel under project_dir's parent
+        (a tmpdir) so callers can construct matching file_paths
+        without hardcoding /tmp."""
+        if target is None:
+            target = str(project_dir.parent / "src")
         """Set up a temporary project with an active symlink and running run."""
         projects_dir = Path.home() / ".raptor" / "projects"
         projects_dir.mkdir(parents=True, exist_ok=True)
@@ -400,8 +409,11 @@ class TestTrackReadHook(unittest.TestCase):
         if self._old_link:
             active_link.symlink_to(self._old_link)
 
-    def _run_hook(self, file_path, project_dir, run_dir, target="/tmp/src"):
-        """Helper to invoke track_read with a simulated hook payload."""
+    def _run_hook(self, file_path, project_dir, run_dir, target=None):
+        """Helper to invoke track_read with a simulated hook payload.
+
+        ``target`` defaults to the sentinel chosen by _setup_project
+        (under project_dir's parent tmpdir)."""
         import io
         self._setup_project(project_dir, run_dir, target)
         payload = json.dumps({"tool_input": {"file_path": file_path}})
@@ -417,16 +429,25 @@ class TestTrackReadHook(unittest.TestCase):
         with TemporaryDirectory() as d:
             project_dir = Path(d) / "project"
             run_dir = project_dir / "validate-20260408"
-            self._run_hook("/tmp/src/auth.py", project_dir, run_dir)
+            # file_path must be UNDER target for the hook to record it.
+            # Build both from the same scratch root so the path-containment
+            # check passes without hardcoding /tmp.
+            target = str(Path(d) / "src")
+            file_path = target + "/auth.py"
+            self._run_hook(file_path, project_dir, run_dir, target=target)
             manifest = run_dir / READS_MANIFEST
             self.assertTrue(manifest.exists())
-            self.assertIn("/tmp/src/auth.py", manifest.read_text())
+            self.assertIn("auth.py", manifest.read_text())
 
     def test_skips_non_source(self):
         with TemporaryDirectory() as d:
             project_dir = Path(d) / "project"
             run_dir = project_dir / "validate-20260408"
-            self._run_hook("/tmp/src/image.png", project_dir, run_dir)
+            # file_path under target but with non-source extension —
+            # the hook should skip on extension, not target match.
+            target = str(Path(d) / "src")
+            file_path = target + "/image.png"
+            self._run_hook(file_path, project_dir, run_dir, target=target)
             manifest = run_dir / READS_MANIFEST
             self.assertFalse(manifest.exists())
 
@@ -438,7 +459,7 @@ class TestTrackReadHook(unittest.TestCase):
         old_link = os.readlink(active_link) if active_link.is_symlink() else None
         if active_link.is_symlink():
             active_link.unlink()
-        payload = json.dumps({"tool_input": {"file_path": "/tmp/src/auth.py"}})
+        payload = json.dumps({"tool_input": {"file_path": "src/auth.py"}})
         old_stdin = __import__("sys").stdin
         try:
             __import__("sys").stdin = io.StringIO(payload)
@@ -453,7 +474,11 @@ class TestTrackReadHook(unittest.TestCase):
         with TemporaryDirectory() as d:
             project_dir = Path(d) / "project"
             run_dir = project_dir / "validate-20260408"
-            self._run_hook("/home/raptor/raptor/core/config.py", project_dir, run_dir, target="/tmp/vuln")
+            # file_path under <d>/elsewhere; target under <d>/vuln —
+            # disjoint, so the hook must drop the read.
+            target = str(Path(d) / "vuln")
+            outside = str(Path(d) / "elsewhere" / "core" / "config.py")
+            self._run_hook(outside, project_dir, run_dir, target=target)
             manifest = run_dir / READS_MANIFEST
             self.assertFalse(manifest.exists())
 

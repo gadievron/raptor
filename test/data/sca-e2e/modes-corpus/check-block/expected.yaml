@@ -1,0 +1,17 @@
+# Coord-style fixture: ``raptor-sca check <eco> <name> <version>``
+# against a known-Block coordinate.
+#
+# log4j-core 2.14.1 carries Log4Shell (CVE-2021-44228) which is
+# CISA KEV-listed, CVSS 10.0, EPSS > 0.9. The verdict ladder
+# pushes any KEV-listed advisory to Block.
+# Exit code: Clean=0, Review=1, Block=2. Block on a KEV-listed
+# critical is the load-bearing CI-gate path.
+
+mode: check
+args: [Maven, org.apache.logging.log4j:log4j-core, "2.14.1"]
+expected:
+  exit_code: 2
+  stdout_contains:
+    - "Verdict"
+    - "Block"
+    - "KEV"

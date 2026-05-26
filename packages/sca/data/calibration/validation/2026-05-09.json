@@ -1,0 +1,69 @@
+{
+  "by_ecosystem": {
+    "Cargo": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 145,
+      "with_signal": 0
+    },
+    "Go": {
+      "spearman_rho": 0.5134042707861217,
+      "top_20_precision": 1.0,
+      "total": 1007,
+      "with_signal": 64
+    },
+    "Maven": {
+      "spearman_rho": 0.5636317395774595,
+      "top_20_precision": 1.0,
+      "total": 637,
+      "with_signal": 45
+    },
+    "NuGet": {
+      "spearman_rho": null,
+      "top_20_precision": 0.0,
+      "total": 33,
+      "with_signal": 0
+    },
+    "Packagist": {
+      "spearman_rho": 0.4412539064172267,
+      "top_20_precision": 0.0,
+      "total": 141,
+      "with_signal": 4
+    },
+    "PyPI": {
+      "spearman_rho": 0.5164251561727151,
+      "top_20_precision": 0.1,
+      "total": 170,
+      "with_signal": 2
+    },
+    "RubyGems": {
+      "spearman_rho": 0.4933693772483073,
+      "top_20_precision": 0.15,
+      "total": 483,
+      "with_signal": 7
+    },
+    "npm": {
+      "spearman_rho": 0.5027960906246708,
+      "top_20_precision": 0.4,
+      "total": 1439,
+      "with_signal": 26
+    }
+  },
+  "corpus_provenance": {
+    "epss_signals.json": "2026-05-08T16:23:19Z",
+    "exploitdb_signals.json": "2026-05-08T16:40:37Z",
+    "kev_signals.json": "2026-05-08T16:23:16Z",
+    "metasploit_signals.json": "2026-05-08T16:40:38Z"
+  },
+  "findings_total": 4055,
+  "findings_with_score": 4055,
+  "findings_with_signal": 148,
+  "notes": [],
+  "snapshot_date": "2026-05-09",
+  "spearman_rho": 0.5135457693250933,
+  "threshold_spearman": 0.4,
+  "threshold_top_20": 0.5,
+  "top_20_precision": 1.0,
+  "top_50_precision": 0.94,
+  "verdict": "validated_v1"
+}

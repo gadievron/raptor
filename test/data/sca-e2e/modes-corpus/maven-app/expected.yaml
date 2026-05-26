@@ -1,0 +1,17 @@
+# Per-mode expectations for maven-app fixture.
+
+scan:
+  exit_code: 0
+  min_findings: 2
+  ecosystems_present:
+    - Maven
+
+bump:
+  exit_code: 0
+  surfaces_present:
+    - from_image             # FROM eclipse-temurin:${JDK_VERSION}-jdk
+
+fix:
+  exit_code: 0
+  emits_proposed_dir: true
+  source_tree_unchanged: true
