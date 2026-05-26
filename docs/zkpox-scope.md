@@ -5,7 +5,7 @@ For the full design rationale see `proposals/raptor-zkpox-design.md`; for
 benchmarks and Phase 0 findings see `research/zkpox-phase0-findings.md`.
 
 This document is the source of truth for the **scope claim**. If the
-README, the PR body, the proposal, or `/prove-exploit`'s output ever
+README, the PR body, the proposal, or `/zkpox prove`'s output ever
 claim more than what's below, treat the discrepancy as a bug in the
 wrapper text, not in this document.
 
@@ -168,7 +168,7 @@ working alternative time-lock service).
 
 ### Vendor patches before T+90d
 
-The producer can issue a follow-up `/prove-exploit` with the same
+The producer can issue a follow-up `/zkpox prove` with the same
 witness and a shorter `--tlock-duration` (or `--no-anchor` for a
 purely-vendor-side bundle). The original published bundle continues to
 exist and its time-lock continues to count down; ZKPoX does not have

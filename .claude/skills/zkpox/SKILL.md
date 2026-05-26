@@ -6,7 +6,8 @@ user-invocable: false
 
 # ZKPoX — Zero-Knowledge Proof of Exploit
 
-Companion skill to `/prove-exploit` and `/verify-exploit-proof`.
+Companion skill to `/zkpox` (subcommands: `eligible`, `bundle`,
+`reproduce`, `prove`, `verify`).
 
 ## When to use this skill
 
@@ -40,26 +41,42 @@ Trigger this skill whenever:
 
 ## Workflow
 
-1. **Verify the witness reproduces the violation locally.** Run the
-   target on the witness, observe the crash / state transition. If it
-   doesn't reproduce, the proof can't prove anything.
-2. **Pick a violation gadget** from `.claude/skills/zkpox/violation-gadgets/`.
-   If none fit cleanly, ask before falling back to `crash-only`.
-3. **Build the harness if needed.** Current Phase 1 supports
+The five subcommands form a tier ladder; bail out at the earliest
+tier that answers the operator's question.
+
+1. **Pre-flight (free).** `python3 raptor.py zkpox eligible
+   --run-dir DIR` — classifies which witnesses qualify for a proof.
+   Pure field-reading, no execution. If nothing's eligible, stop here.
+2. **Verify the witness reproduces the violation locally.** Run the
+   target on the witness, observe the crash / state transition. If
+   it doesn't reproduce, the proof can't prove anything.
+3. **Pick a violation gadget** from
+   `.claude/skills/zkpox/violation-gadgets/`. If none fit cleanly,
+   ask before falling back to `crash-only`.
+4. **Assemble the Tier 0/1 bundle.** `python3 raptor.py zkpox bundle
+   <witness_store> <witness_hash> --out DIR` — attestation-only,
+   no crypto yet; the substrate every higher tier reads.
+5. **Confirm reproduction (Tier 1.5).** `python3 raptor.py zkpox
+   reproduce <bundle_dir> [--n N]` — re-runs the witness N× in the
+   sandbox, folds the result into the bundle manifest.
+6. **Build the harness if needed.** Current Phase 1 supports
    freestanding C compiled to SP1's RISC-V via the cross-compile in
    `core/zkpox/guest/build.rs`. EVM, embedded, and binary-only modes
    are future phases.
-4. **Run the prover.** `python3 raptor.py prove-exploit --witness PATH
-   --out DIR [...]`. Stream progress; the Groth16 wrap can take 15+
-   minutes on CPU.
-5. **Vendor envelope (default).** Pass `--vendor-pubkey AGE_PUBKEY` to
+7. **Run the prover (Tier 2/3).** `python3 raptor.py zkpox prove
+   --witness PATH --out DIR [...]`. Stream progress; the Groth16
+   wrap can take 15+ minutes on CPU. Gated by
+   `packages.zkpox.require_proving_stack` — fires
+   `ProvingStackUnavailable` with an actionable message if the
+   SP1 / RISC-V toolchain isn't installed.
+8. **Vendor envelope (default).** Pass `--vendor-pubkey AGE_PUBKEY` to
    encrypt the witness to the vendor's age public key and to a Drand
    future round (default 90 d, the Project Zero norm).
-6. **Anchor the bundle.** Default `--anchor` (on); set `--no-anchor` to
-   skip Sigstore Rekor anchoring.
-7. **Hand the bundle off.** `bundle.cbor` is the public artefact.
-   Verifiers run `python3 raptor.py verify-exploit-proof` or the
-   standalone `core/zkpox/target/release/zkpox-verify` binary.
+9. **Anchor the bundle.** Default `--anchor` (on); set `--no-anchor`
+   to skip Sigstore Rekor anchoring.
+10. **Hand the bundle off.** `bundle.cbor` is the public artefact.
+    Verifiers run `python3 raptor.py zkpox verify <bundle.cbor>` or
+    the standalone `core/zkpox/target/release/zkpox-verify` binary.
 
 ## Files this skill writes
 
@@ -79,12 +96,17 @@ core/zkpox/                     Rust workspace
 └── verifier/                   standalone CLI: zkpox-verify
 
 packages/zkpox/                 Python orchestration
+├── eligibility.py              Tier 0 — free witness classification
+├── bundle.py                   Tier 0/1 — bundle assembly + persistence
+├── reproduce.py                Tier 1.5 — N× sandbox reproduction
 ├── envelope.py                 AES + age + tle layered crypto
-├── bundle.py                   CBOR producer/parser + Timestamp
 ├── anchor.py                   Sigstore Rekor anchoring
-└── prove.py                    Wrapper around zkpox-prove
+├── prove.py                    Wrapper around zkpox-prove (Tier 2/3)
+├── surfacing.py                Free end-of-run eligibility block
+└── proving_deps.py             SP1 / RISC-V stack availability gate
 
-raptor_zkpox.py                 Standalone driver (called by raptor.py)
+libexec/raptor-zkpox            Operator CLI; the /zkpox dispatcher
+raptor_zkpox.py                 Tier 2/3 driver (prove + verify)
 ```
 
 ## Trust model (proposal § 9, condensed)

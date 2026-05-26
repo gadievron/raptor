@@ -19,8 +19,8 @@ Available Modes:
     agentic               - Full autonomous workflow
     codeql                - CodeQL-only analysis
     doctor                - Status report for local setup (no claude needed)
-    prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
-    verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
+    zkpox                 - ZKPoX disclosure bundles + proofs (beta).
+                            Subcommands: eligible / bundle / reproduce / prove / verify
     help                  - Show detailed help for a specific mode
 
 Examples:
@@ -39,9 +39,12 @@ Examples:
     # CodeQL analysis
     python3 raptor.py codeql --repo /path/to/code --languages java
 
-    # ZKPoX disclosure bundle (Phase 1.5)
-    python3 raptor.py prove-exploit --witness path/to/poc --out bundle/
-    python3 raptor.py verify-exploit-proof bundle/bundle.cbor
+    # ZKPoX — pre-flight, bundle assembly, reproduction, proof, verify
+    python3 raptor.py zkpox eligible --run-dir /path/to/out
+    python3 raptor.py zkpox bundle /path/to/witness-store <witness_hash> --out bundle/
+    python3 raptor.py zkpox reproduce bundle/zkpox/<witness_hash>/
+    python3 raptor.py zkpox prove   --witness path/to/poc --out bundle/   # Tier 2/3
+    python3 raptor.py zkpox verify  bundle/bundle.cbor                    # Tier 2/3
 """
 
 import argparse
@@ -704,33 +707,42 @@ def mode_doctor(args: list) -> int:
     from core.startup.doctor import main as doctor_main
     return doctor_main(args)
 
-def mode_prove_exploit(args: list) -> int:
-    """Generate a ZKPoX disclosure bundle for an exploit witness.
+def mode_zkpox(args: list) -> int:
+    """Single dispatcher for every ZKPoX tier.
 
-    Prepends 'prove' so raptor_zkpox.py's subparser routes correctly.
-    Uses the run lifecycle so the bundle + prove-record land in a
-    project-scoped output directory.
+    Forwards argv to ``libexec/raptor-zkpox`` (the operator CLI). The
+    five subcommands cover the full tier ladder:
+
+        eligible    Tier 0 — free pre-flight signal (which witnesses qualify)
+        bundle      Tier 0/1 — assemble a prover-ready bundle
+        reproduce   Tier 1.5 — N× sandbox reproduction
+        prove       Tier 2/3 — the heavy SP1 STARK proof
+        verify      Tier 2/3 — check a proof
+
+    Lifecycle wrapping is subcommand-aware: ``bundle`` / ``reproduce`` /
+    ``prove`` write artifacts that benefit from project-scoped output
+    tracking, so they go through ``_run_with_lifecycle``; ``eligible``
+    and ``verify`` are read-only and bypass it (no new outputs to
+    track).
     """
     script_root = Path(__file__).parent
-    zkpox_script = script_root / "raptor_zkpox.py"
-    if not zkpox_script.exists():
-        print(f"✗ ZKPoX script not found: {zkpox_script}")
+    dispatcher = script_root / "libexec" / "raptor-zkpox"
+    if not dispatcher.is_file():
+        print(f"✗ ZKPoX dispatcher not found: {dispatcher}")
         return 1
-    return _run_with_lifecycle(
-        "prove-exploit", zkpox_script, ["prove"] + args,
-        "Generating ZKPoX disclosure bundle...",
-    )
-
-
-def mode_verify_exploit_proof(args: list) -> int:
-    """Verify a ZKPoX disclosure bundle. Read-only; bypasses lifecycle
-    since there's no new output to track."""
-    script_root = Path(__file__).parent
-    zkpox_script = script_root / "raptor_zkpox.py"
-    if not zkpox_script.exists():
-        print(f"✗ ZKPoX script not found: {zkpox_script}")
-        return 1
-    return _run_script(zkpox_script, ["verify"] + args)
+    if not args:
+        # Render the dispatcher's help so the operator sees the
+        # subcommand list, then a non-zero exit so scripts don't
+        # silently no-op on a missing verb.
+        _run_script(dispatcher, ["--help"])
+        return 2
+    subcommand = args[0]
+    if subcommand in ("bundle", "reproduce", "prove"):
+        return _run_with_lifecycle(
+            f"zkpox-{subcommand}", dispatcher, args,
+            f"Running ZKPoX {subcommand}...",
+        )
+    return _run_script(dispatcher, args)
 
 
 
@@ -745,8 +757,7 @@ def show_mode_help(mode: str) -> None:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
-        'prove-exploit': script_root / "raptor_zkpox.py",
-        'verify-exploit-proof': script_root / "raptor_zkpox.py",
+        'zkpox': script_root / "libexec" / "raptor-zkpox",
     }
     
     if mode not in mode_scripts:
@@ -795,8 +806,8 @@ Available Modes:
   codeql                - CodeQL-only analysis
   analyze               - LLM-powered vulnerability analysis (requires SARIF input)
   doctor                - Status report for local setup (no claude needed)
-  prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
-  verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
+  zkpox                 - ZKPoX disclosure bundles + proofs (beta).
+                          Subcommands: eligible / bundle / reproduce / prove / verify
 
 Examples:
   # Full autonomous workflow
@@ -817,9 +828,12 @@ Examples:
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
 
-  # ZKPoX disclosure bundle
-  python3 raptor.py prove-exploit --witness /path/to/poc --out /tmp/disclosure
-  python3 raptor.py verify-exploit-proof /tmp/disclosure/bundle.cbor
+  # ZKPoX — full tier ladder under one dispatcher
+  python3 raptor.py zkpox eligible --run-dir /path/to/out
+  python3 raptor.py zkpox bundle /path/to/store <witness_hash> --out /tmp/disclosure
+  python3 raptor.py zkpox reproduce /tmp/disclosure/zkpox/<witness_hash>/
+  python3 raptor.py zkpox prove  --witness /path/to/poc --out /tmp/disclosure
+  python3 raptor.py zkpox verify /tmp/disclosure/bundle.cbor
 
 Sandbox isolation (mode-level flags — pass them AFTER the mode name,
 not before; the top-level parser does not declare them directly):
@@ -903,8 +917,7 @@ def main():
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
         'doctor': mode_doctor,
-        'prove-exploit': mode_prove_exploit,
-        'verify-exploit-proof': mode_verify_exploit_proof,
+        'zkpox': mode_zkpox,
     }
     
     if mode not in mode_handlers:

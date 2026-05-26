@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-RAPTOR ZKPoX — Zero-Knowledge Proof of Exploit driver.
+RAPTOR ZKPoX — Zero-Knowledge Proof of Exploit driver (Tier 2/3).
 
 End-to-end Phase 1.5 orchestration:
   prove                 prove → wrap → envelope → bundle → optional Rekor anchor
   verify                delegate to the standalone zkpox-verify binary
 
-Most users will invoke this through `python3 raptor.py prove-exploit` or
-`python3 raptor.py verify-exploit-proof`; this script is the standalone
-backing implementation, analogous to raptor_codeql.py / raptor_fuzzing.py.
+Reached from the operator surface via ``python3 raptor.py zkpox prove``
+/ ``python3 raptor.py zkpox verify``, which forward through
+``libexec/raptor-zkpox`` to this script (analogous to
+``raptor_codeql.py`` / ``raptor_fuzzing.py``).
 
 Companion code:
   core/zkpox/                    Rust workspace: guest / prover / verifier
   packages/zkpox/                Python: envelope / bundle / anchor / prove
+  libexec/raptor-zkpox           Operator CLI dispatcher
   docs/proposals/raptor-zkpox-design.md
 """
 
@@ -83,7 +85,7 @@ _EXPERIMENTAL_BANNER = (
 def _emit_experimental_banner() -> None:
     """Print the always-on experimental banner to stderr.
 
-    Stderr, not stdout, so /prove-exploit's JSON summary on stdout
+    Stderr, not stdout, so /zkpox prove's JSON summary on stdout
     stays machine-parseable.
     """
     print(_EXPERIMENTAL_BANNER, file=sys.stderr)
