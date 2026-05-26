@@ -26,42 +26,42 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     python3-venv \
     #
     # --- Git (recon, static-analysis, crash-analysis-agent, raptor_agentic) ---
-    git \
+    git=1:2.53.0+next.20260227-1 \
     #
     # --- Build Tools (function-tracing skill, crash-analysis agents, exploit validation) ---
-    build-essential \
-    gcc \
+    build-essential=12.12 \
+    gcc=2.95.2-20 \
     g++ \
-    make \
-    cmake \
-    autoconf \
-    automake \
-    libtool \
+    make=3.80-9 \
+    cmake=4.3.2-1 \
+    autoconf=2.73-2 \
+    automake=1:1.18.1-4 \
+    libtool=2.5.4-11 \
     libtool-bin \
     clang-format \
     #
     # --- GDB (crash-analyzer-agent, binary_analysis package, rr-debugger skill) ---
-    gdb \
+    gdb=17.2-1 \
     gdb-multiarch \
     #
     # --- Binary Analysis (binary_analysis package) ---
-    binutils \
-    file \
+    binutils=2.46.50.20260519-1 \
+    file=1:5.47-2 \
     #
     # --- Network Tools (web package, github-forensics skills) ---
-    curl \
-    wget \
+    curl=8.20.0-2+exp1 \
+    wget=1.25.0-2 \
     #
     # --- rr Debugger Dependencies (crash-analysis agents - Linux x86_64 only) ---
     # rr itself installed separately below
     libcapnp-dev \
     #
     # --- TLS / distro detection (curl, nodesource, playwright deps installer) ---
-    ca-certificates \
-    lsb-release \
+    ca-certificates=20260223 \
+    lsb-release=1.4-8 \
     # --- Misc ---
-    jq \
-    unzip \
+    jq=1.8.1-6 \
+    unzip=6.0-29 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -102,7 +102,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Downloaded from GitHub releases
 # ============================================================================
 
-ARG CODEQL_VERSION=2.15.5
+ARG CODEQL_VERSION=2.25.5
 RUN mkdir -p /opt/codeql \
     && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
     && unzip /tmp/codeql.zip -d /opt \

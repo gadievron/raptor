@@ -9,7 +9,7 @@
 
 services:
   ollama:
-    image: ollama/ollama:0.21.0
+    image: ollama/ollama:0.24.0
     ports:
       - "11435:11434"
     volumes:
@@ -40,7 +40,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
 
   sage:
-    image: ghcr.io/l33tdawg/sage:6.6.5
+    image: ghcr.io/l33tdawg/sage:8.0.0
     ports:
       - "8090:8080"
     volumes:

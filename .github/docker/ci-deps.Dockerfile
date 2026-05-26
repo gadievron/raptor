@@ -11,7 +11,7 @@
 # 4.15.4.0's manylinux_2_34 wheel (see the cap rationale in
 # requirements-dev.txt). PYTHON_VERSION here must track tests.yml's
 # env.PYTHON_VERSION (3.12).
-FROM python:3.12-slim-bookworm
+FROM python:3.14.5-slim-bookworm
 
 # OCI labels surface on the GHCR package page. `description` is the only
 # per-package text GHCR renders (it has no per-image README upload — the
@@ -28,7 +28,7 @@ LABEL org.opencontainers.image.source="https://github.com/gadievron/raptor" \
 # system tooling (sandbox namespaces, radare2/gcc) stay on the runner
 # rather than bloating this image.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git=1:2.53.0+next.20260227-1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/raptor-ci
