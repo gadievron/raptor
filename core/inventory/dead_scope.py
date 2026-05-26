@@ -63,7 +63,7 @@ def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
     try:
         if language == "python":
             return _detect_python(content)
-        if language in ("javascript", "typescript"):
+        if language in ("javascript", "typescript", "tsx"):
             return _detect_javascript(content)
         if language == "rust":
             return _detect_rust(content)

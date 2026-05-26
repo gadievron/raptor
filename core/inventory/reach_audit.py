@@ -47,6 +47,7 @@ class _ClassifyCtx:
     line: int
     module: str
     target: object          # reachability.InternalFunction
+    class_name: Optional[str] = None   # enclosing class, for method qualnames
 
 
 # --- precedence stages: each (ctx, R) -> verdict string | None -------------
@@ -94,14 +95,24 @@ def _stage_entry(ctx: "_ClassifyCtx", R) -> Optional[str]:
 
 
 def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
-    try:
-        verdict = R.function_called(
-            ctx.inventory, f"{ctx.module}.{ctx.name}").verdict
-    except ValueError:
-        return None
-    if verdict == R.Verdict.CALLED:
+    # A method called only via ``this.m()`` / ``self.m()`` resolves through the
+    # method-match index under its CLASS-qualified name (``mod.Class.m``); the
+    # bare ``mod.m`` form misses it and reads not_called. Try the class-qualified
+    # name first (when the item is a method), then the bare form (top-level
+    # functions / where the class-qualified form isn't how the file is indexed).
+    candidates = []
+    if ctx.class_name:
+        candidates.append(f"{ctx.module}.{ctx.class_name}.{ctx.name}")
+    candidates.append(f"{ctx.module}.{ctx.name}")
+    verdicts = []
+    for qn in candidates:
+        try:
+            verdicts.append(R.function_called(ctx.inventory, qn).verdict)
+        except ValueError:
+            continue
+    if R.Verdict.CALLED in verdicts:
         return "called"
-    if verdict == R.Verdict.NOT_CALLED:
+    if R.Verdict.NOT_CALLED in verdicts:
         return "not_called"
     return None
 
@@ -125,6 +136,27 @@ PRECEDENCE = (
 )
 
 
+def _lookup_class_name(
+    inventory: Dict[str, object], file_path: str, name: str, line: int,
+) -> Optional[str]:
+    """The enclosing class of the ``(file_path, name)`` item, if any — used to
+    build a method's class-qualified name for the 1-hop check. Scans the target
+    file's items only (matching the other (inventory, file_path) accessors)."""
+    files = inventory.get("files") or []
+    if not isinstance(files, list):
+        return None
+    for f in files:
+        if not isinstance(f, dict) or f.get("path") != file_path:
+            continue
+        for it in f.get("items") or []:
+            if it.get("name") != name:
+                continue
+            if line and int(it.get("line_start") or 0) != line:
+                continue
+            return (it.get("metadata") or {}).get("class_name")
+    return None
+
+
 def classify_reachability(
     inventory: Dict[str, object],
     file_path: str,
@@ -141,6 +173,7 @@ def classify_reachability(
         inventory=inventory, file_path=file_path, name=name, line=line,
         module=module,
         target=R.InternalFunction(file_path=file_path, name=name, line=line),
+        class_name=_lookup_class_name(inventory, file_path, name, line),
     )
     for stage in PRECEDENCE:
         verdict = stage(ctx, R)

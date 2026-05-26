@@ -2338,6 +2338,9 @@ class ReachabilityProfile:
     visibility_entry: str = ""
     has_go_init: bool = False
     has_java_web: bool = False
+    has_ts_framework: bool = False
+    has_csharp_framework: bool = False
+    has_ruby_framework: bool = False
 
 
 PROFILES: Dict[str, ReachabilityProfile] = {
@@ -2348,9 +2351,10 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "java": ReachabilityProfile("java", "none", has_java_web=True),
     "python":     ReachabilityProfile("python", "none"),
     "javascript": ReachabilityProfile("javascript", "none"),
-    "typescript": ReachabilityProfile("typescript", "none"),
-    "ruby":       ReachabilityProfile("ruby", "none"),
-    "csharp":     ReachabilityProfile("csharp", "none"),
+    "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
+    "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
+    "ruby":       ReachabilityProfile("ruby", "none", has_ruby_framework=True),
+    "csharp":     ReachabilityProfile("csharp", "none", has_csharp_framework=True),
     "php":        ReachabilityProfile("php", "none"),
 }
 
@@ -2421,6 +2425,22 @@ _JAVA_CLASS_STEREOTYPES = frozenset({
     # marshaller. (Jackson @JsonRootName etc. is the JSON analogue.)
     "XmlRootElement", "XmlType",
 })
+# Framework base types (extends/implements, captured in class_attributes) whose
+# methods the framework invokes with no in-project caller — so the class's
+# methods are entries. Spring Data repositories (the impl is generated at
+# runtime) and dispatched framework interfaces (the runtime calls the impl via
+# the interface — the type-free way to catch interface dispatch the inventory
+# can't resolve without type info; generic typed dispatch stays CodeQL's job).
+_JAVA_FRAMEWORK_BASES = frozenset({
+    # Spring Data repositories
+    "Repository", "CrudRepository", "JpaRepository",
+    "PagingAndSortingRepository", "ReactiveCrudRepository",
+    "MongoRepository", "JpaSpecificationExecutor",
+    # Dispatched framework interfaces (impl methods are framework-invoked)
+    "Validator", "RuntimeHintsRegistrar", "Filter", "HandlerInterceptor",
+    "Converter", "Formatter", "ApplicationRunner", "CommandLineRunner",
+    "ApplicationListener", "InitializingBean", "DisposableBean",
+})
 
 
 def _annotation_tail(annotation: Any) -> str:
@@ -2447,11 +2467,121 @@ def _java_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     for a in meta.get("attributes") or []:
         if _annotation_tail(a) in _JAVA_METHOD_DISPATCH_ANNOTATIONS:
             return True
+    class_attrs = meta.get("class_attributes") or []
+    # Framework base type (extends/implements): a repository interface's query
+    # methods / a dispatched interface impl's methods are framework-invoked with
+    # no in-project caller — promote regardless of visibility (interface methods
+    # are implicitly public; impl methods are public).
+    for a in class_attrs:
+        if _annotation_tail(a) in _JAVA_FRAMEWORK_BASES:
+            return True
     # Class stereotype → only the bean's PUBLIC methods are container-dispatched.
     if "public" in str(meta.get("visibility") or "").split():
-        for a in meta.get("class_attributes") or []:
+        for a in class_attrs:
             if _annotation_tail(a) in _JAVA_CLASS_STEREOTYPES:
                 return True
+    return False
+
+
+# Method-level TS/JS decorators whose presence marks the method as
+# framework-dispatched (the framework invokes it with no in-project caller):
+# NestJS HTTP routes / microservice + websocket handlers / schedulers, and
+# GraphQL resolvers (NestJS @nestjs/graphql + TypeGraphQL).
+_TS_METHOD_DISPATCH_DECORATORS = frozenset({
+    "Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All", "Search",
+    "MessagePattern", "EventPattern", "SubscribeMessage",
+    "Cron", "Interval", "Timeout",
+    "Query", "Mutation", "Subscription",
+    "ResolveField", "ResolveProperty", "FieldResolver",
+})
+# Class-level TS/JS stereotype decorators. The framework instantiates the class
+# and reaches its PUBLIC methods with no in-project caller — DI container
+# (NestJS / Angular providers + controllers), template binding + lifecycle
+# (Angular components), or reflective property access (TypeORM entities).
+_TS_CLASS_STEREOTYPE_DECORATORS = frozenset({
+    # NestJS
+    "Controller", "Injectable", "Module", "Resolver", "Catch",
+    "WebSocketGateway", "Gateway",
+    # Angular
+    "Component", "Directive", "Pipe", "NgModule",
+    # TypeORM / MikroORM entities (reflective accessor access)
+    "Entity", "ViewEntity", "ChildEntity",
+})
+
+
+def _ts_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A TS/JS method dispatched by a framework / DI container with no
+    in-project caller — a method-level route/handler/resolver decorator, or a
+    PUBLIC method of a stereotyped (container-managed / template-bound /
+    reflectively-serialised) class. Adding an entry only grows the reachable
+    set, so this can't suppress real code; worst case is failing to demote a
+    genuinely-dead decorated method (the safe direction)."""
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _TS_METHOD_DISPATCH_DECORATORS:
+            return True
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _TS_CLASS_STEREOTYPE_DECORATORS:
+                return True
+    return False
+
+
+# Method-level C# attributes whose presence marks the method as
+# framework-dispatched (ASP.NET MVC / Web API routing — the runtime invokes
+# the action with no in-project caller).
+_CSHARP_METHOD_DISPATCH_ATTRS = frozenset({
+    "HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch",
+    "HttpHead", "HttpOptions", "Route", "AcceptVerbs",
+})
+# Class-level C# stereotype attributes: the ASP.NET runtime instantiates the
+# controller and dispatches into its PUBLIC action methods with no in-project
+# caller.
+_CSHARP_CLASS_STEREOTYPE_ATTRS = frozenset({
+    "ApiController", "Controller", "Route",
+})
+
+
+def _csharp_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A C# method dispatched by ASP.NET with no in-project caller — a method
+    routing attribute (``[HttpGet]`` / ``[Route]``) or a PUBLIC method of a
+    ``[ApiController]`` / ``[Controller]`` class. Monotonic add-entries lever:
+    worst case is failing to demote a genuinely-dead action (safe direction)."""
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _CSHARP_METHOD_DISPATCH_ATTRS:
+            return True
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _CSHARP_CLASS_STEREOTYPE_ATTRS:
+                return True
+    return False
+
+
+# Rails (and Sidekiq) base classes whose subclasses are framework-dispatched:
+# the router invokes controller actions, the queue invokes a job's ``perform``,
+# the mailer framework invokes mailer methods — none has an in-project caller.
+_RUBY_FRAMEWORK_BASES = frozenset({
+    "ApplicationController", "ActionController::Base", "ActionController::API",
+    "ApplicationJob", "ActiveJob::Base",
+    "ApplicationMailer", "ActionMailer::Base",
+    "ApplicationCable::Channel", "ActionCable::Channel::Base",
+})
+
+
+def _ruby_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A Ruby method dispatched by Rails with no in-project caller. Rails uses
+    CONVENTION (no annotations): a class inheriting a framework base (a
+    ``*Controller`` / job / mailer / channel) has its methods invoked by the
+    framework — controller actions by the router, ``perform`` by the queue,
+    callbacks (``before_action`` targets) by the request lifecycle. All are
+    methods of the class, so we promote the class's methods (Ruby visibility is
+    positional and not modelled; over-including a private helper is the
+    FN-safe direction — it's reachable via the public actions anyway). The
+    signal is the base class captured in ``class_attributes``."""
+    for base in (item.get("metadata") or {}).get("class_attributes") or []:
+        if base in _RUBY_FRAMEWORK_BASES or base.endswith("Controller"):
+            return True
     return False
 
 
@@ -2484,6 +2614,19 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # container-managed handlers (doPost, @EventListener, @Service methods)
     # read not_called and get surface-demoted.
     if p.has_java_web and _java_framework_entry(name, item):
+        return True
+    # TS/JS framework-dispatched entries with no in-project caller: NestJS /
+    # Angular / TypeORM method route/handler/resolver decorators and public
+    # methods of stereotyped (DI-managed / template-bound / entity) classes.
+    if p.has_ts_framework and _ts_framework_entry(name, item):
+        return True
+    # C# ASP.NET dispatched entries: [HttpGet]/[Route] action methods and
+    # public methods of [ApiController]/[Controller] classes.
+    if p.has_csharp_framework and _csharp_framework_entry(name, item):
+        return True
+    # Ruby/Rails convention: methods of a class inheriting a framework base
+    # (*Controller / job / mailer / channel) are framework-dispatched entries.
+    if p.has_ruby_framework and _ruby_framework_entry(name, item):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
