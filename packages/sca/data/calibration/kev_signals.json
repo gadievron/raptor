@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-08T16:23:16Z",
+    "fetched_at": "2026-05-26T17:00:21Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -98,6 +98,13 @@
       "ransomware_use": false,
       "vendor": "Oracle"
     },
+    "CVE-2008-4250": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Windows",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2009-0238": {
       "date_added": "2026-04-14",
       "kev": true,
@@ -147,6 +154,13 @@
       "ransomware_use": false,
       "vendor": "phpMyAdmin"
     },
+    "CVE-2009-1537": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "DirectX",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2009-1862": {
       "date_added": "2022-06-08",
       "kev": true,
@@ -167,6 +181,13 @@
       "product": "Excel",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2009-3459": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Acrobat and Reader",
+      "ransomware_use": false,
+      "vendor": "Adobe"
     },
     "CVE-2009-3953": {
       "date_added": "2022-06-08",
@@ -203,12 +224,26 @@
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
+    "CVE-2010-0249": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Internet Explorer",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2010-0738": {
       "date_added": "2022-05-25",
       "kev": true,
       "product": "JBoss",
       "ransomware_use": true,
       "vendor": "Red Hat"
+    },
+    "CVE-2010-0806": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Internet Explorer",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     },
     "CVE-2010-0840": {
       "date_added": "2022-05-25",
@@ -564,7 +599,7 @@
       "date_added": "2022-05-25",
       "kev": true,
       "product": "Java Runtime Environment (JRE)",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Oracle"
     },
     "CVE-2013-0431": {
@@ -3385,7 +3420,7 @@
       "date_added": "2022-03-25",
       "kev": true,
       "product": "Webmin",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Webmin"
     },
     "CVE-2019-15271": {
@@ -8502,7 +8537,7 @@
       "date_added": "2026-04-28",
       "kev": true,
       "product": "ScreenConnect",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "ConnectWise"
     },
     "CVE-2024-1709": {
@@ -9349,7 +9384,7 @@
       "date_added": "2026-04-24",
       "kev": true,
       "product": "SimpleHelp",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "SimpleHelp "
     },
     "CVE-2024-57727": {
@@ -9363,7 +9398,7 @@
       "date_added": "2026-04-24",
       "kev": true,
       "product": "SimpleHelp",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "SimpleHelp "
     },
     "CVE-2024-57968": {
@@ -10199,6 +10234,13 @@
       "ransomware_use": false,
       "vendor": "Commvault"
     },
+    "CVE-2025-34291": {
+      "date_added": "2026-05-21",
+      "kev": true,
+      "product": "Langflow",
+      "ransomware_use": false,
+      "vendor": "Langflow"
+    },
     "CVE-2025-35939": {
       "date_added": "2025-06-02",
       "kev": true,
@@ -10871,6 +10913,13 @@
       "ransomware_use": false,
       "vendor": "Cisco"
     },
+    "CVE-2026-20182": {
+      "date_added": "2026-05-14",
+      "kev": true,
+      "product": "Catalyst SD-WAN",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
     "CVE-2026-20700": {
       "date_added": "2026-02-12",
       "kev": true,
@@ -11074,6 +11123,13 @@
       "ransomware_use": false,
       "vendor": "Adobe"
     },
+    "CVE-2026-34926": {
+      "date_added": "2026-05-21",
+      "kev": true,
+      "product": "Apex One",
+      "ransomware_use": false,
+      "vendor": "Trend Micro"
+    },
     "CVE-2026-3502": {
       "date_added": "2026-04-02",
       "kev": true,
@@ -11109,12 +11165,40 @@
       "ransomware_use": false,
       "vendor": "Marimo"
     },
+    "CVE-2026-41091": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Defender",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-41940": {
       "date_added": "2026-04-30",
       "kev": true,
       "product": "cPanel & WHM and WP2 (WordPress Squared)",
       "ransomware_use": true,
       "vendor": "WebPros"
+    },
+    "CVE-2026-42208": {
+      "date_added": "2026-05-08",
+      "kev": true,
+      "product": "LiteLLM",
+      "ransomware_use": false,
+      "vendor": "BerriAI"
+    },
+    "CVE-2026-42897": {
+      "date_added": "2026-05-15",
+      "kev": true,
+      "product": "Microsoft",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
+    "CVE-2026-45498": {
+      "date_added": "2026-05-20",
+      "kev": true,
+      "product": "Defender",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
     },
     "CVE-2026-5281": {
       "date_added": "2026-04-01",
@@ -11129,6 +11213,13 @@
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-9082": {
+      "date_added": "2026-05-22",
+      "kev": true,
+      "product": "Core",
+      "ransomware_use": false,
+      "vendor": "Drupal"
     }
   }
 }
