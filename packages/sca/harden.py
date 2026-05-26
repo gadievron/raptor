@@ -422,10 +422,33 @@ def _plan_one(
 
     cand.candidates_considered = len(versions)
 
-    # Filter: drop versions <= installed (no point downgrading or
-    # picking the same version).
-    filtered = _versions_above_installed(
-        versions, dep.version, dep.ecosystem)
+    # Filter: drop versions <= the comparison baseline (no point
+    # downgrading or picking the same version). The baseline is the dep's
+    # recorded version; but a RANGE dep records the whole spec string
+    # (e.g. ``>=2.0.0 <3.0.0``), which isn't a comparable version — fall
+    # back to the recorded floor for those, so an explicit-range non-PyPI
+    # dep can be placed (and bumped) at all. EXACT / corridor-pinned deps
+    # keep their concrete version as the baseline: overriding it with the
+    # floor would re-surface every version between the floor and the pin
+    # as a bogus "upgrade".
+    baseline = dep.version
+    if dep.pin_style is PinStyle.RANGE and dep.version_floor:
+        baseline = dep.version_floor
+    filtered = _versions_above_installed(versions, baseline, dep.ecosystem)
+    # Respect a recorded ceiling: never propose at/above it. Keeps the
+    # bump inside the operator's declared corridor, catches sub-major
+    # ceilings the leading-int major-gate would miss, and avoids selecting
+    # a target that would produce an out-of-range corridor on rewrite
+    # (e.g. ``>=2.0,==4.0,<3.0``).
+    if dep.version_ceiling:
+        bounded = []
+        for v in filtered:
+            try:
+                if version_compare(dep.ecosystem, v, dep.version_ceiling) < 0:
+                    bounded.append(v)
+            except Exception:                   # noqa: BLE001
+                continue
+        filtered = bounded
     if not filtered:
         cand.status = "up_to_date"
         return cand

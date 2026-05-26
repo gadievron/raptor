@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..models import Confidence, Dependency, PinStyle
+from ..versions import semver
 from . import register
 
 logger = logging.getLogger(__name__)
@@ -374,6 +375,10 @@ def _build_dep(
 
     pin_style, version, npm_alias_target = _classify(spec)
     purl_name = npm_alias_target or name
+    # Record the semver corridor (caret/tilde/range -> floor & ceiling) so
+    # harden can place a ranged dep relative to its floor and keep a bump
+    # inside the ceiling. Exact / git / alias specs yield (None, None).
+    version_floor, version_ceiling = semver.bounds(spec)
 
     return Dependency(
         ecosystem=ECOSYSTEM,
@@ -386,6 +391,8 @@ def _build_dep(
         direct=True,
         purl=_build_purl(purl_name, version),
         parser_confidence=_confidence(pin_style, version),
+        version_floor=version_floor,
+        version_ceiling=version_ceiling,
     )
 
 

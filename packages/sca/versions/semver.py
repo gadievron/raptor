@@ -104,3 +104,126 @@ def _compare_identifier(a: str, b: str) -> int:
     if a == b:
         return 0
     return -1 if a < b else 1
+
+
+# ---------------------------------------------------------------------------
+# Range bounds extraction (SCA bounded-pinning: corridor floor/ceiling)
+# ---------------------------------------------------------------------------
+
+def _loose_components(operand: str) -> Optional[Tuple[int, int, int, int]]:
+    """Parse a possibly-partial version into ``(major, minor, patch,
+    ncomp)`` where ``ncomp`` is the count of leading concrete numeric
+    components. ``x`` / ``X`` / ``*`` and missing trailing components are
+    treated as absent (default 0). Returns None for a bare wildcard or
+    anything non-numeric (caller treats as 'no bound')."""
+    core = re.split(r"[-+]", operand.strip().lstrip("v"), maxsplit=1)[0]
+    nums: List[int] = []
+    for part in core.split("."):
+        if part in ("x", "X", "*", ""):
+            break
+        if not part.isdigit():
+            return None
+        nums.append(int(part))
+    if not nums:
+        return None
+    return (nums[0],
+            nums[1] if len(nums) > 1 else 0,
+            nums[2] if len(nums) > 2 else 0,
+            len(nums))
+
+
+def _join(c: Tuple[int, int, int, int]) -> str:
+    return f"{c[0]}.{c[1]}.{c[2]}"
+
+
+def _caret_ceiling(c: Tuple[int, int, int, int]) -> str:
+    """Exclusive upper bound for ``^`` per node-semver (allow changes that
+    don't modify the left-most non-zero element)."""
+    major, minor, patch, ncomp = c
+    if major > 0 or ncomp == 1:        # ^1.2.3 / ^1 / ^1.2 -> <(major+1).0.0
+        return f"{major + 1}.0.0"
+    if minor > 0 or ncomp == 2:        # ^0.2.3 / ^0.2 / ^0.0 -> <0.(minor+1).0
+        return f"0.{minor + 1}.0"
+    return f"0.0.{patch + 1}"          # ^0.0.3 -> <0.0.4
+
+
+def _tilde_ceiling(c: Tuple[int, int, int, int]) -> str:
+    """Exclusive upper bound for ``~``."""
+    major, minor, _patch, ncomp = c
+    if ncomp >= 2:                     # ~1.2.3 / ~1.2 -> <1.(minor+1).0
+        return f"{major}.{minor + 1}.0"
+    return f"{major + 1}.0.0"          # ~1 -> <2.0.0
+
+
+def _tightest(versions: List[str], want_max: bool) -> str:
+    best = versions[0]
+    for v in versions[1:]:
+        c = compare(v, best)
+        if (want_max and c > 0) or (not want_max and c < 0):
+            best = v
+    return best
+
+
+def bounds(spec: str) -> Tuple[Optional[str], Optional[str]]:
+    """Best-effort ``(floor, ceiling)`` for an npm/Cargo semver range.
+
+    ``floor`` = tightest inclusive lower bound; ``ceiling`` = tightest
+    exclusive upper bound (the version the range stops *before*). Used by
+    SCA bounded-pinning to give harden a comparable baseline for a ranged
+    dep (the floor) and to keep a bump inside the declared corridor (the
+    ceiling).
+
+    Handles caret ``^``, tilde ``~``, comparators ``>=`` ``>`` ``<=``
+    ``<``, x-ranges (``2.x`` / ``2`` / ``2.*``), and simple hyphen ranges.
+    A fully-specified exact version (``2.7.0`` / ``=2.7.0``) contributes
+    NO bound — it's a pin, not a corridor. Returns ``(None, None)`` for OR
+    ranges (``||``), bare wildcards, or anything unparseable — callers
+    treat that as 'no corridor recorded'.
+    """
+    spec = spec.strip()
+    if not spec or "||" in spec:
+        return None, None
+    if " - " in spec:                  # hyphen range: capture floor, skip ceiling
+        c = _loose_components(spec.split(" - ", 1)[0])
+        return (_join(c) if c else None), None
+
+    lowers: List[str] = []
+    uppers: List[str] = []
+    for tok in spec.split():
+        m = re.match(r"^(>=|<=|>|<|=|\^|~)?\s*(.*)$", tok)
+        if m is None:
+            continue
+        op, operand = (m.group(1) or ""), m.group(2).strip()
+        if not operand or operand in ("*", "x", "X"):
+            continue
+        if op == "^":
+            c = _loose_components(operand)
+            if c:
+                lowers.append(_join(c))
+                uppers.append(_caret_ceiling(c))
+        elif op == "~":
+            c = _loose_components(operand)
+            if c:
+                lowers.append(_join(c))
+                uppers.append(_tilde_ceiling(c))
+        elif op in (">=", ">"):
+            c = _loose_components(operand)
+            if c:
+                lowers.append(_join(c))
+        elif op in ("<", "<="):
+            c = _loose_components(operand)
+            if c:
+                uppers.append(_join(c))
+        else:                          # ``=`` or bare: exact OR x-range
+            c = _loose_components(operand)
+            if c is None:
+                continue
+            if c[3] >= 3 and not any(ch in operand for ch in "xX*"):
+                continue               # fully-specified exact: no bound
+            lowers.append(_join(c))
+            uppers.append(f"{c[0] + 1}.0.0" if c[3] == 1
+                          else f"{c[0]}.{c[1] + 1}.0")
+
+    floor = _tightest(lowers, want_max=True) if lowers else None
+    ceiling = _tightest(uppers, want_max=False) if uppers else None
+    return floor, ceiling
