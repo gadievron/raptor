@@ -117,6 +117,31 @@ def test_sanitise_skips_malformed_entries(tmp_path):
     assert len(out) == 1
 
 
+def test_sanitise_orders_deterministically(tmp_path):
+    """Output is in a stable, total order independent of input order, so a
+    corpus refresh only diffs on real changes (not reordering churn)."""
+    def _vuln(fid: str, name: str):
+        return {
+            "vuln_type": "sca:vulnerable_dependency",
+            "finding_id": fid,
+            "severity": "high",
+            "sca": {"ecosystem": "npm", "name": name, "version": "1.0.0",
+                    "purl": f"pkg:npm/{name}@1.0.0"},
+        }
+
+    scrambled = [
+        _vuln("sca:vd:npm:z:CVE-2", "z"),
+        _vuln("sca:vd:npm:a:CVE-1", "a"),
+        _vuln("sca:vd:npm:m:CVE-3", "m"),
+    ]
+    ids = [f["finding_id"] for f in _sanitise_findings(scrambled, tmp_path)]
+    assert ids == sorted(ids)
+    # Reversed input → identical output (the churn this prevents).
+    rev = [f["finding_id"]
+           for f in _sanitise_findings(list(reversed(scrambled)), tmp_path)]
+    assert rev == ids
+
+
 # ---------------------------------------------------------------------------
 # collect_project_samples — orchestrator + license filter
 # ---------------------------------------------------------------------------

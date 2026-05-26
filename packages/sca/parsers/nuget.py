@@ -160,6 +160,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
 
     # MSBuild XML is namespaced (xmlns="http://schemas...") in some files
     # but namespace-less in modern SDK-style projects; iter both.
+    skipped_no_version = []
     for el in _findall_pkgref(root):
         name = el.get("Include") or el.get("Update")
         if not name:
@@ -186,16 +187,12 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             if version is not None:
                 source_origin = "cpm_central"
         if not version:
-            # Still no version — log a parser warning that the
-            # ``capture_parse_failures`` handler picks up and
-            # surfaces in report.md.
-            logger.warning(
-                "sca.parsers.nuget: PackageReference parse failed "
-                "for %s: <PackageReference Include=%r/> has no "
-                "Version, no VersionOverride, and no CPM entry; "
-                "skipping",
-                path, name,
-            )
+            # No resolvable version (no inline, no VersionOverride, no CPM
+            # entry). Common + benign for shared-framework refs whose version
+            # comes from the SDK (e.g. Microsoft.AspNetCore.App). Collect and
+            # emit ONE warning per file below — a .NET monorepo's sample
+            # projects otherwise produce dozens of per-ref lines.
+            skipped_no_version.append(name)
             continue
         pin_style, normalised = _classify_version_spec(version)
         if normalised is not None:
@@ -214,6 +211,19 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             continue
         seen_keys.add(dep.key())
         out.append(dep)
+    if skipped_no_version:
+        # One aggregated parser warning per file instead of one per
+        # PackageReference. Keep the canonical "<kind> parse failed for
+        # <path>: <reason>" shape so capture_parse_failures still lifts it
+        # into report.md (it matches on that format, not the logger name).
+        # Sorted names for a stable message.
+        logger.warning(
+            "sca.parsers.nuget: PackageReference parse failed for %s: "
+            "%d reference(s) have no Version, VersionOverride, or CPM "
+            "entry (skipped): %s",
+            path, len(skipped_no_version),
+            ", ".join(sorted(skipped_no_version)),
+        )
     return out
 
 

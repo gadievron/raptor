@@ -16,6 +16,8 @@ from typing import List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,10 +75,7 @@ class CratesClient:
                 f"https://crates.io/api/v1/crates/{name}",
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning(
-                "sca.registries.crates: meta fetch failed for %r: %s",
-                name, e,
-            )
+            log_fetch_failure(logger, "sca.registries.crates", name, e)
             if self._cache is not None:
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
@@ -107,10 +106,8 @@ class CratesClient:
                 f"{version}/dependencies",
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning(
-                "sca.registries.crates: deps fetch failed for "
-                "%r@%r: %s", name, version, e,
-            )
+            log_fetch_failure(
+                logger, "sca.registries.crates", f"{name}@{version}", e)
             if self._cache is not None:
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None

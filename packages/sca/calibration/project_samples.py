@@ -924,6 +924,18 @@ def _sanitise_findings(
             "ssvc_exploitation": sca.get("ssvc_exploitation"),
             "ssvc_automatable": sca.get("ssvc_automatable"),
         })
+    # Stable, total ordering so a refresh only diffs on real changes. The
+    # pipeline emits findings in a concurrency-dependent order, which made
+    # every weekly corpus refresh churn whole files (equal insert/delete
+    # counts) and buried the actual deltas. Key on the fields that identify
+    # a finding; ``finding_id`` encodes ecosystem:name:cve so it groups
+    # sensibly, with purl + version as tie-breakers.
+    out.sort(key=lambda f: (
+        f.get("finding_id") or "",
+        f.get("purl") or "",
+        f.get("dep_name") or "",
+        f.get("dep_version") or "",
+    ))
     return out
 
 
