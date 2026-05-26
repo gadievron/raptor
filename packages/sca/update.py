@@ -978,10 +978,15 @@ def _rewrite_package_json(
         rewrote = True
         return f"{prefix}{new_spec}{suffix}"
 
-    new_text, _ = pat.subn(_replace, text, count=1)
-    if not rewrote:
+    new_text, n_matched = pat.subn(_replace, text, count=1)
+    if rewrote:
+        return new_text, True, None
+    if n_matched == 0:
         return text, False, "no matching spec found"
-    return new_text, True, None
+    # The dep was found but _bump_npm_spec declined (VCS/alias/tarball, or
+    # a range whose target falls outside the operator's declared bounds) —
+    # don't mislabel that as 'not found'.
+    return text, False, "spec matched but not safely bumpable (out of declared range or unsupported form)"
 
 
 def _bump_npm_spec(current: str, installed: str, target: str) -> Optional[str]:
@@ -1005,8 +1010,31 @@ def _bump_npm_spec(current: str, installed: str, target: str) -> Optional[str]:
         if s.startswith(prefix):
             return f"{prefix}{target}"
     if any(ch in s for ch in "<>=| "):
-        # range / multi-bound — replace inline match if possible.
-        return s.replace(installed, target) if installed in s else None
+        # Explicit comparator range (caret / tilde already returned
+        # above). Bump the lower bound (``>=`` / ``>``) to the target and
+        # leave any upper bound intact — collapsing ``>=2.0.0 <3.0.0`` to
+        # a bare ``2.8.0`` (the old inline-replace, which fired when
+        # ``installed`` was the whole spec string) silently dropped the
+        # operator's ``<3.0.0`` ceiling. Defer to manual review (None) for
+        # ``||`` (OR) ranges, ranges with no lower bound, and a target
+        # outside the declared corridor (at/above the ceiling, or below
+        # the floor) defer to manual review — never emit an empty/invalid
+        # range like ``>=3.5.0 <3.0.0`` and never silently widen the floor
+        # down past the operator's declared minimum.
+        if "||" in s:
+            return None
+        lo = re.search(r"(>=|>)\s*([0-9][^\s,|]*)", s)
+        if lo is None:
+            return None
+        hi = re.search(r"(<=|<)\s*([0-9][^\s,|]*)", s)
+        try:
+            if hi is not None and version_compare("npm", target, hi.group(2)) >= 0:
+                return None
+            if version_compare("npm", target, lo.group(2)) < 0:
+                return None
+        except VersionError:
+            return None
+        return s[:lo.start(2)] + target + s[lo.end(2):]
     return target
 
 
