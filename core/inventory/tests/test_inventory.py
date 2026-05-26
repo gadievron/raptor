@@ -1181,6 +1181,35 @@ class TestJavaFrameworkEntries:
         assert verdict("Ctl.java", "wr") == "not_called"       # @Transactional is not an entry
         assert verdict("Ctl.java", "dead") == "not_called"     # plain uncalled
 
+    def test_java_framework_base_extends_implements(self, tmp_path):
+        # extends/implements a framework base → methods are entries (closes the
+        # interface-dispatch residuals type-free: Spring Data repos + dispatched
+        # framework-interface @Override impls).
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "OwnerRepository.java").write_text(
+            "package x;\npublic interface OwnerRepository "
+            "extends JpaRepository<Owner,Integer> {\n  Owner findByLastName(String n);\n}\n")
+        (tmp_path / "PetValidator.java").write_text(
+            "package x;\npublic class PetValidator implements Validator {\n"
+            "  @Override public void validate(Object o) {}\n}\n")
+        (tmp_path / "Plain.java").write_text(
+            "package x;\npublic class Plain {\n  public void lonely() {}\n}\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name and f["path"].endswith(rel):
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("OwnerRepository.java", "findByLastName") == "reachable"  # Spring Data
+        assert verdict("PetValidator.java", "validate") == "reachable"           # Validator impl
+        assert verdict("Plain.java", "lonely") == "not_called"                   # control
+
 
 class TestTypeScriptCoverage:
     """End-to-end TypeScript coverage. Typed TS was parsed with the JS grammar,

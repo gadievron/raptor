@@ -2425,6 +2425,22 @@ _JAVA_CLASS_STEREOTYPES = frozenset({
     # marshaller. (Jackson @JsonRootName etc. is the JSON analogue.)
     "XmlRootElement", "XmlType",
 })
+# Framework base types (extends/implements, captured in class_attributes) whose
+# methods the framework invokes with no in-project caller — so the class's
+# methods are entries. Spring Data repositories (the impl is generated at
+# runtime) and dispatched framework interfaces (the runtime calls the impl via
+# the interface — the type-free way to catch interface dispatch the inventory
+# can't resolve without type info; generic typed dispatch stays CodeQL's job).
+_JAVA_FRAMEWORK_BASES = frozenset({
+    # Spring Data repositories
+    "Repository", "CrudRepository", "JpaRepository",
+    "PagingAndSortingRepository", "ReactiveCrudRepository",
+    "MongoRepository", "JpaSpecificationExecutor",
+    # Dispatched framework interfaces (impl methods are framework-invoked)
+    "Validator", "RuntimeHintsRegistrar", "Filter", "HandlerInterceptor",
+    "Converter", "Formatter", "ApplicationRunner", "CommandLineRunner",
+    "ApplicationListener", "InitializingBean", "DisposableBean",
+})
 
 
 def _annotation_tail(annotation: Any) -> str:
@@ -2451,9 +2467,17 @@ def _java_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     for a in meta.get("attributes") or []:
         if _annotation_tail(a) in _JAVA_METHOD_DISPATCH_ANNOTATIONS:
             return True
+    class_attrs = meta.get("class_attributes") or []
+    # Framework base type (extends/implements): a repository interface's query
+    # methods / a dispatched interface impl's methods are framework-invoked with
+    # no in-project caller — promote regardless of visibility (interface methods
+    # are implicitly public; impl methods are public).
+    for a in class_attrs:
+        if _annotation_tail(a) in _JAVA_FRAMEWORK_BASES:
+            return True
     # Class stereotype → only the bean's PUBLIC methods are container-dispatched.
     if "public" in str(meta.get("visibility") or "").split():
-        for a in meta.get("class_attributes") or []:
+        for a in class_attrs:
             if _annotation_tail(a) in _JAVA_CLASS_STEREOTYPES:
                 return True
     return False

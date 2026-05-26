@@ -898,12 +898,43 @@ class TreeSitterExtractor:
             elif child.type == "attribute_list":
                 out.extend(self._csharp_attr_names(child))
             elif child.type == "superclass":
-                # Ruby: ``class X < ApplicationController`` — record the base so
-                # the Rails convention (controller/job/mailer) can fire. The
-                # base is a ``constant`` or a ``scope_resolution`` (Foo::Bar).
+                # Ruby: ``class X < ApplicationController`` — base is a
+                # ``constant`` / ``scope_resolution``. Java: ``extends Foo`` —
+                # base is a ``type_identifier`` / ``generic_type``. Capture both.
                 for sc in child.children:
                     if sc.type in ("constant", "scope_resolution"):
-                        out.append(sc.text.decode())
+                        out.append(sc.text.decode())          # Ruby
+                out.extend(self._java_base_names(child))       # Java (no-op for Ruby)
+            elif child.type in ("super_interfaces", "extends_interfaces"):
+                # Java: ``implements Bar`` / interface ``extends Baz`` — record
+                # the base type names so framework bases (JpaRepository →
+                # Spring Data, Validator → a framework-dispatched interface)
+                # can mark the class's methods as entries.
+                out.extend(self._java_base_names(child))
+        return out
+
+    @staticmethod
+    def _java_base_names(node) -> List[str]:
+        """Base type tail-names from a Java ``superclass`` / ``super_interfaces``
+        / ``extends_interfaces`` node (``JpaRepository<Owner,Integer>`` →
+        ``JpaRepository``; ``org.x.Validator`` → ``Validator``). Iterates the
+        individual type nodes (a ``type_list`` separates them with ``,`` tokens)
+        so a generic's inner comma isn't mistaken for a type separator."""
+        _TYPE_NODES = ("type_identifier", "scoped_type_identifier", "generic_type")
+        out: List[str] = []
+
+        def add(tn) -> None:
+            base = tn.text.decode().split("<")[0].strip().split(".")[-1].strip()
+            if base:
+                out.append(base)
+
+        for n in node.children:
+            if n.type == "type_list":
+                for tn in n.children:
+                    if tn.type in _TYPE_NODES:
+                        add(tn)
+            elif n.type in _TYPE_NODES:
+                add(n)
         return out
 
     @staticmethod

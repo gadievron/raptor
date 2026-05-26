@@ -779,6 +779,26 @@ def test_java_async_transactional_and_plain_are_not_entries():
     assert not _java_framework_entry("dead", _java_item("dead"))
 
 
+def test_java_framework_base_promotes_methods():
+    # extends/implements a framework base (captured in class_attributes): the
+    # framework invokes the methods with no in-project caller — Spring Data
+    # repository query methods + dispatched-interface (@Override) impls. No
+    # visibility gate (interface methods are implicitly public). This is the
+    # type-free way to catch interface dispatch the inventory can't resolve
+    # without type info (generic typed dispatch stays CodeQL's job).
+    from core.inventory.reachability import _java_framework_entry
+    assert _java_framework_entry(
+        "findById", _java_item("findById", class_attrs=["JpaRepository"], visibility=None))
+    assert _java_framework_entry(
+        "validate", _java_item("validate", class_attrs=["Validator"], attrs=["Override"]))
+    assert _java_framework_entry(
+        "registerHints",
+        _java_item("registerHints", class_attrs=["RuntimeHintsRegistrar"]))
+    # a class extending a non-framework base is NOT promoted.
+    assert not _java_framework_entry(
+        "helper", _java_item("helper", class_attrs=["SomeBaseClass"]))
+
+
 def test_java_framework_entry_degrades_gracefully_on_stale_metadata():
     # A pre-feature checklist.json (reused for an unchanged file) has no
     # ``class_attributes`` key — and a malformed record may have no metadata at
