@@ -85,6 +85,13 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
             continue
 
         for func in file_entry.get("items", file_entry.get("functions", [])):
+            # Only FUNCTION items enclose a "function" — globals, macros,
+            # classes, top_level and interstitial are not callable units, so a
+            # sink landing in one has no enclosing function (callers expect
+            # None there, e.g. reachability stays conservative rather than
+            # mislabelling import-time / glue code as "not_called").
+            if func.get("kind", "function") != "function":
+                continue
             func_start = func.get("line_start", 0)
             func_end = func.get("line_end")
 

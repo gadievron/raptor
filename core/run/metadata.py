@@ -549,6 +549,74 @@ def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
     """
     _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
+    # Materialise the LLM read-coverage record from the plugin's .reads-manifest
+    # FIRST, so the snapshot below imports it alongside the scanner records.
+    _convert_reads_manifest(output_dir)
+    # Snapshot AFTER the status/manifest write so coverage provenance can read
+    # the sealed manifest (engine versions / resolved models).
+    _snapshot_run_coverage(output_dir)
+
+
+def _convert_reads_manifest(output_dir: Path) -> None:
+    """Turn the coverage plugin's ``.reads-manifest`` (the files the LLM read
+    this run, captured by the PostToolUse-on-Read hook) into a
+    ``coverage-llm.json`` record so LLM examined-extent reaches the store.
+
+    The plugin captures the reads but nothing converted them — this wires that
+    conversion at run completion. Best-effort: a missing/empty manifest is a
+    no-op, and a failure must never break the lifecycle.
+    """
+    import logging
+    try:
+        from core.coverage.record import build_from_manifest, write_record
+        record = build_from_manifest(Path(output_dir), "llm")
+        if record:
+            write_record(Path(output_dir), record, tool_name="llm")
+    except Exception:  # noqa: BLE001 — never fail lifecycle on a coverage write
+        logging.getLogger(__name__).debug(
+            "_convert_reads_manifest failed for %s", output_dir, exc_info=True
+        )
+
+
+def _snapshot_run_coverage(output_dir: Path) -> None:
+    """Best-effort: fold a just-completed run's coverage into the project's
+    durable ``coverage.json`` so it survives out-of-band deletion of the run
+    dir (manual ``rm``, tmpfs) — not only ``/project clean``.
+
+    Scoped to THIS run's records + findings (bounded cost); project-level
+    ``checked_by`` / annotations live in the project checklist and are captured
+    by the on-demand ``--store`` union, surviving deletion regardless. No-op
+    for a standalone ``out/`` run (no project store). The coverage.json
+    read-modify-write is taken under :func:`coverage_store_lock` so parallel
+    run completions (and a concurrent clean) can't last-writer-wins each other.
+    Never raises — lifecycle hooks must not fail on a snapshot error.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        run_dir = Path(output_dir)
+        proj = run_dir.parent
+        checklist_path = proj / "checklist.json"
+        if not checklist_path.exists():
+            return                       # standalone run — no durable project store
+        from core.json import load_json
+        from core.coverage.store import CoverageStore, coverage_store_lock
+        from core.coverage.importer import (
+            _inventory_paths, import_run_dir, import_run_findings,
+        )
+
+        checklist = load_json(checklist_path)
+        if not checklist:
+            return
+        cov_path = proj / "coverage.json"
+        with coverage_store_lock(cov_path):
+            store = CoverageStore(cov_path)
+            store.set_content_id(checklist)
+            import_run_dir(store, run_dir, checklist)
+            import_run_findings(store, run_dir, _inventory_paths(checklist))
+            store.save()
+    except Exception:  # noqa: BLE001 — never fail lifecycle on a snapshot error
+        log.debug("_snapshot_run_coverage failed for %s", output_dir, exc_info=True)
 
 
 def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,

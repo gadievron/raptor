@@ -344,6 +344,45 @@ class TestProjectManager(unittest.TestCase):
         self.mgr.create("myapp", self.target_code)
         self.assertIsNone(self.mgr.find_project_for_target(self.target_other))
 
+    def _stamp_content_id(self, project, content_id):
+        from core.json import save_json
+        Path(project.output_dir).mkdir(parents=True, exist_ok=True)
+        save_json(Path(project.output_dir) / "coverage.json",
+                  {"version": 1, "content_id": content_id, "files": {}})
+
+    def test_content_id_read_from_store(self):
+        p = self.mgr.create("myapp", self.target_code)
+        self.assertIsNone(p.content_id)                     # no store yet
+        self._stamp_content_id(p, "content:deadbeefcafe0001")
+        self.assertEqual(self.mgr.load("myapp").content_id,
+                         "content:deadbeefcafe0001")
+
+    def test_find_by_content_id_across_acquisitions(self):
+        # A git checkout and a zip extraction of identical source: different
+        # target paths, same content id -> resolve to the same project.
+        git_p = self.mgr.create("from-git", self.target_a)
+        self._stamp_content_id(git_p, "content:abc123")
+        found = self.mgr.find_project_for_target(
+            self.target_b, content_id="content:abc123")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.name, "from-git")
+
+    def test_path_match_takes_precedence_over_content(self):
+        p = self.mgr.create("myapp", self.target_code)
+        self._stamp_content_id(p, "content:abc123")
+        # Exact path still matches even when a content_id is supplied.
+        found = self.mgr.find_project_for_target(
+            self.target_code, content_id="content:nomatch")
+        self.assertEqual(found.name, "myapp")
+
+    def test_find_by_content_id_no_match_returns_none(self):
+        p = self.mgr.create("myapp", self.target_code)
+        self._stamp_content_id(p, "content:abc123")
+        self.assertIsNone(
+            self.mgr.find_project_for_target(self.target_other,
+                                             content_id="content:xyz789"))
+        self.assertIsNone(self.mgr.find_project_by_content_id(""))
+
     def test_remove_run(self):
         p = self.mgr.create("myapp", self.target_code)
         run_dir = Path(p.output_dir) / "scan-20260406"

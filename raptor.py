@@ -254,7 +254,12 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                     write_record(out_dir, record, tool_name="semgrep")
                     break
         if not (out_dir / "coverage-codeql.json").exists():
-            for sarif_path in out_dir.glob("codeql_*.sarif"):
+            # /scan writes codeql_*.sarif at the top level; /agentic writes it
+            # into a codeql/ subdir. Search both. (First match wins — single-
+            # language coverage; multi-language merge is a later refinement.)
+            codeql_sarifs = (list(out_dir.glob("codeql_*.sarif"))
+                             + list((out_dir / "codeql").glob("*.sarif")))
+            for sarif_path in codeql_sarifs:
                 record = build_from_codeql(sarif_path)
                 if record:
                     write_record(out_dir, record, tool_name="codeql")
@@ -349,6 +354,17 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         # lifecycle itself now (core.run.complete_run), uniformly for every
         # command — no per-command manifest wiring here.
         complete_run(out_dir)
+        # Print a coverage summary at the end of /agentic (after complete_run,
+        # so the scanner + codeql + llm-read records are all materialised).
+        # /scan and /validate print their own; this closes the agentic gap.
+        if command == "agentic":
+            try:
+                from core.coverage.store_summary import render_run_coverage
+                summary = render_run_coverage(out_dir)
+                if summary:
+                    print("\n" + summary)
+            except Exception:
+                pass
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc

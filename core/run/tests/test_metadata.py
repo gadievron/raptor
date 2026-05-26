@@ -374,3 +374,85 @@ class TestTrackedRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRunCoverageSnapshot(unittest.TestCase):
+    """complete_run folds a project run's coverage into the durable store
+    (so it survives out-of-band deletion), and is a no-op for standalone runs."""
+
+    def _checklist(self):
+        import json
+        return json.dumps({"files": [
+            {"path": "a.c", "lines": 50, "items": [
+                {"name": "f1", "line_start": 1, "line_end": 20}]}]})
+
+    def test_completion_snapshots_project_run_coverage(self):
+        import json
+
+        from core.coverage.store import CoverageStore
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            (proj / "checklist.json").write_text(self._checklist())
+            run = proj / "scan-20260526_120000"
+            start_run(run, "scan")
+            (run / "coverage-semgrep.json").write_text(json.dumps(
+                {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+            (run / "findings.json").write_text(json.dumps(
+                [{"id": "F1", "file": "a.c", "line": 10, "rule_id": "x"}]))
+            complete_run(run)
+
+            store = CoverageStore(proj / "coverage.json")    # persisted at completion
+            self.assertEqual(store.who_checked("a.c", 10), ["semgrep"])
+            self.assertEqual(store.function_verdict("a.c", 1, 20), "open")  # F1 in f1
+
+    def test_completion_converts_reads_manifest_to_llm_coverage(self):
+        # The coverage plugin captures LLM file-reads into .reads-manifest;
+        # complete_run must materialise that into a coverage-llm.json record so
+        # LLM examined-extent reaches the store.
+        from core.coverage.store import CoverageStore
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            (proj / "checklist.json").write_text(self._checklist())  # a.c, lines 50
+            run = proj / "agentic-20260526_120000"
+            start_run(run, "agentic")
+            (run / ".reads-manifest").write_text("a.c\n")  # the LLM read a.c
+            complete_run(run)
+
+            self.assertTrue((run / "coverage-llm.json").exists())
+            store = CoverageStore(proj / "coverage.json")
+            self.assertEqual(store.who_checked("a.c", 5), ["llm"])
+
+    def test_standalone_run_writes_no_store(self):
+        import json
+        with TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            out.mkdir()
+            run = out / "scan-20260526_120000"
+            start_run(run, "scan")
+            (run / "coverage-semgrep.json").write_text(json.dumps(
+                {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+            complete_run(run)
+            # No project-level checklist in the parent -> no durable store written.
+            self.assertFalse((out / "coverage.json").exists())
+
+    def test_two_completions_accumulate_under_lock(self):
+        import json
+
+        from core.coverage.store import CoverageStore
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            (proj / "checklist.json").write_text(json.dumps({"files": [
+                {"path": "a.c", "lines": 50, "items": [
+                    {"name": "f1", "line_start": 1, "line_end": 20}]},
+                {"path": "b.c", "lines": 30, "items": [
+                    {"name": "g1", "line_start": 1, "line_end": 10}]}]}))
+            for nm, f in [("scan-20260526_01", "a.c"), ("codeql-20260526_02", "b.c")]:
+                run = proj / nm
+                start_run(run, nm.split("-")[0])
+                (run / "coverage-semgrep.json").write_text(json.dumps(
+                    {"tool": "semgrep", "files_examined": [f], "timestamp": "t"}))
+                complete_run(run)
+            # Second snapshot's read-modify-write preserved the first's coverage.
+            store = CoverageStore(proj / "coverage.json")
+            self.assertEqual(store.who_checked("a.c", 5), ["semgrep"])
+            self.assertEqual(store.who_checked("b.c", 5), ["semgrep"])

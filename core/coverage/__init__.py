@@ -16,6 +16,34 @@ from .record import (
     COVERAGE_RECORD_FILE,
     READS_MANIFEST,
 )
+from .store import (
+    CoverageStore,
+    COVERAGE_STORE_FILE,
+    coverage_store_lock,
+    iter_inventory_functions,
+    content_identity,
+)
+from .registry import category_of, depth_of, classify
+from .importer import (
+    backfill,
+    import_run_dir,
+    import_checked_by,
+    import_findings,
+    import_run_findings,
+    import_annotations,
+    run_provenance,
+)
+from .store_summary import (
+    store_view, format_store_view, file_level_view, format_file_level_view,
+)
+from .clean import (
+    clean_run,
+    classify_removal,
+    apply_removal,
+    dedup_runs,
+    format_consequence,
+    CleanConsequence,
+)
 
 __all__ = [
     "build_from_manifest",
@@ -28,4 +56,29 @@ __all__ = [
     "cleanup_manifest",
     "COVERAGE_RECORD_FILE",
     "READS_MANIFEST",
+    "CoverageStore",
+    "COVERAGE_STORE_FILE",
+    "coverage_store_lock",
+    "iter_inventory_functions",
+    "content_identity",
+    "category_of",
+    "depth_of",
+    "classify",
+    "backfill",
+    "import_run_dir",
+    "import_checked_by",
+    "import_findings",
+    "import_run_findings",
+    "import_annotations",
+    "run_provenance",
+    "store_view",
+    "format_store_view",
+    "file_level_view",
+    "format_file_level_view",
+    "clean_run",
+    "classify_removal",
+    "apply_removal",
+    "dedup_runs",
+    "format_consequence",
+    "CleanConsequence",
 ]

@@ -330,6 +330,32 @@ class TestWriteAndLoad(unittest.TestCase):
             tools = {r["tool"] for r in records}
             self.assertEqual(tools, {"semgrep", "codeql", "llm"})
 
+    def test_load_records_finds_tool_subdirs(self):
+        # Agentic writes scanner records into scan/ and codeql into codeql/.
+        # load_records must find records in immediate tool subdirs, not only
+        # at the top level.
+        with TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "scan").mkdir()
+            write_record(run / "scan", {"tool": "semgrep"}, tool_name="semgrep")
+            write_record(run / "scan", {"tool": "coccinelle"}, tool_name="coccinelle")
+            write_record(run, {"tool": "codeql"}, tool_name="codeql")  # top level
+            tools = {r["tool"] for r in load_records(run)}
+            self.assertEqual(tools, {"semgrep", "coccinelle", "codeql"})
+
+    def test_load_records_dedups_tool_across_top_and_subdir(self):
+        with TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "codeql").mkdir()
+            write_record(run, {"tool": "codeql", "files_examined": ["top.c"]},
+                         tool_name="codeql")
+            write_record(run / "codeql", {"tool": "codeql", "files_examined": ["sub.c"]},
+                         tool_name="codeql")
+            records = load_records(run)
+            codeql = [r for r in records if r["tool"] == "codeql"]
+            self.assertEqual(len(codeql), 1)                     # de-duped
+            self.assertEqual(codeql[0]["files_examined"], ["top.c"])  # top wins
+
     def test_load_records_falls_back_to_legacy(self):
         with TemporaryDirectory() as d:
             write_record(Path(d), {"tool": "legacy"})
