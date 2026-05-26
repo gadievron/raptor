@@ -210,9 +210,13 @@ jobs:
               --base main \
               --head "$BRANCH" \
               --title "chore(sca): refit risk-score multipliers" \
-              --label sca \
-              --label automated \
               --body "$BODY"
           else
             gh pr edit "$BRANCH" --body "$BODY"
           fi
+          # Labels best-effort (see sca-self-bump): a missing label must
+          # never block the PR. Create them once under Settings → Labels.
+          for lbl in automated sca; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

@@ -240,7 +240,7 @@ jobs:
           # The token has pull-requests:write, which applies EXISTING
           # labels but can't create new ones, so create any you want
           # auto-applied once under Settings → Labels.
-          for lbl in dependencies sca-self-bump; do
+          for lbl in automated sca dependencies; do
             gh pr edit "$pr_ref" --add-label "$lbl" 2>/dev/null \
               || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
           done

@@ -187,15 +187,20 @@ jobs:
           } > pr-body.md
           # Idempotent create-or-update: ``gh pr create`` exits non-zero
           # when a PR for the branch already exists — fall through to
-          # ``gh pr edit`` to refresh the body. Labels match the sibling
-          # data-refresh workflows so the PR can be filtered / routed.
+          # ``gh pr edit`` to refresh the body. (Labels applied below.)
           if ! gh pr create \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration corpus" \
-                --label sca \
-                --label data-refresh \
-                --label automated \
                 --body-file pr-body.md 2>/dev/null; then
             gh pr edit "$BRANCH" --body-file pr-body.md
           fi
+          # Labels best-effort (see sca-self-bump): pull-requests:write
+          # applies EXISTING labels but can't create them, and
+          # ``gh pr create --label`` hard-errors on an unknown label
+          # (which killed this step in run #3). Create the canonical
+          # labels once under Settings → Labels to auto-apply them.
+          for lbl in automated sca data-refresh; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done

@@ -139,9 +139,12 @@ jobs:
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh bundled popular-package lists" \
-                --body "$BODY" \
-                --label sca \
-                --label data-refresh \
-                --label automated 2>/dev/null; then
+                --body "$BODY" 2>/dev/null; then
             gh pr edit "$BRANCH" --body "$BODY"
           fi
+          # Labels best-effort (see sca-self-bump): a missing label must
+          # never block the PR. Create them once under Settings → Labels.
+          for lbl in automated sca data-refresh; do
+            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+              || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
+          done
