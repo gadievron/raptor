@@ -94,6 +94,20 @@ attribution requirements for sources where the data license requires it.
 - **What's NEVER stored:** referenced exploit content. Operators
   inspecting the URL can navigate manually.
 
+### `vulnrichment_signals.json` — CISA Vulnrichment (SSVC)
+
+- **License:** CC0 1.0 Universal (Public Domain Dedication)
+- **Source:** <https://github.com/cisagov/vulnrichment>
+- **Tarball:** `https://codeload.github.com/cisagov/vulnrichment/tar.gz/refs/heads/develop`
+  (`develop` is the repo's default branch — CISA does not publish to `main`)
+- **Maintainer:** Cybersecurity and Infrastructure Security Agency (CISA), USA
+- **What's stored:** `{cve_id: {ssvc_exploitation, ssvc_automatable, ssvc_technical_impact}}`
+  for entries whose SSVC `Exploitation` is `poc` or `active`. `none`
+  entries carry no exploit signal and are dropped.
+- **Use:** Cross-ecosystem exploitation signal — covers Cargo / NuGet /
+  Packagist, where the other five sources return ~0%. CC0 — no
+  attribution requirement, cited for transparency.
+
 ### `stress_baseline.json` — SCA stress-test regression baseline
 
 - **License:** MIT (RAPTOR-generated). Per-sample scan diagnostics
@@ -137,10 +151,19 @@ ground-truth signals. These are RAPTOR-generated and ship under
 MIT. Each report cites the snapshot date of every ground-truth
 source consulted, so reviewers can reproduce metrics.
 
+`refit/<date>.json` files (created by `raptor-sca-refit-calibration`)
+carry the per-constant risk-multiplier deltas + joint-precision
+metrics from a refit run. Also RAPTOR-generated, MIT — no third-party
+content.
+
+Both `validation/` and `refit/` are first-party generated reports, so
+they carry no `_source` block and are exempt from the per-file
+attribution check below.
+
 ## Updates
 
 Refreshed weekly by `.github/workflows/refresh-sca-calibration.yml`
-(Monday 06:00 UTC). The workflow opens an auto-PR when sources have
+(Tuesday 06:00 UTC). The workflow opens an auto-PR when sources have
 shifted; reviewers approve before merge.
 
 ## Pre-commit license check
@@ -153,6 +176,9 @@ hook on changes under `packages/sca/data/calibration/`. It enforces:
      `has_*` booleans + `url` references — no `body` / `payload` /
      `shellcode` fields
   3. New sources require an entry here in `ATTRIBUTION.md`
+
+First-party generated report subtrees (`refit/`, `validation/`) are
+exempt — they are RAPTOR outputs, not attributed third-party sources.
 
 Defence in depth against accidental ingestion of license-restricted
 content.

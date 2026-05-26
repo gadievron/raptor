@@ -665,10 +665,15 @@ def _is_exploit_host_url(url: str) -> bool:
 # corpus grows — there is no absolute size to re-tune.
 _DECOMP_RATIO = 50
 _DECOMP_FLOOR = 64 * 1024 * 1024
-# A single CVE-JSON-5 record is tens of KB; 8 MB is wildly generous
-# and bounds the in-memory read of any one member so a forged-huge
-# header size can't balloon memory before the stream-level guard fires.
-_PER_RECORD_CAP = 8 * 1024 * 1024
+# Bounds the in-memory read of any single member so a forged-huge
+# header size can't balloon memory before the stream-level guard
+# fires. Most CVE-JSON-5 records are tens of KB, but CISA-ADP
+# enrichment of mega-vendor CVEs is genuinely large — e.g.
+# CVE-2024-20399 (Cisco NX-OS) is ~9.7 MB of affected-product matrix
+# and carries an active-exploitation SSVC signal we must not drop.
+# 64 MB keeps a wide margin over observed records while still bounding
+# a single read; the stream-level ratio cap is the real bomb guard.
+_PER_RECORD_CAP = 64 * 1024 * 1024
 
 
 class _CappedReader:

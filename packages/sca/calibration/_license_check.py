@@ -44,6 +44,14 @@ _FORBIDDEN_FIELDS = frozenset({
 
 _REQUIRED_SOURCE_FIELDS = frozenset({"license", "url"})
 
+# RAPTOR-generated report subtrees under the calibration dir. These
+# are first-party artefacts (refit constant-deltas, validation
+# precision / Spearman metrics) — not third-party sources — so they
+# carry no ``_source`` block and need no per-file attribution. Skip
+# them entirely (cf. ``project_samples``, which DOES carry ``_source``
+# but is attributed by directory rather than per-file).
+_GENERATED_REPORT_SUBTREES = frozenset({"refit", "validation"})
+
 
 def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
     """Return a list of violation strings (empty when corpus is
@@ -64,6 +72,9 @@ def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
     )
     for path in sorted(corpus_dir.rglob("*.json")):
         rel = path.relative_to(corpus_dir)
+        if rel.parts and rel.parts[0] in _GENERATED_REPORT_SUBTREES:
+            # First-party generated report — not an attributed source.
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
