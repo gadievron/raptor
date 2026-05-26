@@ -18,7 +18,16 @@ from core.run.provenance import (
     format_provenance_rollup,
     format_repro_short,
     format_sha_short,
+    harness_model_entry,
     public_view,
+    run_deterministically_reproducible,
+    run_engines,
+    run_framework_sha,
+    run_manifest,
+    run_models,
+    run_target,
+    run_timestamp,
+    run_who,
     source_control_snapshot,
     target_snapshot,
     tool_version,
@@ -211,10 +220,13 @@ class TestDetectEngines(unittest.TestCase):
 
 class TestBuildStartManifestTarget(unittest.TestCase):
 
-    def test_no_target_block_when_not_git(self):
+    def test_directory_target_gets_acquisition_marker(self):
+        # A non-git directory now gets the {source:"directory"} acquisition
+        # stamp (no git block, no content hash — the equivalence id is the
+        # coverage store's, derived from the inventory).
         with TemporaryDirectory() as d:
             m = build_start_manifest(target=Path(d))
-            self.assertNotIn("target", m)
+            self.assertEqual(m["target"], {"source": "directory"})
 
     @unittest.skipUnless(_GIT, "git not available")
     def test_target_block_when_git(self):
@@ -268,37 +280,41 @@ class TestToolVersion(unittest.TestCase):
         self.assertIsNone(tool_version("coccinelle"))
 
 
-class TestScanEngineManifest(unittest.TestCase):
-    """Gating in raptor._scan_engine_manifest — only mechanical commands get
-    engine versions + deterministically_reproducible, and a non-scan command
-    must never produce a manifest (so it can't clobber agentic's)."""
+class TestStandardCompletionProvenance(unittest.TestCase):
+    """standard_completion_provenance — the end-of-run facts the lifecycle
+    derives itself: engines detected from output files for EVERY command, with
+    deterministically_reproducible True only for the deterministic static-rule
+    commands (scan/codeql)."""
 
-    def test_non_scan_command_returns_none(self):
-        import raptor
-        with TemporaryDirectory() as d:
-            self.assertIsNone(raptor._scan_engine_manifest(Path(d), "agentic"))
-            self.assertIsNone(raptor._scan_engine_manifest(Path(d), "fuzz"))
+    def test_deterministic_only_for_static_rule_commands(self):
+        from core.run.provenance import is_deterministically_reproducible
+        self.assertTrue(is_deterministically_reproducible("scan"))
+        self.assertTrue(is_deterministically_reproducible("codeql"))
+        # LLM-mediated (agentic/validate/understand) and stochastic/runtime
+        # (fuzz/web) commands are not — nor is an unknown command.
+        for cmd in ("agentic", "validate", "understand", "fuzz", "web", None):
+            self.assertFalse(is_deterministically_reproducible(cmd))
 
-    def test_scan_detects_engine_from_output_file(self):
-        import raptor
+    def test_engines_detected_for_any_command(self):
+        from core.run.provenance import standard_completion_provenance
         with TemporaryDirectory() as d:
             out = Path(d)
             # Real output filenames: semgrep_*.sarif, codeql_*.sarif, cocci.sarif.
             (out / "semgrep_semgrep_injection.sarif").write_text("{}")
             (out / "codeql_java.sarif").write_text("{}")
             (out / "cocci.sarif").write_text("{}")
-            m = raptor._scan_engine_manifest(out, "scan")
-            self.assertTrue(m["deterministically_reproducible"])
-            # Engines detected from canonical output files (value may be the
-            # version string or None if the tool isn't installed in CI).
+            # Even a non-scan command captures engines now (uniform coverage);
+            # only the reproducibility verdict differs by command.
+            m = standard_completion_provenance(out, "validate")
             self.assertIn("semgrep", m["engines"])
             self.assertIn("codeql", m["engines"])
             self.assertIn("coccinelle", m["engines"])
+            self.assertFalse(m["deterministically_reproducible"])
 
-    def test_scan_with_no_output_still_reproducible(self):
-        import raptor
+    def test_scan_reproducible_with_no_output(self):
+        from core.run.provenance import standard_completion_provenance
         with TemporaryDirectory() as d:
-            m = raptor._scan_engine_manifest(Path(d), "scan")
+            m = standard_completion_provenance(Path(d), "scan")
             self.assertEqual(m["engines"], {})
             self.assertTrue(m["deterministically_reproducible"])
 
@@ -490,13 +506,11 @@ class TestFormatProvenanceRollup(unittest.TestCase):
 
 class TestLifecycleE2E(unittest.TestCase):
     """End-to-end: start_run seals framework+target+env, a scan drops engine
-    output, complete_run merges engines+reproducibility — the full manifest a
-    real /scan run produces, exercised through the real lifecycle + raptor's
-    _scan_engine_manifest (no mocks)."""
+    output, complete_run fills engines+reproducibility — the full manifest a
+    real /scan run produces, exercised through the real lifecycle (no mocks)."""
 
     @unittest.skipUnless(_GIT, "git not available")
     def test_scan_run_seals_and_enriches_full_manifest(self):
-        import raptor
         from core.run import complete_run, load_run_metadata, start_run
         with TemporaryDirectory() as d:
             target = Path(d) / "target"
@@ -514,9 +528,11 @@ class TestLifecycleE2E(unittest.TestCase):
             self.assertIn("environment", sealed)
             self.assertNotIn("engines", sealed)            # not known yet
 
-            # Scanner drops its SARIF output, then the run completes.
+            # Scanner drops its SARIF output, then the run completes. No
+            # per-command manifest wiring — the lifecycle fills engines +
+            # deterministically_reproducible itself, uniformly.
             (out / "semgrep_owasp.sarif").write_text("{}")
-            complete_run(out, manifest=raptor._scan_engine_manifest(out, "scan"))
+            complete_run(out)
 
             final = load_run_metadata(out)
             m = final["manifest"]
@@ -524,9 +540,60 @@ class TestLifecycleE2E(unittest.TestCase):
             # Start-sealed facts survive the merge…
             self.assertIn("source_control", m)
             self.assertEqual(m["target"]["vcs"], "git")
-            # …and end-of-run facts are merged in.
+            # …and end-of-run facts are filled by the lifecycle.
             self.assertIn("semgrep", m["engines"])
             self.assertTrue(m["deterministically_reproducible"])
+
+
+class TestUniformCompletionEnrichment(unittest.TestCase):
+    """complete_run fills standard provenance for EVERY completion path —
+    including the Claude-driven commands that finish through the lifecycle
+    stubs without passing a manifest — and never clobbers a caller-supplied
+    fact."""
+
+    def test_non_scan_command_enriched_without_caller_manifest(self):
+        # /validate and /understand finish via the lifecycle stubs with no
+        # manifest=. They must still get engines + reproducibility — this is
+        # the uneven-coverage gap closed.
+        from core.run import complete_run, load_run_metadata, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "validate-run"
+            start_run(out, "validate", target=str(Path(d)))
+            (out / "semgrep_x.sarif").write_text("{}")
+            complete_run(out)  # no manifest — the stub path
+            m = load_run_metadata(out)["manifest"]
+            self.assertIn("semgrep", m["engines"])
+            self.assertFalse(m["deterministically_reproducible"])
+
+    def test_caller_supplied_key_is_not_clobbered(self):
+        # setdefault precedence: an explicit caller value wins over the
+        # lifecycle's derived default.
+        from core.run import complete_run, load_run_metadata, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "validate", target=str(Path(d)))
+            complete_run(out, manifest={"deterministically_reproducible": True})
+            m = load_run_metadata(out)["manifest"]
+            self.assertTrue(m["deterministically_reproducible"])
+
+    def test_unavailable_manifest_not_enriched(self):
+        # A run carrying the 'unavailable' stamp (predates manifest capture) is
+        # left untouched — no engines/reproducibility grafted on.
+        import json
+        from core.run import complete_run, load_run_metadata, start_run
+        from core.run.metadata import RUN_METADATA_FILE
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "scan", target=str(Path(d)))
+            meta_path = out / RUN_METADATA_FILE
+            meta = json.loads(meta_path.read_text())
+            meta["manifest"] = dict(UNAVAILABLE_MANIFEST)
+            meta_path.write_text(json.dumps(meta))
+            (out / "semgrep_x.sarif").write_text("{}")
+            complete_run(out)
+            m = load_run_metadata(out)["manifest"]
+            self.assertEqual(m.get("provenance"), "unavailable")
+            self.assertNotIn("engines", m)
 
 
 class TestUnavailableManifest(unittest.TestCase):
@@ -534,6 +601,102 @@ class TestUnavailableManifest(unittest.TestCase):
     def test_marked_unavailable(self):
         self.assertEqual(UNAVAILABLE_MANIFEST["provenance"], "unavailable")
         self.assertIn("reason", UNAVAILABLE_MANIFEST)
+
+
+class TestManifestReadAccessors(unittest.TestCase):
+    """The stable read contract consumers (CoverageStore import, /project rollup,
+    future citation) go through instead of indexing the raw manifest dict."""
+
+    def test_reads_each_field_from_a_real_manifest(self):
+        md = _full_run_metadata()
+        self.assertEqual(run_engines(md), {"semgrep": "1.79.0"})
+        self.assertEqual(run_models(md)[0]["resolved"], "gemini-2.5-pro")
+        self.assertEqual(run_target(md)["commit"], "4f2a9b1c")
+        self.assertEqual(run_framework_sha(md), "9668aa8c")
+        self.assertEqual(run_timestamp(md), "2026-05-24T16:00:00+00:00")
+        self.assertIs(run_deterministically_reproducible(md), False)
+
+    def test_degrades_gracefully_on_none_and_unavailable(self):
+        # None input and the 'unavailable' stamp both yield empty/None — never
+        # raise — so the same call works on legacy/adopted runs.
+        for md in (None, {}, {"manifest": dict(UNAVAILABLE_MANIFEST)}):
+            self.assertEqual(run_manifest(md), {})
+            self.assertEqual(run_engines(md), {})
+            self.assertEqual(run_models(md), [])
+            self.assertIsNone(run_target(md))
+            self.assertIsNone(run_framework_sha(md))
+            self.assertIsNone(run_deterministically_reproducible(md))
+
+    def test_missing_fields_return_empty_not_raise(self):
+        # A manifest that predates a field (e.g. no det_repro / no target yet)
+        # reads as None/empty, distinguishable from a present value.
+        md = {"timestamp": "2026-05-25T00:00:00+00:00",
+              "manifest": {"source_control": {"base_sha": "abc"}}}
+        self.assertEqual(run_engines(md), {})
+        self.assertEqual(run_models(md), [])
+        self.assertIsNone(run_target(md))
+        self.assertIsNone(run_deterministically_reproducible(md))
+        self.assertEqual(run_framework_sha(md), "abc")
+        self.assertEqual(run_timestamp(md), "2026-05-25T00:00:00+00:00")
+
+    def test_malformed_shapes_tolerated(self):
+        # Imported/corrupt manifest with wrong types must not crash accessors.
+        md = {"manifest": {"engines": ["not", "a", "dict"],
+                           "models": {"not": "a list"},
+                           "target": "not a dict"}}
+        self.assertEqual(run_engines(md), {})
+        self.assertEqual(run_models(md), [])
+        self.assertIsNone(run_target(md))
+
+
+class TestWhoAndHarnessModel(unittest.TestCase):
+    """#1 — the WHO (finder identity) sealed at start, and the agent-supplied
+    ambient harness model recorded at completion."""
+
+    def test_build_start_manifest_seals_who_when_set(self):
+        from unittest import mock
+        with mock.patch("core.run.identity.load_finder_identity",
+                        return_value={"name": "Jane Doe", "handle": "@jane"}):
+            m = build_start_manifest(target=None)
+            self.assertEqual(m["who"], {"name": "Jane Doe", "handle": "@jane"})
+
+    def test_build_start_manifest_omits_who_when_unset(self):
+        from unittest import mock
+        with mock.patch("core.run.identity.load_finder_identity", return_value=None):
+            self.assertNotIn("who", build_start_manifest(target=None))
+
+    def test_run_who_accessor(self):
+        self.assertEqual(run_who({"manifest": {"who": {"name": "Jane"}}}),
+                         {"name": "Jane"})
+        self.assertIsNone(run_who({"manifest": {}}))
+        self.assertIsNone(run_who(None))
+        self.assertIsNone(run_who({"manifest": {"who": "not-a-dict"}}))
+
+    def test_harness_model_entry_valid(self):
+        self.assertEqual(
+            harness_model_entry("claude-opus-4-7[1m]"),
+            {"role": "harness", "alias": "claude-opus-4-7[1m]",
+             "resolved": "claude-opus-4-7[1m]"})
+
+    def test_harness_model_entry_tolerates_agent_mistakes(self):
+        # The agent WILL fumble it — every bad shape must omit, never record junk.
+        for bad in (
+            None, "", "   ",
+            "<your-model-id>",            # unsubstituted placeholder
+            "claude-opus<x>",             # stray angle bracket
+            "--model",                    # a flag captured as the value
+            "-opus",                      # leading dash
+            "the model is opus",          # prose (whitespace)
+            "claude opus 4.7",            # whitespace
+            "x" * 200,                    # implausibly long
+            123,                          # non-string
+            # adversarial: manifest is publish-bound, so no injection/spoof
+            "claude\x00evil",             # null byte
+            "claude\x1b[31mRED",          # ANSI terminal-injection escape
+            "claude‮RTL",                 # unicode RTL-override spoof
+            "café-model",                 # non-ASCII (model ids are ASCII)
+        ):
+            self.assertIsNone(harness_model_entry(bad), f"should omit: {bad!r}")
 
 
 if __name__ == "__main__":

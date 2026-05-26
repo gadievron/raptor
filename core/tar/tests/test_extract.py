@@ -10,6 +10,8 @@ from __future__ import annotations
 import gzip
 import io
 import tarfile
+
+import pytest
 from typing import List, Optional
 
 from core.tar.extract import extract_files_from_tar
@@ -309,3 +311,18 @@ def test_selector_is_only_called_on_files():
         buf.getvalue(), selector=_s, mode="r:*",
     )
     assert seen == [("afile.txt", True)]
+
+
+def test_max_total_and_entry_caps_with_default_unchanged():
+    from core.tar.extract import TarEntryCountExceeded, TarTotalBytesExceeded
+    raw = _make_tar([(f"f{i}", b"A" * 100) for i in range(5)])
+    # Default (no caps): all extracted — existing callers unaffected.
+    assert len(extract_files_from_tar(raw, selector=lambda m: m.name, mode="r:")) == 5
+    # Aggregate-bytes cap raises (never silently truncates).
+    with pytest.raises(TarTotalBytesExceeded):
+        extract_files_from_tar(
+            raw, selector=lambda m: m.name, mode="r:", max_total_bytes=250)
+    # Entry-count cap raises.
+    with pytest.raises(TarEntryCountExceeded):
+        extract_files_from_tar(
+            raw, selector=lambda m: m.name, mode="r:", max_entry_count=2)

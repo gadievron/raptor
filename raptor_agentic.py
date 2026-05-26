@@ -2409,7 +2409,6 @@ Examples:
     # Mark run as completed
     try:
         from core.run import complete_run
-        from core.run.provenance import detect_engines as _provenance_detect_engines
         orch_meta = (orchestration_result or {}).get("orchestration", {})
         complete_run(out_dir, extra={
             "findings_count": analysed_count,
@@ -2420,15 +2419,11 @@ Examples:
             "aggregate_models": orch_meta.get("aggregate_models", []),
             "aggregated": orch_meta.get("aggregated", False),
         }, manifest={
-            # End-of-run provenance merged into the start-sealed manifest.
+            # Only the in-process fact the lifecycle can't see for itself: the
+            # models that fired. Engines (from the scan phase) and
+            # deterministically_reproducible=False (agentic is LLM-mediated)
+            # are filled uniformly by core.run.complete_run.
             "models": orch_meta.get("fired_models", []),
-            # Engines from the scan phase (/agentic runs semgrep/codeql before
-            # analysis) — captured the same way /scan does.
-            "engines": _provenance_detect_engines(out_dir),
-            # Agentic analysis is LLM-mediated by definition — the verdict path
-            # always runs through a model (in-process or subprocess), so the
-            # result is never deterministically reproducible.
-            "deterministically_reproducible": False,
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline

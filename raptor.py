@@ -80,24 +80,110 @@ def _extract_target(args: list) -> str | None:
     return None
 
 
-def _scan_engine_manifest(out_dir: Path, command: str) -> dict | None:
-    """End-of-run provenance for mechanical scan commands.
+def _rewrite_target_arg(args: list, old: str, new: str) -> list:
+    """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
+    ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
+    flags = ("--repo", "--binary", "--url")
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in flags and i + 1 < len(args) and args[i + 1] == old:
+            out += [a, new]
+            i += 2
+            continue
+        matched = next((f for f in flags if a == f"{f}={old}"), None)
+        out.append(f"{matched}={new}" if matched else a)
+        i += 1
+    return out
 
-    Only ``scan`` and ``codeql`` are purely mechanical — static rules/queries
-    with no LLM in the verdict path — so only they record engine versions and
-    ``deterministically_reproducible=True`` here. Other commands routed through
-    ``_run_with_lifecycle`` (agentic, fuzz, web) either manage their own
-    provenance (agentic seals ``deterministically_reproducible=False``) or are
-    not yet covered; returning None leaves their manifest untouched so we never
-    clobber it. Engines are detected from their canonical output files.
+
+_CACHE_NAME_ALLOWED = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _safe_cache_name(archive_name: str, sha: str) -> str:
+    """Content-cache dir name: ``<sanitised archive name>-<sha>`` — readable
+    *and* collision-free. The archive name is attacker-influenced, so it's
+    reduced to a safe charset, stripped of leading separators, and length-capped
+    before the sha (which alone guarantees uniqueness) is appended.
     """
-    if command not in ("scan", "codeql"):
+    base = "".join(c if c in _CACHE_NAME_ALLOWED else "_" for c in archive_name)
+    base = base.strip("._-")[:64] or "archive"
+    return f"{base}-{sha}"
+
+
+def _unpack_archive_target(target: str, args: list, out_dir: Path):
+    """Extract an archive ``target`` into a CONTENT-ADDRESSED shared cache and
+    point the scan at it.
+
+    The extraction lives at ``<out_dir.parent>/_sources/<archive_sha256>/`` —
+    automatically project-scoped (``<project>/_sources/…`` in project mode,
+    ``out/_sources/…`` otherwise) and deduped by content: one copy per distinct
+    archive shared across every run in that scope, never a per-run copy. A
+    second scan of the same archive is a cache hit (no re-extraction). The
+    extracted source persists (findings stay navigable; downstream can read the
+    flagged code); a ``<out_dir>/_source`` symlink makes each run navigable.
+
+    Returns ``(new_args, target_identity)`` — args with the target rewritten to
+    the cache dir and the manifest archive-identity block — or ``None`` if
+    extraction failed (caller should fail the run rather than scan the archive).
+    """
+    import shutil
+    import tempfile
+
+    from core.archive import extract_to_dir
+    from core.run.provenance import archive_snapshot
+
+    snap = archive_snapshot(target)
+    if snap is None:
         return None
-    from core.run.provenance import detect_engines
-    return {
-        "engines": detect_engines(out_dir),
-        "deterministically_reproducible": True,
-    }
+    sha = snap["archive_sha256"]
+    sources_root = out_dir.parent / "_sources"
+    sources_root.mkdir(parents=True, exist_ok=True)
+    # <name>-<sha> so the dir is self-describing ("what is this?") while the sha
+    # keeps it unique/collision-free.
+    cache_name = _safe_cache_name(snap["archive_name"], sha)
+    canonical = sources_root / cache_name
+
+    if canonical.exists():
+        print(f"[*] Reusing extracted {snap['format']} archive (cache hit {sha[:12]})")
+    else:
+        # Extract to a unique temp sibling, then atomically promote to <sha>/.
+        # Presence of <sha>/ therefore means a COMPLETE extraction, and a
+        # concurrent run racing us just loses the os.replace harmlessly.
+        tmp = Path(tempfile.mkdtemp(dir=sources_root, prefix=".extract-"))
+        try:
+            stats = extract_to_dir(target, tmp)
+        except Exception as e:
+            # Broad on purpose: extraction runs on attacker-controlled input,
+            # so ANY failure (ArchiveError, an unforeseen OSError/ValueError, or
+            # a MemoryError from an oversized archive) must fail the run
+            # gracefully — never crash raptor with a traceback.
+            shutil.rmtree(tmp, ignore_errors=True)
+            print(f"✗ archive extraction failed for {target}: {e}", file=sys.stderr)
+            return None
+        try:
+            os.replace(tmp, canonical)
+        except OSError:
+            shutil.rmtree(tmp, ignore_errors=True)  # lost the race; canonical is there
+        print(f"[*] Unpacked {stats['format']} archive: {stats['files']} files (cache {sha[:12]})")
+
+    # Acquisition stamp only — {source, archive_sha256, archive_name, format}.
+    # The extracted tree's content-equivalence id is the coverage store's to
+    # derive from the inventory, not a second source of truth recorded here.
+    identity = {"source": "archive", **snap}
+
+    # Local navigation aid: <out_dir>/_source -> the cached tree (relative).
+    try:
+        link = out_dir / "_source"
+        if not link.exists():
+            link.symlink_to(os.path.relpath(canonical, out_dir))
+    except OSError:
+        pass
+
+    new_args = _rewrite_target_arg(args, target, str(canonical))
+    return new_args, identity
 
 
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
@@ -108,6 +194,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     into the downstream script args, and marks the run complete or failed.
     """
     target = _extract_target(args)
+
     try:
         out_dir = get_output_dir(command, target_path=target)
     except TargetMismatchError as e:
@@ -122,7 +209,20 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
 
-    start_run(out_dir, command, target=target)
+    # Archive target: unpack into the content-addressed shared cache
+    # (<out_dir.parent>/_sources/<sha>), scan the extracted tree, and record the
+    # archive<->tree binding in the manifest. Deduped across runs; a re-scan of
+    # the same archive is a cache hit.
+    target_identity = None
+    if target and Path(target).is_file():
+        from core.archive import is_archive
+        if is_archive(target):
+            res = _unpack_archive_target(target, args, out_dir)
+            if res is None:
+                return 1  # extraction failed (message printed); no run sealed yet
+            args, target_identity = res
+
+    start_run(out_dir, command, target=target, target_identity=target_identity)
 
     # SAGE: Pre-scan recall
     try:
@@ -245,7 +345,10 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             pass
 
     if rc == 0:
-        complete_run(out_dir, manifest=_scan_engine_manifest(out_dir, command))
+        # Engine versions + deterministically_reproducible are filled by the
+        # lifecycle itself now (core.run.complete_run), uniformly for every
+        # command — no per-command manifest wiring here.
+        complete_run(out_dir)
     else:
         fail_run(out_dir, error=f"exit code {rc}")
     return rc

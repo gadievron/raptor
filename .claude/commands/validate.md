@@ -106,11 +106,13 @@ Skip Stage E if `--skip-feasibility` or no memory corruption findings.
 
 ### Stage 1 (Python): Report Generation
 
+Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the validation, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag; the run still completes, the model is just unrecorded.
+
 ```bash
-libexec/raptor-validation-helper 1 "$OUTPUT_DIR"
+libexec/raptor-validation-helper 1 "$OUTPUT_DIR" --model <your-model-id>
 ```
 
-This merges stage-f.json, generates the validation report, diagrams, coverage records, and completes the run lifecycle. The findings summary and coverage summary are printed to stdout.
+This merges stage-f.json, generates the validation report, diagrams, coverage records, and completes the run lifecycle (recording the model into the manifest). The findings summary and coverage summary are printed to stdout.
 
 Then read `{output_dir}/validation-report.md` and add a 1-2 sentence summary paragraph
 after the `# Exploitability Validation Report` header — e.g., "All 3 buffer overflows are

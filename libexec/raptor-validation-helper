@@ -1350,7 +1350,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
         raise
 
 
-def prepare_1(workdir, target=None):
+def prepare_1(workdir, target=None, model=None):
     """Stage 1: report, coverage, diagrams, complete lifecycle."""
     _apply_stage_file(workdir, "F")
 
@@ -1398,10 +1398,15 @@ def prepare_1(workdir, target=None):
     except Exception:
         pass
 
-    # Complete lifecycle
+    # Complete lifecycle. Record the ambient harness model the agent passed via
+    # --model (only the harness knows /model — RAPTOR's Python can't read it);
+    # omitted when not supplied.
     from core.run.metadata import complete_run
+    from core.run.provenance import harness_model_entry
     try:
-        complete_run(Path(workdir))
+        entry = harness_model_entry(model)
+        manifest = {"models": [entry]} if entry else None
+        complete_run(Path(workdir), manifest=manifest)
     except Exception as e:
         print(f"Lifecycle error: {e}")
 
@@ -1425,7 +1430,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--no-bridge]")
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge]")
         sys.exit(1)
 
     stage = args[0]
@@ -1439,6 +1444,13 @@ def main():
         idx = args.index("--out")
         if idx + 1 < len(args):
             explicit_out = args[idx + 1]
+    # Ambient harness model the agent passes (only it knows /model); stage 1
+    # records it into models[]. Omitted when absent.
+    model = None
+    if "--model" in args:
+        idx = args.index("--model")
+        if idx + 1 < len(args):
+            model = args[idx + 1]
     no_bridge = "--no-bridge" in args
 
     # Stage 0 creates its own workdir
@@ -1456,7 +1468,10 @@ def main():
         print(f"ERROR: workdir not found: {workdir}", file=sys.stderr)
         sys.exit(1)
 
-    STAGES[stage](workdir, target)
+    if stage == "1":
+        prepare_1(workdir, target, model=model)
+    else:
+        STAGES[stage](workdir, target)
 
 
 if __name__ == "__main__":

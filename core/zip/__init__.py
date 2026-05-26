@@ -45,7 +45,11 @@ Limitations:
 """
 
 from .eocd import DEFAULT_MAX_ENTRIES, peek_total_entries
-from .extract import ZipEntryCountExceeded, extract_files_from_zip
+from .extract import (
+    ZipEntryCountExceeded,
+    ZipTotalBytesExceeded,
+    extract_files_from_zip,
+)
 from .safe_member import (
     DEFAULT_MAX_MEMBER_BYTES,
     DEFAULT_MAX_RATIO,
@@ -60,6 +64,7 @@ __all__ = [
     "DEFAULT_MAX_RATIO",
     "UnsafeMemberReason",
     "ZipEntryCountExceeded",
+    "ZipTotalBytesExceeded",
     "extract_files_from_zip",
     "is_safe_member",
     "peek_total_entries",

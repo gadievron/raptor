@@ -251,3 +251,14 @@ def test_compression_bomb_skipped():
     )
     assert "bomb.bin" not in result
     assert result == {"ok.txt": b"hello"}
+
+
+def test_max_total_bytes_caps_aggregate_and_default_unchanged():
+    from core.zip.extract import ZipTotalBytesExceeded
+    z = _make_zip(*[(f"f{i}", b"A" * 100, None) for i in range(5)])
+    # Default (no cap): all members extracted — existing callers unaffected.
+    assert len(extract_files_from_zip(z, selector=lambda i: i.filename)) == 5
+    # A cap below the aggregate raises (never silently truncates).
+    with pytest.raises(ZipTotalBytesExceeded):
+        extract_files_from_zip(
+            z, selector=lambda i: i.filename, max_total_bytes=250)

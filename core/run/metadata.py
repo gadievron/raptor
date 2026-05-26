@@ -182,7 +182,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
-              target: str = None) -> Path:
+              target: str = None, target_identity: Dict[str, Any] = None) -> Path:
     """Write initial .raptor-run.json with status=running.
 
     Call this at the start of a command. Returns the output_dir (for chaining).
@@ -214,7 +214,7 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
         "command": command,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "status": STATUS_RUNNING,
-        "manifest": build_start_manifest(target=target),
+        "manifest": build_start_manifest(target=target, target_identity=target_identity),
         "extra": extra or {},
     }
     if session_pid is not None:
@@ -537,10 +537,15 @@ def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
                  manifest: Dict[str, Any] = None) -> None:
     """Update .raptor-run.json to status=completed.
 
-    ``manifest`` merges end-of-run provenance — the models that fired, engine
-    versions, ``deterministically_reproducible`` — into the manifest sealed at
+    ``manifest`` merges end-of-run provenance into the manifest sealed at
     start_run. Top-level keys overwrite; the start-sealed source_control /
     environment snapshots are preserved unless explicitly overwritten.
+
+    Standard end-of-run provenance the lifecycle can derive itself — engine
+    versions (``detect_engines``) and ``deterministically_reproducible`` (from
+    the command) — is filled automatically for EVERY completion path, so a
+    caller only needs to pass the facts unique to it (the models that fired).
+    Callers still win on conflict: an explicitly-passed key is never clobbered.
     """
     _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_COMPLETED, extra, manifest=manifest)
@@ -753,14 +758,37 @@ def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
         metadata["extra"] = existing_extra
 
     if manifest:
-        # Merge end-of-run provenance into the start-sealed manifest. Shallow
-        # top-level merge: source_control / environment (sealed at start) stay
-        # put; models / engines / deterministically_reproducible land here.
+        # Merge caller-supplied end-of-run provenance into the start-sealed
+        # manifest. Shallow top-level merge: source_control / environment
+        # (sealed at start) stay put; models land here.
         existing_manifest = metadata.get("manifest", {})
         existing_manifest.update(manifest)
         metadata["manifest"] = existing_manifest
 
+    if status == STATUS_COMPLETED:
+        _apply_standard_provenance(metadata, Path(output_dir))
+
     save_json(path, metadata)
+
+
+def _apply_standard_provenance(metadata: Dict[str, Any], output_dir: Path) -> None:
+    """Fill the manifest with the standard end-of-run provenance the lifecycle
+    derives itself — engine versions + ``deterministically_reproducible`` — so
+    EVERY completion path enriches uniformly without per-command wiring.
+
+    Caller-supplied keys win (``setdefault``): the lifecycle only fills gaps,
+    never clobbers a value a command passed via ``complete_run(manifest=...)``.
+    Skipped when there's no real manifest to enrich — a run that predates
+    manifest capture carries the ``provenance: unavailable`` stamp, and a run
+    whose ``start_run`` never sealed one has no ``manifest`` key at all.
+    """
+    existing = metadata.get("manifest")
+    if not existing or existing.get("provenance") == "unavailable":
+        return
+    from core.run.provenance import standard_completion_provenance
+    standard = standard_completion_provenance(output_dir, metadata.get("command"))
+    for key, value in standard.items():
+        existing.setdefault(key, value)
 
 
 def parse_timestamp_from_name(name: str) -> Optional[str]:

@@ -18,7 +18,7 @@ import hashlib
 import platform
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 # Repo root = parents[2] of this file:
 #   parents[0] = core/run   (this module's dir)
@@ -196,6 +196,53 @@ def target_snapshot(target_path: Optional[Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def archive_snapshot(archive_path: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """Identity of the SCANNED ARCHIVE file — the "which distribution" half.
+
+    Hashes the archive bytes; returns ``{archive_sha256, archive_name, format}``
+    or None if it isn't a recognised archive. Publish-safe (hash + name only,
+    no path).
+    """
+    if not archive_path:
+        return None
+    from core.archive import detect_format
+    p = Path(archive_path)
+    fmt = detect_format(p)
+    if fmt is None:
+        return None
+    try:
+        digest = _sha256_file(p)
+    except OSError:
+        return None
+    return {"archive_sha256": digest, "archive_name": p.name, "format": fmt}
+
+
+def archive_target_identity(
+    archive_path: Optional[Any],
+) -> Optional[Dict[str, Any]]:
+    """Compose the manifest ``target`` block for an archive target — the
+    archive file's ACQUISITION identity ``{source, archive_sha256,
+    archive_name, format}``. None if ``archive_path`` isn't a recognised
+    archive. Hashes/names only, so (unlike the git block) it's publish-safe.
+
+    The extracted tree's content-EQUIVALENCE id is deliberately not here: that
+    is the coverage store's to derive from the inventory (one content identity,
+    and it belongs to the store, not a second source of truth in the manifest).
+    """
+    a = archive_snapshot(archive_path)
+    if a is None:
+        return None
+    return {"source": "archive", **a}
+
+
 # Canonical per-run output files that signal an engine ran, mapped to the
 # probe name in _VERSION_PROBES. Semgrep/CodeQL emit SARIF (``<engine>_*.sarif``;
 # ``.json`` tolerated for alternate modes); coccinelle emits ``cocci.sarif``.
@@ -218,6 +265,47 @@ def detect_engines(out_dir: Any) -> Dict[str, Optional[str]]:
         if any(any(out_dir.glob(p)) for p in patterns):
             engines[name] = tool_version(name)
     return engines
+
+
+# Commands whose verdict is a pure function of the inputs — static rules /
+# queries, no LLM and no stochastic/runtime component — so a re-run on the
+# same tree reproduces the same findings. Fuzzing (stochastic mutation),
+# dynamic web scans (target-state-dependent), and every LLM-mediated command
+# (agentic / validate / understand) are NOT deterministically reproducible.
+# #4 will refine this single bool into a richer `method` taxonomy
+# (mechanical / runtime / llm_assisted); for now the bool preserves exactly
+# the scan/codeql=True, everything-else=False behaviour the per-command
+# callers hard-coded, while letting the lifecycle apply it uniformly.
+_DETERMINISTIC_COMMANDS = frozenset({"scan", "codeql"})
+
+
+def is_deterministically_reproducible(command: Optional[str]) -> bool:
+    """Whether ``command``'s verdict path is deterministic (no LLM, no
+    stochastic/runtime component) — i.e. re-running on the same inputs
+    reproduces the same findings."""
+    return command in _DETERMINISTIC_COMMANDS
+
+
+def standard_completion_provenance(
+    out_dir: Any, command: Optional[str],
+) -> Dict[str, Any]:
+    """The end-of-run provenance EVERY command contributes, derived only from
+    facts the lifecycle can see for itself: which engines left output, and
+    whether the command's verdict is deterministic.
+
+    Centralised here so enrichment is uniform across every completion path —
+    the Python orchestrators (scan / codeql / agentic) AND the Claude-driven
+    commands that finish through the lifecycle stubs (/validate, /understand)
+    — instead of being hand-wired per caller (which is why coverage used to be
+    uneven). Facts only an in-process orchestrator knows — the models that
+    fired — stay with the caller and merge separately; the lifecycle fills
+    these two only where the caller didn't supply them.
+    """
+    return {
+        "engines": detect_engines(out_dir),
+        "deterministically_reproducible": is_deterministically_reproducible(
+            command),
+    }
 
 
 def environment_snapshot() -> Dict[str, Any]:
@@ -244,24 +332,41 @@ def environment_snapshot() -> Dict[str, Any]:
 
 
 def build_start_manifest(repo_dir: Optional[Path] = None,
-                         target: Optional[Any] = None) -> Dict[str, Any]:
+                         target: Optional[Any] = None,
+                         target_identity: Optional[Dict[str, Any]] = None,
+                         ) -> Dict[str, Any]:
     """Assemble the manifest fragment sealed at run START.
 
     Carries a ``schema`` integer so the manifest can evolve independently of
     the enclosing .raptor-run.json ``version``. complete_run later merges
     end-of-run facts (models, engines) into this same dict.
 
-    ``target`` (the scanned path) is snapshotted into a ``target`` block when
-    it is a git checkout — the "what code was analysed" half of attribution.
+    The ``target`` block (the "what code was analysed" half of attribution) is
+    an ACQUISITION stamp — how the code arrived, NOT a content-equivalence id
+    (that is the coverage store's, derived from the inventory's per-file SHAs):
+    ``target_identity`` verbatim when the caller supplies one (e.g. the archive
+    block from a target the run unpacked), else ``target_snapshot(target)`` for
+    a git checkout, else ``{source: "directory"}`` for a plain directory.
     """
     manifest: Dict[str, Any] = {
         "schema": 1,
         "source_control": source_control_snapshot(repo_dir),
         "environment": environment_snapshot(),
     }
-    tgt = target_snapshot(target)
+    tgt = target_identity if target_identity is not None else target_snapshot(target)
+    if not tgt and target and Path(target).is_dir():
+        # Non-git, non-archive directory: record only that it was a directory
+        # acquisition. Its content identity is the coverage store's to derive.
+        tgt = {"source": "directory"}
     if tgt:
         manifest["target"] = tgt
+    # WHO — the operator's public-facing identity (#485), from the per-uid
+    # ~/.raptor/identity.json. Omitted entirely when unset (no default); the
+    # citation view gates on its presence. See core.run.identity.
+    from core.run.identity import load_finder_identity
+    who = load_finder_identity()
+    if who:
+        manifest["who"] = who
     return manifest
 
 
@@ -395,6 +500,20 @@ def public_view(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             # Hash only — the diff content is never stored, so this is safe.
             "diff_sha256": sc.get("diff_sha256"),
         }
+    # Target block: a git target carries commit/branch (possibly a private
+    # engagement) → dropped. A non-git target (archive / directory) is an
+    # acquisition stamp — hashes + names only → publish-safe, the attribution a
+    # citation wants ("found in archive X"). Discriminate by `commit`. The
+    # content-equivalence id is the coverage store's, not published here.
+    tgt = manifest.get("target")
+    if isinstance(tgt, dict) and not tgt.get("commit"):
+        safe_tgt = {
+            k: tgt[k] for k in
+            ("source", "archive_sha256", "archive_name", "format")
+            if k in tgt
+        }
+        if safe_tgt:
+            pub["target"] = safe_tgt
     # Field-allowlist INSIDE each sub-dict too — never forward verbatim, so a
     # crafted/imported manifest can't smuggle a path or secret under an extra
     # key in environment / engines / models.
@@ -523,3 +642,121 @@ def format_provenance_rollup(summary: Dict[str, Any]) -> str:
     if summary.get("unavailable"):
         lines.append(f"  Provenance unavailable: {summary['unavailable']} run(s)")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Manifest read accessors — the stable read contract.
+#
+# Consumers that read a run's provenance (the CoverageStore's import step, the
+# /project rollup, a future citation view) go through THESE rather than indexing
+# the raw ``.raptor-run.json`` dict, so the manifest's internal shape can evolve
+# without breaking them. Every accessor takes the loaded run-metadata dict (from
+# ``load_run_metadata(run_dir)``) and degrades gracefully — missing/legacy
+# fields return None / empty, never raise — so the same call works against an
+# old manifest, today's, and one with fields not yet added.
+#
+# The companion location convention is ``RUN_METADATA_FILE`` +
+# ``load_run_metadata(run_dir)`` in core.run.metadata.
+# ---------------------------------------------------------------------------
+
+
+def run_manifest(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The sealed manifest sub-dict of a loaded run metadata, or ``{}`` when
+    absent or the 'unavailable' stamp (legacy/adopted runs). The base every
+    field accessor below reads through."""
+    if not run_metadata:
+        return {}
+    m = run_metadata.get("manifest")
+    if not isinstance(m, dict) or m.get("provenance") == "unavailable":
+        return {}
+    return m
+
+
+def run_engines(run_metadata: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+    """``{engine_name: version}`` that ran (version may be None), or ``{}``."""
+    engines = run_manifest(run_metadata).get("engines")
+    return dict(engines) if isinstance(engines, dict) else {}
+
+
+def run_models(run_metadata: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The models that fired — each a dict with ``provider`` / ``alias`` /
+    ``resolved`` (the snapshot, not the floating alias) / ``role`` / ``calls``.
+    ``[]`` when none (e.g. a mechanical scan)."""
+    models = run_manifest(run_metadata).get("models")
+    return [m for m in models if isinstance(m, dict)] if isinstance(models, list) else []
+
+
+def run_target(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The target's ACQUISITION stamp — how the code was acquired: git
+    ``{vcs, commit, branch, dirty}`` / archive ``{source, archive_sha256, …}`` /
+    ``{source: "directory"}``. None when absent.
+
+    This is the loose, per-acquisition audit stamp, NOT a content-equivalence
+    id: two acquisitions of identical bytes (a git checkout vs a zip) carry
+    *different* stamps here by design. A consumer that needs content
+    equivalence (git-X ≡ zip-X) derives it from the inventory's per-file
+    SHA-256 set, not from this field.
+    """
+    target = run_manifest(run_metadata).get("target")
+    return target if isinstance(target, dict) else None
+
+
+def run_framework_sha(run_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The RAPTOR framework ``base_sha`` that produced the run, or None."""
+    sc = run_manifest(run_metadata).get("source_control")
+    return sc.get("base_sha") if isinstance(sc, dict) else None
+
+
+def run_timestamp(run_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The run's start timestamp (ISO 8601). Top-level on the metadata, not in
+    the manifest — the accessor hides that."""
+    if not run_metadata:
+        return None
+    ts = run_metadata.get("timestamp")
+    return ts if isinstance(ts, str) else None
+
+
+def run_deterministically_reproducible(
+    run_metadata: Optional[Dict[str, Any]],
+) -> Optional[bool]:
+    """Whether the run's verdict is a pure function of its inputs (mechanical),
+    or None when the manifest predates the field — so a consumer can tell
+    "not reproducible" apart from "unknown"."""
+    v = run_manifest(run_metadata).get("deterministically_reproducible")
+    return v if isinstance(v, bool) else None
+
+
+def run_who(run_metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The operator's public-facing identity (``{name, handle?, url?}``) sealed
+    at run start, or None when no identity was set — the WHO a citation
+    credits. See core.run.identity."""
+    who = run_manifest(run_metadata).get("who")
+    return who if isinstance(who, dict) else None
+
+
+def harness_model_entry(model: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A ``models[]`` entry for an agent-supplied ambient harness model — the
+    only value only the harness (the Claude session) knows, since RAPTOR's
+    Python can't read ``/model`` (no env var). The completion stubs build this
+    from the ``--model`` the /validate, /understand skills instruct the agent
+    to pass.
+
+    Hardened against the agent getting it wrong (it will): an unsubstituted
+    ``<your-model-id>`` placeholder, a stray flag captured as the value (leading
+    ``-``), whitespace-bearing prose, an empty/missing string, or an
+    implausibly long value all return None — the manifest then omits the model
+    rather than recording garbage (a wrong/junk model is worse than absent)."""
+    if not isinstance(model, str):
+        return None
+    m = model.strip()
+    if (not m
+            or m.startswith("-")                # a stray flag captured as value
+            or "<" in m or ">" in m             # unsubstituted <placeholder>
+            or len(m) > 128                      # implausibly long
+            # printable non-space ASCII only (0x21-0x7e): model ids are ASCII
+            # with no spaces, so this single check rejects prose/whitespace,
+            # control bytes (\x00, \x1b ANSI escapes), and unicode tricks
+            # (RTL-override) that would inject into / spoof the published manifest.
+            or any(not (0x21 <= ord(ch) <= 0x7e) for ch in m)):
+        return None
+    return {"role": "harness", "alias": m, "resolved": m}
