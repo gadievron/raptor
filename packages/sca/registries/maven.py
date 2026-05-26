@@ -17,6 +17,8 @@ from typing import List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,8 +108,7 @@ class MavenClient:
                 url, headers=self._request_headers(),
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.maven: fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.maven", name, e)
             if self._cache is not None:
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []

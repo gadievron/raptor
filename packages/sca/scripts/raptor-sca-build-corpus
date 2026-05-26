@@ -61,6 +61,12 @@ def main() -> int:
              "metasploit, github_poc, osv_evidence, vulnrichment",
     )
     parser.add_argument(
+        "--jobs", "-j", type=int, default=0,
+        help="sources to fetch in parallel (default: auto — one thread per "
+             "source, capped at 8). Each is an independent download to its "
+             "own host + file. Use 1 to force sequential.",
+    )
+    parser.add_argument(
         "--offline", action="store_true",
         help="don't fetch — exits 0 with a no-op log line. For "
              "test environments without network.",
@@ -84,7 +90,7 @@ def main() -> int:
         sources = [s.strip() for s in args.sources.split(",") if s.strip()]
 
     from packages.sca.calibration import build_corpus
-    results = build_corpus(out_dir=out_dir, sources=sources)
+    results = build_corpus(out_dir=out_dir, sources=sources, jobs=args.jobs)
 
     any_changed = False
     any_ok = False

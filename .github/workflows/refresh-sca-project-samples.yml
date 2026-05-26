@@ -37,8 +37,10 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    # Higher than the daily refreshes — cloning + scanning ten
-    # projects can run 30-60 minutes on a cold cache.
+    # Higher than the daily refreshes — cloning + scanning the corpus is
+    # the heaviest job. The collector now scans projects in parallel
+    # (``--jobs``), which cut a sequential ~20-min run to a few minutes;
+    # the headroom stays for cold caches and corpus growth.
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -65,7 +67,10 @@ jobs:
         # better than no refresh.
         run: |
           set +e
-          packages/sca/scripts/raptor-sca-collect-samples -v
+          # ``--jobs 4`` matches the ubuntu-latest vCPU count. Each project
+          # scans in its own process (full isolation; the egress proxy binds
+          # an ephemeral per-process port) and they share the on-disk cache.
+          packages/sca/scripts/raptor-sca-collect-samples -v --jobs 4
           # Don't propagate the per-sample exit code — partial
           # success still produces a useful diff.
           true

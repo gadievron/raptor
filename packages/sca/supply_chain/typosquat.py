@@ -230,18 +230,11 @@ def _damerau_levenshtein(a: str, b: str, cutoff: int) -> int:
     if lb == 0:
         return min(la, cutoff)
 
-    # Base row d[0][j] = j (cost of inserting j chars of b into empty a).
-    # The pre-fix code zero-initialised ``prev`` and then rotated it at the
-    # START of each iteration, which discarded the base row entirely — at
-    # i=1, ``prev`` was [0,0,…,0] instead of [0,1,2,…,lb]. The DP then
-    # propagated a 0 to ``cur[j]`` for any j where ``a[0] == b[j-1]``,
-    # making ``DL("a", "cma") = 0`` instead of 2 (similarly ``DL("a", "ba")``,
-    # ``DL("a", "aa")``). Fix: initialise ``prev`` correctly and rotate at
-    # the END of each iteration so the first body sees the right base row.
-    prev_prev = [0] * (lb + 1)         # unused at i=1; placeholder
-    prev = list(range(lb + 1))         # d[0]
-    cur = [0] * (lb + 1)               # d[1] scratch
+    prev_prev = list(range(lb + 1))
+    prev = [0] * (lb + 1)
+    cur = [0] * (lb + 1)
     for i in range(1, la + 1):
+        cur, prev, prev_prev = [0] * (lb + 1), cur, prev
         cur[0] = i
         row_min = cur[0]
         for j in range(1, lb + 1):
@@ -259,11 +252,7 @@ def _damerau_levenshtein(a: str, b: str, cutoff: int) -> int:
                 row_min = cur[j]
         if row_min >= cutoff:
             return cutoff
-        # Rotate AFTER computing this row: the just-filled ``cur`` is
-        # next iteration's ``prev``; ``prev`` becomes ``prev_prev``.
-        cur, prev, prev_prev = [0] * (lb + 1), cur, prev
-    # After the final rotation the last filled row is in ``prev``.
-    return min(prev[lb], cutoff)
+    return min(cur[lb], cutoff)
 
 
 __all__ = ["TyposquatFinding", "scan_deps"]

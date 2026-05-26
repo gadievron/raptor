@@ -38,6 +38,8 @@ from typing import Any, List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 from ..versions.debian import compare as _debian_compare
 
 logger = logging.getLogger(__name__)
@@ -110,8 +112,7 @@ class DebianClient:
         try:
             data = self._http.get_json(url)
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.debian: fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.debian", name, e)
             if self._cache is not None:
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []

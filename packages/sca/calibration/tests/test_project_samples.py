@@ -183,6 +183,58 @@ def test_one_sample_failing_doesnt_abort_others(tmp_path: Path):
     assert "simulated clone failure" in by_name["bad"].error
 
 
+def test_parallel_collects_all_samples_input_order(tmp_path: Path):
+    """jobs>1 runs projects across a process pool and returns one result
+    per sample in INPUT order (not completion order), with per-project
+    failures isolated. Uses the ``fork`` start method so the patched
+    ``_collect_one`` is inherited by the worker processes."""
+    samples = [
+        ProjectSample(name=f"p{i}", ecosystem="PyPI",
+                       repo_url=f"https://p{i}/", git_ref="v1",
+                       license_spdx="MIT")
+        for i in range(5)
+    ]
+
+    def _fake(s, *args, **kw):
+        # Emit to stdout so the worker's fd-level capture is exercised.
+        print(f"scanning {s.name}")
+        if s.name == "p3":
+            raise RuntimeError("boom p3")
+        return CollectResult(
+            project=s.name, ecosystem=s.ecosystem,
+            written=True, error=None, finding_count=len(s.name),
+        )
+
+    with patch(
+        "packages.sca.calibration.project_samples._collect_one",
+        side_effect=_fake,
+    ):
+        results = collect_project_samples(
+            out_dir=tmp_path, samples=samples,
+            jobs=3, prewarm=False, _mp_start_method="fork",
+        )
+
+    assert [r.project for r in results] == [f"p{i}" for i in range(5)]
+    by = {r.project: r for r in results}
+    assert by["p0"].written is True
+    assert by["p3"].error is not None and "boom p3" in by["p3"].error
+    # The four non-failing projects all produced a result.
+    assert sum(1 for r in results if r.written) == 4
+
+
+def test_prewarm_global_feeds_is_best_effort(monkeypatch):
+    """The KEV pre-warm must never raise — a fetch/import failure just
+    leaves workers to load the catalog themselves."""
+    from packages.sca.calibration import project_samples as ps
+
+    def _boom():
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("core.http.default_client", _boom)
+    # Should swallow the error, not propagate.
+    ps._prewarm_global_feeds()
+
+
 def test_default_samples_all_have_licenses():
     """The curated list ships with declared licenses — sanity-
     check the data file."""

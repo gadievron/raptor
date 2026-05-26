@@ -285,6 +285,27 @@ def test_build_corpus_one_source_failing_doesnt_abort_others(
     assert (tmp_path / "epss_signals.json").exists()
 
 
+def test_build_corpus_parallel_preserves_input_order(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """With jobs>1 the sources run on a thread pool; results must still come
+    back in INPUT order (not completion order), and all sources must run."""
+    import packages.sca.calibration.build as build
+
+    def _fake(source, out_dir, http):
+        return build.BuildResult(
+            source=source, written=True, error=None, record_count=1,
+        )
+
+    monkeypatch.setattr(build, "_build_one_source", _fake)
+    sources = ["kev", "epss", "exploitdb", "metasploit", "github_poc"]
+    results = build.build_corpus(
+        out_dir=tmp_path, http=object(), sources=sources, jobs=4,
+    )
+    assert [r.source for r in results] == sources
+    assert all(r.written for r in results)
+
+
 # ---------------------------------------------------------------------------
 # Diff-friendliness
 # ---------------------------------------------------------------------------

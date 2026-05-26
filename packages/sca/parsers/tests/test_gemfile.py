@@ -64,6 +64,37 @@ def test_git_dependency(tmp_path: Path) -> None:
     assert deps[0].pin_style is PinStyle.GIT
 
 
+def test_non_version_shaped_spec_treated_as_unpinned(tmp_path: Path) -> None:
+    """A quoted non-version where a version goes (a constant lexed loosely)
+    must not become the version — it would 404 on every registry lookup.
+    Gem versions start with a digit; anything else → unpinned."""
+    body = """gem 'ibm_db', 'IBM_DB'\n"""
+    p = _write(tmp_path, body, "Gemfile")
+    deps = parse_manifest(p)
+    assert deps[0].name == "ibm_db"
+    assert deps[0].version is None
+    assert deps[0].pin_style is PinStyle.WILDCARD
+
+
+def test_lockfile_skips_non_version_shaped_rows(tmp_path: Path) -> None:
+    """A malformed ``specs:`` row whose version isn't digit-led is skipped,
+    not emitted as a phantom gem. Real (incl. platform) rows survive."""
+    body = """\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ffi (1.9.18-java)
+    bogus (IBM_DB)
+    rails (7.1.2)
+"""
+    p = _write(tmp_path, body, "Gemfile.lock")
+    deps = parse_lockfile(p)
+    names = {d.name: d.version for d in deps}
+    assert names.get("ffi") == "1.9.18-java"   # platform suffix preserved
+    assert names.get("rails") == "7.1.2"
+    assert "bogus" not in names
+
+
 def test_github_shorthand_dependency(tmp_path: Path) -> None:
     body = """gem 'rails', github: 'rails/rails'\n"""
     p = _write(tmp_path, body, "Gemfile")

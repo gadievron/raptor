@@ -37,8 +37,12 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing as mp
+import os
 import subprocess
+import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -583,6 +587,9 @@ def collect_project_samples(
     git_clone_timeout: int = 120,
     sca_timeout: int = 300,
     only_licenses: Optional[List[str]] = None,
+    jobs: int = 1,
+    prewarm: bool = True,
+    _mp_start_method: str = "spawn",
 ) -> List[CollectResult]:
     """Clone each sample, run SCA, write findings.
 
@@ -591,6 +598,10 @@ def collect_project_samples(
     processed. Operators concerned about license-touch can pass
     e.g. ``["MIT", "Apache-2.0", "BSD-3-Clause"]`` to skip
     anything else.
+
+    ``jobs`` > 1 scans projects in parallel across a process pool (see
+    :func:`_collect_parallel`); the in-process ``http``/``cache`` args are
+    then ignored (each worker builds its own, sharing the on-disk cache).
 
     Returns one :class:`CollectResult` per attempted sample
     (errored or successful). The function never raises on
@@ -606,6 +617,13 @@ def collect_project_samples(
             if any(lic in s.license_spdx for lic in allowed)
         ]
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if jobs > 1 and len(samples) > 1:
+        return _collect_parallel(
+            samples, out_dir, jobs=jobs,
+            git_clone_timeout=git_clone_timeout, sca_timeout=sca_timeout,
+            mp_start_method=_mp_start_method, prewarm=prewarm,
+        )
 
     results: List[CollectResult] = []
     for sample in samples:
@@ -626,6 +644,129 @@ def collect_project_samples(
             )
         results.append(result)
     return results
+
+
+def _prewarm_global_feeds() -> None:
+    """Load run-global network feeds into the shared on-disk cache ONCE,
+    before the worker pool fans out. The CISA KEV catalog is a single ~1.5 MB
+    document fetched per process; without a pre-warm, N parallel workers each
+    cold-miss it and re-fetch — a cache stampede that parallelism introduces.
+    One warm fetch here populates the shared JsonCache root that every worker
+    reads. Best-effort: any failure just leaves workers to fetch it themselves
+    (the pre-parallel behaviour), so it never blocks a run.
+
+    (EPSS and Vulnrichment are per-CVE, not a single document, so they can't
+    be pre-warmed this cheaply; the exploit-evidence corpus is a local dir.)
+    """
+    try:
+        from core.cve import KevClient
+        from core.http import default_client
+        from core.json import JsonCache
+
+        from .. import SCA_CACHE_ROOT
+        cache = JsonCache(root=SCA_CACHE_ROOT)
+        # A throwaway lookup forces the catalog load → writes the disk cache.
+        KevClient(default_client(), cache).contains("CVE-1970-0000")
+    except Exception as e:                                  # noqa: BLE001
+        logger.debug("sca.calibration: KEV pre-warm skipped: %s", e)
+
+
+def _collect_parallel(
+    samples: List[ProjectSample],
+    out_dir: Path,
+    *,
+    jobs: int,
+    git_clone_timeout: int,
+    sca_timeout: int,
+    mp_start_method: str,
+    prewarm: bool = True,
+) -> List[CollectResult]:
+    """Run the per-project collect across a process pool.
+
+    Each project is independent (its own temp clone + own output file), so
+    they parallelise cleanly. Workers run in separate processes — full
+    isolation, no thread-safety assumptions about the SCA pipeline, and the
+    CPU-heavy reachability phase actually parallelises. A shared in-process
+    ``http``/``cache`` can't cross the process boundary, so each worker builds
+    its own; they still share the on-disk JsonCache root (concurrent-write
+    safe), which is what dedups advisory/registry lookups across projects.
+
+    Process start method is ``spawn`` in production (a fresh interpreter per
+    worker — the egress proxy binds an ephemeral 127.0.0.1 port per process,
+    so no collision); tests inject ``fork`` so a monkeypatched ``_collect_one``
+    is inherited by workers.
+    """
+    if prewarm:
+        _prewarm_global_feeds()
+    ctx = mp.get_context(mp_start_method)
+    results: List[Optional[CollectResult]] = [None] * len(samples)
+    with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
+        fut_to_idx = {
+            pool.submit(
+                _collect_one_captured,
+                (sample, out_dir, git_clone_timeout, sca_timeout),
+            ): i
+            for i, sample in enumerate(samples)
+        }
+        for fut in as_completed(fut_to_idx):
+            idx = fut_to_idx[fut]
+            sample = samples[idx]
+            try:
+                result, captured = fut.result()
+            except Exception as e:                          # noqa: BLE001
+                # A worker crash (segfault, pickling error, OOM-kill) must
+                # not sink the whole run — record it and keep the rest.
+                result = CollectResult(
+                    project=sample.name, ecosystem=sample.ecosystem,
+                    written=False, error=f"worker crashed: {e}",
+                    finding_count=0,
+                )
+                captured = ""
+            # Flush this project's full output as one contiguous block (in
+            # completion order) so parallel logs stay readable instead of
+            # interleaving line-by-line.
+            if captured:
+                sys.stdout.write(captured)
+                sys.stdout.flush()
+            results[idx] = result
+    # Return in input order (stable summary), independent of completion order.
+    return [r for r in results if r is not None]
+
+
+def _collect_one_captured(
+    args: "tuple[ProjectSample, Path, int, int]",
+) -> "tuple[CollectResult, str]":
+    """Process-pool worker: run ``_collect_one`` with all output (prints,
+    logging, the rich ``sca >`` progress, and subprocess stdio) redirected at
+    the file-descriptor level into a temp file, so the parent can flush it as
+    one readable block. Returns ``(result, captured_text)`` and never raises —
+    failures come back as a ``CollectResult`` with ``error`` set.
+    """
+    sample, out_dir, git_clone_timeout, sca_timeout = args
+    with tempfile.TemporaryFile(mode="w+", prefix="sca-cap-") as cap:
+        old_out, old_err = os.dup(1), os.dup(2)
+        os.dup2(cap.fileno(), 1)
+        os.dup2(cap.fileno(), 2)
+        try:
+            result = _collect_one(
+                sample, out_dir, http=None, cache=None,
+                git_clone_timeout=git_clone_timeout, sca_timeout=sca_timeout,
+            )
+        except Exception as e:                              # noqa: BLE001
+            result = CollectResult(
+                project=sample.name, ecosystem=sample.ecosystem,
+                written=False, error=str(e), finding_count=0,
+            )
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(old_out, 1)
+            os.dup2(old_err, 2)
+            os.close(old_out)
+            os.close(old_err)
+        cap.seek(0)
+        captured = cap.read()
+    return result, captured
 
 
 def _collect_one(

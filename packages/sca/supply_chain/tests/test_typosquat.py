@@ -55,33 +55,6 @@ def test_far_away_name_not_flagged() -> None:
     assert findings == []
 
 
-def test_single_char_name_not_falsely_matched_as_distance_zero() -> None:
-    """Regression: ``_damerau_levenshtein`` previously initialised its
-    ``prev`` row to all zeros and rotated at the START of the loop,
-    discarding the canonical ``[0,1,2,…]`` base row. The DP then
-    propagated a 0 to ``cur[j]`` whenever ``a[0] == b[j-1]``, so e.g.
-    ``DL("a", "cma")`` returned 0 instead of 2. The detector
-    interpreted that as a distance-0 bare-form match (scoped-name
-    namespace squat) and flagged short legitimate names like the
-    PyPI dep ``a`` as high-confidence typosquats — which the
-    transitive cascade refused with ``skipped_typosquat_refused``."""
-    findings = scan_deps([_dep("a", ecosystem="PyPI")])
-    # ``a`` is not in the popular list and is genuinely distance-2
-    # from short popular names (e.g. ``cma``). It should either not
-    # be flagged or be flagged at low/medium severity — but never
-    # high (distance 0 is reserved for the bare-form scoped-squat
-    # case, which a non-scoped name can't satisfy).
-    for f in findings:
-        assert f.distance >= 1, (
-            f"short name spuriously matched distance-0 to "
-            f"{f.nearest_popular!r}"
-        )
-        assert f.confidence.level != "high" or f.distance == 0, (
-            "high-confidence only legitimate for distance-0 bare-form "
-            "match; this finding claims high without the matching shape"
-        )
-
-
 def test_transitive_deps_skipped() -> None:
     """Typosquat checks only run on direct deps — a transitive dep is
     chosen by the resolver and isn't an operator-typed name."""

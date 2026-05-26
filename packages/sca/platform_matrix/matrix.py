@@ -238,13 +238,13 @@ def _walk_devcontainer(
         logger.debug("platform_matrix: failed to read %s: %s", path, e)
         return
 
-    # Strip // line comments + /* block comments */ before parsing.
-    import json
-    text_stripped = re.sub(r"//.*?$", "", text, flags=re.MULTILINE)
-    text_stripped = re.sub(r"/\*.*?\*/", "", text_stripped, flags=re.DOTALL)
+    # devcontainer.json is JSONC (comments + trailing commas). Use the shared
+    # string-aware loader — a naive ``//`` strip mangles a ``//`` inside a URL
+    # value (e.g. an "image" / "features" URL) and silently breaks the parse.
+    from core.json.jsonc import load_jsonc
     try:
-        data = json.loads(text_stripped)
-    except json.JSONDecodeError:
+        data = load_jsonc(text)
+    except ValueError:        # JSONDecodeError is a ValueError subclass
         return
     if not isinstance(data, dict):
         return

@@ -15,6 +15,8 @@ from typing import List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,8 +56,7 @@ class RubyGemsClient:
             data = self._http.get_json(
                 f"https://rubygems.org/api/v1/versions/{name}.json")
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.rubygems: fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.rubygems", name, e)
             if self._cache is not None:
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []
@@ -107,7 +108,15 @@ class RubyGemsClient:
         ``dependencies: {runtime: [...], development: [...]}``.
         Used by the transitive-drop detector to diff dep state
         across versions."""
-        cache_key = f"rubygems-vmeta:{name}:{version}"
+        # RubyGems lockfiles spell platform-specific gems as
+        # "1.9.18-java" / "1.0.0-x86_64-linux", but the v2 per-version
+        # endpoint keys on the canonical version only (platform is a
+        # separate attribute). A gem version string never contains '-', so
+        # everything from the first '-' is the platform tag — strip it, or
+        # every platform-pinned gem 404s. Caching on the canonical version
+        # also dedups the java/x64/x86 variants onto one fetch.
+        canonical = version.split("-", 1)[0]
+        cache_key = f"rubygems-vmeta:{name}:{canonical}"
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
@@ -117,10 +126,15 @@ class RubyGemsClient:
         try:
             data = self._http.get_json(
                 f"https://rubygems.org/api/v2/rubygems/{name}/"
-                f"versions/{version}.json",
+                f"versions/{canonical}.json",
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning(
+            # A 404 here is expected and non-fatal: yanked versions (e.g.
+            # mimemagic 0.3.2) and versions absent from the v2 index simply
+            # have no per-version metadata, and the caller treats None as
+            # "no data". Keep it at debug so a routine miss doesn't spam the
+            # run log — real yank detection is the yanked-versions stage's job.
+            logger.debug(
                 "sca.registries.rubygems: version-meta fetch failed "
                 "for %r==%r: %s", name, version, e,
             )

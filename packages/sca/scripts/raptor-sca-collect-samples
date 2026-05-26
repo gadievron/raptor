@@ -29,6 +29,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -68,6 +69,12 @@ def main() -> int:
         help="raptor-sca timeout per project (default 300s)",
     )
     parser.add_argument(
+        "--jobs", "-j", type=int, default=min(4, (os.cpu_count() or 2)),
+        help="number of projects to scan in parallel (default: "
+             "min(4, nproc)). Each runs in its own process; they share "
+             "the on-disk cache. Use 1 to force sequential.",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="emit per-sample status lines",
     )
@@ -93,6 +100,7 @@ def main() -> int:
         only_licenses=only_licenses,
         git_clone_timeout=args.clone_timeout,
         sca_timeout=args.sca_timeout,
+        jobs=args.jobs,
     )
 
     any_failed = False
