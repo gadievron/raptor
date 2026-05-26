@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:12:26Z",
+    "fetched_at": "2026-05-26T23:45:45Z",
     "git_ref": "3.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of flask",
@@ -193,7 +193,7 @@
           "examples/javascript/js_example/views.py:1",
           "examples/javascript/js_example/views.py:2",
           "examples/javascript/js_example/views.py:3",
-          "examples/tutorial/flaskr/db.py:4",
+          "examples/celery/src/task_app/__init__.py:3",
           "... and 21 more"
         ],
         "verdict": "imported"
@@ -271,7 +271,7 @@
           "examples/javascript/js_example/views.py:1",
           "examples/javascript/js_example/views.py:2",
           "examples/javascript/js_example/views.py:3",
-          "examples/tutorial/flaskr/db.py:4",
+          "examples/celery/src/task_app/__init__.py:3",
           "... and 21 more"
         ],
         "verdict": "imported"
@@ -710,11 +710,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -788,11 +788,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -863,11 +863,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -935,11 +935,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -1007,11 +1007,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -1085,11 +1085,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"
@@ -1162,11 +1162,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/flask/typing.py:7",
-          "src/flask/typing.py:8",
           "src/flask/app.py:15",
           "src/flask/app.py:16",
           "src/flask/app.py:17",
+          "src/flask/app.py:18",
+          "src/flask/app.py:19",
           "... and 104 more"
         ],
         "verdict": "imported"

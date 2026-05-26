@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:19:21Z",
+    "fetched_at": "2026-05-26T23:50:23Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -2422,6 +2422,68 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [],
+        "id": "RUSTSEC-2025-0134",
+        "informational": "unmaintained",
+        "modified": "2025-12-05T19:07:59.622592+00:00",
+        "published": "2025-11-28T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rustls-pemfile",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0134.html",
+          "https://github.com/rustls/pemfile/issues/61"
+        ],
+        "severity": null,
+        "summary": "rustls-pemfile is unmaintained"
+      },
+      "cvss_score": null,
+      "dep_name": "rustls-pemfile",
+      "dep_version": "1.0.2",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rustls-pemfile:1.0.2:RUSTSEC-2025-0134",
+      "in_kev": false,
+      "purl": "pkg:cargo/rustls-pemfile@1.0.2",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch/src/option.rs:20"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2024-32650",
           "GHSA-6g7w-8wpp-frhj"
@@ -2490,68 +2552,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [],
-        "fixed_versions": [],
-        "id": "RUSTSEC-2025-0134",
-        "informational": "unmaintained",
-        "modified": "2025-12-05T19:07:59.622592+00:00",
-        "published": "2025-11-28T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rustls-pemfile",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0134.html",
-          "https://github.com/rustls/pemfile/issues/61"
-        ],
-        "severity": null,
-        "summary": "rustls-pemfile is unmaintained"
-      },
-      "cvss_score": null,
-      "dep_name": "rustls-pemfile",
-      "dep_version": "1.0.2",
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:rustls-pemfile:1.0.2:RUSTSEC-2025-0134",
-      "in_kev": false,
-      "purl": "pkg:cargo/rustls-pemfile@1.0.2",
-      "raptor_risk_estimate": 8.268975749999997,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "meilisearch/src/option.rs:20"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -2872,11 +2872,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "meilisearch-auth/src/lib.rs:16",
+          "meilisearch-auth/src/store.rs:17",
           "dump/src/lib.rs:12",
           "dump/src/lib.rs:214",
           "dump/src/writer.rs:11",
-          "dump/src/reader/v6/mod.rs:7",
-          "dump/src/reader/v2/updates.rs:2",
           "... (+42 more)"
         ],
         "verdict": "imported"

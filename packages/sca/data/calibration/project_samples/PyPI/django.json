@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:12:26Z",
+    "fetched_at": "2026-05-26T23:45:55Z",
     "git_ref": "4.2.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django",
@@ -9,6 +9,142 @@
     "url": "https://github.com/django/django.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-32274"
+        ],
+        "fixed_versions": [
+          "26.3.1"
+        ],
+        "id": "GHSA-3936-cmfr-pm3m",
+        "modified": "2026-03-16T16:44:03.077621+00:00",
+        "published": "2026-03-12T18:33:10+00:00",
+        "references": [
+          "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-32274",
+          "https://github.com/psf/black/pull/5038",
+          "https://github.com/psf/black/commit/4937fe6cf241139ddbfc16b0bdbb5b422798909d",
+          "https://github.com/psf/black"
+        ],
+        "severity": null,
+        "summary": "Black: Arbitrary file writes from unsanitized user input in cache file name"
+      },
+      "cvss_score": null,
+      "dep_name": "black",
+      "dep_version": "23.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00023,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-3936-cmfr-pm3m",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.3.0",
+      "raptor_risk_estimate": 4.914704909073764,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39941736899999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.914704909073764,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21503",
+          "PYSEC-2024-48"
+        ],
+        "fixed_versions": [
+          "24.3.0"
+        ],
+        "id": "GHSA-fj7x-q9j7-g6q6",
+        "modified": "2026-02-04T03:39:28.463485+00:00",
+        "published": "2024-03-19T06:30:52+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
+          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
+          "https://github.com/psf/black",
+          "https://github.com/psf/black/releases/tag/24.3.0",
+          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "black",
+      "dep_version": "23.3.0",
+      "ecosystem": "PyPI",
+      "epss": 0.00081,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
+      "in_kev": false,
+      "purl": "pkg:pypi/black@23.3.0",
+      "raptor_risk_estimate": 18.81909990589183,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
+        },
+        "evidence": [],
+        "verdict": "not_evaluated"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399713343,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 18.81909990589183,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.6817,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -228,142 +364,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-32274"
-        ],
-        "fixed_versions": [
-          "26.3.1"
-        ],
-        "id": "GHSA-3936-cmfr-pm3m",
-        "modified": "2026-03-16T16:44:03.077621+00:00",
-        "published": "2026-03-12T18:33:10+00:00",
-        "references": [
-          "https://github.com/psf/black/security/advisories/GHSA-3936-cmfr-pm3m",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-32274",
-          "https://github.com/psf/black/pull/5038",
-          "https://github.com/psf/black/commit/4937fe6cf241139ddbfc16b0bdbb5b422798909d",
-          "https://github.com/psf/black"
-        ],
-        "severity": null,
-        "summary": "Black: Arbitrary file writes from unsanitized user input in cache file name"
-      },
-      "cvss_score": null,
-      "dep_name": "black",
-      "dep_version": "23.3.0",
-      "ecosystem": "PyPI",
-      "epss": 0.00023,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-3936-cmfr-pm3m",
-      "in_kev": false,
-      "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 4.914704909073764,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
-        },
-        "evidence": [],
-        "verdict": "not_evaluated"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39941736899999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.914704909073764,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6817,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-21503",
-          "PYSEC-2024-48"
-        ],
-        "fixed_versions": [
-          "24.3.0"
-        ],
-        "id": "GHSA-fj7x-q9j7-g6q6",
-        "modified": "2026-02-04T03:39:28.463485+00:00",
-        "published": "2024-03-19T06:30:52+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-21503",
-          "https://github.com/psf/black/commit/f00093672628d212b8965a8993cee8bedf5fe9b8",
-          "https://github.com/psf/black",
-          "https://github.com/psf/black/releases/tag/24.3.0",
-          "https://github.com/pypa/advisory-database/tree/main/vulns/black/PYSEC-2024-48.yaml"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Black vulnerable to Regular Expression Denial of Service (ReDoS)"
-      },
-      "cvss_score": 5.3,
-      "dep_name": "black",
-      "dep_version": "23.3.0",
-      "ecosystem": "PyPI",
-      "epss": 0.00081,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
-      "in_kev": false,
-      "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 18.81909990589183,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "tier-3 wheel-metadata fetch attempted for black==23.3.0 but no module mapping resolved against project scan"
-        },
-        "evidence": [],
-        "verdict": "not_evaluated"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399713343,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 18.81909990589183,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.6817,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

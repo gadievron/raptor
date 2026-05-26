@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:13:04Z",
+    "fetched_at": "2026-05-26T23:46:04Z",
     "git_ref": "2.2.20",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django-2.2",

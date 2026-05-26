@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:19:13Z",
+    "fetched_at": "2026-05-26T23:50:16Z",
     "git_ref": "12.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of drush-12",
@@ -9,83 +9,6 @@
     "url": "https://github.com/drush-ops/drush.git"
   },
   "findings": [
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-25129"
-        ],
-        "fixed_versions": [
-          "0.12.19",
-          "0.11.23"
-        ],
-        "id": "GHSA-4486-gxhx-5mg7",
-        "modified": "2026-02-03T03:13:39.153449+00:00",
-        "published": "2026-01-30T21:28:44+00:00",
-        "references": [
-          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
-          "https://github.com/bobthecow/psysh",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
-      },
-      "cvss_score": 6.7,
-      "dep_name": "psy/psysh",
-      "dep_version": "v0.11.21",
-      "ecosystem": "Packagist",
-      "epss": 5e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:psy/psysh:v0.11.21:GHSA-4486-gxhx-5mg7",
-      "in_kev": false,
-      "purl": "pkg:composer/psy/psysh@v0.11.21",
-      "raptor_risk_estimate": 20.720771088639207,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Psy\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "src/Commands/core/CliCommands.php:16",
-          "src/Commands/core/CliCommands.php:17",
-          "src/Psysh/DrushHelpCommand.php:6",
-          "src/Psysh/DrushCommand.php:10",
-          "src/Psysh/Shell.php:6"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39932551499999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 20.720771088639207,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
     {
       "advisory": {
         "aliases": [
@@ -133,11 +56,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -212,11 +135,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -291,11 +214,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -369,11 +292,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -449,11 +372,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -528,11 +451,11 @@
           "reason": "vendor `Drupal\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
           "... (+241 more)"
         ],
         "verdict": "imported"
@@ -553,6 +476,1540 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2026-6365",
+          "CVE-2026-6365"
+        ],
+        "fixed_versions": [
+          "10.5.9",
+          "10.6.7",
+          "11.2.11",
+          "11.3.7"
+        ],
+        "id": "DRUPAL-CORE-2026-001",
+        "modified": "2026-05-21T09:26:01.119793+00:00",
+        "published": "2026-04-15T19:24:30+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2026-001"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00033,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-001",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.0472832213649985,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399468399,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.0472832213649985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2026-6366",
+          "CVE-2026-6366"
+        ],
+        "fixed_versions": [
+          "10.5.9",
+          "10.6.7",
+          "11.2.11",
+          "11.3.7"
+        ],
+        "id": "DRUPAL-CORE-2026-002",
+        "modified": "2026-05-21T09:26:08.698854+00:00",
+        "published": "2026-04-15T19:25:23+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2026-002"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00052,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-002",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.0485082730599995,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399565356,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.0485082730599995,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-9082"
+        ],
+        "fixed_versions": [
+          "10.4.10",
+          "10.5.10",
+          "10.6.9",
+          "11.1.10",
+          "11.2.12",
+          "11.3.10"
+        ],
+        "id": "DRUPAL-CORE-2026-004",
+        "modified": "2026-05-21T19:00:03.853407+00:00",
+        "published": "2026-05-20T18:08:21+00:00",
+        "references": [
+          "https://www.drupal.org/sa-core-2026-004"
+        ],
+        "severity": null,
+        "summary": ""
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.17334,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": true,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-004",
+      "in_kev": true,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 26.202319809725747,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.487755402,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 26.202319809725747,
+        "kev_multiplier": 1.7569,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-31674",
+          "CVE-2025-31674",
+          "DRUPAL-CORE-2025-003"
+        ],
+        "fixed_versions": [
+          "10.3.13",
+          "10.4.3",
+          "11.0.12",
+          "11.1.3"
+        ],
+        "id": "GHSA-2qph-q8xw-gv7q",
+        "modified": "2025-12-10T23:41:08.718269+00:00",
+        "published": "2025-04-01T00:30:33+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-31674",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-003"
+        ],
+        "severity": null,
+        "summary": "Drupal Core Improperly Controlled Modification of Dynamically-Determined Object Attributes Vulnerability"
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00314,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-2qph-q8xw-gv7q",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.06540109117,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40090234199999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.06540109117,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-3057",
+          "CVE-2025-3057",
+          "DRUPAL-CORE-2025-001"
+        ],
+        "fixed_versions": [
+          "10.3.13",
+          "10.4.3",
+          "11.0.12",
+          "11.1.3"
+        ],
+        "id": "GHSA-39g6-x4x8-5jcm",
+        "modified": "2025-12-10T23:41:10.146111+00:00",
+        "published": "2025-04-01T00:30:35+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-3057",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-001"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Drupal Core Potential Cross-Site Scripting (XSS) via Error Messages"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00406,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-39g6-x4x8-5jcm",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 7.733782703655749,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.401371818,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.733782703655749,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-11942",
+          "CVE-2024-11942",
+          "DRUPAL-CORE-2024-002"
+        ],
+        "fixed_versions": [
+          "10.2.10"
+        ],
+        "id": "GHSA-52jr-x6h6-xj6g",
+        "modified": "2025-12-10T23:40:59.635498+00:00",
+        "published": "2024-12-05T15:31:02+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-11942",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-002"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Drupal core vulnerable to improper error handling"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.01558,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-52jr-x6h6-xj6g",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 7.589774365010249,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.407250474,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.589774365010249,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "10.1.8",
+          "10.2.2"
+        ],
+        "id": "GHSA-6ccv-8fgf-cjpw",
+        "modified": "2024-11-29T05:26:49.838861+00:00",
+        "published": "2024-02-12T22:31:34+00:00",
+        "references": [
+          "https://github.com/drupal/core/commit/2f76ac716ca8019bc60579fdfc8aa6cd65d57dff",
+          "https://github.com/drupal/core/commit/5e606b560ac4ecb08135f12b6165bbe0348346a0",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/drupal/core/2024-01-17.yaml",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-001"
+        ],
+        "severity": null,
+        "summary": "Drupal core Denial of Service vulnerability"
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-6ccv-8fgf-cjpw",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-55634",
+          "CVE-2024-55634",
+          "DRUPAL-CORE-2024-004"
+        ],
+        "fixed_versions": [
+          "10.2.11",
+          "10.3.9",
+          "11.0.8"
+        ],
+        "id": "GHSA-7cwc-fjqm-8vh8",
+        "modified": "2025-12-10T23:41:13.673688+00:00",
+        "published": "2024-12-10T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-55634",
+          "https://github.com/drupal/core/commit/7ae0e8f1824e15f8b2b06e4da09836250e85e934",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-004"
+        ],
+        "severity": null,
+        "summary": "Drupal core Access bypass"
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.01148,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-7cwc-fjqm-8vh8",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.119174412939999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.405158244,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.119174412939999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13080",
+          "CVE-2025-13080",
+          "DRUPAL-CORE-2025-005"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "GHSA-83v7-c2cf-p9c2",
+        "modified": "2025-12-10T23:41:07.744028+00:00",
+        "published": "2025-11-18T18:32:53+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-13080",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-005"
+        ],
+        "severity": null,
+        "summary": "Drupal core allows Forceful Browsing"
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00093,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-83v7-c2cf-p9c2",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.051151805664999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.39977457899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.051151805664999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-12393",
+          "CVE-2024-12393",
+          "DRUPAL-CORE-2024-003"
+        ],
+        "fixed_versions": [
+          "10.2.11",
+          "10.3.9",
+          "11.0.8"
+        ],
+        "id": "GHSA-8mvq-8h2v-j9vf",
+        "modified": "2025-12-10T23:41:11.305616+00:00",
+        "published": "2024-12-10T00:31:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-12393",
+          "https://github.com/drupal/core/commit/276ac67ad891605052e0a24fb36ece9caaa511e8",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-003"
+        ],
+        "severity": {
+          "score": 5.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Drupal Core Cross-Site Scripting (XSS)"
+      },
+      "cvss_score": 5.4,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.02544,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-8mvq-8h2v-j9vf",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 7.032397690331999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 54.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.41228203199999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.032397690331999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-55636",
+          "CVE-2024-55636",
+          "DRUPAL-CORE-2024-006"
+        ],
+        "fixed_versions": [
+          "10.2.11",
+          "10.3.9",
+          "11.0.8"
+        ],
+        "id": "GHSA-938f-5r4f-h65v",
+        "modified": "2025-12-10T23:41:12.826760+00:00",
+        "published": "2024-12-10T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-55636",
+          "https://github.com/drupal/core/commit/17f362b988e6ad6bd5cc1e7e8a7a0804e1536fbc",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-006"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.11473,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-938f-5r4f-h65v",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 14.172988571684249,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.45784671899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.172988571684249,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-55638",
+          "CVE-2024-55638",
+          "DRUPAL-CORE-2024-008"
+        ],
+        "fixed_versions": [
+          "10.2.11",
+          "10.3.9",
+          "7.102"
+        ],
+        "id": "GHSA-gvf2-2f4g-jqf4",
+        "modified": "2025-12-10T23:41:03.440447+00:00",
+        "published": "2024-12-10T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-55638",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-008"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.09932,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-gvf2-2f4g-jqf4",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 13.929561128426998,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.44998299599999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.929561128426998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13082",
+          "CVE-2025-13082",
+          "DRUPAL-CORE-2025-007"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "GHSA-h89p-5896-f4q8",
+        "modified": "2025-12-10T23:41:19.050806+00:00",
+        "published": "2025-11-18T18:32:53+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-13082",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-007"
+        ],
+        "severity": null,
+        "summary": "Drupal core allows Content Spoofing"
+      },
+      "cvss_score": null,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00044,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-h89p-5896-f4q8",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.04799246182,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399524532,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.04799246182,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-31675",
+          "CVE-2025-31675",
+          "DRUPAL-CORE-2025-004"
+        ],
+        "fixed_versions": [
+          "10.3.14",
+          "10.4.5",
+          "11.0.13",
+          "11.1.5"
+        ],
+        "id": "GHSA-m4wj-hhwj-47qp",
+        "modified": "2026-04-06T17:46:18.151624+00:00",
+        "published": "2025-04-01T00:30:33+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-31675",
+          "https://d7es.tag1.com/security-advisories/link-moderately-critical-cross-site-scripting-sa-core-2025-004",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-004",
+          "https://www.herodevs.com/vulnerability-directory/cve-2025-31675"
+        ],
+        "severity": {
+          "score": 5.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Drupal Core Cross-Site Scripting (XSS) Vulnerability"
+      },
+      "cvss_score": 5.4,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00081,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m4wj-hhwj-47qp",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 6.818010419886749,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 54.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399713343,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.818010419886749,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13081",
+          "CVE-2025-13081",
+          "DRUPAL-CORE-2025-006"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8"
+        ],
+        "id": "GHSA-m6vv-vcj8-w8m7",
+        "modified": "2025-12-10T23:41:16.689525+00:00",
+        "published": "2025-11-18T18:32:53+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-13081",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-006"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Drupal core allows Object Injection"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00135,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m6vv-vcj8-w8m7",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 7.454443226645625,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399988905,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.454443226645625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45440"
+        ],
+        "fixed_versions": [
+          "10.3.6",
+          "11.0.5",
+          "10.2.9"
+        ],
+        "id": "GHSA-mg8j-w93w-xjgc",
+        "modified": "2025-04-23T15:02:55.541812+00:00",
+        "published": "2024-08-29T12:31:05+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-45440",
+          "https://github.com/github/advisory-database/pull/4827",
+          "https://github.com/drupal/drupal",
+          "https://senscybersecurity.nl/CVE-2024-45440-Explained",
+          "https://www.drupal.org/project/drupal/issues/3457781"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Drupal Full Path Disclosure"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.87541,
+      "exploit_evidence": {
+        "edb_ids": [
+          52266
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mg8j-w93w-xjgc",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 33.802890143815915,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.846021723,
+        "exploit_evidence_multiplier": 1.5839,
+        "exposure_multiplier": 0.5,
+        "final": 33.802890143815915,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-13083",
+          "CVE-2025-13083",
+          "DRUPAL-CORE-2025-008"
+        ],
+        "fixed_versions": [
+          "10.4.9",
+          "10.5.6",
+          "11.1.9",
+          "11.2.8",
+          "7.103"
+        ],
+        "id": "GHSA-mhpg-hpj5-73r2",
+        "modified": "2026-02-03T03:15:35.495869+00:00",
+        "published": "2025-11-18T18:32:53+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-13083",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-008"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Drupal core allows Exploiting Incorrectly Configured Access Control Security Levels"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00011,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mhpg-hpj5-73r2",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 4.667424884920874,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399356133,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.667424884920874,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-55637",
+          "CVE-2024-55637",
+          "DRUPAL-CORE-2024-007"
+        ],
+        "fixed_versions": [
+          "10.2.11",
+          "10.3.9",
+          "11.0.8"
+        ],
+        "id": "GHSA-w6rx-9g2x-mg5g",
+        "modified": "2025-12-10T23:41:12.148111+00:00",
+        "published": "2024-12-10T00:31:27+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-55637",
+          "https://github.com/drupal/core/commit/1664030d399c73b4144f410f2ccc68c66a947f8d",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-007"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.09982,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-w6rx-9g2x-mg5g",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 13.937459488039499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.450238146,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.937459488039499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2025-31673",
+          "CVE-2025-31673",
+          "DRUPAL-CORE-2025-002"
+        ],
+        "fixed_versions": [
+          "10.3.13",
+          "10.4.3",
+          "11.0.12",
+          "11.1.3"
+        ],
+        "id": "GHSA-wpp8-fjgf-pwc7",
+        "modified": "2025-12-10T23:41:12.209689+00:00",
+        "published": "2025-04-01T00:30:33+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-31673",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2025-002"
+        ],
+        "severity": {
+          "score": 4.6,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Drupal Core Vulnerable to Forceful Browsing"
+      },
+      "cvss_score": 4.6,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00173,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-wpp8-fjgf-pwc7",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 5.814756405774748,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 46.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40018281899999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.814756405774748,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2024-11941",
+          "CVE-2024-11941",
+          "DRUPAL-CORE-2024-001"
+        ],
+        "fixed_versions": [
+          "10.1.8",
+          "10.2.2"
+        ],
+        "id": "GHSA-xq54-x54m-vcpx",
+        "modified": "2025-12-10T23:41:20.710292+00:00",
+        "published": "2024-12-05T15:31:02+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-11941",
+          "https://github.com/drupal/core",
+          "https://www.drupal.org/sa-core-2024-001"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Drupal core Denial of Service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "drupal/core",
+      "dep_version": "10.1.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00692,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-xq54-x54m-vcpx",
+      "in_kev": false,
+      "purl": "pkg:composer/drupal/core@10.1.4",
+      "raptor_risk_estimate": 9.543324697987497,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "`use Drupal\\Core\\...` found in non-test source"
+        },
+        "evidence": [
+          "src/Drupal/DrupalUtil.php:6",
+          "src/Drupal/DrupalUtil.php:8",
+          "src/Drupal/ExtensionDiscovery.php:6",
+          "src/Drupal/DrupalKernelTrait.php:8",
+          "src/Drupal/DrupalKernelTrait.php:9",
+          "... (+180 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.402831276,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.543324697987497,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -609,10 +2066,10 @@
         },
         "evidence": [
           "tests/unit/SiteAliasNameTest.php:6",
+          "tests/unit/ExpandWildcardTablesTest.php:8",
           "tests/unit/EnvironmentTest.php:8",
-          "tests/unit/SiteAliasFileDiscoveryTest.php:6",
           "tests/unit/SiteAliasFileLoaderTest.php:9",
-          "tests/unit/UserAbortExceptionTest.php:8",
+          "tests/unit/MigrateRunnerTest.php:11",
           "... (+9 more)"
         ],
         "verdict": "not_reachable"
@@ -633,6 +2090,239 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25129"
+        ],
+        "fixed_versions": [
+          "0.12.19",
+          "0.11.23"
+        ],
+        "id": "GHSA-4486-gxhx-5mg7",
+        "modified": "2026-02-03T03:13:39.153449+00:00",
+        "published": "2026-01-30T21:28:44+00:00",
+        "references": [
+          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
+          "https://github.com/bobthecow/psysh",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
+        ],
+        "severity": {
+          "score": 6.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
+      },
+      "cvss_score": 6.7,
+      "dep_name": "psy/psysh",
+      "dep_version": "v0.11.21",
+      "ecosystem": "Packagist",
+      "epss": 5e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:psy/psysh:v0.11.21:GHSA-4486-gxhx-5mg7",
+      "in_kev": false,
+      "purl": "pkg:composer/psy/psysh@v0.11.21",
+      "raptor_risk_estimate": 20.720771088639207,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Psy\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "src/Commands/core/CliCommands.php:16",
+          "src/Commands/core/CliCommands.php:17",
+          "src/Psysh/Shell.php:6",
+          "src/Psysh/DrushHelpCommand.php:6",
+          "src/Psysh/DrushCommand.php:10"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 67.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39932551499999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.720771088639207,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-64500"
+        ],
+        "fixed_versions": [
+          "5.4.50",
+          "6.4.29",
+          "7.3.7"
+        ],
+        "id": "GHSA-3rg7-wf37-54rm",
+        "modified": "2026-02-04T03:01:05.453147+00:00",
+        "published": "2025-11-12T21:50:37+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
+          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
+        ],
+        "severity": {
+          "score": 7.3,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+        },
+        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
+      },
+      "cvss_score": 7.3,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v6.3.4",
+      "ecosystem": "Packagist",
+      "epss": 0.06657,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-3rg7-wf37-54rm",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
+      "raptor_risk_estimate": 9.990734243755124,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
+          "drush.php:8",
+          "src/Utils/FsUtils.php:11",
+          "... (+261 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 73.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.433270671,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.990734243755124,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-50345"
+        ],
+        "fixed_versions": [
+          "5.4.46",
+          "6.4.14",
+          "7.1.7"
+        ],
+        "id": "GHSA-mrqx-rp3w-jpjp",
+        "modified": "2025-11-03T23:05:56.908103+00:00",
+        "published": "2024-11-06T15:22:09+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
+          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
+        ],
+        "severity": {
+          "score": 3.1,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
+      },
+      "cvss_score": 3.1,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v6.3.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00394,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-mrqx-rp3w-jpjp",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
+      "raptor_risk_estimate": 3.9296833827667492,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
+          "drush.php:8",
+          "src/Utils/FsUtils.php:11",
+          "... (+261 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 31.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40131058199999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.9296833827667492,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -687,10 +2377,10 @@
         },
         "evidence": [
           "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
           "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
           "drush.php:8",
-          "src/Commands/DrushCommands.php:27",
+          "src/Utils/FsUtils.php:11",
           "... (+261 more)"
         ],
         "verdict": "imported"
@@ -711,6 +2401,84 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-50343"
+        ],
+        "fixed_versions": [
+          "5.4.43",
+          "6.4.11",
+          "7.1.4"
+        ],
+        "id": "GHSA-g3rh-rrhp-jhh9",
+        "modified": "2025-11-03T23:16:31.077246+00:00",
+        "published": "2024-11-06T15:21:08+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-g3rh-rrhp-jhh9",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-50343",
+          "https://github.com/symfony/symfony/commit/7d1032bbead9a4229b32fa6ebca32681c80cb76f",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50343.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/validator/CVE-2024-50343.yaml"
+        ],
+        "severity": {
+          "score": 3.1,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Symfony has an incorrect response from Validator when input ends with `\\n`"
+      },
+      "cvss_score": 3.1,
+      "dep_name": "symfony/validator",
+      "dep_version": "v6.3.4",
+      "ecosystem": "Packagist",
+      "epss": 0.00246,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/validator:v6.3.4:GHSA-g3rh-rrhp-jhh9",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/validator@v6.3.4",
+      "raptor_risk_estimate": 3.9222879391132492,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "doctum-config.php:10",
+          "src/Commands/core/PhpCommands.php:12",
+          "src/Commands/core/TwigCommands.php:19",
+          "drush.php:8",
+          "src/Utils/FsUtils.php:11",
+          "... (+261 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 31.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.400555338,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.9222879391132492,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -1180,1774 +2948,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-11941",
-          "CVE-2024-11941",
-          "DRUPAL-CORE-2024-001"
-        ],
-        "fixed_versions": [
-          "10.1.8",
-          "10.2.2"
-        ],
-        "id": "GHSA-xq54-x54m-vcpx",
-        "modified": "2025-12-10T23:41:20.710292+00:00",
-        "published": "2024-12-05T15:31:02+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-11941",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-001"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Drupal core Denial of Service"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00692,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-xq54-x54m-vcpx",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 9.543324697987497,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402831276,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.543324697987497,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-11942",
-          "CVE-2024-11942",
-          "DRUPAL-CORE-2024-002"
-        ],
-        "fixed_versions": [
-          "10.2.10"
-        ],
-        "id": "GHSA-52jr-x6h6-xj6g",
-        "modified": "2025-12-10T23:40:59.635498+00:00",
-        "published": "2024-12-05T15:31:02+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-11942",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-002"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Drupal core vulnerable to improper error handling"
-      },
-      "cvss_score": 5.9,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.01558,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-52jr-x6h6-xj6g",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.589774365010249,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.407250474,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.589774365010249,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-12393",
-          "CVE-2024-12393",
-          "DRUPAL-CORE-2024-003"
-        ],
-        "fixed_versions": [
-          "10.2.11",
-          "10.3.9",
-          "11.0.8"
-        ],
-        "id": "GHSA-8mvq-8h2v-j9vf",
-        "modified": "2025-12-10T23:41:11.305616+00:00",
-        "published": "2024-12-10T00:31:26+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-12393",
-          "https://github.com/drupal/core/commit/276ac67ad891605052e0a24fb36ece9caaa511e8",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-003"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Drupal Core Cross-Site Scripting (XSS)"
-      },
-      "cvss_score": 5.4,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.02544,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-8mvq-8h2v-j9vf",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.032397690331999,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41228203199999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.032397690331999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-55634",
-          "CVE-2024-55634",
-          "DRUPAL-CORE-2024-004"
-        ],
-        "fixed_versions": [
-          "10.2.11",
-          "10.3.9",
-          "11.0.8"
-        ],
-        "id": "GHSA-7cwc-fjqm-8vh8",
-        "modified": "2025-12-10T23:41:13.673688+00:00",
-        "published": "2024-12-10T00:31:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-55634",
-          "https://github.com/drupal/core/commit/7ae0e8f1824e15f8b2b06e4da09836250e85e934",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-004"
-        ],
-        "severity": null,
-        "summary": "Drupal core Access bypass"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.01148,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-7cwc-fjqm-8vh8",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.119174412939999,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.405158244,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.119174412939999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-55636",
-          "CVE-2024-55636",
-          "DRUPAL-CORE-2024-006"
-        ],
-        "fixed_versions": [
-          "10.2.11",
-          "10.3.9",
-          "11.0.8"
-        ],
-        "id": "GHSA-938f-5r4f-h65v",
-        "modified": "2025-12-10T23:41:12.826760+00:00",
-        "published": "2024-12-10T00:31:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-55636",
-          "https://github.com/drupal/core/commit/17f362b988e6ad6bd5cc1e7e8a7a0804e1536fbc",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-006"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.11473,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-938f-5r4f-h65v",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 14.172988571684249,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.45784671899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.172988571684249,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-55637",
-          "CVE-2024-55637",
-          "DRUPAL-CORE-2024-007"
-        ],
-        "fixed_versions": [
-          "10.2.11",
-          "10.3.9",
-          "11.0.8"
-        ],
-        "id": "GHSA-w6rx-9g2x-mg5g",
-        "modified": "2025-12-10T23:41:12.148111+00:00",
-        "published": "2024-12-10T00:31:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-55637",
-          "https://github.com/drupal/core/commit/1664030d399c73b4144f410f2ccc68c66a947f8d",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-007"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.09982,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-w6rx-9g2x-mg5g",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 13.937459488039499,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.450238146,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.937459488039499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2024-55638",
-          "CVE-2024-55638",
-          "DRUPAL-CORE-2024-008"
-        ],
-        "fixed_versions": [
-          "10.2.11",
-          "10.3.9",
-          "7.102"
-        ],
-        "id": "GHSA-gvf2-2f4g-jqf4",
-        "modified": "2025-12-10T23:41:03.440447+00:00",
-        "published": "2024-12-10T00:31:27+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-55638",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-008"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Drupal core contains a potential PHP Object Injection vulnerability"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.09932,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-gvf2-2f4g-jqf4",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 13.929561128426998,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.44998299599999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.929561128426998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-3057",
-          "CVE-2025-3057",
-          "DRUPAL-CORE-2025-001"
-        ],
-        "fixed_versions": [
-          "10.3.13",
-          "10.4.3",
-          "11.0.12",
-          "11.1.3"
-        ],
-        "id": "GHSA-39g6-x4x8-5jcm",
-        "modified": "2025-12-10T23:41:10.146111+00:00",
-        "published": "2025-04-01T00:30:35+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-3057",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-001"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Drupal Core Potential Cross-Site Scripting (XSS) via Error Messages"
-      },
-      "cvss_score": 6.1,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00406,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-39g6-x4x8-5jcm",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.733782703655749,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401371818,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.733782703655749,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-31673",
-          "CVE-2025-31673",
-          "DRUPAL-CORE-2025-002"
-        ],
-        "fixed_versions": [
-          "10.3.13",
-          "10.4.3",
-          "11.0.12",
-          "11.1.3"
-        ],
-        "id": "GHSA-wpp8-fjgf-pwc7",
-        "modified": "2025-12-10T23:41:12.209689+00:00",
-        "published": "2025-04-01T00:30:33+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-31673",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-002"
-        ],
-        "severity": {
-          "score": 4.6,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Drupal Core Vulnerable to Forceful Browsing"
-      },
-      "cvss_score": 4.6,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00173,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-wpp8-fjgf-pwc7",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.814756405774748,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 46.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40018281899999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.814756405774748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-31674",
-          "CVE-2025-31674",
-          "DRUPAL-CORE-2025-003"
-        ],
-        "fixed_versions": [
-          "10.3.13",
-          "10.4.3",
-          "11.0.12",
-          "11.1.3"
-        ],
-        "id": "GHSA-2qph-q8xw-gv7q",
-        "modified": "2025-12-10T23:41:08.718269+00:00",
-        "published": "2025-04-01T00:30:33+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-31674",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-003"
-        ],
-        "severity": null,
-        "summary": "Drupal Core Improperly Controlled Modification of Dynamically-Determined Object Attributes Vulnerability"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00314,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-2qph-q8xw-gv7q",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.06540109117,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40090234199999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.06540109117,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-31675",
-          "CVE-2025-31675",
-          "DRUPAL-CORE-2025-004"
-        ],
-        "fixed_versions": [
-          "10.3.14",
-          "10.4.5",
-          "11.0.13",
-          "11.1.5"
-        ],
-        "id": "GHSA-m4wj-hhwj-47qp",
-        "modified": "2026-04-06T17:46:18.151624+00:00",
-        "published": "2025-04-01T00:30:33+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-31675",
-          "https://d7es.tag1.com/security-advisories/link-moderately-critical-cross-site-scripting-sa-core-2025-004",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-004",
-          "https://www.herodevs.com/vulnerability-directory/cve-2025-31675"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Drupal Core Cross-Site Scripting (XSS) Vulnerability"
-      },
-      "cvss_score": 5.4,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00081,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m4wj-hhwj-47qp",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 6.818010419886749,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399713343,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.818010419886749,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-13080",
-          "CVE-2025-13080",
-          "DRUPAL-CORE-2025-005"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8"
-        ],
-        "id": "GHSA-83v7-c2cf-p9c2",
-        "modified": "2025-12-10T23:41:07.744028+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13080",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-005"
-        ],
-        "severity": null,
-        "summary": "Drupal core allows Forceful Browsing"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00093,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-83v7-c2cf-p9c2",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.051151805664999,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39977457899999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.051151805664999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-13081",
-          "CVE-2025-13081",
-          "DRUPAL-CORE-2025-006"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8"
-        ],
-        "id": "GHSA-m6vv-vcj8-w8m7",
-        "modified": "2025-12-10T23:41:16.689525+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13081",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-006"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Drupal core allows Object Injection"
-      },
-      "cvss_score": 5.9,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00135,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-m6vv-vcj8-w8m7",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 7.454443226645625,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399988905,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.454443226645625,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-13082",
-          "CVE-2025-13082",
-          "DRUPAL-CORE-2025-007"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8"
-        ],
-        "id": "GHSA-h89p-5896-f4q8",
-        "modified": "2025-12-10T23:41:19.050806+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13082",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-007"
-        ],
-        "severity": null,
-        "summary": "Drupal core allows Content Spoofing"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00044,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-h89p-5896-f4q8",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.04799246182,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399524532,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.04799246182,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2025-13083",
-          "CVE-2025-13083",
-          "DRUPAL-CORE-2025-008"
-        ],
-        "fixed_versions": [
-          "10.4.9",
-          "10.5.6",
-          "11.1.9",
-          "11.2.8",
-          "7.103"
-        ],
-        "id": "GHSA-mhpg-hpj5-73r2",
-        "modified": "2026-02-03T03:15:35.495869+00:00",
-        "published": "2025-11-18T18:32:53+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-13083",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2025-008"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Drupal core allows Exploiting Incorrectly Configured Access Control Security Levels"
-      },
-      "cvss_score": 3.7,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00011,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mhpg-hpj5-73r2",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 4.667424884920874,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399356133,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.667424884920874,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2026-6365",
-          "CVE-2026-6365"
-        ],
-        "fixed_versions": [
-          "10.5.9",
-          "10.6.7",
-          "11.2.11",
-          "11.3.7"
-        ],
-        "id": "DRUPAL-CORE-2026-001",
-        "modified": "2026-05-21T09:26:01.119793+00:00",
-        "published": "2026-04-15T19:24:30+00:00",
-        "references": [
-          "https://www.drupal.org/sa-core-2026-001"
-        ],
-        "severity": null,
-        "summary": ""
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00033,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-001",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.0472832213649985,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399468399,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.0472832213649985,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2026-6366",
-          "CVE-2026-6366"
-        ],
-        "fixed_versions": [
-          "10.5.9",
-          "10.6.7",
-          "11.2.11",
-          "11.3.7"
-        ],
-        "id": "DRUPAL-CORE-2026-002",
-        "modified": "2026-05-21T09:26:08.698854+00:00",
-        "published": "2026-04-15T19:25:23+00:00",
-        "references": [
-          "https://www.drupal.org/sa-core-2026-002"
-        ],
-        "severity": null,
-        "summary": ""
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00052,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-002",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 5.0485082730599995,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399565356,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.0485082730599995,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-9082"
-        ],
-        "fixed_versions": [
-          "10.4.10",
-          "10.5.10",
-          "10.6.9",
-          "11.1.10",
-          "11.2.12",
-          "11.3.10"
-        ],
-        "id": "DRUPAL-CORE-2026-004",
-        "modified": "2026-05-21T19:00:03.853407+00:00",
-        "published": "2026-05-20T18:08:21+00:00",
-        "references": [
-          "https://www.drupal.org/sa-core-2026-004"
-        ],
-        "severity": null,
-        "summary": ""
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.17334,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": true,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:DRUPAL-CORE-2026-004",
-      "in_kev": true,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 26.202319809725747,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.487755402,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 26.202319809725747,
-        "kev_multiplier": 1.7569,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [],
-        "fixed_versions": [
-          "10.1.8",
-          "10.2.2"
-        ],
-        "id": "GHSA-6ccv-8fgf-cjpw",
-        "modified": "2024-11-29T05:26:49.838861+00:00",
-        "published": "2024-02-12T22:31:34+00:00",
-        "references": [
-          "https://github.com/drupal/core/commit/2f76ac716ca8019bc60579fdfc8aa6cd65d57dff",
-          "https://github.com/drupal/core/commit/5e606b560ac4ecb08135f12b6165bbe0348346a0",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/drupal/core/2024-01-17.yaml",
-          "https://github.com/drupal/core",
-          "https://www.drupal.org/sa-core-2024-001"
-        ],
-        "severity": null,
-        "summary": "Drupal core Denial of Service vulnerability"
-      },
-      "cvss_score": null,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-6ccv-8fgf-cjpw",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 8.268975749999997,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.268975749999997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-45440"
-        ],
-        "fixed_versions": [
-          "10.3.6",
-          "11.0.5",
-          "10.2.9"
-        ],
-        "id": "GHSA-mg8j-w93w-xjgc",
-        "modified": "2025-04-23T15:02:55.541812+00:00",
-        "published": "2024-08-29T12:31:05+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-45440",
-          "https://github.com/github/advisory-database/pull/4827",
-          "https://github.com/drupal/drupal",
-          "https://senscybersecurity.nl/CVE-2024-45440-Explained",
-          "https://www.drupal.org/project/drupal/issues/3457781"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Drupal Full Path Disclosure"
-      },
-      "cvss_score": 5.3,
-      "dep_name": "drupal/core",
-      "dep_version": "10.1.4",
-      "ecosystem": "Packagist",
-      "epss": 0.87541,
-      "exploit_evidence": {
-        "edb_ids": [
-          52266
-        ],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:drupal/core:10.1.4:GHSA-mg8j-w93w-xjgc",
-      "in_kev": false,
-      "purl": "pkg:composer/drupal/core@10.1.4",
-      "raptor_risk_estimate": 33.802890143815915,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "`use Drupal\\Core\\...` found in non-test source"
-        },
-        "evidence": [
-          "src/Commands/sql/SqlCommands.php:13",
-          "src/Commands/core/SiteInstallCommands.php:13",
-          "src/Commands/core/UpdateDBCommands.php:11",
-          "src/Boot/DrupalBoot8.php:9",
-          "src/Sql/SqlBase.php:8",
-          "... (+180 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.846021723,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 33.802890143815915,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-64500"
-        ],
-        "fixed_versions": [
-          "5.4.50",
-          "6.4.29",
-          "7.3.7"
-        ],
-        "id": "GHSA-3rg7-wf37-54rm",
-        "modified": "2026-02-04T03:01:05.453147+00:00",
-        "published": "2025-11-12T21:50:37+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
-          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
-      },
-      "cvss_score": 7.3,
-      "dep_name": "symfony/http-foundation",
-      "dep_version": "v6.3.4",
-      "ecosystem": "Packagist",
-      "epss": 0.06657,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-3rg7-wf37-54rm",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 9.990734243755124,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
-          "src/Commands/core/PhpCommands.php:12",
-          "drush.php:8",
-          "src/Commands/DrushCommands.php:27",
-          "... (+261 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.433270671,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.990734243755124,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-50345"
-        ],
-        "fixed_versions": [
-          "5.4.46",
-          "6.4.14",
-          "7.1.7"
-        ],
-        "id": "GHSA-mrqx-rp3w-jpjp",
-        "modified": "2025-11-03T23:05:56.908103+00:00",
-        "published": "2024-11-06T15:22:09+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
-          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
-      },
-      "cvss_score": 3.1,
-      "dep_name": "symfony/http-foundation",
-      "dep_version": "v6.3.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00394,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.3.4:GHSA-mrqx-rp3w-jpjp",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/http-foundation@v6.3.4",
-      "raptor_risk_estimate": 3.9296833827667492,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
-          "src/Commands/core/PhpCommands.php:12",
-          "drush.php:8",
-          "src/Commands/DrushCommands.php:27",
-          "... (+261 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40131058199999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.9296833827667492,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-50343"
-        ],
-        "fixed_versions": [
-          "5.4.43",
-          "6.4.11",
-          "7.1.4"
-        ],
-        "id": "GHSA-g3rh-rrhp-jhh9",
-        "modified": "2025-11-03T23:16:31.077246+00:00",
-        "published": "2024-11-06T15:21:08+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-g3rh-rrhp-jhh9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-50343",
-          "https://github.com/symfony/symfony/commit/7d1032bbead9a4229b32fa6ebca32681c80cb76f",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50343.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/validator/CVE-2024-50343.yaml"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Symfony has an incorrect response from Validator when input ends with `\\n`"
-      },
-      "cvss_score": 3.1,
-      "dep_name": "symfony/validator",
-      "dep_version": "v6.3.4",
-      "ecosystem": "Packagist",
-      "epss": 0.00246,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/validator:v6.3.4:GHSA-g3rh-rrhp-jhh9",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/validator@v6.3.4",
-      "raptor_risk_estimate": 3.9222879391132492,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "doctum-config.php:10",
-          "src/Commands/core/TwigCommands.php:19",
-          "src/Commands/core/PhpCommands.php:12",
-          "drush.php:8",
-          "src/Commands/DrushCommands.php:27",
-          "... (+261 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400555338,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.9222879391132492,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

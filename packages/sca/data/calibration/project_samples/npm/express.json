@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:12:33Z",
+    "fetched_at": "2026-05-26T23:45:48Z",
     "git_ref": "4.18.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express",
@@ -142,6 +142,436 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-33883"
+        ],
+        "fixed_versions": [
+          "3.1.10"
+        ],
+        "id": "GHSA-ghr5-ch3p-vcr6",
+        "modified": "2026-02-04T02:37:02.497258+00:00",
+        "published": "2024-04-28T18:30:31+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-33883",
+          "https://github.com/mde/ejs/commit/e469741dca7df2eb400199e1cdb74621e3f89aa5",
+          "https://github.com/mde/ejs",
+          "https://github.com/mde/ejs/compare/v3.1.9...v3.1.10",
+          "https://security.netapp.com/advisory/ntap-20240605-0003"
+        ],
+        "severity": {
+          "score": 4.0,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "ejs lacks certain pollution protection"
+      },
+      "cvss_score": 4.0,
+      "dep_name": "ejs",
+      "dep_version": "3.1.8",
+      "ecosystem": "npm",
+      "epss": 0.0154,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:ejs:3.1.8:GHSA-ghr5-ch3p-vcr6",
+      "in_kev": false,
+      "purl": "pkg:npm/ejs@3.1.8",
+      "raptor_risk_estimate": 7.349213090999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "lib/application.js:274",
+          "lib/application.js:281",
+          "examples/ejs/index.js:23"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40715861999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.349213090999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-21681"
+        ],
+        "fixed_versions": [
+          "4.0.10"
+        ],
+        "id": "GHSA-5v2h-r2cx-5xgj",
+        "modified": "2023-11-08T04:08:07.532717+00:00",
+        "published": "2022-01-14T21:04:46+00:00",
+        "references": [
+          "https://github.com/markedjs/marked/security/advisories/GHSA-5v2h-r2cx-5xgj",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-21681",
+          "https://github.com/markedjs/marked/commit/8f806573a3f6c6b7a39b8cdb66ab5ebb8d55a5f5",
+          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
+          "https://github.com/markedjs/marked"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Inefficient Regular Expression Complexity in marked"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "marked",
+      "dep_version": "0.7.0",
+      "ecosystem": "npm",
+      "epss": 0.00695,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:marked:0.7.0:GHSA-5v2h-r2cx-5xgj",
+      "in_kev": false,
+      "purl": "pkg:npm/marked@0.7.0",
+      "raptor_risk_estimate": 13.633839111093748,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "examples/markdown/index.js:10",
+          "examples/view-constructor/index.js:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.402846585,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.633839111093748,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-21680"
+        ],
+        "fixed_versions": [
+          "4.0.10"
+        ],
+        "id": "GHSA-rrrm-qjm4-v8hf",
+        "modified": "2023-11-08T04:08:07.472715+00:00",
+        "published": "2022-01-14T21:04:41+00:00",
+        "references": [
+          "https://github.com/markedjs/marked/security/advisories/GHSA-rrrm-qjm4-v8hf",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-21680",
+          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
+          "https://github.com/markedjs/marked",
+          "https://github.com/markedjs/marked/releases/tag/v4.0.10"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Inefficient Regular Expression Complexity in marked"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "marked",
+      "dep_version": "0.7.0",
+      "ecosystem": "npm",
+      "epss": 0.00708,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:marked:0.7.0:GHSA-rrrm-qjm4-v8hf",
+      "in_kev": false,
+      "purl": "pkg:npm/marked@0.7.0",
+      "raptor_risk_estimate": 13.636084271624998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "examples/markdown/index.js:10",
+          "examples/view-constructor/index.js:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.402912924,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.636084271624998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-8159"
+        ],
+        "fixed_versions": [
+          "4.3.0"
+        ],
+        "id": "GHSA-65x3-rw7q-gx94",
+        "modified": "2026-05-18T17:48:46.828357+00:00",
+        "published": "2026-05-18T17:40:10+00:00",
+        "references": [
+          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-65x3-rw7q-gx94",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-8159",
+          "https://cna.openjsf.org/security-advisories.html",
+          "https://github.com/pillarjs/multiparty",
+          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "multiparty vulnerable to ReDoS via filename parsing"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "multiparty",
+      "dep_version": "4.2.3",
+      "ecosystem": "npm",
+      "epss": 0.00055,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-65x3-rw7q-gx94",
+      "in_kev": false,
+      "purl": "pkg:npm/multiparty@4.2.3",
+      "raptor_risk_estimate": 13.52330813109375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "examples/multipart/index.js:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399580665,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.52330813109375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-8161"
+        ],
+        "fixed_versions": [
+          "4.3.0"
+        ],
+        "id": "GHSA-qxch-whhj-8956",
+        "modified": "2026-05-18T17:48:39.254566+00:00",
+        "published": "2026-05-18T17:35:01+00:00",
+        "references": [
+          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-qxch-whhj-8956",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-8161",
+          "https://cna.openjsf.org/security-advisories.html",
+          "https://github.com/pillarjs/multiparty",
+          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "multiparty: Denial of Service via Prototype Pollution leads to Uncaught Exception"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "multiparty",
+      "dep_version": "4.2.3",
+      "ecosystem": "npm",
+      "epss": 0.00016,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-qxch-whhj-8956",
+      "in_kev": false,
+      "purl": "pkg:npm/multiparty@4.2.3",
+      "raptor_risk_estimate": 13.516572649499997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "examples/multipart/index.js:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399381648,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.516572649499997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-8162"
+        ],
+        "fixed_versions": [
+          "4.3.0"
+        ],
+        "id": "GHSA-xh3c-6gcq-g4rv",
+        "modified": "2026-05-18T17:48:44.702198+00:00",
+        "published": "2026-05-18T17:35:24+00:00",
+        "references": [
+          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-xh3c-6gcq-g4rv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-8162",
+          "https://cna.openjsf.org/security-advisories.html",
+          "https://github.com/pillarjs/multiparty",
+          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "multiparty vulnerable to Denial of Service via Uncaught Exception in filename* parameter parsing"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "multiparty",
+      "dep_version": "4.2.3",
+      "ecosystem": "npm",
+      "epss": 0.00055,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-xh3c-6gcq-g4rv",
+      "in_kev": false,
+      "purl": "pkg:npm/multiparty@4.2.3",
+      "raptor_risk_estimate": 13.52330813109375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "examples/multipart/index.js:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399580665,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.52330813109375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -646,436 +1076,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-33883"
-        ],
-        "fixed_versions": [
-          "3.1.10"
-        ],
-        "id": "GHSA-ghr5-ch3p-vcr6",
-        "modified": "2026-02-04T02:37:02.497258+00:00",
-        "published": "2024-04-28T18:30:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-33883",
-          "https://github.com/mde/ejs/commit/e469741dca7df2eb400199e1cdb74621e3f89aa5",
-          "https://github.com/mde/ejs",
-          "https://github.com/mde/ejs/compare/v3.1.9...v3.1.10",
-          "https://security.netapp.com/advisory/ntap-20240605-0003"
-        ],
-        "severity": {
-          "score": 4.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "ejs lacks certain pollution protection"
-      },
-      "cvss_score": 4.0,
-      "dep_name": "ejs",
-      "dep_version": "3.1.8",
-      "ecosystem": "npm",
-      "epss": 0.0154,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:ejs:3.1.8:GHSA-ghr5-ch3p-vcr6",
-      "in_kev": false,
-      "purl": "pkg:npm/ejs@3.1.8",
-      "raptor_risk_estimate": 7.349213090999998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "lib/application.js:274",
-          "lib/application.js:281",
-          "examples/ejs/index.js:23"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40715861999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.349213090999998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-21681"
-        ],
-        "fixed_versions": [
-          "4.0.10"
-        ],
-        "id": "GHSA-5v2h-r2cx-5xgj",
-        "modified": "2023-11-08T04:08:07.532717+00:00",
-        "published": "2022-01-14T21:04:46+00:00",
-        "references": [
-          "https://github.com/markedjs/marked/security/advisories/GHSA-5v2h-r2cx-5xgj",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-21681",
-          "https://github.com/markedjs/marked/commit/8f806573a3f6c6b7a39b8cdb66ab5ebb8d55a5f5",
-          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
-          "https://github.com/markedjs/marked"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Inefficient Regular Expression Complexity in marked"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "marked",
-      "dep_version": "0.7.0",
-      "ecosystem": "npm",
-      "epss": 0.00695,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:marked:0.7.0:GHSA-5v2h-r2cx-5xgj",
-      "in_kev": false,
-      "purl": "pkg:npm/marked@0.7.0",
-      "raptor_risk_estimate": 13.633839111093748,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "examples/markdown/index.js:10",
-          "examples/view-constructor/index.js:9"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402846585,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.633839111093748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-21680"
-        ],
-        "fixed_versions": [
-          "4.0.10"
-        ],
-        "id": "GHSA-rrrm-qjm4-v8hf",
-        "modified": "2023-11-08T04:08:07.472715+00:00",
-        "published": "2022-01-14T21:04:41+00:00",
-        "references": [
-          "https://github.com/markedjs/marked/security/advisories/GHSA-rrrm-qjm4-v8hf",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-21680",
-          "https://github.com/markedjs/marked/commit/c4a3ccd344b6929afa8a1d50ac54a721e57012c0",
-          "https://github.com/markedjs/marked",
-          "https://github.com/markedjs/marked/releases/tag/v4.0.10"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Inefficient Regular Expression Complexity in marked"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "marked",
-      "dep_version": "0.7.0",
-      "ecosystem": "npm",
-      "epss": 0.00708,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:marked:0.7.0:GHSA-rrrm-qjm4-v8hf",
-      "in_kev": false,
-      "purl": "pkg:npm/marked@0.7.0",
-      "raptor_risk_estimate": 13.636084271624998,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "examples/markdown/index.js:10",
-          "examples/view-constructor/index.js:9"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402912924,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.636084271624998,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-8159"
-        ],
-        "fixed_versions": [
-          "4.3.0"
-        ],
-        "id": "GHSA-65x3-rw7q-gx94",
-        "modified": "2026-05-18T17:48:46.828357+00:00",
-        "published": "2026-05-18T17:40:10+00:00",
-        "references": [
-          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-65x3-rw7q-gx94",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-8159",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/pillarjs/multiparty",
-          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "multiparty vulnerable to ReDoS via filename parsing"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "multiparty",
-      "dep_version": "4.2.3",
-      "ecosystem": "npm",
-      "epss": 0.00055,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-65x3-rw7q-gx94",
-      "in_kev": false,
-      "purl": "pkg:npm/multiparty@4.2.3",
-      "raptor_risk_estimate": 13.52330813109375,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "examples/multipart/index.js:8"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399580665,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.52330813109375,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-8161"
-        ],
-        "fixed_versions": [
-          "4.3.0"
-        ],
-        "id": "GHSA-qxch-whhj-8956",
-        "modified": "2026-05-18T17:48:39.254566+00:00",
-        "published": "2026-05-18T17:35:01+00:00",
-        "references": [
-          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-qxch-whhj-8956",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-8161",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/pillarjs/multiparty",
-          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "multiparty: Denial of Service via Prototype Pollution leads to Uncaught Exception"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "multiparty",
-      "dep_version": "4.2.3",
-      "ecosystem": "npm",
-      "epss": 0.00016,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-qxch-whhj-8956",
-      "in_kev": false,
-      "purl": "pkg:npm/multiparty@4.2.3",
-      "raptor_risk_estimate": 13.516572649499997,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "examples/multipart/index.js:8"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399381648,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.516572649499997,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-8162"
-        ],
-        "fixed_versions": [
-          "4.3.0"
-        ],
-        "id": "GHSA-xh3c-6gcq-g4rv",
-        "modified": "2026-05-18T17:48:44.702198+00:00",
-        "published": "2026-05-18T17:35:24+00:00",
-        "references": [
-          "https://github.com/pillarjs/multiparty/security/advisories/GHSA-xh3c-6gcq-g4rv",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-8162",
-          "https://cna.openjsf.org/security-advisories.html",
-          "https://github.com/pillarjs/multiparty",
-          "https://github.com/pillarjs/multiparty/releases/tag/v4.3.0"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "multiparty vulnerable to Denial of Service via Uncaught Exception in filename* parameter parsing"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "multiparty",
-      "dep_version": "4.2.3",
-      "ecosystem": "npm",
-      "epss": 0.00055,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:multiparty:4.2.3:GHSA-xh3c-6gcq-g4rv",
-      "in_kev": false,
-      "purl": "pkg:npm/multiparty@4.2.3",
-      "raptor_risk_estimate": 13.52330813109375,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "examples/multipart/index.js:8"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399580665,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.52330813109375,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

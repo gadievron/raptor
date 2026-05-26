@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:12:22Z",
+    "fetched_at": "2026-05-26T23:45:44Z",
     "git_ref": "v2.31.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests",
@@ -193,8 +193,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -259,8 +259,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -332,8 +332,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -404,8 +404,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -477,8 +477,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -542,8 +542,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -615,8 +615,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -682,8 +682,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -753,8 +753,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -821,8 +821,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },
@@ -885,8 +885,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/__init__.py:132",
-          "requests/help.py:30"
+          "requests/help.py:30",
+          "requests/__init__.py:132"
         ],
         "verdict": "imported"
       },

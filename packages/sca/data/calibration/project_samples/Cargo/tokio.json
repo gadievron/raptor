@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:12:35Z",
+    "fetched_at": "2026-05-26T23:45:50Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -9,6 +9,159 @@
     "url": "https://github.com/tokio-rs/tokio.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2020-35908",
+          "RUSTSEC-2020-0062"
+        ],
+        "fixed_versions": [
+          "0.3.2"
+        ],
+        "id": "GHSA-5r9g-j7jj-hw6c",
+        "modified": "2023-11-08T04:03:38.733785+00:00",
+        "published": "2022-05-24T17:37:49+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-35908",
+          "https://github.com/rust-lang/futures-rs/issues/2050",
+          "https://github.com/rust-lang/futures-rs",
+          "https://rustsec.org/advisories/RUSTSEC-2020-0062.html"
+        ],
+        "severity": {
+          "score": 5.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Improper `Sync` implementation on `FuturesUnordered` in futures-utils can cause data corruption"
+      },
+      "cvss_score": 5.5,
+      "dep_name": "futures-util",
+      "dep_version": "0.3.0",
+      "ecosystem": "Cargo",
+      "epss": 0.00054,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:futures-util:0.3.0:GHSA-5r9g-j7jj-hw6c",
+      "in_kev": false,
+      "purl": "pkg:cargo/futures-util@0.3.0",
+      "raptor_risk_estimate": 9.9169659793875,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "tokio-test/tests/stream_mock.rs:1",
+          "tokio/tests/tcp_connect.rs:176",
+          "tokio-util/src/task/spawn_pinned.rs:1",
+          "tokio-util/tests/compat.rs:6",
+          "tokio-util/tests/io_sink_writer.rs:4"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399575562,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.9169659793875,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-27308",
+          "RUSTSEC-2024-0019"
+        ],
+        "fixed_versions": [
+          "0.8.11"
+        ],
+        "id": "GHSA-r8w9-5wcg-vfj7",
+        "modified": "2026-02-04T03:50:24.995209+00:00",
+        "published": "2024-03-04T20:44:35+00:00",
+        "references": [
+          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
+          "https://github.com/tokio-rs/tokio/issues/6369",
+          "https://github.com/tokio-rs/mio/pull/1760",
+          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "mio",
+      "dep_version": "0.8.9",
+      "ecosystem": "Cargo",
+      "epss": 0.00937,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:mio:0.8.9:GHSA-r8w9-5wcg-vfj7",
+      "in_kev": false,
+      "purl": "pkg:cargo/mio@0.8.9",
+      "raptor_risk_estimate": 27.907818344553405,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "tokio/src/net/unix/pipe.rs:5",
+          "tokio/src/signal/unix.rs:14",
+          "tokio/src/io/async_fd.rs:4",
+          "tokio/src/io/poll_evented.rs:4",
+          "tokio/src/io/bsd/poll_aio.rs:6",
+          "... (+8 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.404081511,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 27.907818344553405,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -212,159 +365,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2020-35908",
-          "RUSTSEC-2020-0062"
-        ],
-        "fixed_versions": [
-          "0.3.2"
-        ],
-        "id": "GHSA-5r9g-j7jj-hw6c",
-        "modified": "2023-11-08T04:03:38.733785+00:00",
-        "published": "2022-05-24T17:37:49+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-35908",
-          "https://github.com/rust-lang/futures-rs/issues/2050",
-          "https://github.com/rust-lang/futures-rs",
-          "https://rustsec.org/advisories/RUSTSEC-2020-0062.html"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Improper `Sync` implementation on `FuturesUnordered` in futures-utils can cause data corruption"
-      },
-      "cvss_score": 5.5,
-      "dep_name": "futures-util",
-      "dep_version": "0.3.0",
-      "ecosystem": "Cargo",
-      "epss": 0.00054,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:futures-util:0.3.0:GHSA-5r9g-j7jj-hw6c",
-      "in_kev": false,
-      "purl": "pkg:cargo/futures-util@0.3.0",
-      "raptor_risk_estimate": 9.9169659793875,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "tokio-test/tests/stream_mock.rs:1",
-          "tokio/tests/tcp_connect.rs:176",
-          "tokio-util/src/task/spawn_pinned.rs:1",
-          "tokio-util/tests/compat.rs:6",
-          "tokio-util/tests/io_sink_writer.rs:4"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 55.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399575562,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.9169659793875,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-27308",
-          "RUSTSEC-2024-0019"
-        ],
-        "fixed_versions": [
-          "0.8.11"
-        ],
-        "id": "GHSA-r8w9-5wcg-vfj7",
-        "modified": "2026-02-04T03:50:24.995209+00:00",
-        "published": "2024-03-04T20:44:35+00:00",
-        "references": [
-          "https://github.com/tokio-rs/mio/security/advisories/GHSA-r8w9-5wcg-vfj7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-27308",
-          "https://github.com/tokio-rs/tokio/issues/6369",
-          "https://github.com/tokio-rs/mio/pull/1760",
-          "https://github.com/tokio-rs/mio/commit/90d4fe00df870acd3d38f3dc4face9aacab8fbb9"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Mio's tokens for named pipes may be delivered after deregistration"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "mio",
-      "dep_version": "0.8.9",
-      "ecosystem": "Cargo",
-      "epss": 0.00937,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:mio:0.8.9:GHSA-r8w9-5wcg-vfj7",
-      "in_kev": false,
-      "purl": "pkg:cargo/mio@0.8.9",
-      "raptor_risk_estimate": 27.907818344553405,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "tokio/src/process/unix/mod.rs:35",
-          "tokio/src/process/unix/mod.rs:37",
-          "tokio/src/runtime/signal/mod.rs:7",
-          "tokio/src/runtime/io/driver.rs:12",
-          "tokio/src/runtime/io/registration.rs:6",
-          "... (+8 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404081511,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 27.907818344553405,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

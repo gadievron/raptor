@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:17:00Z",
+    "fetched_at": "2026-05-26T23:49:20Z",
     "git_ref": "jansa-1",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of manageiq-jansa",
@@ -9,1069 +9,6 @@
     "url": "https://github.com/ManageIQ/manageiq.git"
   },
   "findings": [
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2019-25025"
-        ],
-        "fixed_versions": [
-          "2.0.0"
-        ],
-        "id": "GHSA-cvw2-xj8r-mjf7",
-        "modified": "2024-02-16T08:10:03.472082+00:00",
-        "published": "2021-03-09T00:45:31+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-25025",
-          "https://github.com/rails/activerecord-session_store/pull/151",
-          "https://github.com/rails/activerecord-session_store/commit/9d4dd113d3010b82daaadf0b0ee6b9fb2afb2160",
-          "https://github.com/rails/activerecord-session_store",
-          "https://github.com/rails/activerecord-session_store/releases/tag/v2.0.0"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Activerecord-session_store Vulnerable to Timing Attack"
-      },
-      "cvss_score": 5.3,
-      "dep_name": "activerecord-session_store",
-      "dep_version": "1.1.3",
-      "ecosystem": "RubyGems",
-      "epss": 0.00136,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:activerecord-session_store:1.1.3:GHSA-cvw2-xj8r-mjf7",
-      "in_kev": false,
-      "purl": "pkg:gem/activerecord-session_store@1.1.3",
-      "raptor_risk_estimate": 3.524024269325641,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'activerecord-session_store'` found (also tried ['activerecord_session_store'])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399994008,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.524024269325641,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-14762"
-        ],
-        "fixed_versions": [
-          "1.208.0"
-        ],
-        "id": "GHSA-2xgq-q749-89fq",
-        "modified": "2026-02-04T02:13:35.351959+00:00",
-        "published": "2025-12-18T18:51:50+00:00",
-        "references": [
-          "https://github.com/aws/aws-sdk-ruby/security/advisories/GHSA-2xgq-q749-89fq",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-14762",
-          "https://github.com/aws/aws-sdk-ruby/commit/b633ba10cd2fbc4cc770b76ab531ed9647654044",
-          "https://aws.amazon.com/security/security-bulletins/AWS-2025-032",
-          "https://github.com/aws/aws-sdk-ruby"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "AWS SDK for Ruby's S3 Encryption Client has a Key Commitment Issue"
-      },
-      "cvss_score": 5.3,
-      "dep_name": "aws-sdk-s3",
-      "dep_version": "1.77.0",
-      "ecosystem": "RubyGems",
-      "epss": 7e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:aws-sdk-s3:1.77.0:GHSA-2xgq-q749-89fq",
-      "in_kev": false,
-      "purl": "pkg:gem/aws-sdk-s3@1.77.0",
-      "raptor_risk_estimate": 5.1853743371849985,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
-        },
-        "evidence": [
-          "app/models/file_depot_s3.rb:13",
-          "app/models/file_depot_s3.rb:66"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399335721,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.1853743371849985,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-33306"
-        ],
-        "fixed_versions": [
-          "3.1.22"
-        ],
-        "id": "GHSA-f27w-vcwj-c954",
-        "modified": "2026-03-25T21:48:59.466561+00:00",
-        "published": "2026-03-19T17:54:17+00:00",
-        "references": [
-          "https://github.com/bcrypt-ruby/bcrypt-ruby/security/advisories/GHSA-f27w-vcwj-c954",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-33306",
-          "https://github.com/bcrypt-ruby/bcrypt-ruby/commit/831ce64cb0a9502130fa93a28bfd9527a5fa45c4",
-          "https://github.com/bcrypt-ruby/bcrypt-ruby",
-          "https://github.com/bcrypt-ruby/bcrypt-ruby/releases/tag/v3.1.22"
-        ],
-        "severity": null,
-        "summary": "bcrypt-ruby has an Integer Overflow that Causes Zero Key-Strengthening Iterations at Cost=31 on JRuby"
-      },
-      "cvss_score": null,
-      "dep_name": "bcrypt",
-      "dep_version": "3.1.15",
-      "ecosystem": "RubyGems",
-      "epss": 9e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:bcrypt:3.1.15:GHSA-f27w-vcwj-c954",
-      "in_kev": false,
-      "purl": "pkg:gem/bcrypt@3.1.15",
-      "raptor_risk_estimate": 2.6553317365002536,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "gem required only by spec/test code"
-        },
-        "evidence": [
-          "spec/models/user_password_spec.rb:1"
-        ],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399345927,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 2.6553317365002536,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2021-43809"
-        ],
-        "fixed_versions": [
-          "2.2.33"
-        ],
-        "id": "GHSA-fj7f-vq84-fh43",
-        "modified": "2026-03-13T22:00:54.526949+00:00",
-        "published": "2021-12-08T19:51:36+00:00",
-        "references": [
-          "https://github.com/rubygems/rubygems/security/advisories/GHSA-fj7f-vq84-fh43",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-43809",
-          "https://github.com/rubygems/rubygems/pull/5142",
-          "https://github.com/rubygems/rubygems/commit/0fad1ccfe9dd7a3c5b82c1496df3c2b4842870d3",
-          "https://github.com/rubygems/rubygems/commit/a4f2f8ac17e6ce81c689527a8b6f14381060d95f"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Local Code Execution through Argument Injection via dash leading git url parameter in Gemfile."
-      },
-      "cvss_score": 6.7,
-      "dep_name": "bundler",
-      "dep_version": "1.15",
-      "ecosystem": "RubyGems",
-      "epss": 0.01553,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-fj7f-vq84-fh43",
-      "in_kev": false,
-      "purl": "pkg:gem/bundler@1.15",
-      "raptor_risk_estimate": 6.684597701984999,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
-        },
-        "evidence": [
-          "config/boot.rb:5",
-          "tools/fix_auth.rb:3",
-          "tools/configure_server_settings.rb:2",
-          "tools/pg_inspector/inspect_pg_server.rb:2"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407224959,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.684597701984999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2019-3881"
-        ],
-        "fixed_versions": [
-          "2.1.0"
-        ],
-        "id": "GHSA-g98m-96g9-wfjq",
-        "modified": "2024-02-16T08:22:47.202315+00:00",
-        "published": "2021-05-10T14:53:59+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-3881",
-          "https://github.com/rubygems/bundler/issues/6501",
-          "https://github.com/rubygems/bundler/pull/7416/commits/65cfebb041c454c246aaf32a177b0243915a9998",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=1651826",
-          "https://github.com/advisories/GHSA-g98m-96g9-wfjq"
-        ],
-        "severity": {
-          "score": 7.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Insecure path handling in Bundler"
-      },
-      "cvss_score": 7.0,
-      "dep_name": "bundler",
-      "dep_version": "1.15",
-      "ecosystem": "RubyGems",
-      "epss": 0.00151,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-g98m-96g9-wfjq",
-      "in_kev": false,
-      "purl": "pkg:gem/bundler@1.15",
-      "raptor_risk_estimate": 6.861209983949999,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
-        },
-        "evidence": [
-          "config/boot.rb:5",
-          "tools/fix_auth.rb:3",
-          "tools/configure_server_settings.rb:2",
-          "tools/pg_inspector/inspect_pg_server.rb:2"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 70.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400070553,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.861209983949999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2016-7954"
-        ],
-        "fixed_versions": [
-          "2.0.0"
-        ],
-        "id": "GHSA-jvgm-pfqv-887x",
-        "modified": "2025-04-14T22:27:57.972251+00:00",
-        "published": "2022-05-14T00:57:16+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2016-7954",
-          "https://github.com/bundler/bundler/issues/5051",
-          "https://github.com/bundler/bundler/issues/5062",
-          "https://bugzilla.redhat.com/show_bug.cgi?id=1381951",
-          "https://collectiveidea.com/blog/archives/2016/10/06/bundlers-multiple-source-security-vulnerability"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Bundler allows attacker to inject arbitrary code via secondary Gem source"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "bundler",
-      "dep_version": "1.15",
-      "ecosystem": "RubyGems",
-      "epss": 0.02779,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-jvgm-pfqv-887x",
-      "in_kev": false,
-      "purl": "pkg:gem/bundler@1.15",
-      "raptor_risk_estimate": 9.927684500369999,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
-        },
-        "evidence": [
-          "config/boot.rb:5",
-          "tools/fix_auth.rb:3",
-          "tools/configure_server_settings.rb:2",
-          "tools/pg_inspector/inspect_pg_server.rb:2"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413481237,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.927684500369999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-4064"
-        ],
-        "fixed_versions": [
-          "3.2.3"
-        ],
-        "id": "GHSA-3xg8-cc8f-9wv2",
-        "modified": "2023-11-08T04:10:24.443144+00:00",
-        "published": "2022-11-19T21:30:26+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-4064",
-          "https://github.com/petergoldstein/dalli/issues/932",
-          "https://github.com/petergoldstein/dalli/pull/933",
-          "https://github.com/petergoldstein/dalli/commit/48d594dae55934476fec61789e7a7c3700e0f50d",
-          "https://github.com/petergoldstein/dalli"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
-        },
-        "summary": "Unsanitized input leading to code injection in Dalli"
-      },
-      "cvss_score": 3.7,
-      "dep_name": "dalli",
-      "dep_version": "2.7.6",
-      "ecosystem": "RubyGems",
-      "epss": 0.00317,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:dalli:2.7.6:GHSA-3xg8-cc8f-9wv2",
-      "in_kev": false,
-      "purl": "pkg:gem/dalli@2.7.6",
-      "raptor_risk_estimate": 11.294913233757388,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`require` found in non-test Ruby source"
-        },
-        "evidence": [
-          "config/initializers/session_store.rb:18",
-          "app/models/miq_server/worker_management/monitor.rb:169",
-          "app/models/miq_worker/runner.rb:322"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400917651,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 11.294913233757388,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.7
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-0759"
-        ],
-        "fixed_versions": [
-          "4.9.3"
-        ],
-        "id": "GHSA-69p3-xp37-f692",
-        "modified": "2023-11-08T04:07:40.042374+00:00",
-        "published": "2022-03-26T00:00:29+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-0759",
-          "https://github.com/ManageIQ/kubeclient/issues/554",
-          "https://github.com/ManageIQ/kubeclient/issues/555",
-          "https://github.com/ManageIQ/kubeclient/pull/556",
-          "https://github.com/ManageIQ/kubeclient/commit/109ea71de5a8881748f03ebbe103b49f0f1c7887"
-        ],
-        "severity": {
-          "score": 8.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Improper Certificate Validation in kubeclient"
-      },
-      "cvss_score": 8.1,
-      "dep_name": "kubeclient",
-      "dep_version": "4.9.0",
-      "ecosystem": "RubyGems",
-      "epss": 0.00136,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:kubeclient:4.9.0:GHSA-69p3-xp37-f692",
-      "in_kev": false,
-      "purl": "pkg:gem/kubeclient@4.9.0",
-      "raptor_risk_estimate": 5.385772939912772,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'kubeclient'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 81.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399994008,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.385772939912772,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2021-41136"
-        ],
-        "fixed_versions": [
-          "5.5.1",
-          "4.3.9"
-        ],
-        "id": "GHSA-48w2-rm65-62xx",
-        "modified": "2026-03-13T22:15:20.589866+00:00",
-        "published": "2021-10-12T17:53:00+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-48w2-rm65-62xx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-41136",
-          "https://github.com/puma/puma/commit/436c71807f00e07070902a03f79fd3e130eb6b18",
-          "https://github.com/puma/puma/commit/acdc3ae571dfae0e045cf09a295280127db65c7f",
-          "https://github.com/puma/puma/commit/fb6ad8f8013ab5cdbb2f444cbfabd0b4fde71139"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:N"
-        },
-        "summary": "Puma with proxy which forwards LF characters as line endings could allow HTTP request smuggling"
-      },
-      "cvss_score": 3.7,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.00288,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-48w2-rm65-62xx",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 2.464938567552518,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40076966399999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 2.464938567552518,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2023-40175"
-        ],
-        "fixed_versions": [
-          "5.6.7",
-          "6.3.1"
-        ],
-        "id": "GHSA-68xg-gqqm-vgj8",
-        "modified": "2024-02-16T08:21:11.519474+00:00",
-        "published": "2023-08-18T21:50:05+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-68xg-gqqm-vgj8",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-40175",
-          "https://github.com/puma/puma/commit/690155e7d644b80eeef0a6094f9826ee41f1080a",
-          "https://github.com/puma/puma/commit/7405a219801dcebc0ad6e0aa108d4319ca23f662",
-          "https://github.com/puma/puma/commit/ed0f2f94b56982c687452504b95d5f1fbbe3eed1"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Puma HTTP Request/Response Smuggling vulnerability"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.00377,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-68xg-gqqm-vgj8",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 6.536154833855512,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401223831,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.536154833855512,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-45614"
-        ],
-        "fixed_versions": [
-          "5.6.9",
-          "6.4.3"
-        ],
-        "id": "GHSA-9hf4-67fc-4vf4",
-        "modified": "2026-02-04T03:42:06.102645+00:00",
-        "published": "2024-09-20T14:40:16+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-9hf4-67fc-4vf4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-45614",
-          "https://github.com/puma/puma/commit/cac3fd18cf29ed43719ff5d52d9cfec215f0a043",
-          "https://github.com/puma/puma/commit/f196b23be24712fb8fb16051cc124798cc84f70e",
-          "https://github.com/puma/puma"
-        ],
-        "severity": {
-          "score": 5.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "Puma's header normalization allows for client to clobber proxy set headers"
-      },
-      "cvss_score": 5.4,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.00803,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-9hf4-67fc-4vf4",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 3.621068352195594,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 54.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403397709,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.621068352195594,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-21647"
-        ],
-        "fixed_versions": [
-          "6.4.2",
-          "5.6.8"
-        ],
-        "id": "GHSA-c2f4-cvqm-65w2",
-        "modified": "2026-02-04T04:35:28.231778+00:00",
-        "published": "2024-01-08T15:56:48+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-c2f4-cvqm-65w2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-21647",
-          "https://github.com/puma/puma/commit/5fc43d73b6ff193325e657a24ed76dec79133e93",
-          "https://github.com/puma/puma/commit/60d5ee3734adc8cee85c3f0561af392448fe19b7",
-          "https://github.com/puma/puma/commit/bbb880ffb6debbfdea535b4b3eb2204d49ae151d"
-        ],
-        "severity": {
-          "score": 5.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Puma HTTP Request/Response Smuggling vulnerability"
-      },
-      "cvss_score": 5.9,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.0246,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-c2f4-cvqm-65w2",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 4.039282069054072,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 59.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41185338,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.039282069054072,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-24790"
-        ],
-        "fixed_versions": [
-          "5.6.4",
-          "4.3.12"
-        ],
-        "id": "GHSA-h99w-9q5r-gjq9",
-        "modified": "2024-02-16T07:55:51.665412+00:00",
-        "published": "2022-03-30T21:48:50+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-h99w-9q5r-gjq9",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24790",
-          "https://github.com/puma/puma/commit/5bb7d202e24dec00a898dca4aa11db391d7787a5",
-          "https://github.com/puma/puma",
-          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/puma/CVE-2022-24790.yml"
-        ],
-        "severity": {
-          "score": 9.1,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Puma vulnerable to HTTP Request Smuggling"
-      },
-      "cvss_score": 9.1,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.00417,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-h99w-9q5r-gjq9",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 6.072374341317604,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 90.99999999999999,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401427951,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.072374341317604,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2021-29509"
-        ],
-        "fixed_versions": [
-          "4.3.8",
-          "5.3.1"
-        ],
-        "id": "GHSA-q28m-8xjw-8vr5",
-        "modified": "2026-03-13T21:59:39.617877+00:00",
-        "published": "2021-05-18T01:27:15+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-q28m-8xjw-8vr5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-29509",
-          "https://gist.github.com/nateberkopec/4b3ea5676c0d70cbb37c82d54be25837",
-          "https://github.com/puma/puma",
-          "https://github.com/puma/puma/security/policy"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Puma's Keepalive Connections Causing Denial Of Service"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.01358,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-q28m-8xjw-8vr5",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 5.064570919988528,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406229874,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.064570919988528,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-23634"
-        ],
-        "fixed_versions": [
-          "5.6.2",
-          "4.3.11"
-        ],
-        "id": "GHSA-rmj8-8hhh-gv5h",
-        "modified": "2026-02-04T04:40:25.385031+00:00",
-        "published": "2022-02-11T21:33:23+00:00",
-        "references": [
-          "https://github.com/puma/puma/security/advisories/GHSA-rmj8-8hhh-gv5h",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-23634",
-          "https://github.com/puma/puma/commit/b70f451fe8abc0cff192c065d549778452e155bb",
-          "https://github.com/advisories/GHSA-rmj8-8hhh-gv5h",
-          "https://github.com/advisories/GHSA-wh98-p28r-vrc9"
-        ],
-        "severity": {
-          "score": 8.0,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:H/A:N"
-        },
-        "summary": "Puma used with Rails may lead to Information Exposure"
-      },
-      "cvss_score": 8.0,
-      "dep_name": "puma",
-      "dep_version": "4.3.5",
-      "ecosystem": "RubyGems",
-      "epss": 0.00479,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-rmj8-8hhh-gv5h",
-      "in_kev": false,
-      "purl": "pkg:gem/puma@4.3.5",
-      "raptor_risk_estimate": 5.342558498138149,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `require 'puma'` found (also tried [])"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 80.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401744337,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.342558498138149,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.7,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.7
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
     {
       "advisory": {
         "aliases": [
@@ -2109,6 +1046,75 @@
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-25025"
+        ],
+        "fixed_versions": [
+          "2.0.0"
+        ],
+        "id": "GHSA-cvw2-xj8r-mjf7",
+        "modified": "2024-02-16T08:10:03.472082+00:00",
+        "published": "2021-03-09T00:45:31+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-25025",
+          "https://github.com/rails/activerecord-session_store/pull/151",
+          "https://github.com/rails/activerecord-session_store/commit/9d4dd113d3010b82daaadf0b0ee6b9fb2afb2160",
+          "https://github.com/rails/activerecord-session_store",
+          "https://github.com/rails/activerecord-session_store/releases/tag/v2.0.0"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Activerecord-session_store Vulnerable to Timing Attack"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "activerecord-session_store",
+      "dep_version": "1.1.3",
+      "ecosystem": "RubyGems",
+      "epss": 0.00136,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:activerecord-session_store:1.1.3:GHSA-cvw2-xj8r-mjf7",
+      "in_kev": false,
+      "purl": "pkg:gem/activerecord-session_store@1.1.3",
+      "raptor_risk_estimate": 3.524024269325641,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'activerecord-session_store'` found (also tried ['activerecord_session_store'])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399994008,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.524024269325641,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
       },
       "severity": "medium",
       "ssvc_automatable": null,
@@ -3493,6 +2499,441 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2025-14762"
+        ],
+        "fixed_versions": [
+          "1.208.0"
+        ],
+        "id": "GHSA-2xgq-q749-89fq",
+        "modified": "2026-02-04T02:13:35.351959+00:00",
+        "published": "2025-12-18T18:51:50+00:00",
+        "references": [
+          "https://github.com/aws/aws-sdk-ruby/security/advisories/GHSA-2xgq-q749-89fq",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-14762",
+          "https://github.com/aws/aws-sdk-ruby/commit/b633ba10cd2fbc4cc770b76ab531ed9647654044",
+          "https://aws.amazon.com/security/security-bulletins/AWS-2025-032",
+          "https://github.com/aws/aws-sdk-ruby"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "AWS SDK for Ruby's S3 Encryption Client has a Key Commitment Issue"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "aws-sdk-s3",
+      "dep_version": "1.77.0",
+      "ecosystem": "RubyGems",
+      "epss": 7e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:aws-sdk-s3:1.77.0:GHSA-2xgq-q749-89fq",
+      "in_kev": false,
+      "purl": "pkg:gem/aws-sdk-s3@1.77.0",
+      "raptor_risk_estimate": 5.1853743371849985,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "app/models/file_depot_s3.rb:13",
+          "app/models/file_depot_s3.rb:66"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399335721,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.1853743371849985,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-33306"
+        ],
+        "fixed_versions": [
+          "3.1.22"
+        ],
+        "id": "GHSA-f27w-vcwj-c954",
+        "modified": "2026-03-25T21:48:59.466561+00:00",
+        "published": "2026-03-19T17:54:17+00:00",
+        "references": [
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/security/advisories/GHSA-f27w-vcwj-c954",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-33306",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/commit/831ce64cb0a9502130fa93a28bfd9527a5fa45c4",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby",
+          "https://github.com/bcrypt-ruby/bcrypt-ruby/releases/tag/v3.1.22"
+        ],
+        "severity": null,
+        "summary": "bcrypt-ruby has an Integer Overflow that Causes Zero Key-Strengthening Iterations at Cost=31 on JRuby"
+      },
+      "cvss_score": null,
+      "dep_name": "bcrypt",
+      "dep_version": "3.1.15",
+      "ecosystem": "RubyGems",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:bcrypt:3.1.15:GHSA-f27w-vcwj-c954",
+      "in_kev": false,
+      "purl": "pkg:gem/bcrypt@3.1.15",
+      "raptor_risk_estimate": 2.6553317365002536,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "gem required only by spec/test code"
+        },
+        "evidence": [
+          "spec/models/user_password_spec.rb:1"
+        ],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399345927,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.6553317365002536,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-43809"
+        ],
+        "fixed_versions": [
+          "2.2.33"
+        ],
+        "id": "GHSA-fj7f-vq84-fh43",
+        "modified": "2026-03-13T22:00:54.526949+00:00",
+        "published": "2021-12-08T19:51:36+00:00",
+        "references": [
+          "https://github.com/rubygems/rubygems/security/advisories/GHSA-fj7f-vq84-fh43",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-43809",
+          "https://github.com/rubygems/rubygems/pull/5142",
+          "https://github.com/rubygems/rubygems/commit/0fad1ccfe9dd7a3c5b82c1496df3c2b4842870d3",
+          "https://github.com/rubygems/rubygems/commit/a4f2f8ac17e6ce81c689527a8b6f14381060d95f"
+        ],
+        "severity": {
+          "score": 6.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Local Code Execution through Argument Injection via dash leading git url parameter in Gemfile."
+      },
+      "cvss_score": 6.7,
+      "dep_name": "bundler",
+      "dep_version": "1.15",
+      "ecosystem": "RubyGems",
+      "epss": 0.01553,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-fj7f-vq84-fh43",
+      "in_kev": false,
+      "purl": "pkg:gem/bundler@1.15",
+      "raptor_risk_estimate": 6.684597701984999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "config/boot.rb:5",
+          "tools/configure_server_settings.rb:2",
+          "tools/fix_auth.rb:3",
+          "tools/pg_inspector/inspect_pg_server.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 67.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.407224959,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.684597701984999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-3881"
+        ],
+        "fixed_versions": [
+          "2.1.0"
+        ],
+        "id": "GHSA-g98m-96g9-wfjq",
+        "modified": "2024-02-16T08:22:47.202315+00:00",
+        "published": "2021-05-10T14:53:59+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-3881",
+          "https://github.com/rubygems/bundler/issues/6501",
+          "https://github.com/rubygems/bundler/pull/7416/commits/65cfebb041c454c246aaf32a177b0243915a9998",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=1651826",
+          "https://github.com/advisories/GHSA-g98m-96g9-wfjq"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Insecure path handling in Bundler"
+      },
+      "cvss_score": 7.0,
+      "dep_name": "bundler",
+      "dep_version": "1.15",
+      "ecosystem": "RubyGems",
+      "epss": 0.00151,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-g98m-96g9-wfjq",
+      "in_kev": false,
+      "purl": "pkg:gem/bundler@1.15",
+      "raptor_risk_estimate": 6.861209983949999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "config/boot.rb:5",
+          "tools/configure_server_settings.rb:2",
+          "tools/fix_auth.rb:3",
+          "tools/pg_inspector/inspect_pg_server.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400070553,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.861209983949999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2016-7954"
+        ],
+        "fixed_versions": [
+          "2.0.0"
+        ],
+        "id": "GHSA-jvgm-pfqv-887x",
+        "modified": "2025-04-14T22:27:57.972251+00:00",
+        "published": "2022-05-14T00:57:16+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2016-7954",
+          "https://github.com/bundler/bundler/issues/5051",
+          "https://github.com/bundler/bundler/issues/5062",
+          "https://bugzilla.redhat.com/show_bug.cgi?id=1381951",
+          "https://collectiveidea.com/blog/archives/2016/10/06/bundlers-multiple-source-security-vulnerability"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Bundler allows attacker to inject arbitrary code via secondary Gem source"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "bundler",
+      "dep_version": "1.15",
+      "ecosystem": "RubyGems",
+      "epss": 0.02779,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:bundler:1.15:GHSA-jvgm-pfqv-887x",
+      "in_kev": false,
+      "purl": "pkg:gem/bundler@1.15",
+      "raptor_risk_estimate": 9.927684500369999,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "config/boot.rb:5",
+          "tools/configure_server_settings.rb:2",
+          "tools/fix_auth.rb:3",
+          "tools/pg_inspector/inspect_pg_server.rb:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.413481237,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.927684500369999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-4064"
+        ],
+        "fixed_versions": [
+          "3.2.3"
+        ],
+        "id": "GHSA-3xg8-cc8f-9wv2",
+        "modified": "2023-11-08T04:10:24.443144+00:00",
+        "published": "2022-11-19T21:30:26+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-4064",
+          "https://github.com/petergoldstein/dalli/issues/932",
+          "https://github.com/petergoldstein/dalli/pull/933",
+          "https://github.com/petergoldstein/dalli/commit/48d594dae55934476fec61789e7a7c3700e0f50d",
+          "https://github.com/petergoldstein/dalli"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+        },
+        "summary": "Unsanitized input leading to code injection in Dalli"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "dalli",
+      "dep_version": "2.7.6",
+      "ecosystem": "RubyGems",
+      "epss": 0.00317,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:dalli:2.7.6:GHSA-3xg8-cc8f-9wv2",
+      "in_kev": false,
+      "purl": "pkg:gem/dalli@2.7.6",
+      "raptor_risk_estimate": 11.294913233757388,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`require` found in non-test Ruby source"
+        },
+        "evidence": [
+          "config/initializers/session_store.rb:18",
+          "app/models/miq_worker/runner.rb:322",
+          "app/models/miq_server/worker_management/monitor.rb:169"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400917651,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.294913233757388,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.7
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-1530"
         ],
         "fixed_versions": [
@@ -3825,6 +3266,75 @@
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-0759"
+        ],
+        "fixed_versions": [
+          "4.9.3"
+        ],
+        "id": "GHSA-69p3-xp37-f692",
+        "modified": "2023-11-08T04:07:40.042374+00:00",
+        "published": "2022-03-26T00:00:29+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-0759",
+          "https://github.com/ManageIQ/kubeclient/issues/554",
+          "https://github.com/ManageIQ/kubeclient/issues/555",
+          "https://github.com/ManageIQ/kubeclient/pull/556",
+          "https://github.com/ManageIQ/kubeclient/commit/109ea71de5a8881748f03ebbe103b49f0f1c7887"
+        ],
+        "severity": {
+          "score": 8.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Improper Certificate Validation in kubeclient"
+      },
+      "cvss_score": 8.1,
+      "dep_name": "kubeclient",
+      "dep_version": "4.9.0",
+      "ecosystem": "RubyGems",
+      "epss": 0.00136,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:kubeclient:4.9.0:GHSA-69p3-xp37-f692",
+      "in_kev": false,
+      "purl": "pkg:gem/kubeclient@4.9.0",
+      "raptor_risk_estimate": 5.385772939912772,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'kubeclient'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 81.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399994008,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.385772939912772,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
       },
       "severity": "high",
       "ssvc_automatable": null,
@@ -5863,6 +5373,496 @@
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-41136"
+        ],
+        "fixed_versions": [
+          "5.5.1",
+          "4.3.9"
+        ],
+        "id": "GHSA-48w2-rm65-62xx",
+        "modified": "2026-03-13T22:15:20.589866+00:00",
+        "published": "2021-10-12T17:53:00+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-48w2-rm65-62xx",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-41136",
+          "https://github.com/puma/puma/commit/436c71807f00e07070902a03f79fd3e130eb6b18",
+          "https://github.com/puma/puma/commit/acdc3ae571dfae0e045cf09a295280127db65c7f",
+          "https://github.com/puma/puma/commit/fb6ad8f8013ab5cdbb2f444cbfabd0b4fde71139"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:N"
+        },
+        "summary": "Puma with proxy which forwards LF characters as line endings could allow HTTP request smuggling"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00288,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-48w2-rm65-62xx",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 2.464938567552518,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40076966399999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 2.464938567552518,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-40175"
+        ],
+        "fixed_versions": [
+          "5.6.7",
+          "6.3.1"
+        ],
+        "id": "GHSA-68xg-gqqm-vgj8",
+        "modified": "2024-02-16T08:21:11.519474+00:00",
+        "published": "2023-08-18T21:50:05+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-68xg-gqqm-vgj8",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-40175",
+          "https://github.com/puma/puma/commit/690155e7d644b80eeef0a6094f9826ee41f1080a",
+          "https://github.com/puma/puma/commit/7405a219801dcebc0ad6e0aa108d4319ca23f662",
+          "https://github.com/puma/puma/commit/ed0f2f94b56982c687452504b95d5f1fbbe3eed1"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Puma HTTP Request/Response Smuggling vulnerability"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00377,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-68xg-gqqm-vgj8",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 6.536154833855512,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.401223831,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.536154833855512,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45614"
+        ],
+        "fixed_versions": [
+          "5.6.9",
+          "6.4.3"
+        ],
+        "id": "GHSA-9hf4-67fc-4vf4",
+        "modified": "2026-02-04T03:42:06.102645+00:00",
+        "published": "2024-09-20T14:40:16+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-9hf4-67fc-4vf4",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-45614",
+          "https://github.com/puma/puma/commit/cac3fd18cf29ed43719ff5d52d9cfec215f0a043",
+          "https://github.com/puma/puma/commit/f196b23be24712fb8fb16051cc124798cc84f70e",
+          "https://github.com/puma/puma"
+        ],
+        "severity": {
+          "score": 5.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:L/I:L/A:N"
+        },
+        "summary": "Puma's header normalization allows for client to clobber proxy set headers"
+      },
+      "cvss_score": 5.4,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00803,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-9hf4-67fc-4vf4",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 3.621068352195594,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 54.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.403397709,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.621068352195594,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21647"
+        ],
+        "fixed_versions": [
+          "6.4.2",
+          "5.6.8"
+        ],
+        "id": "GHSA-c2f4-cvqm-65w2",
+        "modified": "2026-02-04T04:35:28.231778+00:00",
+        "published": "2024-01-08T15:56:48+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-c2f4-cvqm-65w2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-21647",
+          "https://github.com/puma/puma/commit/5fc43d73b6ff193325e657a24ed76dec79133e93",
+          "https://github.com/puma/puma/commit/60d5ee3734adc8cee85c3f0561af392448fe19b7",
+          "https://github.com/puma/puma/commit/bbb880ffb6debbfdea535b4b3eb2204d49ae151d"
+        ],
+        "severity": {
+          "score": 5.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Puma HTTP Request/Response Smuggling vulnerability"
+      },
+      "cvss_score": 5.9,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.0246,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-c2f4-cvqm-65w2",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 4.039282069054072,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 59.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.41185338,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.039282069054072,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-24790"
+        ],
+        "fixed_versions": [
+          "5.6.4",
+          "4.3.12"
+        ],
+        "id": "GHSA-h99w-9q5r-gjq9",
+        "modified": "2024-02-16T07:55:51.665412+00:00",
+        "published": "2022-03-30T21:48:50+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-h99w-9q5r-gjq9",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24790",
+          "https://github.com/puma/puma/commit/5bb7d202e24dec00a898dca4aa11db391d7787a5",
+          "https://github.com/puma/puma",
+          "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/puma/CVE-2022-24790.yml"
+        ],
+        "severity": {
+          "score": 9.1,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Puma vulnerable to HTTP Request Smuggling"
+      },
+      "cvss_score": 9.1,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00417,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-h99w-9q5r-gjq9",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 6.072374341317604,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 90.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.401427951,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.072374341317604,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-29509"
+        ],
+        "fixed_versions": [
+          "4.3.8",
+          "5.3.1"
+        ],
+        "id": "GHSA-q28m-8xjw-8vr5",
+        "modified": "2026-03-13T21:59:39.617877+00:00",
+        "published": "2021-05-18T01:27:15+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-q28m-8xjw-8vr5",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-29509",
+          "https://gist.github.com/nateberkopec/4b3ea5676c0d70cbb37c82d54be25837",
+          "https://github.com/puma/puma",
+          "https://github.com/puma/puma/security/policy"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Puma's Keepalive Connections Causing Denial Of Service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.01358,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-q28m-8xjw-8vr5",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 5.064570919988528,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.406229874,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.064570919988528,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-23634"
+        ],
+        "fixed_versions": [
+          "5.6.2",
+          "4.3.11"
+        ],
+        "id": "GHSA-rmj8-8hhh-gv5h",
+        "modified": "2026-02-04T04:40:25.385031+00:00",
+        "published": "2022-02-11T21:33:23+00:00",
+        "references": [
+          "https://github.com/puma/puma/security/advisories/GHSA-rmj8-8hhh-gv5h",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-23634",
+          "https://github.com/puma/puma/commit/b70f451fe8abc0cff192c065d549778452e155bb",
+          "https://github.com/advisories/GHSA-rmj8-8hhh-gv5h",
+          "https://github.com/advisories/GHSA-wh98-p28r-vrc9"
+        ],
+        "severity": {
+          "score": 8.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:H/A:N"
+        },
+        "summary": "Puma used with Rails may lead to Information Exposure"
+      },
+      "cvss_score": 8.0,
+      "dep_name": "puma",
+      "dep_version": "4.3.5",
+      "ecosystem": "RubyGems",
+      "epss": 0.00479,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:RubyGems:puma:4.3.5:GHSA-rmj8-8hhh-gv5h",
+      "in_kev": false,
+      "purl": "pkg:gem/puma@4.3.5",
+      "raptor_risk_estimate": 5.342558498138149,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `require 'puma'` found (also tried [])"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 80.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.401744337,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.342558498138149,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.7,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.7
       },
       "severity": "high",
       "ssvc_automatable": null,

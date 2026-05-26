@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:20:21Z",
+    "fetched_at": "2026-05-26T23:50:38Z",
     "git_ref": "v1.30.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of deno-1.30",
@@ -118,11 +118,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/encrypt.rs:7",
-          "ext/crypto/encrypt.rs:8",
-          "ext/crypto/encrypt.rs:9",
-          "ext/crypto/encrypt.rs:10",
-          "ext/crypto/encrypt.rs:11",
+          "ext/crypto/decrypt.rs:6",
+          "ext/crypto/decrypt.rs:7",
+          "ext/crypto/decrypt.rs:8",
+          "ext/crypto/decrypt.rs:9",
+          "ext/crypto/decrypt.rs:10",
           "... (+13 more)"
         ],
         "verdict": "imported"
@@ -1711,11 +1711,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/standalone.rs:29",
-          "cli/standalone.rs:30",
-          "cli/standalone.rs:31",
-          "cli/standalone.rs:32",
-          "cli/standalone.rs:33",
+          "cli/proc_state.rs:55",
+          "cli/proc_state.rs:56",
+          "cli/proc_state.rs:57",
+          "cli/proc_state.rs:58",
+          "cli/proc_state.rs:59",
           "... (+170 more)"
         ],
         "verdict": "imported"
@@ -2446,134 +2446,6 @@
     {
       "advisory": {
         "aliases": [
-          "RUSTSEC-2023-0055"
-        ],
-        "fixed_versions": [
-          "7.0.0"
-        ],
-        "id": "GHSA-c2hm-mjxv-89r4",
-        "modified": "2024-09-16T16:50:14+00:00",
-        "published": "2023-09-04T17:02:00+00:00",
-        "references": [
-          "https://github.com/Alexhuszagh/rust-lexical",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0055.html"
-        ],
-        "severity": null,
-        "summary": "Multiple soundness issues in lexical"
-      },
-      "cvss_score": null,
-      "dep_name": "lexical",
-      "dep_version": "6.1.1",
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:lexical:6.1.1:GHSA-c2hm-mjxv-89r4",
-      "in_kev": false,
-      "purl": "pkg:cargo/lexical@6.1.1",
-      "raptor_risk_estimate": 5.610417356617499,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use lexical` / `extern crate lexical` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-c2hm-mjxv-89r4"
-        ],
-        "fixed_versions": [
-          "7.0.0"
-        ],
-        "id": "RUSTSEC-2023-0055",
-        "informational": "unsound",
-        "modified": "2026-02-04T02:37:30.134688+00:00",
-        "published": "2023-09-03T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/lexical",
-          "https://rustsec.org/advisories/RUSTSEC-2023-0055.html",
-          "https://github.com/Alexhuszagh/rust-lexical/issues/102",
-          "https://github.com/Alexhuszagh/rust-lexical/issues/101",
-          "https://github.com/Alexhuszagh/rust-lexical/issues/95"
-        ],
-        "severity": null,
-        "summary": "Multiple soundness issues"
-      },
-      "cvss_score": null,
-      "dep_name": "lexical",
-      "dep_version": "6.1.1",
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:lexical:6.1.1:RUSTSEC-2023-0055",
-      "in_kev": false,
-      "purl": "pkg:cargo/lexical@6.1.1",
-      "raptor_risk_estimate": 5.610417356617499,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use lexical` / `extern crate lexical` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.610417356617499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "RUSTSEC-2023-0086"
         ],
         "fixed_versions": [
@@ -2705,6 +2577,134 @@
     {
       "advisory": {
         "aliases": [
+          "RUSTSEC-2023-0055"
+        ],
+        "fixed_versions": [
+          "7.0.0"
+        ],
+        "id": "GHSA-c2hm-mjxv-89r4",
+        "modified": "2024-09-16T16:50:14+00:00",
+        "published": "2023-09-04T17:02:00+00:00",
+        "references": [
+          "https://github.com/Alexhuszagh/rust-lexical",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0055.html"
+        ],
+        "severity": null,
+        "summary": "Multiple soundness issues in lexical"
+      },
+      "cvss_score": null,
+      "dep_name": "lexical",
+      "dep_version": "6.1.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:lexical:6.1.1:GHSA-c2hm-mjxv-89r4",
+      "in_kev": false,
+      "purl": "pkg:cargo/lexical@6.1.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use lexical` / `extern crate lexical` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-c2hm-mjxv-89r4"
+        ],
+        "fixed_versions": [
+          "7.0.0"
+        ],
+        "id": "RUSTSEC-2023-0055",
+        "informational": "unsound",
+        "modified": "2026-02-04T02:37:30.134688+00:00",
+        "published": "2023-09-03T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/lexical",
+          "https://rustsec.org/advisories/RUSTSEC-2023-0055.html",
+          "https://github.com/Alexhuszagh/rust-lexical/issues/102",
+          "https://github.com/Alexhuszagh/rust-lexical/issues/101",
+          "https://github.com/Alexhuszagh/rust-lexical/issues/95"
+        ],
+        "severity": null,
+        "summary": "Multiple soundness issues"
+      },
+      "cvss_score": null,
+      "dep_name": "lexical",
+      "dep_version": "6.1.1",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:lexical:6.1.1:RUSTSEC-2023-0055",
+      "in_kev": false,
+      "purl": "pkg:cargo/lexical@6.1.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use lexical` / `extern crate lexical` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2024-27308",
           "RUSTSEC-2024-0019"
         ],
@@ -2751,11 +2751,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "ext/flash/socket.rs:12",
           "ext/flash/lib.rs:33",
           "ext/flash/lib.rs:34",
           "ext/flash/lib.rs:35",
           "ext/flash/lib.rs:36",
-          "ext/flash/lib.rs:37",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -2887,8 +2887,8 @@
           "cli/tools/test.rs:42",
           "cli/tools/test.rs:43",
           "cli/tools/test.rs:44",
-          "ext/crypto/encrypt.rs:23",
-          "ext/crypto/lib.rs:22",
+          "ext/crypto/x25519.rs:9",
+          "ext/crypto/x25519.rs:10",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -2960,8 +2960,8 @@
           "cli/tools/test.rs:42",
           "cli/tools/test.rs:43",
           "cli/tools/test.rs:44",
-          "ext/crypto/encrypt.rs:23",
-          "ext/crypto/lib.rs:22",
+          "ext/crypto/x25519.rs:9",
+          "ext/crypto/x25519.rs:10",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -3164,7 +3164,7 @@
           "cli/util/checksum.rs:2",
           "cli/util/checksum.rs:4",
           "cli/npm/tarball.rs:36",
-          "ext/crypto/import_key.rs:8",
+          "test_util/src/npm.rs:65",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -3233,7 +3233,7 @@
           "cli/util/checksum.rs:2",
           "cli/util/checksum.rs:4",
           "cli/npm/tarball.rs:36",
-          "ext/crypto/import_key.rs:8",
+          "test_util/src/npm.rs:65",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -3305,11 +3305,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/encrypt.rs:24",
-          "ext/crypto/encrypt.rs:25",
-          "ext/crypto/encrypt.rs:26",
-          "ext/crypto/export_key.rs:11",
-          "ext/crypto/import_key.rs:9",
+          "ext/crypto/lib.rs:37",
+          "ext/crypto/lib.rs:38",
+          "ext/crypto/lib.rs:39",
+          "ext/crypto/lib.rs:40",
+          "ext/crypto/lib.rs:202",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -3376,11 +3376,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/encrypt.rs:24",
-          "ext/crypto/encrypt.rs:25",
-          "ext/crypto/encrypt.rs:26",
-          "ext/crypto/export_key.rs:11",
-          "ext/crypto/import_key.rs:9",
+          "ext/crypto/lib.rs:37",
+          "ext/crypto/lib.rs:38",
+          "ext/crypto/lib.rs:39",
+          "ext/crypto/lib.rs:40",
+          "ext/crypto/lib.rs:202",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -3401,83 +3401,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-32650",
-          "GHSA-6g7w-8wpp-frhj"
-        ],
-        "fixed_versions": [
-          "0.21.11",
-          "0.22.4",
-          "0.23.5"
-        ],
-        "id": "RUSTSEC-2024-0336",
-        "modified": "2024-04-20T02:21:14+00:00",
-        "published": "2024-04-19T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rustls",
-          "https://rustsec.org/advisories/RUSTSEC-2024-0336.html",
-          "https://github.com/rustls/rustls/security/advisories/GHSA-6g7w-8wpp-frhj"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "`rustls::ConnectionCommon::complete_io` could fall into an infinite loop based on network input"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "rustls",
-      "dep_version": "0.20.6",
-      "ecosystem": "Cargo",
-      "epss": 0.00054,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:rustls:0.20.6:RUSTSEC-2024-0336",
-      "in_kev": false,
-      "purl": "pkg:cargo/rustls@0.20.6",
-      "raptor_risk_estimate": 9.466194798506248,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "`use`/`extern crate` found in non-test source"
-        },
-        "evidence": [
-          "ext/tls/lib.rs:2",
-          "ext/tls/lib.rs:14",
-          "ext/tls/lib.rs:16",
-          "ext/tls/lib.rs:17",
-          "ext/tls/lib.rs:18",
-          "... (+10 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399575562,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.466194798506248,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3543,6 +3466,83 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-32650",
+          "GHSA-6g7w-8wpp-frhj"
+        ],
+        "fixed_versions": [
+          "0.21.11",
+          "0.22.4",
+          "0.23.5"
+        ],
+        "id": "RUSTSEC-2024-0336",
+        "modified": "2024-04-20T02:21:14+00:00",
+        "published": "2024-04-19T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rustls",
+          "https://rustsec.org/advisories/RUSTSEC-2024-0336.html",
+          "https://github.com/rustls/rustls/security/advisories/GHSA-6g7w-8wpp-frhj"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "`rustls::ConnectionCommon::complete_io` could fall into an infinite loop based on network input"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "rustls",
+      "dep_version": "0.20.6",
+      "ecosystem": "Cargo",
+      "epss": 0.00054,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rustls:0.20.6:RUSTSEC-2024-0336",
+      "in_kev": false,
+      "purl": "pkg:cargo/rustls@0.20.6",
+      "raptor_risk_estimate": 9.466194798506248,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "test_util/src/lib.rs:21",
+          "test_util/src/lib.rs:22",
+          "ext/tls/lib.rs:2",
+          "ext/tls/lib.rs:14",
+          "ext/tls/lib.rs:16",
+          "... (+10 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399575562,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.466194798506248,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3805,11 +3805,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/lsp/diagnostics.rs:38",
-          "cli/lsp/diagnostics.rs:39",
-          "cli/lsp/diagnostics.rs:40",
-          "cli/lsp/parent_process_checker.rs:2",
-          "cli/lsp/parent_process_checker.rs:4",
+          "cli/util/file_watcher.rs:21",
+          "cli/util/file_watcher.rs:22",
+          "cli/util/file_watcher.rs:23",
+          "cli/util/file_watcher.rs:24",
+          "cli/lsp/tsc.rs:60",
           "... (+97 more)"
         ],
         "verdict": "imported"
@@ -3879,11 +3879,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/lsp/diagnostics.rs:38",
-          "cli/lsp/diagnostics.rs:39",
-          "cli/lsp/diagnostics.rs:40",
-          "cli/lsp/parent_process_checker.rs:2",
-          "cli/lsp/parent_process_checker.rs:4",
+          "cli/util/file_watcher.rs:21",
+          "cli/util/file_watcher.rs:22",
+          "cli/util/file_watcher.rs:23",
+          "cli/util/file_watcher.rs:24",
+          "cli/lsp/tsc.rs:60",
           "... (+97 more)"
         ],
         "verdict": "imported"

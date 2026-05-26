@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:18:50Z",
+    "fetched_at": "2026-05-26T23:50:00Z",
     "git_ref": "v1.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bagisto-1.5",
@@ -9,6 +9,75 @@
     "url": "https://github.com/bagisto/bagisto.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2023-50262"
+        ],
+        "fixed_versions": [
+          "2.0.4"
+        ],
+        "id": "GHSA-3qx2-6f78-w2j2",
+        "modified": "2024-02-16T08:14:50.785317+00:00",
+        "published": "2023-12-13T23:09:04+00:00",
+        "references": [
+          "https://github.com/dompdf/dompdf/security/advisories/GHSA-3qx2-6f78-w2j2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2023-50262",
+          "https://github.com/dompdf/dompdf/commit/41cbac16f3cf56affa49f06e8dae66d0eac2b593",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/dompdf/dompdf/CVE-2023-50262.yaml",
+          "https://github.com/dompdf/dompdf"
+        ],
+        "severity": {
+          "score": 5.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "Denial of service caused by infinite recursion when parsing SVG images"
+      },
+      "cvss_score": 5.3,
+      "dep_name": "dompdf/dompdf",
+      "dep_version": "v2.0.3",
+      "ecosystem": "Packagist",
+      "epss": 0.06147,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-3qx2-6f78-w2j2",
+      "in_kev": false,
+      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
+      "raptor_risk_estimate": 4.891897192300993,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Dompdf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 53.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.430668141,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.891897192300993,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -122,8 +191,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
-          "config/sanctum.php:2"
+          "config/sanctum.php:2",
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
         ],
         "verdict": "imported"
       },
@@ -200,8 +269,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
-          "config/sanctum.php:2"
+          "config/sanctum.php:2",
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
         ],
         "verdict": "imported"
       },
@@ -221,148 +290,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "none",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-24765"
-        ],
-        "fixed_versions": [
-          "8.5.52",
-          "9.6.33",
-          "10.5.62",
-          "11.5.50",
-          "12.5.8"
-        ],
-        "id": "GHSA-vvj3-c3rp-c85p",
-        "modified": "2026-05-05T15:55:47.547809+00:00",
-        "published": "2026-01-27T22:26:22+00:00",
-        "references": [
-          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
-          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
-          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
-      },
-      "cvss_score": 7.8,
-      "dep_name": "phpunit/phpunit",
-      "dep_version": "10.1.2",
-      "ecosystem": "Packagist",
-      "epss": 0.00162,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:phpunit/phpunit:10.1.2:GHSA-vvj3-c3rp-c85p",
-      "in_kev": false,
-      "purl": "pkg:composer/phpunit/phpunit@10.1.2",
-      "raptor_risk_estimate": 9.555486117593768,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Phpunit\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400126686,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.555486117593768,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2023-50262"
-        ],
-        "fixed_versions": [
-          "2.0.4"
-        ],
-        "id": "GHSA-3qx2-6f78-w2j2",
-        "modified": "2024-02-16T08:14:50.785317+00:00",
-        "published": "2023-12-13T23:09:04+00:00",
-        "references": [
-          "https://github.com/dompdf/dompdf/security/advisories/GHSA-3qx2-6f78-w2j2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2023-50262",
-          "https://github.com/dompdf/dompdf/commit/41cbac16f3cf56affa49f06e8dae66d0eac2b593",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/dompdf/dompdf/CVE-2023-50262.yaml",
-          "https://github.com/dompdf/dompdf"
-        ],
-        "severity": {
-          "score": 5.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "Denial of service caused by infinite recursion when parsing SVG images"
-      },
-      "cvss_score": 5.3,
-      "dep_name": "dompdf/dompdf",
-      "dep_version": "v2.0.3",
-      "ecosystem": "Packagist",
-      "epss": 0.06147,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:dompdf/dompdf:v2.0.3:GHSA-3qx2-6f78-w2j2",
-      "in_kev": false,
-      "purl": "pkg:composer/dompdf/dompdf@v2.0.3",
-      "raptor_risk_estimate": 4.891897192300993,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Dompdf\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 53.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.430668141,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 4.891897192300993,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -631,6 +558,156 @@
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-11358",
+          "DRUPAL-CORE-2019-006"
+        ],
+        "fixed_versions": [
+          "3.4.0",
+          "4.3.4",
+          "2.1.9",
+          "2.2.2",
+          "1.19.0"
+        ],
+        "id": "GHSA-6c3j-c64m-qhgq",
+        "modified": "2026-03-13T21:56:20.301637+00:00",
+        "published": "2019-04-26T16:29:11+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/pull/4333",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc",
+          "https://github.com/django/django/commit/34ec52269ade54af31a021b12969913129571a3f"
+        ],
+        "severity": {
+          "score": 6.1,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+        },
+        "summary": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products"
+      },
+      "cvss_score": 6.1,
+      "dep_name": "maximebf/debugbar",
+      "dep_version": "v1.18.2",
+      "ecosystem": "Packagist",
+      "epss": 0.02443,
+      "exploit_evidence": {
+        "edb_ids": [
+          52141
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.18.2:GHSA-6c3j-c64m-qhgq",
+      "in_kev": false,
+      "purl": "pkg:composer/maximebf/debugbar@v1.18.2",
+      "raptor_risk_estimate": 11.162639972514325,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Maximebf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 61.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.411766629,
+        "exploit_evidence_multiplier": 1.5839,
+        "exposure_multiplier": 0.5,
+        "final": 11.162639972514325,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11022",
+          "CVE-2020-11022"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0",
+          "1.19.0"
+        ],
+        "id": "GHSA-gxr4-xjj5-5px2",
+        "modified": "2026-04-13T14:01:26.874485+00:00",
+        "published": "2020-04-29T22:18:55+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "maximebf/debugbar",
+      "dep_version": "v1.18.2",
+      "ecosystem": "Packagist",
+      "epss": 0.02456,
+      "exploit_evidence": {
+        "edb_ids": [
+          49766
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.18.2:GHSA-gxr4-xjj5-5px2",
+      "in_kev": false,
+      "purl": "pkg:composer/maximebf/debugbar@v1.18.2",
+      "raptor_risk_estimate": 11.164438365878388,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Maximebf\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.41183296799999997,
+        "exploit_evidence_multiplier": 1.5839,
+        "exposure_multiplier": 0.5,
+        "final": 11.164438365878388,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -2702,6 +2779,79 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-24765"
+        ],
+        "fixed_versions": [
+          "8.5.52",
+          "9.6.33",
+          "10.5.62",
+          "11.5.50",
+          "12.5.8"
+        ],
+        "id": "GHSA-vvj3-c3rp-c85p",
+        "modified": "2026-05-05T15:55:47.547809+00:00",
+        "published": "2026-01-27T22:26:22+00:00",
+        "references": [
+          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
+          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
+          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "phpunit/phpunit",
+      "dep_version": "10.1.2",
+      "ecosystem": "Packagist",
+      "epss": 0.00162,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpunit/phpunit:10.1.2:GHSA-vvj3-c3rp-c85p",
+      "in_kev": false,
+      "purl": "pkg:composer/phpunit/phpunit@10.1.2",
+      "raptor_risk_estimate": 9.555486117593768,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Phpunit\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400126686,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.555486117593768,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-25129"
         ],
         "fixed_versions": [
@@ -2818,11 +2968,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -2895,11 +3045,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -2972,11 +3122,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3048,11 +3198,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3122,11 +3272,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3199,11 +3349,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3276,11 +3426,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
-          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
-          "packages/Webkul/Sitemap/src/Models/Product.php:6",
+          "config/sitemap.php:4",
+          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
+          "packages/Webkul/Sitemap/src/Models/Product.php:4",
+          "packages/Webkul/Sitemap/src/Models/Category.php:4",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
-          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3355,11 +3505,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3433,11 +3583,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3511,11 +3661,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3536,156 +3686,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2019-11358",
-          "DRUPAL-CORE-2019-006"
-        ],
-        "fixed_versions": [
-          "3.4.0",
-          "4.3.4",
-          "2.1.9",
-          "2.2.2",
-          "1.19.0"
-        ],
-        "id": "GHSA-6c3j-c64m-qhgq",
-        "modified": "2026-03-13T21:56:20.301637+00:00",
-        "published": "2019-04-26T16:29:11+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-11358",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/pull/4333",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc",
-          "https://github.com/django/django/commit/34ec52269ade54af31a021b12969913129571a3f"
-        ],
-        "severity": {
-          "score": 6.1,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-        },
-        "summary": "XSS in jQuery as used in Drupal, Backdrop CMS, and other products"
-      },
-      "cvss_score": 6.1,
-      "dep_name": "maximebf/debugbar",
-      "dep_version": "v1.18.2",
-      "ecosystem": "Packagist",
-      "epss": 0.02443,
-      "exploit_evidence": {
-        "edb_ids": [
-          52141
-        ],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.18.2:GHSA-6c3j-c64m-qhgq",
-      "in_kev": false,
-      "purl": "pkg:composer/maximebf/debugbar@v1.18.2",
-      "raptor_risk_estimate": 11.162639972514325,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Maximebf\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 61.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.411766629,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 11.162639972514325,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2020-11022",
-          "CVE-2020-11022"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0",
-          "1.19.0"
-        ],
-        "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-04-13T14:01:26.874485+00:00",
-        "published": "2020-04-29T22:18:55+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
-      },
-      "cvss_score": 6.9,
-      "dep_name": "maximebf/debugbar",
-      "dep_version": "v1.18.2",
-      "ecosystem": "Packagist",
-      "epss": 0.02456,
-      "exploit_evidence": {
-        "edb_ids": [
-          49766
-        ],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.18.2:GHSA-gxr4-xjj5-5px2",
-      "in_kev": false,
-      "purl": "pkg:composer/maximebf/debugbar@v1.18.2",
-      "raptor_risk_estimate": 11.164438365878388,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Maximebf\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.41183296799999997,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 11.164438365878388,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3738,11 +3738,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -3812,11 +3812,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -3889,11 +3889,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -3962,11 +3962,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4039,11 +4039,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4114,11 +4114,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4189,11 +4189,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4264,11 +4264,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4341,11 +4341,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4414,11 +4414,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4489,11 +4489,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4564,11 +4564,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4639,11 +4639,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4715,11 +4715,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4790,11 +4790,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4865,11 +4865,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -4942,11 +4942,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -5017,11 +5017,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -5092,11 +5092,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7",
           "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "resources/assets/js/bootstrap.js:7"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
         ],
         "verdict": "imported"
       },
@@ -5117,6 +5117,310 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11022",
+          "CVE-2020-11022"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0",
+          "1.19.0"
+        ],
+        "id": "GHSA-gxr4-xjj5-5px2",
+        "modified": "2026-04-13T14:01:26.874485+00:00",
+        "published": "2020-04-29T22:18:55+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
+          "https://github.com/maximebf/php-debugbar/issues/447",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "jquery",
+      "dep_version": "3.4.1",
+      "ecosystem": "npm",
+      "epss": 0.02456,
+      "exploit_evidence": {
+        "edb_ids": [
+          49766
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:jquery:3.4.1:GHSA-gxr4-xjj5-5px2",
+      "in_kev": false,
+      "purl": "pkg:npm/jquery@3.4.1",
+      "raptor_risk_estimate": 23.506901598462104,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "... and 1 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.41183296799999997,
+        "exploit_evidence_multiplier": 1.5839,
+        "exposure_multiplier": 0.5,
+        "final": 23.506901598462104,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-drupal-2020-11023",
+          "CVE-2020-11023"
+        ],
+        "fixed_versions": [
+          "3.5.0",
+          "4.4.0"
+        ],
+        "id": "GHSA-jpcq-cgw6-v4j6",
+        "modified": "2026-03-13T21:59:48.264015+00:00",
+        "published": "2020-04-29T22:19:14+00:00",
+        "references": [
+          "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-11023",
+          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
+          "https://lists.apache.org/thread.html/rda99599896c3667f2cc9e9d34c7b6ef5d2bbed1f4801e1d75a2b0679@%3Ccommits.nifi.apache.org%3E",
+          "https://lists.apache.org/thread.html/re4ae96fa5c1a2fe71ccbb7b7ac1538bd0cb677be270a2bf6e2f8d108%40%3Cissues.flink.apache.org%3E"
+        ],
+        "severity": {
+          "score": 6.9,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
+        },
+        "summary": "Potential XSS vulnerability in jQuery"
+      },
+      "cvss_score": 6.9,
+      "dep_name": "jquery",
+      "dep_version": "3.4.1",
+      "ecosystem": "npm",
+      "epss": 0.3466,
+      "exploit_evidence": {
+        "edb_ids": [
+          49767
+        ],
+        "github_poc_urls": [],
+        "has_any": true,
+        "kev_listed": true,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:jquery:3.4.1:GHSA-jpcq-cgw6-v4j6",
+      "in_kev": true,
+      "purl": "pkg:npm/jquery@3.4.1",
+      "raptor_risk_estimate": 44.21709856685001,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
+          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "... and 1 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 69.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.57616998,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 44.21709856685001,
+        "kev_multiplier": 1.7569,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-24785"
+        ],
+        "fixed_versions": [
+          "2.29.2"
+        ],
+        "id": "GHSA-8hfj-j24r-96c4",
+        "modified": "2025-11-04T17:01:47.910754+00:00",
+        "published": "2022-04-04T21:25:48+00:00",
+        "references": [
+          "https://github.com/moment/moment/security/advisories/GHSA-8hfj-j24r-96c4",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-24785",
+          "https://github.com/moment/moment/commit/4211bfc8f15746be4019bba557e29a7ba83d54c5",
+          "https://github.com/moment/moment",
+          "https://lists.debian.org/debian-lts-announce/2023/01/msg00035.html"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Path Traversal: 'dir/../../filename' in moment.locale"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "moment",
+      "dep_version": "2.29.1",
+      "ecosystem": "npm",
+      "epss": 0.01827,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-8hfj-j24r-96c4",
+      "in_kev": false,
+      "purl": "pkg:npm/moment@2.29.1",
+      "raptor_risk_estimate": 13.829340781968748,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Admin/src/Resources/assets/js/app.js:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.408623181,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.829340781968748,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-31129"
+        ],
+        "fixed_versions": [
+          "2.29.4"
+        ],
+        "id": "GHSA-wc69-rhjr-hc9g",
+        "modified": "2026-02-04T04:36:14.077349+00:00",
+        "published": "2022-07-06T18:38:49+00:00",
+        "references": [
+          "https://github.com/moment/moment/security/advisories/GHSA-wc69-rhjr-hc9g",
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-31129",
+          "https://github.com/moment/moment/pull/6015#issuecomment-1152961973",
+          "https://github.com/moment/moment/pull/6015/commits/4bbb9f3ccbe231de40207503f344fe5ce97584f4",
+          "https://github.com/moment/moment/pull/6015/commits/bfd4f2375d5c1a2106246721d693a9611dddfbfe"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Moment.js vulnerable to Inefficient Regular Expression Complexity"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "moment",
+      "dep_version": "2.29.1",
+      "ecosystem": "npm",
+      "epss": 0.0311,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-wc69-rhjr-hc9g",
+      "in_kev": false,
+      "purl": "pkg:npm/moment@2.29.1",
+      "raptor_risk_estimate": 28.673665674568042,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Admin/src/Resources/assets/js/app.js:9"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.41517033,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 28.673665674568042,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -6229,382 +6533,6 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2022-24785"
-        ],
-        "fixed_versions": [
-          "2.29.2"
-        ],
-        "id": "GHSA-8hfj-j24r-96c4",
-        "modified": "2025-11-04T17:01:47.910754+00:00",
-        "published": "2022-04-04T21:25:48+00:00",
-        "references": [
-          "https://github.com/moment/moment/security/advisories/GHSA-8hfj-j24r-96c4",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-24785",
-          "https://github.com/moment/moment/commit/4211bfc8f15746be4019bba557e29a7ba83d54c5",
-          "https://github.com/moment/moment",
-          "https://lists.debian.org/debian-lts-announce/2023/01/msg00035.html"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Path Traversal: 'dir/../../filename' in moment.locale"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "moment",
-      "dep_version": "2.29.1",
-      "ecosystem": "npm",
-      "epss": 0.01827,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-8hfj-j24r-96c4",
-      "in_kev": false,
-      "purl": "pkg:npm/moment@2.29.1",
-      "raptor_risk_estimate": 13.829340781968748,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/app.js:9"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408623181,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.829340781968748,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-31129"
-        ],
-        "fixed_versions": [
-          "2.29.4"
-        ],
-        "id": "GHSA-wc69-rhjr-hc9g",
-        "modified": "2026-02-04T04:36:14.077349+00:00",
-        "published": "2022-07-06T18:38:49+00:00",
-        "references": [
-          "https://github.com/moment/moment/security/advisories/GHSA-wc69-rhjr-hc9g",
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-31129",
-          "https://github.com/moment/moment/pull/6015#issuecomment-1152961973",
-          "https://github.com/moment/moment/pull/6015/commits/4bbb9f3ccbe231de40207503f344fe5ce97584f4",
-          "https://github.com/moment/moment/pull/6015/commits/bfd4f2375d5c1a2106246721d693a9611dddfbfe"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Moment.js vulnerable to Inefficient Regular Expression Complexity"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "moment",
-      "dep_version": "2.29.1",
-      "ecosystem": "npm",
-      "epss": 0.0311,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:moment:2.29.1:GHSA-wc69-rhjr-hc9g",
-      "in_kev": false,
-      "purl": "pkg:npm/moment@2.29.1",
-      "raptor_risk_estimate": 28.673665674568042,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/app.js:9"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41517033,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 28.673665674568042,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2020-11022",
-          "CVE-2020-11022"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0",
-          "1.19.0"
-        ],
-        "id": "GHSA-gxr4-xjj5-5px2",
-        "modified": "2026-04-13T14:01:26.874485+00:00",
-        "published": "2020-04-29T22:18:55+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11022",
-          "https://github.com/maximebf/php-debugbar/issues/447",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://github.com/maximebf/php-debugbar/commit/847216e60544258c881f2733d699bbcfeefac0fc"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
-      },
-      "cvss_score": 6.9,
-      "dep_name": "jquery",
-      "dep_version": "3.4.1",
-      "ecosystem": "npm",
-      "epss": 0.02456,
-      "exploit_evidence": {
-        "edb_ids": [
-          49766
-        ],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:jquery:3.4.1:GHSA-gxr4-xjj5-5px2",
-      "in_kev": false,
-      "purl": "pkg:npm/jquery@3.4.1",
-      "raptor_risk_estimate": 23.506901598462104,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "... and 1 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41183296799999997,
-        "exploit_evidence_multiplier": 1.5839,
-        "exposure_multiplier": 0.5,
-        "final": 23.506901598462104,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-drupal-2020-11023",
-          "CVE-2020-11023"
-        ],
-        "fixed_versions": [
-          "3.5.0",
-          "4.4.0"
-        ],
-        "id": "GHSA-jpcq-cgw6-v4j6",
-        "modified": "2026-03-13T21:59:48.264015+00:00",
-        "published": "2020-04-29T22:19:14+00:00",
-        "references": [
-          "https://github.com/jquery/jquery/security/advisories/GHSA-jpcq-cgw6-v4j6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-11023",
-          "https://github.com/jquery/jquery/commit/1d61fd9407e6fbe82fe55cb0b938307aa0791f77",
-          "https://lists.apache.org/thread.html/rda99599896c3667f2cc9e9d34c7b6ef5d2bbed1f4801e1d75a2b0679@%3Ccommits.nifi.apache.org%3E",
-          "https://lists.apache.org/thread.html/re4ae96fa5c1a2fe71ccbb7b7ac1538bd0cb677be270a2bf6e2f8d108%40%3Cissues.flink.apache.org%3E"
-        ],
-        "severity": {
-          "score": 6.9,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
-        },
-        "summary": "Potential XSS vulnerability in jQuery"
-      },
-      "cvss_score": 6.9,
-      "dep_name": "jquery",
-      "dep_version": "3.4.1",
-      "ecosystem": "npm",
-      "epss": 0.3466,
-      "exploit_evidence": {
-        "edb_ids": [
-          49767
-        ],
-        "github_poc_urls": [],
-        "has_any": true,
-        "kev_listed": true,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:jquery:3.4.1:GHSA-jpcq-cgw6-v4j6",
-      "in_kev": true,
-      "purl": "pkg:npm/jquery@3.4.1",
-      "raptor_risk_estimate": 44.21709856685001,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
-          "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "... and 1 more"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 69.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.57616998,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 44.21709856685001,
-        "kev_multiplier": 1.7569,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-9506"
-        ],
-        "fixed_versions": [
-          "3.0.0-alpha.0"
-        ],
-        "id": "GHSA-5j4c-8p2g-v4jx",
-        "modified": "2024-10-24T19:12:14.925352+00:00",
-        "published": "2024-10-15T18:30:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-9506",
-          "https://github.com/vuejs/core",
-          "https://www.herodevs.com/vulnerability-directory/cve-2024-9506"
-        ],
-        "severity": {
-          "score": 3.7,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
-        },
-        "summary": "ReDoS vulnerability in vue package that is exploitable through inefficient regex evaluation in the parseHTML function"
-      },
-      "cvss_score": 3.7,
-      "dep_name": "vue",
-      "dep_version": "2.6.14",
-      "ecosystem": "npm",
-      "epss": 0.00027,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:vue:2.6.14:GHSA-5j4c-8p2g-v4jx",
-      "in_kev": false,
-      "purl": "pkg:npm/vue@2.6.14",
-      "raptor_risk_estimate": 6.66911305102125,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
-          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 37.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399437781,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.66911305102125,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "CVE-2024-6783"
         ],
         "fixed_versions": [],
@@ -6665,6 +6593,78 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-9506"
+        ],
+        "fixed_versions": [
+          "3.0.0-alpha.0"
+        ],
+        "id": "GHSA-5j4c-8p2g-v4jx",
+        "modified": "2024-10-24T19:12:14.925352+00:00",
+        "published": "2024-10-15T18:30:50+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-9506",
+          "https://github.com/vuejs/core",
+          "https://www.herodevs.com/vulnerability-directory/cve-2024-9506"
+        ],
+        "severity": {
+          "score": 3.7,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "summary": "ReDoS vulnerability in vue package that is exploitable through inefficient regex evaluation in the parseHTML function"
+      },
+      "cvss_score": 3.7,
+      "dep_name": "vue",
+      "dep_version": "2.6.14",
+      "ecosystem": "npm",
+      "epss": 0.00027,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:vue:2.6.14:GHSA-5j4c-8p2g-v4jx",
+      "in_kev": false,
+      "purl": "pkg:npm/vue@2.6.14",
+      "raptor_risk_estimate": 6.66911305102125,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 37.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399437781,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.66911305102125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

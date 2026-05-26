@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:16:45Z",
+    "fetched_at": "2026-05-26T23:48:44Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.2",
@@ -9,6 +9,83 @@
     "url": "https://github.com/PowerShell/PowerShell.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21907"
+        ],
+        "fixed_versions": [
+          "13.0.1"
+        ],
+        "id": "GHSA-5crp-9r3c-p9vr",
+        "modified": "2026-02-04T04:31:41.201349+00:00",
+        "published": "2022-06-22T15:08:47+00:00",
+        "references": [
+          "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
+          "https://github.com/JamesNK/Newtonsoft.Json/pull/2462",
+          "https://github.com/JamesNK/Newtonsoft.Json/commit/7e77bbe1beccceac4fc7b174b53abfefac278b66",
+          "https://alephsecurity.com/2018/10/22/StackOverflowException",
+          "https://alephsecurity.com/vulns/aleph-2018004"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Improper Handling of Exceptional Conditions in Newtonsoft.Json"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "Newtonsoft.Json",
+      "dep_version": "12.0.1",
+      "ecosystem": "NuGet",
+      "epss": 0.02228,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:12.0.1:GHSA-5crp-9r3c-p9vr",
+      "in_kev": false,
+      "purl": "pkg:nuget/Newtonsoft.Json@12.0.1",
+      "raptor_risk_estimate": 28.362815538777472,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/System.Management.Automation/engine/PSConfiguration.cs:9",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
+          "... (+5 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.410669484,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 28.362815538777472,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -298,83 +375,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-21907"
-        ],
-        "fixed_versions": [
-          "13.0.1"
-        ],
-        "id": "GHSA-5crp-9r3c-p9vr",
-        "modified": "2026-02-04T04:31:41.201349+00:00",
-        "published": "2022-06-22T15:08:47+00:00",
-        "references": [
-          "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
-          "https://github.com/JamesNK/Newtonsoft.Json/pull/2462",
-          "https://github.com/JamesNK/Newtonsoft.Json/commit/7e77bbe1beccceac4fc7b174b53abfefac278b66",
-          "https://alephsecurity.com/2018/10/22/StackOverflowException",
-          "https://alephsecurity.com/vulns/aleph-2018004"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Improper Handling of Exceptional Conditions in Newtonsoft.Json"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "Newtonsoft.Json",
-      "dep_version": "12.0.1",
-      "ecosystem": "NuGet",
-      "epss": 0.02228,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:12.0.1:GHSA-5crp-9r3c-p9vr",
-      "in_kev": false,
-      "purl": "pkg:nuget/Newtonsoft.Json@12.0.1",
-      "raptor_risk_estimate": 28.362815538777472,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "namespace prefix matches package id"
-        },
-        "evidence": [
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
-          "src/System.Management.Automation/engine/PSConfiguration.cs:9",
-          "... (+5 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410669484,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 28.362815538777472,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

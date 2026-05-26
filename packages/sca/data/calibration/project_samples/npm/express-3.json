@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:13:19Z",
+    "fetched_at": "2026-05-26T23:46:11Z",
     "git_ref": "3.21.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express-3",
@@ -220,146 +220,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2017-16119"
-        ],
-        "fixed_versions": [
-          "0.5.2"
-        ],
-        "id": "GHSA-9qj9-36jm-prpv",
-        "modified": "2023-11-08T03:59:05.953225+00:00",
-        "published": "2018-07-24T20:16:57+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2017-16119",
-          "https://github.com/advisories/GHSA-9qj9-36jm-prpv",
-          "https://www.npmjs.com/advisories/526"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Regular Expression Denial of Service in fresh"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "fresh",
-      "dep_version": "0.3.0",
-      "ecosystem": "npm",
-      "epss": 0.00328,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:fresh:0.3.0:GHSA-9qj9-36jm-prpv",
-      "in_kev": false,
-      "purl": "pkg:npm/fresh@0.3.0",
-      "raptor_risk_estimate": 13.57045650225,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "lib/request.js:11"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400973784,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 13.57045650225,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-43799"
-        ],
-        "fixed_versions": [
-          "0.19.0"
-        ],
-        "id": "GHSA-m6fv-jmcg-4jfg",
-        "modified": "2026-02-04T03:14:06.122593+00:00",
-        "published": "2024-09-10T19:42:41+00:00",
-        "references": [
-          "https://github.com/pillarjs/send/security/advisories/GHSA-m6fv-jmcg-4jfg",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-43799",
-          "https://github.com/pillarjs/send/commit/ae4f2989491b392ae2ef3b0015a019770ae65d35",
-          "https://github.com/pillarjs/send",
-          "https://lists.debian.org/debian-lts-announce/2025/06/msg00022.html"
-        ],
-        "severity": {
-          "score": 5.0,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:L"
-        },
-        "summary": "send vulnerable to template injection that can lead to XSS"
-      },
-      "cvss_score": 5.0,
-      "dep_name": "send",
-      "dep_version": "0.13.0",
-      "ecosystem": "npm",
-      "epss": 0.00161,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:send:0.13.0:GHSA-m6fv-jmcg-4jfg",
-      "in_kev": false,
-      "purl": "pkg:npm/send@0.13.0",
-      "raptor_risk_estimate": 9.0277432164375,
-      "reachability": {
-        "confidence": {
-          "level": "high",
-          "numeric": 0.95,
-          "reason": "import/require found in non-test source"
-        },
-        "evidence": [
-          "lib/response.js:28"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400121583,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.0277432164375,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -724,6 +584,75 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2017-16119"
+        ],
+        "fixed_versions": [
+          "0.5.2"
+        ],
+        "id": "GHSA-9qj9-36jm-prpv",
+        "modified": "2023-11-08T03:59:05.953225+00:00",
+        "published": "2018-07-24T20:16:57+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2017-16119",
+          "https://github.com/advisories/GHSA-9qj9-36jm-prpv",
+          "https://www.npmjs.com/advisories/526"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Regular Expression Denial of Service in fresh"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "fresh",
+      "dep_version": "0.3.0",
+      "ecosystem": "npm",
+      "epss": 0.00328,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:fresh:0.3.0:GHSA-9qj9-36jm-prpv",
+      "in_kev": false,
+      "purl": "pkg:npm/fresh@0.3.0",
+      "raptor_risk_estimate": 13.57045650225,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "lib/request.js:11"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400973784,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 13.57045650225,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -1152,6 +1081,77 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-43799"
+        ],
+        "fixed_versions": [
+          "0.19.0"
+        ],
+        "id": "GHSA-m6fv-jmcg-4jfg",
+        "modified": "2026-02-04T03:14:06.122593+00:00",
+        "published": "2024-09-10T19:42:41+00:00",
+        "references": [
+          "https://github.com/pillarjs/send/security/advisories/GHSA-m6fv-jmcg-4jfg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-43799",
+          "https://github.com/pillarjs/send/commit/ae4f2989491b392ae2ef3b0015a019770ae65d35",
+          "https://github.com/pillarjs/send",
+          "https://lists.debian.org/debian-lts-announce/2025/06/msg00022.html"
+        ],
+        "severity": {
+          "score": 5.0,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:L"
+        },
+        "summary": "send vulnerable to template injection that can lead to XSS"
+      },
+      "cvss_score": 5.0,
+      "dep_name": "send",
+      "dep_version": "0.13.0",
+      "ecosystem": "npm",
+      "epss": 0.00161,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:send:0.13.0:GHSA-m6fv-jmcg-4jfg",
+      "in_kev": false,
+      "purl": "pkg:npm/send@0.13.0",
+      "raptor_risk_estimate": 9.0277432164375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "lib/response.js:28"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 50.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400121583,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.0277432164375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:18:02Z",
+    "fetched_at": "2026-05-26T23:49:28Z",
     "git_ref": "v6.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.0",
@@ -9,6 +9,83 @@
     "url": "https://github.com/PowerShell/PowerShell.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21907"
+        ],
+        "fixed_versions": [
+          "13.0.1"
+        ],
+        "id": "GHSA-5crp-9r3c-p9vr",
+        "modified": "2026-02-04T04:31:41.201349+00:00",
+        "published": "2022-06-22T15:08:47+00:00",
+        "references": [
+          "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
+          "https://github.com/JamesNK/Newtonsoft.Json/pull/2462",
+          "https://github.com/JamesNK/Newtonsoft.Json/commit/7e77bbe1beccceac4fc7b174b53abfefac278b66",
+          "https://alephsecurity.com/2018/10/22/StackOverflowException",
+          "https://alephsecurity.com/vulns/aleph-2018004"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Improper Handling of Exceptional Conditions in Newtonsoft.Json"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "Newtonsoft.Json",
+      "dep_version": "10.0.3",
+      "ecosystem": "NuGet",
+      "epss": 0.02228,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:10.0.3:GHSA-5crp-9r3c-p9vr",
+      "in_kev": false,
+      "purl": "pkg:nuget/Newtonsoft.Json@10.0.3",
+      "raptor_risk_estimate": 28.362815538777472,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/System.Management.Automation/engine/PSConfiguration.cs:5",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:11",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:15",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:9",
+          "src/System.Management.Automation/engine/PSConfiguration.cs:6",
+          "... (+3 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.410669484,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 28.362815538777472,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -225,6 +302,154 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-0786"
+        ],
+        "fixed_versions": [
+          "5.2.4",
+          "5.3.5",
+          "5.4.2",
+          "6.0.6",
+          "4.4.1",
+          "4.3.1",
+          "4.1.1",
+          "4.0.2"
+        ],
+        "id": "GHSA-jc8g-xhw5-6x46",
+        "modified": "2023-11-08T03:59:31.030847+00:00",
+        "published": "2018-10-16T19:59:05+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-0786",
+          "https://github.com/dotnet/announcements/issues/51",
+          "https://github.com/github/advisory-database/issues/302",
+          "https://github.com/advisories/GHSA-jc8g-xhw5-6x46",
+          "https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-0786"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Improper Certificate Validation in Microsoft .NET Framework components"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "System.Private.ServiceModel",
+      "dep_version": "4.4.0",
+      "ecosystem": "NuGet",
+      "epss": 0.02026,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:System.Private.ServiceModel:4.4.0:GHSA-jc8g-xhw5-6x46",
+      "in_kev": false,
+      "purl": "pkg:nuget/System.Private.ServiceModel@4.4.0",
+      "raptor_risk_estimate": 9.40638792521957,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `using System.Private.ServiceModel` (or sub-namespace) found in non-test source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.409638678,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.40638792521957,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2018-8356"
+        ],
+        "fixed_versions": [
+          "4.1.3",
+          "4.3.3",
+          "4.4.4",
+          "4.5.3",
+          "4.0.4"
+        ],
+        "id": "GHSA-p9wx-v264-q34p",
+        "modified": "2023-11-08T04:00:27.420543+00:00",
+        "published": "2022-05-14T03:00:10+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-8356",
+          "https://github.com/dotnet/announcements/issues/73",
+          "https://github.com/github/advisory-database/issues/302",
+          "https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-8356"
+        ],
+        "severity": {
+          "score": 5.5,
+          "severity": "medium",
+          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
+        },
+        "summary": "Improper Certificate Validation in Microsoft .NET Framework components"
+      },
+      "cvss_score": 5.5,
+      "dep_name": "System.Private.ServiceModel",
+      "dep_version": "4.4.0",
+      "ecosystem": "NuGet",
+      "epss": 0.00212,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:System.Private.ServiceModel:4.4.0:GHSA-p9wx-v264-q34p",
+      "in_kev": false,
+      "purl": "pkg:nuget/System.Private.ServiceModel@4.4.0",
+      "raptor_risk_estimate": 6.742139315907742,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `using System.Private.ServiceModel` (or sub-namespace) found in non-test source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400381836,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.742139315907742,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -1038,231 +1263,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2018-0786"
-        ],
-        "fixed_versions": [
-          "5.2.4",
-          "5.3.5",
-          "5.4.2",
-          "6.0.6",
-          "4.4.1",
-          "4.3.1",
-          "4.1.1",
-          "4.0.2"
-        ],
-        "id": "GHSA-jc8g-xhw5-6x46",
-        "modified": "2023-11-08T03:59:31.030847+00:00",
-        "published": "2018-10-16T19:59:05+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-0786",
-          "https://github.com/dotnet/announcements/issues/51",
-          "https://github.com/github/advisory-database/issues/302",
-          "https://github.com/advisories/GHSA-jc8g-xhw5-6x46",
-          "https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-0786"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Improper Certificate Validation in Microsoft .NET Framework components"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "System.Private.ServiceModel",
-      "dep_version": "4.4.0",
-      "ecosystem": "NuGet",
-      "epss": 0.02026,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:NuGet:System.Private.ServiceModel:4.4.0:GHSA-jc8g-xhw5-6x46",
-      "in_kev": false,
-      "purl": "pkg:nuget/System.Private.ServiceModel@4.4.0",
-      "raptor_risk_estimate": 9.40638792521957,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `using System.Private.ServiceModel` (or sub-namespace) found in non-test source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.409638678,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.40638792521957,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2018-8356"
-        ],
-        "fixed_versions": [
-          "4.1.3",
-          "4.3.3",
-          "4.4.4",
-          "4.5.3",
-          "4.0.4"
-        ],
-        "id": "GHSA-p9wx-v264-q34p",
-        "modified": "2023-11-08T04:00:27.420543+00:00",
-        "published": "2022-05-14T03:00:10+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2018-8356",
-          "https://github.com/dotnet/announcements/issues/73",
-          "https://github.com/github/advisory-database/issues/302",
-          "https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-8356"
-        ],
-        "severity": {
-          "score": 5.5,
-          "severity": "medium",
-          "vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
-        },
-        "summary": "Improper Certificate Validation in Microsoft .NET Framework components"
-      },
-      "cvss_score": 5.5,
-      "dep_name": "System.Private.ServiceModel",
-      "dep_version": "4.4.0",
-      "ecosystem": "NuGet",
-      "epss": 0.00212,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:NuGet:System.Private.ServiceModel:4.4.0:GHSA-p9wx-v264-q34p",
-      "in_kev": false,
-      "purl": "pkg:nuget/System.Private.ServiceModel@4.4.0",
-      "raptor_risk_estimate": 6.742139315907742,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `using System.Private.ServiceModel` (or sub-namespace) found in non-test source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 55.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400381836,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.742139315907742,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-21907"
-        ],
-        "fixed_versions": [
-          "13.0.1"
-        ],
-        "id": "GHSA-5crp-9r3c-p9vr",
-        "modified": "2026-02-04T04:31:41.201349+00:00",
-        "published": "2022-06-22T15:08:47+00:00",
-        "references": [
-          "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
-          "https://github.com/JamesNK/Newtonsoft.Json/pull/2462",
-          "https://github.com/JamesNK/Newtonsoft.Json/commit/7e77bbe1beccceac4fc7b174b53abfefac278b66",
-          "https://alephsecurity.com/2018/10/22/StackOverflowException",
-          "https://alephsecurity.com/vulns/aleph-2018004"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Improper Handling of Exceptional Conditions in Newtonsoft.Json"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "Newtonsoft.Json",
-      "dep_version": "10.0.3",
-      "ecosystem": "NuGet",
-      "epss": 0.02228,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:10.0.3:GHSA-5crp-9r3c-p9vr",
-      "in_kev": false,
-      "purl": "pkg:nuget/Newtonsoft.Json@10.0.3",
-      "raptor_risk_estimate": 28.362815538777472,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "namespace prefix matches package id"
-        },
-        "evidence": [
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:11",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:15",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:9",
-          "src/System.Management.Automation/engine/PSConfiguration.cs:5",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:12",
-          "... (+3 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410669484,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 28.362815538777472,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.331,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

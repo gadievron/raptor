@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:17:48Z",
+    "fetched_at": "2026-05-26T23:49:22Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of firecracker-1.0",
@@ -234,11 +234,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/mmds/src/token.rs:6",
+          "src/seccompiler/src/seccompiler_bin.rs:48",
+          "src/seccompiler/src/seccompiler_bin.rs:236",
           "src/seccompiler/src/lib.rs:9",
           "src/seccompiler/src/lib.rs:11",
-          "src/seccompiler/src/seccompiler_bin.rs:48",
-          "src/seccompiler/src/seccompiler_bin.rs:236"
+          "src/mmds/src/token.rs:6"
         ],
         "verdict": "imported"
       },
@@ -501,11 +501,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/device_manager/mmio.rs:28",
-          "src/vmm/src/device_manager/legacy.rs:17",
-          "src/vmm/src/device_manager/persist.rs:28",
-          "src/vmm/src/vstate/vm.rs:24",
-          "src/vmm/src/vstate/system.rs:14",
+          "src/arch/src/x86_64/regs.rs:12",
+          "src/arch/src/x86_64/regs.rs:195",
+          "src/arch/src/x86_64/interrupts.rs:9",
+          "src/arch/src/x86_64/interrupts.rs:69",
+          "src/arch/src/x86_64/msr.rs:9",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -572,11 +572,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/device_manager/mmio.rs:28",
-          "src/vmm/src/device_manager/legacy.rs:17",
-          "src/vmm/src/device_manager/persist.rs:28",
-          "src/vmm/src/vstate/vm.rs:24",
-          "src/vmm/src/vstate/system.rs:14",
+          "src/arch/src/x86_64/regs.rs:12",
+          "src/arch/src/x86_64/regs.rs:195",
+          "src/arch/src/x86_64/interrupts.rs:9",
+          "src/arch/src/x86_64/interrupts.rs:69",
+          "src/arch/src/x86_64/msr.rs:9",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -648,11 +648,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/arch/src/x86_64/mod.rs:20",
+          "src/arch/src/x86_64/mod.rs:21",
+          "src/arch/src/x86_64/mod.rs:22",
+          "src/arch/src/x86_64/mod.rs:193",
           "src/vmm/src/builder.rs:28",
-          "src/vmm/src/builder.rs:30",
-          "src/vmm/src/builder.rs:49",
-          "src/vmm/src/builder.rs:50",
-          "src/vmm/src/builder.rs:986",
           "... (+6 more)"
         ],
         "verdict": "imported"
@@ -988,11 +988,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/snapshot/benches/version_map.rs:5",
           "src/snapshot/src/lib.rs:31",
           "src/snapshot/src/lib.rs:32",
           "src/snapshot/tests/test.rs:4",
-          "src/rate_limiter/src/persist.rs:8",
+          "src/snapshot/benches/version_map.rs:5",
+          "src/devices/src/virtio/persist.rs:10",
           "... (+18 more)"
         ],
         "verdict": "imported"
@@ -1065,11 +1065,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/memory_snapshot.rs:12",
-          "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/io_uring/src/lib.rs:396",
+          "src/io_uring/src/operation/cqe.rs:6",
+          "src/io_uring/src/operation/sqe.rs:3",
+          "src/io_uring/src/queue/mmap.rs:7",
+          "src/io_uring/src/queue/submission.rs:12",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1143,11 +1143,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/memory_snapshot.rs:12",
-          "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/io_uring/src/lib.rs:396",
+          "src/io_uring/src/operation/cqe.rs:6",
+          "src/io_uring/src/operation/sqe.rs:3",
+          "src/io_uring/src/queue/mmap.rs:7",
+          "src/io_uring/src/queue/submission.rs:12",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1220,11 +1220,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/vmm/src/memory_snapshot.rs:12",
-          "src/vmm/src/memory_snapshot.rs:212",
-          "src/vmm/src/lib.rs:69",
-          "src/vmm/src/builder.rs:57",
-          "src/vmm/src/builder.rs:988",
+          "src/io_uring/src/lib.rs:396",
+          "src/io_uring/src/operation/cqe.rs:6",
+          "src/io_uring/src/operation/sqe.rs:3",
+          "src/io_uring/src/queue/mmap.rs:7",
+          "src/io_uring/src/queue/submission.rs:12",
           "... (+70 more)"
         ],
         "verdict": "imported"

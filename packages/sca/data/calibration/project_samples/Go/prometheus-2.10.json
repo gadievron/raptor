@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:15:58Z",
+    "fetched_at": "2026-05-26T23:48:14Z",
     "git_ref": "v2.10.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of prometheus-2.10",
@@ -9,6 +9,145 @@
     "url": "https://github.com/prometheus/prometheus.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2019-0210",
+          "GO-2021-0101"
+        ],
+        "fixed_versions": [
+          "0.13.0"
+        ],
+        "id": "GHSA-jq7p-26h5-w78r",
+        "modified": "2023-11-08T04:00:31.417506+00:00",
+        "published": "2021-05-18T15:32:04+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2019-0210",
+          "https://github.com/apache/thrift/commit/264a3f318ed3e9e51573f67f963c8509786bcec2",
+          "https://access.redhat.com/errata/RHSA-2020:0804",
+          "https://access.redhat.com/errata/RHSA-2020:0805",
+          "https://access.redhat.com/errata/RHSA-2020:0806"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Out-of-bounds read in Apache Thrift"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "github.com/apache/thrift",
+      "dep_version": "v0.12.0",
+      "ecosystem": "Go",
+      "epss": 0.01194,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:github.com/apache/thrift:v0.12.0:GHSA-jq7p-26h5-w78r",
+      "in_kev": false,
+      "purl": "pkg:golang/github.com/apache/thrift@v0.12.0",
+      "raptor_risk_estimate": 6.5162268578493165,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"github.com/apache/thrift\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.405392982,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.5162268578493165,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-thrift-2026-41602",
+          "CVE-2026-41602"
+        ],
+        "fixed_versions": [
+          "0.23.0"
+        ],
+        "id": "GHSA-wf45-q9ch-q8gh",
+        "modified": "2026-05-07T14:59:22.255543+00:00",
+        "published": "2026-04-28T12:31:30+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-41602",
+          "https://github.com/apache/thrift",
+          "https://lists.apache.org/thread/lb4j0zyd5f3g36cos0wql925przpnwql",
+          "http://www.openwall.com/lists/oss-security/2026/04/28/6"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Apache Thrift TFramedTransport Go language implementation has an Integer Overflow or Wraparound vulnerability"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "github.com/apache/thrift",
+      "dep_version": "v0.12.0",
+      "ecosystem": "Go",
+      "epss": 0.00065,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:github.com/apache/thrift:v0.12.0:GHSA-wf45-q9ch-q8gh",
+      "in_kev": false,
+      "purl": "pkg:golang/github.com/apache/thrift@v0.12.0",
+      "raptor_risk_estimate": 6.423620782381592,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"github.com/apache/thrift\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399631695,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.423620782381592,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [
@@ -499,6 +638,76 @@
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.5636650000000001,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-45339",
+          "GO-2025-3372"
+        ],
+        "fixed_versions": [
+          "1.2.4"
+        ],
+        "id": "GHSA-6wxm-mpqj-6jpf",
+        "modified": "2026-02-04T02:54:52.960344+00:00",
+        "published": "2025-01-28T17:29:03+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-45339",
+          "https://github.com/golang/glog/pull/74",
+          "https://github.com/golang/glog/pull/74/commits/b8741656e406e66d6992bc2c9575e460ecaa0ec2",
+          "https://github.com/golang/glog",
+          "https://groups.google.com/g/golang-announce/c/H-Q4ouHWyKs"
+        ],
+        "severity": {
+          "score": 7.1,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "summary": "Insecure Temporary File usage in github.com/golang/glog"
+      },
+      "cvss_score": 7.1,
+      "dep_name": "github.com/golang/glog",
+      "dep_version": "v0.0.0-20160126235308-23def4e6c14b",
+      "ecosystem": "Go",
+      "epss": 0.00072,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:github.com/golang/glog:v0.0.0-20160126235308-23def4e6c14b:GHSA-6wxm-mpqj-6jpf",
+      "in_kev": false,
+      "purl": "pkg:golang/github.com/golang/glog@v0.0.0-20160126235308-23def4e6c14b",
+      "raptor_risk_estimate": 6.081571225443559,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"github.com/golang/glog\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 71.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399667416,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.081571225443559,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
@@ -1046,11 +1255,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "rules/manager.go:28",
-          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
-          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
+          "util/treecache/treecache.go:23",
+          "util/stats/query_stats.go:18",
           "template/template.go:29",
-          "cmd/prometheus/main.go:39",
+          "discovery/manager.go:23",
+          "discovery/dns/dns.go:26",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -1126,11 +1335,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "rules/manager.go:28",
-          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
-          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
+          "util/treecache/treecache.go:23",
+          "util/stats/query_stats.go:18",
           "template/template.go:29",
-          "cmd/prometheus/main.go:39",
+          "discovery/manager.go:23",
+          "discovery/dns/dns.go:26",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -1206,11 +1415,11 @@
           "reason": "import + advisory symbol(s) (Handler, InstrumentHandlerDuration, InstrumentHandlerResponseSize) found in source"
         },
         "evidence": [
-          "rules/manager.go:28",
-          "documentation/examples/remote_storage/remote_storage_adapter/main.go:31",
-          "documentation/examples/remote_storage/remote_storage_adapter/influxdb/client.go:25",
+          "util/treecache/treecache.go:23",
+          "util/stats/query_stats.go:18",
           "template/template.go:29",
-          "cmd/prometheus/main.go:39",
+          "discovery/manager.go:23",
+          "discovery/dns/dns.go:26",
           "... (+30 more)",
           "[symbol] Handler",
           "[symbol] InstrumentHandlerDuration",
@@ -1234,6 +1443,74 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-65637",
+          "GO-2025-4188"
+        ],
+        "fixed_versions": [
+          "1.8.3",
+          "1.9.1",
+          "1.9.3"
+        ],
+        "id": "GHSA-4f99-4q7p-p3gh",
+        "modified": "2026-02-04T02:14:18.493183+00:00",
+        "published": "2025-12-04T21:31:04+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-65637",
+          "https://github.com/sirupsen/logrus/issues/1370",
+          "https://github.com/sirupsen/logrus/pull/1376",
+          "https://github.com/sirupsen/logrus/commit/6acd903758687c4a3db3c11701e6c414fcf1c1f7",
+          "https://github.com/mjuanxd/logrus-dos-poc"
+        ],
+        "severity": null,
+        "summary": "Logrus is vulnerable to DoS when using Entry.Writer()"
+      },
+      "cvss_score": null,
+      "dep_name": "github.com/sirupsen/logrus",
+      "dep_version": "v1.2.0",
+      "ecosystem": "Go",
+      "epss": 0.00055,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:github.com/sirupsen/logrus:v1.2.0:GHSA-4f99-4q7p-p3gh",
+      "in_kev": false,
+      "purl": "pkg:golang/github.com/sirupsen/logrus@v1.2.0",
+      "raptor_risk_estimate": 3.4254936179765645,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"github.com/sirupsen/logrus\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399580665,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.4254936179765645,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -34403,6 +34680,216 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2020-14040",
+          "GO-2020-0015"
+        ],
+        "fixed_versions": [
+          "0.3.3"
+        ],
+        "id": "GHSA-5rcv-m4m3-hfh7",
+        "modified": "2026-02-04T03:10:44.096471+00:00",
+        "published": "2021-05-18T18:34:35+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2020-14040",
+          "https://github.com/golang/go/issues/39491",
+          "https://github.com/golang/text/commit/23ae387dee1f90d29a23c0e87ee0b46038fbed0e",
+          "https://go-review.googlesource.com/c/text/+/238238",
+          "https://go.dev/cl/238238"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H/E:P/RL:O/RC:C"
+        },
+        "summary": "golang.org/x/text Infinite loop"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/text",
+      "dep_version": "v0.3.0",
+      "ecosystem": "Go",
+      "epss": 8e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-5rcv-m4m3-hfh7",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
+      "raptor_risk_estimate": 6.4189453649310515,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/text\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399340824,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.4189453649310515,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2022-32149",
+          "GO-2022-1059"
+        ],
+        "fixed_versions": [
+          "0.3.8"
+        ],
+        "id": "GHSA-69ch-w2m2-3vjp",
+        "modified": "2026-02-04T03:11:34.199431+00:00",
+        "published": "2022-10-14T19:00:40+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2022-32149",
+          "https://github.com/golang/go/issues/56152",
+          "https://github.com/golang/text/commit/434eadcdbc3b0256971992e8c70027278364c72c",
+          "https://github.com/golang/text",
+          "https://go.dev/cl/442235"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "golang.org/x/text/language Denial of service via crafted Accept-Language header"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/text",
+      "dep_version": "v0.3.0",
+      "ecosystem": "Go",
+      "epss": 0.00056,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-69ch-w2m2-3vjp",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
+      "raptor_risk_estimate": 6.422882558573612,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/text\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399585768,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.422882558573612,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-38561",
+          "GO-2021-0113"
+        ],
+        "fixed_versions": [
+          "0.3.7"
+        ],
+        "id": "GHSA-ppp9-7jff-5vj2",
+        "modified": "2026-02-04T03:24:32.877720+00:00",
+        "published": "2022-12-26T06:30:22+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-38561",
+          "https://deps.dev/advisory/OSV/GO-2021-0113",
+          "https://go.dev/cl/340830",
+          "https://go.googlesource.com/text/+/383b2e75a7a4198c42f8f87833eefb772868a56f",
+          "https://groups.google.com/g/golang-announce"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "golang.org/x/text/language Out-of-bounds Read vulnerability"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "golang.org/x/text",
+      "dep_version": "v0.3.0",
+      "ecosystem": "Go",
+      "epss": 0.00053,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-ppp9-7jff-5vj2",
+      "in_kev": false,
+      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
+      "raptor_risk_estimate": 6.422636483970951,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `import \"golang.org/x/text\"` found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399570459,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.422636483970951,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "GO-2023-2153"
         ],
         "fixed_versions": [
@@ -34450,11 +34937,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34526,11 +35013,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34598,11 +35085,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34677,11 +35164,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34753,11 +35240,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34825,11 +35312,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34904,11 +35391,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -34980,11 +35467,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -35052,11 +35539,11 @@
           "reason": "import + advisory symbol(s) (NewServer) found in source"
         },
         "evidence": [
+          "prompb/rpc.pb.go:12",
+          "prompb/rpc.pb.gw.go:17",
           "web/web.go:53",
           "web/api/v2/api.go:30",
-          "prompb/rpc.pb.gw.go:17",
-          "prompb/rpc.pb.go:12",
-          "web/api/v2/api.go:31",
+          "prompb/rpc.pb.gw.go:18",
           "... (+4 more)",
           "[symbol] NewServer"
         ],
@@ -35130,11 +35617,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35209,11 +35696,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35289,11 +35776,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35368,11 +35855,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35447,11 +35934,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35527,11 +36014,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35606,11 +36093,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35685,11 +36172,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35765,11 +36252,11 @@
           "reason": "import + advisory symbol(s) (Unmarshal, UnmarshalStrict) found in source"
         },
         "evidence": [
-          "rules/alerting.go:23",
-          "rules/recording.go:21",
-          "cmd/promtool/unittest.go:28",
           "discovery/file/file.go:32",
+          "rules/recording.go:21",
+          "rules/alerting.go:23",
           "pkg/rulefmt/rulefmt.go:22",
+          "config/config.go:26",
           "... (+1 more)",
           "[symbol] Unmarshal",
           "[symbol] UnmarshalStrict"
@@ -35999,493 +36486,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2019-0210",
-          "GO-2021-0101"
-        ],
-        "fixed_versions": [
-          "0.13.0"
-        ],
-        "id": "GHSA-jq7p-26h5-w78r",
-        "modified": "2023-11-08T04:00:31.417506+00:00",
-        "published": "2021-05-18T15:32:04+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2019-0210",
-          "https://github.com/apache/thrift/commit/264a3f318ed3e9e51573f67f963c8509786bcec2",
-          "https://access.redhat.com/errata/RHSA-2020:0804",
-          "https://access.redhat.com/errata/RHSA-2020:0805",
-          "https://access.redhat.com/errata/RHSA-2020:0806"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Out-of-bounds read in Apache Thrift"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "github.com/apache/thrift",
-      "dep_version": "v0.12.0",
-      "ecosystem": "Go",
-      "epss": 0.01194,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:github.com/apache/thrift:v0.12.0:GHSA-jq7p-26h5-w78r",
-      "in_kev": false,
-      "purl": "pkg:golang/github.com/apache/thrift@v0.12.0",
-      "raptor_risk_estimate": 6.5162268578493165,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"github.com/apache/thrift\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.405392982,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.5162268578493165,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "BIT-thrift-2026-41602",
-          "CVE-2026-41602"
-        ],
-        "fixed_versions": [
-          "0.23.0"
-        ],
-        "id": "GHSA-wf45-q9ch-q8gh",
-        "modified": "2026-05-07T14:59:22.255543+00:00",
-        "published": "2026-04-28T12:31:30+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-41602",
-          "https://github.com/apache/thrift",
-          "https://lists.apache.org/thread/lb4j0zyd5f3g36cos0wql925przpnwql",
-          "http://www.openwall.com/lists/oss-security/2026/04/28/6"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "Apache Thrift TFramedTransport Go language implementation has an Integer Overflow or Wraparound vulnerability"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "github.com/apache/thrift",
-      "dep_version": "v0.12.0",
-      "ecosystem": "Go",
-      "epss": 0.00065,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:github.com/apache/thrift:v0.12.0:GHSA-wf45-q9ch-q8gh",
-      "in_kev": false,
-      "purl": "pkg:golang/github.com/apache/thrift@v0.12.0",
-      "raptor_risk_estimate": 6.423620782381592,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"github.com/apache/thrift\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399631695,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.423620782381592,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-45339",
-          "GO-2025-3372"
-        ],
-        "fixed_versions": [
-          "1.2.4"
-        ],
-        "id": "GHSA-6wxm-mpqj-6jpf",
-        "modified": "2026-02-04T02:54:52.960344+00:00",
-        "published": "2025-01-28T17:29:03+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-45339",
-          "https://github.com/golang/glog/pull/74",
-          "https://github.com/golang/glog/pull/74/commits/b8741656e406e66d6992bc2c9575e460ecaa0ec2",
-          "https://github.com/golang/glog",
-          "https://groups.google.com/g/golang-announce/c/H-Q4ouHWyKs"
-        ],
-        "severity": {
-          "score": 7.1,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N"
-        },
-        "summary": "Insecure Temporary File usage in github.com/golang/glog"
-      },
-      "cvss_score": 7.1,
-      "dep_name": "github.com/golang/glog",
-      "dep_version": "v0.0.0-20160126235308-23def4e6c14b",
-      "ecosystem": "Go",
-      "epss": 0.00072,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:github.com/golang/glog:v0.0.0-20160126235308-23def4e6c14b:GHSA-6wxm-mpqj-6jpf",
-      "in_kev": false,
-      "purl": "pkg:golang/github.com/golang/glog@v0.0.0-20160126235308-23def4e6c14b",
-      "raptor_risk_estimate": 6.081571225443559,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"github.com/golang/glog\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 71.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.081571225443559,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-65637",
-          "GO-2025-4188"
-        ],
-        "fixed_versions": [
-          "1.8.3",
-          "1.9.1",
-          "1.9.3"
-        ],
-        "id": "GHSA-4f99-4q7p-p3gh",
-        "modified": "2026-02-04T02:14:18.493183+00:00",
-        "published": "2025-12-04T21:31:04+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-65637",
-          "https://github.com/sirupsen/logrus/issues/1370",
-          "https://github.com/sirupsen/logrus/pull/1376",
-          "https://github.com/sirupsen/logrus/commit/6acd903758687c4a3db3c11701e6c414fcf1c1f7",
-          "https://github.com/mjuanxd/logrus-dos-poc"
-        ],
-        "severity": null,
-        "summary": "Logrus is vulnerable to DoS when using Entry.Writer()"
-      },
-      "cvss_score": null,
-      "dep_name": "github.com/sirupsen/logrus",
-      "dep_version": "v1.2.0",
-      "ecosystem": "Go",
-      "epss": 0.00055,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:github.com/sirupsen/logrus:v1.2.0:GHSA-4f99-4q7p-p3gh",
-      "in_kev": false,
-      "purl": "pkg:golang/github.com/sirupsen/logrus@v1.2.0",
-      "raptor_risk_estimate": 3.4254936179765645,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"github.com/sirupsen/logrus\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399580665,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.4254936179765645,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2020-14040",
-          "GO-2020-0015"
-        ],
-        "fixed_versions": [
-          "0.3.3"
-        ],
-        "id": "GHSA-5rcv-m4m3-hfh7",
-        "modified": "2026-02-04T03:10:44.096471+00:00",
-        "published": "2021-05-18T18:34:35+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2020-14040",
-          "https://github.com/golang/go/issues/39491",
-          "https://github.com/golang/text/commit/23ae387dee1f90d29a23c0e87ee0b46038fbed0e",
-          "https://go-review.googlesource.com/c/text/+/238238",
-          "https://go.dev/cl/238238"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H/E:P/RL:O/RC:C"
-        },
-        "summary": "golang.org/x/text Infinite loop"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "golang.org/x/text",
-      "dep_version": "v0.3.0",
-      "ecosystem": "Go",
-      "epss": 8e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-5rcv-m4m3-hfh7",
-      "in_kev": false,
-      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
-      "raptor_risk_estimate": 6.4189453649310515,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"golang.org/x/text\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399340824,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.4189453649310515,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2022-32149",
-          "GO-2022-1059"
-        ],
-        "fixed_versions": [
-          "0.3.8"
-        ],
-        "id": "GHSA-69ch-w2m2-3vjp",
-        "modified": "2026-02-04T03:11:34.199431+00:00",
-        "published": "2022-10-14T19:00:40+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2022-32149",
-          "https://github.com/golang/go/issues/56152",
-          "https://github.com/golang/text/commit/434eadcdbc3b0256971992e8c70027278364c72c",
-          "https://github.com/golang/text",
-          "https://go.dev/cl/442235"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "golang.org/x/text/language Denial of service via crafted Accept-Language header"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "golang.org/x/text",
-      "dep_version": "v0.3.0",
-      "ecosystem": "Go",
-      "epss": 0.00056,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-69ch-w2m2-3vjp",
-      "in_kev": false,
-      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
-      "raptor_risk_estimate": 6.422882558573612,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"golang.org/x/text\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399585768,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.422882558573612,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2021-38561",
-          "GO-2021-0113"
-        ],
-        "fixed_versions": [
-          "0.3.7"
-        ],
-        "id": "GHSA-ppp9-7jff-5vj2",
-        "modified": "2026-02-04T03:24:32.877720+00:00",
-        "published": "2022-12-26T06:30:22+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-38561",
-          "https://deps.dev/advisory/OSV/GO-2021-0113",
-          "https://go.dev/cl/340830",
-          "https://go.googlesource.com/text/+/383b2e75a7a4198c42f8f87833eefb772868a56f",
-          "https://groups.google.com/g/golang-announce"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "golang.org/x/text/language Out-of-bounds Read vulnerability"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "golang.org/x/text",
-      "dep_version": "v0.3.0",
-      "ecosystem": "Go",
-      "epss": 0.00053,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Go:golang.org/x/text:v0.3.0:GHSA-ppp9-7jff-5vj2",
-      "in_kev": false,
-      "purl": "pkg:golang/golang.org/x/text@v0.3.0",
-      "raptor_risk_estimate": 6.422636483970951,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `import \"golang.org/x/text\"` found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399570459,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 6.422636483970951,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }

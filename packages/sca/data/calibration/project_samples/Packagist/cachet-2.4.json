@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:18:39Z",
+    "fetched_at": "2026-05-26T23:50:00Z",
     "git_ref": "v2.4.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of cachet-2.4",
@@ -833,6 +833,742 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2025-46734"
+        ],
+        "fixed_versions": [
+          "2.7.0"
+        ],
+        "id": "GHSA-3527-qv2q-pfvx",
+        "modified": "2026-03-20T21:31:21.970036+00:00",
+        "published": "2025-05-05T20:40:36+00:00",
+        "references": [
+          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-3527-qv2q-pfvx",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-46734",
+          "https://github.com/thephpleague/commonmark/commit/f0d626cf05ad3e99e6db26ebcb9091b6cd1cd89b",
+          "https://github.com/thephpleague/commonmark"
+        ],
+        "severity": {
+          "score": 6.4,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:L/A:N"
+        },
+        "summary": "league/commonmark contains a XSS vulnerability in Attributes extension"
+      },
+      "cvss_score": 6.4,
+      "dep_name": "league/commonmark",
+      "dep_version": "1.6.7",
+      "ecosystem": "Packagist",
+      "epss": 0.0005,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:league/commonmark:1.6.7:GHSA-3527-qv2q-pfvx",
+      "in_kev": false,
+      "purl": "pkg:composer/league/commonmark@1.6.7",
+      "raptor_risk_estimate": 5.480439815994275,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use League\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 64.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.39955514999999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.480439815994275,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "2.6.0"
+        ],
+        "id": "GHSA-c2pc-g5qf-rfrf",
+        "modified": "2024-12-09T20:51:59.109747+00:00",
+        "published": "2024-12-09T20:42:07+00:00",
+        "references": [
+          "https://github.com/github/cmark-gfm/security/advisories/GHSA-24f7-9frr-5h2r",
+          "https://github.com/github/cmark-gfm/security/advisories/GHSA-29g3-96g3-jg6c",
+          "https://github.com/github/cmark-gfm/security/advisories/GHSA-66g8-4hjf-77xh",
+          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r572-jvj2-3m8p",
+          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r8vr-c48j-fcc5"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "league/commonmark's quadratic complexity bugs may lead to a denial of service"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "league/commonmark",
+      "dep_version": "1.6.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:league/commonmark:1.6.7:GHSA-c2pc-g5qf-rfrf",
+      "in_kev": false,
+      "purl": "pkg:composer/league/commonmark@1.6.7",
+      "raptor_risk_estimate": 10.51953254365781,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use League\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.51953254365781,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2021-32708"
+        ],
+        "fixed_versions": [
+          "1.1.4",
+          "2.1.1"
+        ],
+        "id": "GHSA-9f46-5r25-5wfm",
+        "modified": "2026-03-13T22:01:08.982482+00:00",
+        "published": "2021-06-29T03:13:28+00:00",
+        "references": [
+          "https://github.com/thephpleague/flysystem/security/advisories/GHSA-9f46-5r25-5wfm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-32708",
+          "https://github.com/thephpleague/flysystem/commit/a3c694de9f7e844b76f9d1b61296ebf6e8d89d74",
+          "https://github.com/thephpleague/flysystem/commit/f3ad69181b8afed2c9edf7be5a2918144ff4ea32",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/league/flysystem/CVE-2021-32708.yaml"
+        ],
+        "severity": {
+          "score": 9.8,
+          "severity": "critical",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem"
+      },
+      "cvss_score": 9.8,
+      "dep_name": "league/flysystem",
+      "dep_version": "1.0.70",
+      "ecosystem": "Packagist",
+      "epss": 0.07327,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:league/flysystem:1.0.70:GHSA-9f46-5r25-5wfm",
+      "in_kev": false,
+      "purl": "pkg:composer/league/flysystem@1.0.70",
+      "raptor_risk_estimate": 9.17186621752386,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use League\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 98.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.436689681,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.17186621752386,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "critical",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-22145"
+        ],
+        "fixed_versions": [
+          "3.8.4",
+          "2.72.6"
+        ],
+        "id": "GHSA-j3f9-p6hm-5w6q",
+        "modified": "2025-02-25T18:48:28.814404+00:00",
+        "published": "2025-01-08T21:03:28+00:00",
+        "references": [
+          "https://github.com/CarbonPHP/carbon/security/advisories/GHSA-j3f9-p6hm-5w6q",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-22145",
+          "https://github.com/briannesbitt/Carbon/commit/129700ed449b1f02d70272d2ac802357c8c30c58",
+          "https://github.com/CarbonPHP/carbon",
+          "https://lists.debian.org/debian-lts-announce/2025/02/msg00032.html"
+        ],
+        "severity": null,
+        "summary": "Carbon has an arbitrary file include via unvalidated input passed to Carbon::setLocale"
+      },
+      "cvss_score": null,
+      "dep_name": "nesbot/carbon",
+      "dep_version": "1.39.1",
+      "ecosystem": "Packagist",
+      "epss": 0.00095,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:nesbot/carbon:1.39.1:GHSA-j3f9-p6hm-5w6q",
+      "in_kev": false,
+      "purl": "pkg:composer/nesbot/carbon@1.39.1",
+      "raptor_risk_estimate": 3.427243481817703,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Nesbot\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399784785,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.427243481817703,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-24765"
+        ],
+        "fixed_versions": [
+          "8.5.52",
+          "9.6.33",
+          "10.5.62",
+          "11.5.50",
+          "12.5.8"
+        ],
+        "id": "GHSA-vvj3-c3rp-c85p",
+        "modified": "2026-05-05T15:55:47.547809+00:00",
+        "published": "2026-01-27T22:26:22+00:00",
+        "references": [
+          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
+          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
+          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
+        ],
+        "severity": {
+          "score": 7.8,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
+      },
+      "cvss_score": 7.8,
+      "dep_name": "phpunit/phpunit",
+      "dep_version": "7.5.20",
+      "ecosystem": "Packagist",
+      "epss": 0.00162,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:phpunit/phpunit:7.5.20:GHSA-vvj3-c3rp-c85p",
+      "in_kev": false,
+      "purl": "pkg:composer/phpunit/phpunit@7.5.20",
+      "raptor_risk_estimate": 9.555486117593768,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "vendor referenced only by test code"
+        },
+        "evidence": [
+          "tests/TestListener.php:13",
+          "tests/TestListener.php:15",
+          "tests/TestListener.php:16",
+          "tests/TestListener.php:17",
+          "tests/TestListener.php:18",
+          "... (+5 more)"
+        ],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 78.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400126686,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.555486117593768,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-25129"
+        ],
+        "fixed_versions": [
+          "0.12.19",
+          "0.11.23"
+        ],
+        "id": "GHSA-4486-gxhx-5mg7",
+        "modified": "2026-02-03T03:13:39.153449+00:00",
+        "published": "2026-01-30T21:28:44+00:00",
+        "references": [
+          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
+          "https://github.com/bobthecow/psysh",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
+          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
+        ],
+        "severity": {
+          "score": 6.7,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
+        },
+        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
+      },
+      "cvss_score": 6.7,
+      "dep_name": "psy/psysh",
+      "dep_version": "v0.9.12",
+      "ecosystem": "Packagist",
+      "epss": 5e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:psy/psysh:v0.9.12:GHSA-4486-gxhx-5mg7",
+      "in_kev": false,
+      "purl": "pkg:composer/psy/psysh@v0.9.12",
+      "raptor_risk_estimate": 9.841185183151572,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `use Psy\\...` found in non-test PHP source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 67.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.39932551499999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.841185183151572,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-64500"
+        ],
+        "fixed_versions": [
+          "5.4.50",
+          "6.4.29",
+          "7.3.7"
+        ],
+        "id": "GHSA-3rg7-wf37-54rm",
+        "modified": "2026-02-04T03:01:05.453147+00:00",
+        "published": "2025-11-12T21:50:37+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
+          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
+        ],
+        "severity": {
+          "score": 7.3,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
+        },
+        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
+      },
+      "cvss_score": 7.3,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.4.49",
+      "ecosystem": "Packagist",
+      "epss": 0.06657,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.4.49:GHSA-3rg7-wf37-54rm",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.4.49",
+      "raptor_risk_estimate": 9.990734243755124,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Middleware/Acceptable.php:16",
+          "app/Http/Middleware/Authenticate.php:17",
+          "app/Http/Middleware/Admin.php:17",
+          "app/Http/Middleware/ApiAuthentication.php:19",
+          "app/Http/Middleware/Throttler.php:17",
+          "... (+19 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 73.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.433270671,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.990734243755124,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-50345"
+        ],
+        "fixed_versions": [
+          "5.4.46",
+          "6.4.14",
+          "7.1.7"
+        ],
+        "id": "GHSA-mrqx-rp3w-jpjp",
+        "modified": "2025-11-03T23:05:56.908103+00:00",
+        "published": "2024-11-06T15:22:09+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
+          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
+        ],
+        "severity": {
+          "score": 3.1,
+          "severity": "low",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+        },
+        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
+      },
+      "cvss_score": 3.1,
+      "dep_name": "symfony/http-foundation",
+      "dep_version": "v4.4.49",
+      "ecosystem": "Packagist",
+      "epss": 0.00394,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.4.49:GHSA-mrqx-rp3w-jpjp",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/http-foundation@v4.4.49",
+      "raptor_risk_estimate": 3.9296833827667492,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Middleware/Acceptable.php:16",
+          "app/Http/Middleware/Authenticate.php:17",
+          "app/Http/Middleware/Admin.php:17",
+          "app/Http/Middleware/ApiAuthentication.php:19",
+          "app/Http/Middleware/Throttler.php:17",
+          "... (+19 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 31.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.40131058199999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 3.9296833827667492,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-51736"
+        ],
+        "fixed_versions": [
+          "5.4.46",
+          "6.4.14",
+          "7.1.7"
+        ],
+        "id": "GHSA-qq5c-677p-737q",
+        "modified": "2025-03-07T13:40:26.737075+00:00",
+        "published": "2024-11-06T15:22:55+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-qq5c-677p-737q",
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-51736",
+          "https://github.com/symfony/symfony/commit/18ecd03eda3917fdf901a48e72518f911c64a1c9",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/process/CVE-2024-51736.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-51736.yaml"
+        ],
+        "severity": {
+          "score": 8.4,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        },
+        "summary": "Symfony vulnerable to command execution hijack on Windows with Process class"
+      },
+      "cvss_score": 8.4,
+      "dep_name": "symfony/process",
+      "dep_version": "v4.4.44",
+      "ecosystem": "Packagist",
+      "epss": 0.00783,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/process:v4.4.44:GHSA-qq5c-677p-737q",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/process@v4.4.44",
+      "raptor_risk_estimate": 10.700845102741498,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Middleware/Acceptable.php:16",
+          "app/Http/Middleware/Authenticate.php:17",
+          "app/Http/Middleware/Admin.php:17",
+          "app/Http/Middleware/ApiAuthentication.php:19",
+          "app/Http/Middleware/Throttler.php:17",
+          "... (+19 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 84.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.403295649,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 10.700845102741498,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-24739"
+        ],
+        "fixed_versions": [
+          "5.4.51",
+          "6.4.33",
+          "7.3.11",
+          "7.4.5",
+          "8.0.5"
+        ],
+        "id": "GHSA-r39x-jcww-82v6",
+        "modified": "2026-02-16T13:43:45.548028+00:00",
+        "published": "2026-01-28T21:28:10+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-r39x-jcww-82v6",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-24739",
+          "https://github.com/symfony/symfony/issues/62921",
+          "https://github.com/symfony/symfony/pull/63164",
+          "https://github.com/symfony/symfony/commit/35203939050e5abd3caf2202113b00cab5d379b3"
+        ],
+        "severity": {
+          "score": 6.3,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:H"
+        },
+        "summary": "Symfony's incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows"
+      },
+      "cvss_score": 6.3,
+      "dep_name": "symfony/process",
+      "dep_version": "v4.4.44",
+      "ecosystem": "Packagist",
+      "epss": 9e-05,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/process:v4.4.44:GHSA-r39x-jcww-82v6",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/process@v4.4.44",
+      "raptor_risk_estimate": 7.947033865540873,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "app/Http/Middleware/Acceptable.php:16",
+          "app/Http/Middleware/Authenticate.php:17",
+          "app/Http/Middleware/Admin.php:17",
+          "app/Http/Middleware/ApiAuthentication.php:19",
+          "app/Http/Middleware/Throttler.php:17",
+          "... (+19 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 63.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.399345927,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.947033865540873,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-46628"
         ],
         "fixed_versions": [
@@ -1323,742 +2059,6 @@
     {
       "advisory": {
         "aliases": [
-          "CVE-2026-24765"
-        ],
-        "fixed_versions": [
-          "8.5.52",
-          "9.6.33",
-          "10.5.62",
-          "11.5.50",
-          "12.5.8"
-        ],
-        "id": "GHSA-vvj3-c3rp-c85p",
-        "modified": "2026-05-05T15:55:47.547809+00:00",
-        "published": "2026-01-27T22:26:22+00:00",
-        "references": [
-          "https://github.com/sebastianbergmann/phpunit/security/advisories/GHSA-vvj3-c3rp-c85p",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24765",
-          "https://github.com/sebastianbergmann/phpunit/commit/3141742e00620e2968d3d2e732d320de76685fda",
-          "https://github.com/sebastianbergmann/phpunit/commit/613d142f5a8471ca71623ce5ca2795f79248329e",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/phpunit/phpunit/CVE-2026-24765.yaml"
-        ],
-        "severity": {
-          "score": 7.8,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PHPUnit Vulnerable to Unsafe Deserialization in PHPT Code Coverage Handling"
-      },
-      "cvss_score": 7.8,
-      "dep_name": "phpunit/phpunit",
-      "dep_version": "7.5.20",
-      "ecosystem": "Packagist",
-      "epss": 0.00162,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:phpunit/phpunit:7.5.20:GHSA-vvj3-c3rp-c85p",
-      "in_kev": false,
-      "purl": "pkg:composer/phpunit/phpunit@7.5.20",
-      "raptor_risk_estimate": 9.555486117593768,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "vendor referenced only by test code"
-        },
-        "evidence": [
-          "tests/TestListener.php:13",
-          "tests/TestListener.php:15",
-          "tests/TestListener.php:16",
-          "tests/TestListener.php:17",
-          "tests/TestListener.php:18",
-          "... (+5 more)"
-        ],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 78.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400126686,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.555486117593768,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-46734"
-        ],
-        "fixed_versions": [
-          "2.7.0"
-        ],
-        "id": "GHSA-3527-qv2q-pfvx",
-        "modified": "2026-03-20T21:31:21.970036+00:00",
-        "published": "2025-05-05T20:40:36+00:00",
-        "references": [
-          "https://github.com/thephpleague/commonmark/security/advisories/GHSA-3527-qv2q-pfvx",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-46734",
-          "https://github.com/thephpleague/commonmark/commit/f0d626cf05ad3e99e6db26ebcb9091b6cd1cd89b",
-          "https://github.com/thephpleague/commonmark"
-        ],
-        "severity": {
-          "score": 6.4,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:L/A:N"
-        },
-        "summary": "league/commonmark contains a XSS vulnerability in Attributes extension"
-      },
-      "cvss_score": 6.4,
-      "dep_name": "league/commonmark",
-      "dep_version": "1.6.7",
-      "ecosystem": "Packagist",
-      "epss": 0.0005,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:league/commonmark:1.6.7:GHSA-3527-qv2q-pfvx",
-      "in_kev": false,
-      "purl": "pkg:composer/league/commonmark@1.6.7",
-      "raptor_risk_estimate": 5.480439815994275,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 64.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39955514999999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 5.480439815994275,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [],
-        "fixed_versions": [
-          "2.6.0"
-        ],
-        "id": "GHSA-c2pc-g5qf-rfrf",
-        "modified": "2024-12-09T20:51:59.109747+00:00",
-        "published": "2024-12-09T20:42:07+00:00",
-        "references": [
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-24f7-9frr-5h2r",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-29g3-96g3-jg6c",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-66g8-4hjf-77xh",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r572-jvj2-3m8p",
-          "https://github.com/github/cmark-gfm/security/advisories/GHSA-r8vr-c48j-fcc5"
-        ],
-        "severity": {
-          "score": 7.5,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
-        },
-        "summary": "league/commonmark's quadratic complexity bugs may lead to a denial of service"
-      },
-      "cvss_score": 7.5,
-      "dep_name": "league/commonmark",
-      "dep_version": "1.6.7",
-      "ecosystem": "Packagist",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:league/commonmark:1.6.7:GHSA-c2pc-g5qf-rfrf",
-      "in_kev": false,
-      "purl": "pkg:composer/league/commonmark@1.6.7",
-      "raptor_risk_estimate": 10.51953254365781,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 75.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.51953254365781,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2021-32708"
-        ],
-        "fixed_versions": [
-          "1.1.4",
-          "2.1.1"
-        ],
-        "id": "GHSA-9f46-5r25-5wfm",
-        "modified": "2026-03-13T22:01:08.982482+00:00",
-        "published": "2021-06-29T03:13:28+00:00",
-        "references": [
-          "https://github.com/thephpleague/flysystem/security/advisories/GHSA-9f46-5r25-5wfm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2021-32708",
-          "https://github.com/thephpleague/flysystem/commit/a3c694de9f7e844b76f9d1b61296ebf6e8d89d74",
-          "https://github.com/thephpleague/flysystem/commit/f3ad69181b8afed2c9edf7be5a2918144ff4ea32",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/league/flysystem/CVE-2021-32708.yaml"
-        ],
-        "severity": {
-          "score": 9.8,
-          "severity": "critical",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Time-of-check Time-of-use (TOCTOU) Race Condition in league/flysystem"
-      },
-      "cvss_score": 9.8,
-      "dep_name": "league/flysystem",
-      "dep_version": "1.0.70",
-      "ecosystem": "Packagist",
-      "epss": 0.07327,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:league/flysystem:1.0.70:GHSA-9f46-5r25-5wfm",
-      "in_kev": false,
-      "purl": "pkg:composer/league/flysystem@1.0.70",
-      "raptor_risk_estimate": 9.17186621752386,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use League\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 98.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.436689681,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.17186621752386,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "critical",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-22145"
-        ],
-        "fixed_versions": [
-          "3.8.4",
-          "2.72.6"
-        ],
-        "id": "GHSA-j3f9-p6hm-5w6q",
-        "modified": "2025-02-25T18:48:28.814404+00:00",
-        "published": "2025-01-08T21:03:28+00:00",
-        "references": [
-          "https://github.com/CarbonPHP/carbon/security/advisories/GHSA-j3f9-p6hm-5w6q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-22145",
-          "https://github.com/briannesbitt/Carbon/commit/129700ed449b1f02d70272d2ac802357c8c30c58",
-          "https://github.com/CarbonPHP/carbon",
-          "https://lists.debian.org/debian-lts-announce/2025/02/msg00032.html"
-        ],
-        "severity": null,
-        "summary": "Carbon has an arbitrary file include via unvalidated input passed to Carbon::setLocale"
-      },
-      "cvss_score": null,
-      "dep_name": "nesbot/carbon",
-      "dep_version": "1.39.1",
-      "ecosystem": "Packagist",
-      "epss": 0.00095,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:nesbot/carbon:1.39.1:GHSA-j3f9-p6hm-5w6q",
-      "in_kev": false,
-      "purl": "pkg:composer/nesbot/carbon@1.39.1",
-      "raptor_risk_estimate": 3.427243481817703,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Nesbot\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399784785,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.427243481817703,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-25129"
-        ],
-        "fixed_versions": [
-          "0.12.19",
-          "0.11.23"
-        ],
-        "id": "GHSA-4486-gxhx-5mg7",
-        "modified": "2026-02-03T03:13:39.153449+00:00",
-        "published": "2026-01-30T21:28:44+00:00",
-        "references": [
-          "https://github.com/bobthecow/psysh/security/advisories/GHSA-4486-gxhx-5mg7",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-25129",
-          "https://github.com/bobthecow/psysh",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.11.23",
-          "https://github.com/bobthecow/psysh/releases/tag/v0.12.19"
-        ],
-        "severity": {
-          "score": 6.7,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:H"
-        },
-        "summary": "PsySH has Local Privilege Escalation via CWD .psysh.php auto-load"
-      },
-      "cvss_score": 6.7,
-      "dep_name": "psy/psysh",
-      "dep_version": "v0.9.12",
-      "ecosystem": "Packagist",
-      "epss": 5e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:psy/psysh:v0.9.12:GHSA-4486-gxhx-5mg7",
-      "in_kev": false,
-      "purl": "pkg:composer/psy/psysh@v0.9.12",
-      "raptor_risk_estimate": 9.841185183151572,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no `use Psy\\...` found in non-test PHP source"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 67.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39932551499999996,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.841185183151572,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-64500"
-        ],
-        "fixed_versions": [
-          "5.4.50",
-          "6.4.29",
-          "7.3.7"
-        ],
-        "id": "GHSA-3rg7-wf37-54rm",
-        "modified": "2026-02-04T03:01:05.453147+00:00",
-        "published": "2025-11-12T21:50:37+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-3rg7-wf37-54rm",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-64500",
-          "https://github.com/symfony/symfony/commit/9962b91b12bb791322fa73836b350836b6db7cac",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2025-64500.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2025-64500.yaml"
-        ],
-        "severity": {
-          "score": 7.3,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:L"
-        },
-        "summary": "Symfony's incorrect parsing of PATH_INFO can lead to limited authorization bypass"
-      },
-      "cvss_score": 7.3,
-      "dep_name": "symfony/http-foundation",
-      "dep_version": "v4.4.49",
-      "ecosystem": "Packagist",
-      "epss": 0.06657,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.4.49:GHSA-3rg7-wf37-54rm",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/http-foundation@v4.4.49",
-      "raptor_risk_estimate": 9.990734243755124,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "app/Http/Middleware/Throttler.php:17",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Transformers/BusTransformer.php:17",
-          "... (+19 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 73.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.433270671,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 9.990734243755124,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-50345"
-        ],
-        "fixed_versions": [
-          "5.4.46",
-          "6.4.14",
-          "7.1.7"
-        ],
-        "id": "GHSA-mrqx-rp3w-jpjp",
-        "modified": "2025-11-03T23:05:56.908103+00:00",
-        "published": "2024-11-06T15:22:09+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-mrqx-rp3w-jpjp",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-50345",
-          "https://github.com/symfony/symfony/commit/5a9b08e5740af795854b1b639b7d45b9cbfe8819",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/http-foundation/CVE-2024-50345.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-50345.yaml"
-        ],
-        "severity": {
-          "score": 3.1,
-          "severity": "low",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
-        },
-        "summary": "Symfony vulnerable to open redirect via browser-sanitized URLs"
-      },
-      "cvss_score": 3.1,
-      "dep_name": "symfony/http-foundation",
-      "dep_version": "v4.4.49",
-      "ecosystem": "Packagist",
-      "epss": 0.00394,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.4.49:GHSA-mrqx-rp3w-jpjp",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/http-foundation@v4.4.49",
-      "raptor_risk_estimate": 3.9296833827667492,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "app/Http/Middleware/Throttler.php:17",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Transformers/BusTransformer.php:17",
-          "... (+19 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 31.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40131058199999997,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.9296833827667492,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-51736"
-        ],
-        "fixed_versions": [
-          "5.4.46",
-          "6.4.14",
-          "7.1.7"
-        ],
-        "id": "GHSA-qq5c-677p-737q",
-        "modified": "2025-03-07T13:40:26.737075+00:00",
-        "published": "2024-11-06T15:22:55+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-qq5c-677p-737q",
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-51736",
-          "https://github.com/symfony/symfony/commit/18ecd03eda3917fdf901a48e72518f911c64a1c9",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/process/CVE-2024-51736.yaml",
-          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2024-51736.yaml"
-        ],
-        "severity": {
-          "score": 8.4,
-          "severity": "high",
-          "vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-        },
-        "summary": "Symfony vulnerable to command execution hijack on Windows with Process class"
-      },
-      "cvss_score": 8.4,
-      "dep_name": "symfony/process",
-      "dep_version": "v4.4.44",
-      "ecosystem": "Packagist",
-      "epss": 0.00783,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/process:v4.4.44:GHSA-qq5c-677p-737q",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/process@v4.4.44",
-      "raptor_risk_estimate": 10.700845102741498,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "app/Http/Middleware/Throttler.php:17",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Transformers/BusTransformer.php:17",
-          "... (+19 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 84.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.403295649,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 10.700845102741498,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "high",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-24739"
-        ],
-        "fixed_versions": [
-          "5.4.51",
-          "6.4.33",
-          "7.3.11",
-          "7.4.5",
-          "8.0.5"
-        ],
-        "id": "GHSA-r39x-jcww-82v6",
-        "modified": "2026-02-16T13:43:45.548028+00:00",
-        "published": "2026-01-28T21:28:10+00:00",
-        "references": [
-          "https://github.com/symfony/symfony/security/advisories/GHSA-r39x-jcww-82v6",
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-24739",
-          "https://github.com/symfony/symfony/issues/62921",
-          "https://github.com/symfony/symfony/pull/63164",
-          "https://github.com/symfony/symfony/commit/35203939050e5abd3caf2202113b00cab5d379b3"
-        ],
-        "severity": {
-          "score": 6.3,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:H"
-        },
-        "summary": "Symfony's incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows"
-      },
-      "cvss_score": 6.3,
-      "dep_name": "symfony/process",
-      "dep_version": "v4.4.44",
-      "ecosystem": "Packagist",
-      "epss": 9e-05,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Packagist:symfony/process:v4.4.44:GHSA-r39x-jcww-82v6",
-      "in_kev": false,
-      "purl": "pkg:composer/symfony/process@v4.4.44",
-      "raptor_risk_estimate": 7.947033865540873,
-      "reachability": {
-        "confidence": {
-          "level": "low",
-          "numeric": 0.3,
-          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
-        },
-        "evidence": [
-          "app/Exceptions/Displayers/ThrottleDisplayer.php:17",
-          "app/Http/Middleware/Throttler.php:17",
-          "app/Exceptions/Displayers/JsonValidationDisplayer.php:18",
-          "app/Exceptions/Displayers/RedirectDisplayer.php:17",
-          "app/Exceptions/Transformers/BusTransformer.php:17",
-          "... (+19 more)"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 63.0,
-        "cvss_source": "numeric",
-        "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399345927,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.947033865540873,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
           "CVE-2025-62718"
         ],
         "fixed_versions": [
@@ -2105,8 +2105,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2179,8 +2179,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2251,8 +2251,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2322,8 +2322,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2394,8 +2394,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2466,8 +2466,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2539,8 +2539,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2612,8 +2612,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2682,8 +2682,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2754,8 +2754,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2826,8 +2826,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2898,8 +2898,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -2970,8 +2970,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -3042,8 +3042,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -3116,8 +3116,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -3188,8 +3188,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -3260,8 +3260,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:21",
-          "resources/assets/js/app.js:16"
+          "resources/assets/js/app.js:16",
+          "resources/assets/js/bootstrap.js:21"
         ],
         "verdict": "imported"
       },
@@ -4003,6 +4003,72 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2024-6783"
+        ],
+        "fixed_versions": [],
+        "id": "GHSA-g3ch-rx76-35fx",
+        "modified": "2026-02-03T03:15:37.764047+00:00",
+        "published": "2024-07-23T15:31:09+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2024-6783",
+          "https://github.com/vuejs/vue",
+          "https://www.herodevs.com/vulnerability-directory/cve-2024-6783"
+        ],
+        "severity": {
+          "score": 4.2,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+        },
+        "summary": "vue-template-compiler vulnerable to client-side Cross-Site Scripting (XSS)"
+      },
+      "cvss_score": 4.2,
+      "dep_name": "vue-template-compiler",
+      "dep_version": "2.7.15",
+      "ecosystem": "npm",
+      "epss": 0.00308,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:vue-template-compiler:2.7.15:GHSA-g3ch-rx76-35fx",
+      "in_kev": false,
+      "purl": "pkg:npm/vue-template-compiler@2.7.15",
+      "raptor_risk_estimate": 14.113272514291028,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'vue-template-compiler' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 42.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400871724,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.113272514291028,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2024-9506"
         ],
         "fixed_versions": [
@@ -4066,72 +4132,6 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2024-6783"
-        ],
-        "fixed_versions": [],
-        "id": "GHSA-g3ch-rx76-35fx",
-        "modified": "2026-02-03T03:15:37.764047+00:00",
-        "published": "2024-07-23T15:31:09+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2024-6783",
-          "https://github.com/vuejs/vue",
-          "https://www.herodevs.com/vulnerability-directory/cve-2024-6783"
-        ],
-        "severity": {
-          "score": 4.2,
-          "severity": "medium",
-          "vector": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
-        },
-        "summary": "vue-template-compiler vulnerable to client-side Cross-Site Scripting (XSS)"
-      },
-      "cvss_score": 4.2,
-      "dep_name": "vue-template-compiler",
-      "dep_version": "2.7.15",
-      "ecosystem": "npm",
-      "epss": 0.00308,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:npm:vue-template-compiler:2.7.15:GHSA-g3ch-rx76-35fx",
-      "in_kev": false,
-      "purl": "pkg:npm/vue-template-compiler@2.7.15",
-      "raptor_risk_estimate": 14.113272514291028,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "no import/require for 'vue-template-compiler' found"
-        },
-        "evidence": [],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 42.00000000000001,
-        "cvss_source": "numeric",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400871724,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 14.113272514291028,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
-        "ssvc_poc_multiplier": 1.4399,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     }
