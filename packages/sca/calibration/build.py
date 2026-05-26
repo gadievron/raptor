@@ -167,10 +167,11 @@ def _build_kev(out_dir: Path, http: Any) -> BuildResult:
 
 # Exploit-DB index CSV. Fetched by BOTH _build_exploitdb and
 # _build_github_poc (the latter re-parses it for github.com PoC URLs),
-# so it lives here as a single source of truth — a branch/path rename
-# upstream is then a one-line fix, not a fix-one-miss-the-other trap.
+# so it lives here as a single source of truth. The ``HEAD`` ref
+# resolves to the repo's default branch at request time (GitLab raw
+# honours HEAD), so a branch rename upstream can't 404 us.
 _EDB_CSV_URL = (
-    "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+    "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
     "files_exploits.csv"
 )
 
@@ -270,9 +271,12 @@ def _build_metasploit(out_dir: Path, http: Any) -> BuildResult:
     module path; each module has a ``references`` list with
     ``CVE-...`` entries.
     """
+    # ``HEAD`` resolves to the repo's default branch at request time
+    # (raw.githubusercontent honours it), so a master→main rename
+    # upstream can't 404 this fetch.
     MSF_URL = (
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"
-        "master/db/modules_metadata_base.json"
+        "HEAD/db/modules_metadata_base.json"
     )
     data = http.get_json(MSF_URL)
     if not isinstance(data, dict):
@@ -766,11 +770,11 @@ def _build_vulnrichment(out_dir: Path, http: Any) -> BuildResult:
     import io
     import tarfile
 
-    # ``develop`` is the repo's default branch — CISA does not
-    # publish to ``main`` (a fetch of ``refs/heads/main`` 404s).
+    # ``HEAD`` resolves to the repo's default branch at request time
+    # (CISA publishes to ``develop``, not ``main``); codeload honours
+    # it, so a future default-branch rename can't 404 this fetch.
     VULNRICHMENT_TARBALL = (
-        "https://codeload.github.com/cisagov/vulnrichment/tar.gz/"
-        "refs/heads/develop"
+        "https://codeload.github.com/cisagov/vulnrichment/tar.gz/HEAD"
     )
     raw = http.get_bytes(
         VULNRICHMENT_TARBALL, max_bytes=300 * 1024 * 1024,

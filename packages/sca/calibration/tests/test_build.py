@@ -27,8 +27,7 @@ from packages.sca.calibration.build import (
 )
 
 _VULNRICHMENT_URL = (
-    "https://codeload.github.com/cisagov/vulnrichment/tar.gz/"
-    "refs/heads/develop"
+    "https://codeload.github.com/cisagov/vulnrichment/tar.gz/HEAD"
 )
 
 
@@ -335,7 +334,7 @@ _EDB_CSV = (
 
 def test_build_exploitdb_extracts_cve_to_edb_id_mapping(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     result = _build_exploitdb(tmp_path, http)
@@ -357,7 +356,7 @@ def test_build_exploitdb_no_exploit_content_emitted(tmp_path: Path) -> None:
     """The output must NOT contain any of the forbidden field
     names that would indicate exploit content."""
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     _build_exploitdb(tmp_path, http)
@@ -371,7 +370,7 @@ def test_build_exploitdb_no_exploit_content_emitted(tmp_path: Path) -> None:
 
 def test_build_exploitdb_idempotent(tmp_path: Path) -> None:
     http = _StubHttp({
-        "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
+        "https://gitlab.com/exploit-database/exploitdb/-/raw/HEAD/"
         "files_exploits.csv": _EDB_CSV,
     })
     r1 = _build_exploitdb(tmp_path, http)
@@ -412,7 +411,7 @@ _MSF_INDEX = {
 def test_build_metasploit_extracts_cve_to_module_mapping(tmp_path: Path) -> None:
     http = _StubHttp({
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"
-        "master/db/modules_metadata_base.json": _MSF_INDEX,
+        "HEAD/db/modules_metadata_base.json": _MSF_INDEX,
     })
     result = _build_metasploit(tmp_path, http)
     assert result.source == "metasploit"
@@ -438,7 +437,7 @@ def test_build_metasploit_no_module_code_emitted(tmp_path: Path) -> None:
     """Output is paths + booleans only — no module code / payload."""
     http = _StubHttp({
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"
-        "master/db/modules_metadata_base.json": _MSF_INDEX,
+        "HEAD/db/modules_metadata_base.json": _MSF_INDEX,
     })
     _build_metasploit(tmp_path, http)
     text = (tmp_path / "metasploit_signals.json").read_text().lower()

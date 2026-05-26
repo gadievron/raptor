@@ -32,7 +32,8 @@ attribution requirements for sources where the data license requires it.
   We embed **only** boolean signals + entry-ID references (public
   observable facts that an exploit exists for a given CVE).
 - **Source:** <https://gitlab.com/exploit-database/exploitdb>
-- **Index file:** `files_exploits.csv` from upstream main branch.
+- **Index file:** `files_exploits.csv` from the upstream default
+  branch (fetched via the `HEAD` ref, so a branch rename can't break it).
 - **What's stored:** `{cve_id: {has_exploitdb_entry: true, edb_ids: [N, ...]}}`.
 - **What's NEVER stored:** exploit bodies, payloads, shellcode, or
   any exploit content. The license-compliance check
@@ -48,8 +49,8 @@ attribution requirements for sources where the data license requires it.
   references + booleans is sufficient for calibration without
   vendoring the framework.
 - **Source:** <https://github.com/rapid7/metasploit-framework>
-- **Index file:** `db/modules_metadata_base.json` from upstream
-  master branch.
+- **Index file:** `db/modules_metadata_base.json` from the upstream
+  default branch (fetched via the `HEAD` ref, so a branch rename can't break it).
 - **What's stored:** `{cve_id: {has_msf_module: true, module_paths: ["exploits/...", ...]}}`.
 - **What's NEVER stored:** Metasploit Framework code (modules,
   payloads, evasion, post-exploitation, etc.). Same forbidden-
