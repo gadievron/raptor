@@ -21,6 +21,8 @@ from pathlib import Path
 
 from core.sandbox import run_untrusted
 
+from packages.zkpox.proving_deps import require_proving_stack
+
 
 # Repo root resolution. The Rust workspace lives at <repo>/core/zkpox/.
 # Fall back to walking up from this file's location so the package works
@@ -91,6 +93,13 @@ def run(
     """
     if mode not in ("execute", "prove"):
         raise ValueError(f"mode must be 'execute' or 'prove', got {mode!r}")
+    # Gate the *default* path on the proving stack so a bare box gets
+    # the actionable ProvingStackUnavailable message rather than a vague
+    # "binary not found". An explicit ``binary=`` overrides — tests
+    # (and any future stub-prover use) supply their own path and
+    # legitimately don't need cargo-prove / SP1 installed.
+    if binary is None:
+        require_proving_stack()
     bin_path = Path(binary) if binary else _default_binary()
     if not bin_path.exists():
         raise ProverError(
