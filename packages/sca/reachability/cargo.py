@@ -126,10 +126,20 @@ def _walk_rust_sources(
 
 
 def _is_test_file(path: Path, target: Path) -> bool:
-    """``tests/``, ``examples/``, ``benches/``, ``fuzz/`` directories OR
-    a file ending in ``_test.rs`` (uncommon but seen)."""
+    """A Cargo non-library target: a file under a crate-root ``tests/`` /
+    ``examples/`` / ``benches/`` / ``fuzz/`` directory, or a ``*_test.rs`` file.
+
+    Cargo only treats those directory names as integration / example / bench
+    targets at the CRATE ROOT. A module nested inside the library — e.g.
+    ``src/foo/examples/bar.rs`` — is ordinary production code, so matching the
+    name at any depth would misclassify it as test-only and wrongly downgrade
+    the reachability of a dependency it uses (a false negative). Anchor to the
+    first path component relative to the scanned crate root. (In a workspace
+    where ``target`` is the workspace root, a nested crate's target dir is
+    treated as production — the reachability-conservative direction.)
+    """
     rel_parts = path.relative_to(target).parts
-    if any(p in _TEST_DIR_NAMES for p in rel_parts):
+    if rel_parts and rel_parts[0] in _TEST_DIR_NAMES:
         return True
     if path.name.endswith("_test.rs"):
         return True

@@ -63,6 +63,32 @@ def test_cargo_only_in_tests(tmp_path: Path) -> None:
     assert r.verdict == "not_reachable"
 
 
+def test_cargo_crate_root_examples_still_test(tmp_path: Path) -> None:
+    # A crate-root examples/ dir IS a Cargo example target (not in the lib),
+    # so a dep used only there stays not_reachable.
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "demo.rs").write_text(
+        "use rand::random;\nfn main() {}\n", encoding="utf-8")
+    scan = rcargo.scan_imports(tmp_path)
+    r = rcargo.resolve_dep("rand", scan, target=tmp_path)
+    assert r.verdict == "not_reachable"
+
+
+def test_cargo_nested_examples_module_is_production(tmp_path: Path) -> None:
+    # A module named examples NESTED in the library (src/foo/examples/…) is
+    # compiled into the crate = production code. It must NOT be treated as a
+    # Cargo example target, or a dependency it uses is wrongly downgraded
+    # (the silent false-negative this fix addresses).
+    nested = tmp_path / "src" / "foo" / "examples"
+    nested.mkdir(parents=True)
+    (nested / "bar.rs").write_text(
+        "use rand::random;\npub fn use_it() { let _ = random::<u8>(); }\n",
+        encoding="utf-8")
+    scan = rcargo.scan_imports(tmp_path)
+    r = rcargo.resolve_dep("rand", scan, target=tmp_path)
+    assert r.verdict == "imported"
+
+
 def test_cargo_no_match(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.rs").write_text(
