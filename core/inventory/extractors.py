@@ -797,6 +797,10 @@ def _ts_language(lang: str):
             import tree_sitter_cpp as ts
         elif lang == "go":
             import tree_sitter_go as ts
+        elif lang == "csharp":
+            import tree_sitter_c_sharp as ts
+        elif lang == "ruby":
+            import tree_sitter_ruby as ts
         else:
             return None
         return Language(ts.language())
@@ -839,6 +843,9 @@ class TreeSitterExtractor:
         "c": ("function_definition",),
         "cpp": ("function_definition",),
         "go": ("function_declaration", "method_declaration"),
+        "csharp": ("method_declaration", "constructor_declaration",
+                   "local_function_statement"),
+        "ruby": ("method", "singleton_method"),
     }
 
     _CLASS_TYPES = {
@@ -850,6 +857,9 @@ class TreeSitterExtractor:
         "c": (),
         "cpp": ("class_specifier", "struct_specifier"),
         "go": (),
+        "csharp": ("class_declaration", "interface_declaration",
+                   "struct_declaration", "record_declaration"),
+        "ruby": ("class", "module"),
     }
 
     def __init__(self, language: str):
@@ -873,11 +883,11 @@ class TreeSitterExtractor:
         return functions
 
     def _class_annotations(self, node) -> List[str]:
-        """Annotations declared on a class/interface (Java).
+        """Annotations / attributes declared on a class/interface.
 
-        Reads the class node's ``modifiers`` block, the same shape used for
-        method annotations. Other languages don't put annotations there, so
-        this returns ``[]`` for them.
+        Java: the ``modifiers`` block holds ``marker_annotation`` / ``annotation``.
+        C#: ``attribute_list`` children hold ``[Attr]`` attributes. Other
+        languages put neither here, so this returns ``[]`` for them.
         """
         out: List[str] = []
         for child in node.children:
@@ -885,6 +895,40 @@ class TreeSitterExtractor:
                 for mod in child.children:
                     if mod.type in ("marker_annotation", "annotation"):
                         out.append(mod.text.decode().lstrip("@"))
+            elif child.type == "attribute_list":
+                out.extend(self._csharp_attr_names(child))
+            elif child.type == "superclass":
+                # Ruby: ``class X < ApplicationController`` — record the base so
+                # the Rails convention (controller/job/mailer) can fire. The
+                # base is a ``constant`` or a ``scope_resolution`` (Foo::Bar).
+                for sc in child.children:
+                    if sc.type in ("constant", "scope_resolution"):
+                        out.append(sc.text.decode())
+        return out
+
+    @staticmethod
+    def _csharp_attr_names(attribute_list_node) -> List[str]:
+        """Attribute names in one C# ``attribute_list`` (``[HttpGet, Route(\"x\")]``
+        → ``["HttpGet", "Route"]``). The name is the ``attribute`` node's leading
+        identifier / qualified_name; reachability tail-matches it."""
+        out: List[str] = []
+        for a in attribute_list_node.children:
+            if a.type != "attribute":
+                continue
+            for ac in a.children:
+                if ac.type in ("identifier", "qualified_name"):
+                    out.append(ac.text.decode())
+                    break
+        return out
+
+    def _csharp_attributes(self, node) -> List[str]:
+        """C# attributes on a method/ctor — its ``attribute_list`` children."""
+        if self.language != "csharp":
+            return []
+        out: List[str] = []
+        for child in node.children:
+            if child.type == "attribute_list":
+                out.extend(self._csharp_attr_names(child))
         return out
 
     # Sibling node types allowed between a TS/JS decorator and the
@@ -984,7 +1028,8 @@ class TreeSitterExtractor:
             elif child.type in self.func_types:
                 # JS/TS: method/function decorators are preceding siblings
                 # (@Get() / @Cron() …). Python: a decorated_definition wrapper.
-                attrs = self._ts_decorators(child)
+                # C#: ``[HttpGet]`` attribute_list children (gathered here).
+                attrs = self._ts_decorators(child) + self._csharp_attributes(child)
                 parent = child.parent
                 if parent and parent.type == "decorated_definition":
                     for sib in parent.children:
@@ -1061,6 +1106,19 @@ class TreeSitterExtractor:
         if node.type == "method_definition":
             visibility = self._ts_member_visibility(node)
 
+        # C#: ``modifier`` children carry access keywords; members default to
+        # ``private`` (the framework-entry rule keys on public action methods).
+        if self.language == "csharp" and node.type in (
+            "method_declaration", "constructor_declaration",
+        ):
+            visibility = "private"
+            for child in node.children:
+                if child.type == "modifier" and child.text.decode() in (
+                    "public", "private", "protected", "internal",
+                ):
+                    visibility = child.text.decode()
+                    break
+
         # Java: modifiers block contains annotations and access keywords
         for child in node.children:
             if child.type == "modifiers":
@@ -1115,15 +1173,34 @@ class TreeSitterExtractor:
         return visibility, class_name
 
     def _get_name(self, node) -> Optional[str]:
+        # C#: a method/ctor name is the identifier immediately BEFORE the
+        # ``parameter_list`` — the identifiers before THAT are the return type
+        # (``IActionResult GetAll()`` → ``GetAll``, not ``IActionResult``).
+        if self.language == "csharp" and node.type in (
+            "method_declaration", "constructor_declaration",
+            "local_function_statement",
+        ):
+            plist = next(
+                (c for c in node.children if c.type == "parameter_list"), None)
+            sib = plist.prev_sibling if plist is not None else None
+            while sib is not None:
+                if sib.type in ("identifier", "name"):
+                    return sib.text.decode()
+                sib = sib.prev_sibling
         # ``type_identifier`` names a TS class/interface — but in a Java/TS
         # method it's the RETURN TYPE (``public String handle()``), which
         # precedes the method name, so only accept it on a class declaration.
         is_class_decl = node.type in (
             "class_declaration", "abstract_class_declaration",
             "interface_declaration",
+            "class", "module",          # Ruby
         )
         for child in node.children:
             if child.type in ("identifier", "name"):
+                return child.text.decode()
+            # Ruby class/module name is a ``constant`` (the first one; a
+            # superclass constant is nested inside the ``superclass`` node).
+            if child.type == "constant" and is_class_decl:
                 return child.text.decode()
             # JS/TS class method names are ``property_identifier`` (safe in any
             # node — no language puts a return type there). Without this, every
@@ -1308,6 +1385,8 @@ _REGEX_EXTRACTORS = {
     'javascript': JavaScriptExtractor(),
     'typescript': JavaScriptExtractor(),
     'tsx': JavaScriptExtractor(),
+    'csharp': GenericExtractor(),
+    'ruby': GenericExtractor(),
     'c': CExtractor(),
     'cpp': CExtractor(),
     'java': JavaExtractor(),

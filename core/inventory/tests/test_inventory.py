@@ -1285,3 +1285,119 @@ class TestTypeScriptCoverage:
         assert verdict("step") == "called"        # via this.step()
         assert verdict("deep") == "called"        # via this.deep() (transitive)
         assert verdict("orphan") == "not_called"  # genuinely uncalled control
+
+
+class TestCSharpCoverage:
+    """End-to-end C# / ASP.NET coverage. C# used the regex extractor (no
+    attribute/visibility capture); now wired to tree-sitter-c-sharp so methods
+    extract (name = identifier before parameter_list, NOT the return type) with
+    attributes + visibility, and ASP.NET routing attributes / [ApiController]
+    stereotypes promote action methods to framework entries. Needs
+    tree-sitter-c-sharp; skips without it."""
+
+    _FILES = {
+        "UsersController.cs": (
+            "[ApiController]\n[Route(\"api/users\")]\n"
+            "public class UsersController : ControllerBase {\n"
+            "  [HttpGet] public IActionResult GetAll() { return Ok(Fmt()); }\n"
+            "  [HttpPost] public IActionResult Create() { return Ok(); }\n"
+            "  private string Fmt() { return \"x\"; }\n"
+            "  private string DeadHelper() { return \"never\"; }\n}\n"),
+        "Svc.cs": (
+            "public class Svc {\n  public string Lonely() { return \"x\"; }\n}\n"),
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_csharp_extracts_methods_and_attributes(self, tmp_path):
+        pytest.importorskip("tree_sitter_c_sharp")
+        inv = self._build(tmp_path)
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        # method name is GetAll (not the return type IActionResult).
+        assert {"GetAll", "Create", "Fmt", "Lonely"} <= set(meta)
+        assert "HttpGet" in meta["GetAll"]["attributes"]
+        assert "ApiController" in meta["GetAll"]["class_attributes"]
+        assert meta["Fmt"]["visibility"] == "private"
+
+    def test_csharp_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_c_sharp")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0),
+                            f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("GetAll") == "reachable"     # [HttpGet]
+        assert verdict("Create") == "reachable"     # [HttpPost]
+        assert verdict("Fmt") == "called"           # called intra-class by GetAll
+        assert verdict("DeadHelper") == "not_called"  # private uncalled
+        assert verdict("Lonely") == "not_called"    # public, non-stereotype class
+
+
+class TestRubyCoverage:
+    """End-to-end Ruby / Rails coverage. Ruby used the regex extractor; now
+    wired to tree-sitter-ruby (class name = constant, methods, superclass
+    captured). Rails dispatch is CONVENTION-based (no annotations): methods of a
+    class inheriting a framework base (*Controller / job / mailer) are
+    framework entries. Needs tree-sitter-ruby; skips without it."""
+
+    _FILES = {
+        "users_controller.rb": (
+            "class UsersController < ApplicationController\n"
+            "  before_action :authenticate\n"
+            "  def index\n    @u = fetch\n  end\n"
+            "  def show; end\n"
+            "  private\n  def fetch; User.all; end\n"
+            "  def authenticate; end\nend\n"),
+        "widget_job.rb": (
+            "class WidgetJob < ApplicationJob\n  def perform(id); end\nend\n"),
+        "plain.rb": "class PlainThing\n  def lonely; end\nend\n",
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_ruby_extracts_methods_and_superclass(self, tmp_path):
+        pytest.importorskip("tree_sitter_ruby")
+        inv = self._build(tmp_path)
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        assert {"index", "show", "fetch", "perform", "lonely"} <= set(meta)
+        assert meta["index"]["class_name"] == "UsersController"
+        assert "ApplicationController" in meta["index"]["class_attributes"]
+
+    def test_ruby_rails_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_ruby")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0),
+                            f["path"].rsplit(".", 1)[0])
+            return None
+
+        # controller actions + private callbacks/helpers are Rails-dispatched.
+        assert verdict("index") == "reachable"
+        assert verdict("show") == "reachable"
+        assert verdict("authenticate") == "reachable"   # before_action callback
+        assert verdict("fetch") == "reachable"           # helper in a controller
+        assert verdict("perform") == "reachable"         # job entry
+        assert verdict("lonely") == "not_called"         # plain class control

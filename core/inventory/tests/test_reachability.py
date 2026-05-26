@@ -829,3 +829,57 @@ def test_ts_plain_method_and_stale_metadata_not_entries():
     assert not _ts_framework_entry("dead", _java_item("dead", visibility="public"))
     # graceful on missing metadata (degrade to 1-hop, no crash).
     assert _ts_framework_entry("x", {"name": "x", "kind": "function"}) is False
+
+
+# ---------------------------------------------------------------------------
+# C# / ASP.NET framework-dispatch entries (_csharp_framework_entry).
+# Path-independent: synthetic item dicts (attributes stored as the tail name,
+# e.g. "HttpGet" / "ApiController"), so they run on CI without tree-sitter-c#.
+# ---------------------------------------------------------------------------
+
+
+def test_csharp_method_route_attrs_are_entries():
+    from core.inventory.reachability import _csharp_framework_entry
+    for attr in ("HttpGet", "HttpPost", "Route",
+                 "Microsoft.AspNetCore.Mvc.HttpDelete"):
+        assert _csharp_framework_entry(
+            "Act", _java_item("Act", attrs=[attr], visibility="public")), attr
+
+
+def test_csharp_controller_stereotype_promotes_public_only():
+    from core.inventory.reachability import _csharp_framework_entry
+    assert _csharp_framework_entry(
+        "Index", _java_item("Index", class_attrs=["ApiController"], visibility="public"))
+    assert _csharp_framework_entry(
+        "List", _java_item("List", class_attrs=["Controller"], visibility="public"))
+    # C# members default to private; a private action isn't dispatched.
+    assert not _csharp_framework_entry(
+        "Helper", _java_item("Helper", class_attrs=["ApiController"], visibility="private"))
+
+
+def test_csharp_plain_and_stale_not_entries():
+    from core.inventory.reachability import _csharp_framework_entry
+    assert not _csharp_framework_entry("Lonely", _java_item("Lonely", visibility="public"))
+    assert _csharp_framework_entry("x", {"name": "x", "kind": "function"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Ruby / Rails framework entries (_ruby_framework_entry). Convention-based: the
+# signal is the base class captured in class_attributes (no annotations).
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_framework_base_promotes_class_methods():
+    from core.inventory.reachability import _ruby_framework_entry
+    # any method of a class inheriting a Rails base is framework-dispatched.
+    for base in ("ApplicationController", "Admin::UsersController",
+                 "ApplicationJob", "ActionMailer::Base"):
+        assert _ruby_framework_entry("m", _java_item("m", class_attrs=[base])), base
+
+
+def test_ruby_non_framework_class_not_entry():
+    from core.inventory.reachability import _ruby_framework_entry
+    # a plain class (no Rails base) is not framework-dispatched.
+    assert not _ruby_framework_entry("lonely", _java_item("lonely", class_attrs=["SomeBase"]))
+    assert not _ruby_framework_entry("lonely", _java_item("lonely"))
+    assert _ruby_framework_entry("x", {"name": "x", "kind": "function"}) is False

@@ -2339,6 +2339,8 @@ class ReachabilityProfile:
     has_go_init: bool = False
     has_java_web: bool = False
     has_ts_framework: bool = False
+    has_csharp_framework: bool = False
+    has_ruby_framework: bool = False
 
 
 PROFILES: Dict[str, ReachabilityProfile] = {
@@ -2351,8 +2353,8 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "javascript": ReachabilityProfile("javascript", "none"),
     "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
     "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
-    "ruby":       ReachabilityProfile("ruby", "none"),
-    "csharp":     ReachabilityProfile("csharp", "none"),
+    "ruby":       ReachabilityProfile("ruby", "none", has_ruby_framework=True),
+    "csharp":     ReachabilityProfile("csharp", "none", has_csharp_framework=True),
     "php":        ReachabilityProfile("php", "none"),
 }
 
@@ -2501,6 +2503,64 @@ def _ts_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     return False
 
 
+# Method-level C# attributes whose presence marks the method as
+# framework-dispatched (ASP.NET MVC / Web API routing — the runtime invokes
+# the action with no in-project caller).
+_CSHARP_METHOD_DISPATCH_ATTRS = frozenset({
+    "HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch",
+    "HttpHead", "HttpOptions", "Route", "AcceptVerbs",
+})
+# Class-level C# stereotype attributes: the ASP.NET runtime instantiates the
+# controller and dispatches into its PUBLIC action methods with no in-project
+# caller.
+_CSHARP_CLASS_STEREOTYPE_ATTRS = frozenset({
+    "ApiController", "Controller", "Route",
+})
+
+
+def _csharp_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A C# method dispatched by ASP.NET with no in-project caller — a method
+    routing attribute (``[HttpGet]`` / ``[Route]``) or a PUBLIC method of a
+    ``[ApiController]`` / ``[Controller]`` class. Monotonic add-entries lever:
+    worst case is failing to demote a genuinely-dead action (safe direction)."""
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _CSHARP_METHOD_DISPATCH_ATTRS:
+            return True
+    if "public" in str(meta.get("visibility") or "").split():
+        for a in meta.get("class_attributes") or []:
+            if _annotation_tail(a) in _CSHARP_CLASS_STEREOTYPE_ATTRS:
+                return True
+    return False
+
+
+# Rails (and Sidekiq) base classes whose subclasses are framework-dispatched:
+# the router invokes controller actions, the queue invokes a job's ``perform``,
+# the mailer framework invokes mailer methods — none has an in-project caller.
+_RUBY_FRAMEWORK_BASES = frozenset({
+    "ApplicationController", "ActionController::Base", "ActionController::API",
+    "ApplicationJob", "ActiveJob::Base",
+    "ApplicationMailer", "ActionMailer::Base",
+    "ApplicationCable::Channel", "ActionCable::Channel::Base",
+})
+
+
+def _ruby_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A Ruby method dispatched by Rails with no in-project caller. Rails uses
+    CONVENTION (no annotations): a class inheriting a framework base (a
+    ``*Controller`` / job / mailer / channel) has its methods invoked by the
+    framework — controller actions by the router, ``perform`` by the queue,
+    callbacks (``before_action`` targets) by the request lifecycle. All are
+    methods of the class, so we promote the class's methods (Ruby visibility is
+    positional and not modelled; over-including a private helper is the
+    FN-safe direction — it's reachable via the public actions anyway). The
+    signal is the base class captured in ``class_attributes``."""
+    for base in (item.get("metadata") or {}).get("class_attributes") or []:
+        if base in _RUBY_FRAMEWORK_BASES or base.endswith("Controller"):
+            return True
+    return False
+
+
 def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
@@ -2535,6 +2595,14 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # Angular / TypeORM method route/handler/resolver decorators and public
     # methods of stereotyped (DI-managed / template-bound / entity) classes.
     if p.has_ts_framework and _ts_framework_entry(name, item):
+        return True
+    # C# ASP.NET dispatched entries: [HttpGet]/[Route] action methods and
+    # public methods of [ApiController]/[Controller] classes.
+    if p.has_csharp_framework and _csharp_framework_entry(name, item):
+        return True
+    # Ruby/Rails convention: methods of a class inheriting a framework base
+    # (*Controller / job / mailer / channel) are framework-dispatched entries.
+    if p.has_ruby_framework and _ruby_framework_entry(name, item):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
