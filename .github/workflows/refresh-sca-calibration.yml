@@ -49,17 +49,22 @@ jobs:
       - name: Install minimal deps
         run: |
           python -m pip install --upgrade pip==26.1.1
-          # The build script needs urllib3 (core.http dependency)
-          # plus pytest for the validation step. No other
-          # requirements-dev — keep this fast.
+          # The build script needs only urllib3 (the core.http
+          # backend). The validate step runs on the stdlib + the
+          # bundled corpus — no pytest required. Keep this fast.
           pip install 'urllib3==2.7.0,<3.0'
 
       - name: Refresh corpus
-        # ``-v`` emits per-source ``updated/unchanged`` lines so the
-        # PR body can quote them. Exit 0 = at least one source
-        # succeeded; exit 1 = every source failed (transient global
-        # event, retried at next schedule).
-        run: packages/sca/scripts/raptor-sca-build-corpus -v
+        # ``-v`` emits per-source ``updated/unchanged`` (and
+        # ``FAILED``) lines; we capture them to refresh.log and embed
+        # them in the PR body so a drifted source shows up in review.
+        # Exit 0 = at least one source produced output; exit 1 = every
+        # source failed (a global outage, retried next schedule). A
+        # single source drifting does NOT fail the run or discard the
+        # rest. (GHA's default shell sets pipefail, so the script's
+        # exit code propagates through the ``tee``.)
+        run: |
+          packages/sca/scripts/raptor-sca-build-corpus -v 2>&1 | tee refresh.log
 
       - name: License-compliance check
         # Defence in depth: enforces the ATTRIBUTION.md cross-
@@ -145,7 +150,11 @@ jobs:
         run: |
           set -eu
           BRANCH="auto/sca-calibration-refresh"
-          BODY=$(cat <<'EOF'
+          # Build the PR body, embedding the captured per-source
+          # status (incl. any FAILED sources) so a drifted upstream
+          # shows up in review rather than only in the run log.
+          {
+            cat <<'EOF'
           Auto-PR from `.github/workflows/refresh-sca-calibration.yml`.
 
           Refreshes the bundled `packages/sca/data/calibration/`
@@ -154,9 +163,11 @@ jobs:
 
           ## Per-source status
 
-          See the workflow run log for the per-source
-          `raptor-sca-build-corpus: <source> updated/unchanged
-          (N records)` output.
+          EOF
+            echo '```'
+            cat refresh.log 2>/dev/null || echo '(per-source status unavailable)'
+            echo '```'
+            cat <<'EOF'
 
           ## License compliance
 
@@ -169,17 +180,22 @@ jobs:
           ## Review checklist
 
           - [ ] Per-source counts look reasonable (≥ prior run)
+          - [ ] No source shows FAILED above (or it's a known transient)
           - [ ] No license-restricted content in the diff
           - [ ] `ATTRIBUTION.md` still covers every JSON file
           EOF
-          )
-          # Idempotent create-or-update: ``gh pr create`` exits 1
-          # when a PR for the branch already exists — in that case
-          # we update the body so it always reflects the latest run.
+          } > pr-body.md
+          # Idempotent create-or-update: ``gh pr create`` exits non-zero
+          # when a PR for the branch already exists — fall through to
+          # ``gh pr edit`` to refresh the body. Labels match the sibling
+          # data-refresh workflows so the PR can be filtered / routed.
           if ! gh pr create \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration corpus" \
-                --body "$BODY" 2>/dev/null; then
-            gh pr edit "$BRANCH" --body "$BODY"
+                --label sca \
+                --label data-refresh \
+                --label automated \
+                --body-file pr-body.md 2>/dev/null; then
+            gh pr edit "$BRANCH" --body-file pr-body.md
           fi
