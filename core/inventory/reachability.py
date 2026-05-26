@@ -839,6 +839,15 @@ class _AdjacencyIndex:
     class_bases: Dict[Tuple[str, str], Tuple[str, ...]] = field(
         default_factory=dict,
     )
+    # ``(class_name, method_name)`` pairs for methods declared in a class that
+    # extends/implements something — i.e. potential polymorphic-dispatch
+    # OVERRIDES. Class Hierarchy Analysis (type-free): a member call the import
+    # map can't resolve (``obj.m()``) might dispatch to such an override at
+    # runtime, so when its tail is one of these AND appears in method_match
+    # (some unresolved ``x.m()`` exists), function_called yields UNCERTAIN
+    # rather than NOT_CALLED — never suppress what virtual dispatch could reach.
+    # Surface-only; precise typed resolution stays CodeQL's (Tier 2) job.
+    override_methods: Set[Tuple[str, str]] = field(default_factory=set)
     # Functions whose decorators match a framework-dispatch
     # registration pattern (``@app.route``, ``@router.get``,
     # ``@cli.command``, ``@task.fixture``, etc.). These are reachable
@@ -1084,6 +1093,10 @@ def _get_or_build_index(
                         or len(method_entry) < 2:
                     continue
                 m_name = str(method_entry[0])
+                # CHA: a method of a class that extends/implements something is
+                # a potential polymorphic-dispatch override (see override_methods).
+                if bases:
+                    idx.override_methods.add((cls_name, m_name))
                 m_line = int(method_entry[1] or 0)
                 # Look up the InternalFunction registered in pass 1.
                 # We match on (path, name) and pick the one whose
@@ -2746,6 +2759,30 @@ def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
             return True
         return False
     return False
+
+
+def is_virtual_dispatch_candidate(
+    inventory: Dict[str, Any],
+    class_name: Optional[str],
+    method_name: str,
+    *,
+    exclude_test_files: bool = True,
+) -> bool:
+    """CHA (Class Hierarchy Analysis, type-free): is ``(class_name,
+    method_name)`` a polymorphic-dispatch OVERRIDE — its class extends /
+    implements something — AND dispatched somewhere via an unresolved member
+    call (``x.method_name()`` lands in ``method_match``)? If so, a member call
+    could reach it at runtime even though the import map couldn't resolve the
+    receiver's type, so the caller should read UNCERTAIN rather than
+    NOT_CALLED. Surface-only over-approximation; precise typed resolution
+    (``obj`` of declared type I → I's impls) is CodeQL's job (Tier 2)."""
+    if not class_name:
+        return False
+    idx = _get_or_build_index(inventory, exclude_test_files=exclude_test_files)
+    # getattr-guard a stale pickled index (pre-V7) that lacks the field.
+    overrides = getattr(idx, "override_methods", None) or frozenset()
+    return ((class_name, method_name) in overrides
+            and method_name in idx.method_match)
 
 
 def entry_reachability(

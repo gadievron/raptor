@@ -78,7 +78,9 @@ logger = logging.getLogger(__name__)
 # via _FRAMEWORK_REGISTRATION_TAILS + CallSite.argument_identifiers).
 # An old V5 cache returns _AdjacencyIndex instances without the
 # new attribute — AttributeError on access by is_registered_via_call.
-_CACHE_VERSION = 6
+# V7 (2026-05-26): _AdjacencyIndex grew `override_methods` (CHA virtual-
+# dispatch candidates). Same hazard: an old pickle lacks the attribute.
+_CACHE_VERSION = 7
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
