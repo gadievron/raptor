@@ -194,13 +194,100 @@ MODEL_LIMITS = {
     "ministral-3b-latest":     {"max_context": 256000,  "max_output": 256000},
 }
 
-# Provider -> env var mapping for API key lookup
+# Provider -> env var mapping for API key lookup.
+# Bedrock uses AWS_REGION as its "key marker" — there is no API key,
+# but the boto3 credential chain needs a region to operate. The detection
+# layer treats any AWS_REGION (or AWS_DEFAULT_REGION) as the presence
+# signal and the boto3 credential chain handles the actual auth.
 PROVIDER_ENV_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "mistral": "MISTRAL_API_KEY",
+    "bedrock":  "AWS_REGION",
 }
+
+
+# ---------------------------------------------------------------------------
+# AWS Bedrock model IDs.
+# Bedrock hosts the same Anthropic Claude models as the Anthropic API
+# but uses AWS-prefixed model IDs and SigV4 auth via boto3. Costs and
+# context/output limits are identical to the underlying Anthropic models;
+# we add the Bedrock IDs as duplicate entries so cost tracking and limit
+# enforcement work with no special-casing in callers.
+#
+# Inference profile prefixes (us./eu./apac.) enable cross-region
+# inference for higher throughput. Region-specific (non-prefixed) IDs
+# are also valid in regions that support on-demand for that model.
+# Add more IDs here as new Claude models land on Bedrock.
+# ---------------------------------------------------------------------------
+
+_BEDROCK_CLAUDE_COST_MAP = {
+    # Bedrock model ID                                         -> canonical Anthropic ID
+    # ---- Region-pinned (no inference profile prefix) ----
+    # These are the IDs returned by ``aws bedrock list-foundation-models``.
+    # Plain (no -v1:0 suffix) IDs map cleanly to canonical Anthropic
+    # models for cost/limit lookup.
+    "anthropic.claude-opus-4-7":                                "claude-opus-4-7",
+    "anthropic.claude-sonnet-4-6":                              "claude-sonnet-4-6",
+    "anthropic.claude-haiku-4-5-20251001-v1:0":                 "claude-haiku-4-5",
+    "anthropic.claude-opus-4-6-v1":                             "claude-opus-4-6",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0":                "claude-sonnet-4-5",
+    "anthropic.claude-opus-4-5-20251101-v1:0":                  "claude-opus-4-5",
+    "anthropic.claude-opus-4-1-20250805-v1:0":                  "claude-opus-4-1",
+    # ---- US cross-region inference profiles ----
+    "us.anthropic.claude-opus-4-7":                             "claude-opus-4-7",
+    "us.anthropic.claude-sonnet-4-6":                           "claude-sonnet-4-6",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0":              "claude-haiku-4-5",
+    "us.anthropic.claude-opus-4-6-v1":                          "claude-opus-4-6",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0":             "claude-sonnet-4-5",
+    "us.anthropic.claude-opus-4-5-20251101-v1:0":               "claude-opus-4-5",
+    "us.anthropic.claude-opus-4-1-20250805-v1:0":               "claude-opus-4-1",
+    # ---- EU cross-region inference profiles ----
+    "eu.anthropic.claude-opus-4-7":                             "claude-opus-4-7",
+    "eu.anthropic.claude-sonnet-4-6":                           "claude-sonnet-4-6",
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0":              "claude-haiku-4-5",
+    "eu.anthropic.claude-opus-4-6-v1":                          "claude-opus-4-6",
+    "eu.anthropic.claude-sonnet-4-5-20250929-v1:0":             "claude-sonnet-4-5",
+    "eu.anthropic.claude-opus-4-5-20251101-v1:0":               "claude-opus-4-5",
+    # ---- Australia cross-region inference profiles ----
+    # APAC region uses ``au.`` for Claude 4.x; legacy ``apac.`` is
+    # Claude 3.x era only.
+    "au.anthropic.claude-opus-4-7":                             "claude-opus-4-7",
+    "au.anthropic.claude-sonnet-4-6":                           "claude-sonnet-4-6",
+    "au.anthropic.claude-haiku-4-5-20251001-v1:0":              "claude-haiku-4-5",
+    "au.anthropic.claude-opus-4-6-v1":                          "claude-opus-4-6",
+    "au.anthropic.claude-sonnet-4-5-20250929-v1:0":             "claude-sonnet-4-5",
+    "au.anthropic.claude-opus-4-5-20251101-v1:0":               "claude-opus-4-5",
+    # ---- Global cross-region inference profiles ----
+    # Broadest reach — routes to whichever region has capacity.
+    "global.anthropic.claude-opus-4-7":                         "claude-opus-4-7",
+    "global.anthropic.claude-sonnet-4-6":                       "claude-sonnet-4-6",
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0":          "claude-haiku-4-5",
+    "global.anthropic.claude-opus-4-6-v1":                      "claude-opus-4-6",
+    "global.anthropic.claude-sonnet-4-5-20250929-v1:0":         "claude-sonnet-4-5",
+    "global.anthropic.claude-opus-4-5-20251101-v1:0":           "claude-opus-4-5",
+}
+
+
+def _register_bedrock_aliases() -> None:
+    """Populate MODEL_COSTS / MODEL_LIMITS for Bedrock IDs by aliasing
+    them to the underlying Anthropic model entries. Idempotent — safe
+    to call from module import."""
+    for bedrock_id, anthropic_id in _BEDROCK_CLAUDE_COST_MAP.items():
+        if bedrock_id not in MODEL_COSTS and anthropic_id in MODEL_COSTS:
+            MODEL_COSTS[bedrock_id] = MODEL_COSTS[anthropic_id]
+        if bedrock_id not in MODEL_LIMITS and anthropic_id in MODEL_LIMITS:
+            MODEL_LIMITS[bedrock_id] = MODEL_LIMITS[anthropic_id]
+
+
+_register_bedrock_aliases()
+
+# Default Bedrock model when an operator says provider=bedrock without
+# specifying a model. Cross-region us. profile picked because it has
+# the broadest regional availability and highest throughput headroom.
+PROVIDER_DEFAULT_MODELS["bedrock"] = "us.anthropic.claude-opus-4-7"
+PROVIDER_FAST_MODELS["bedrock"] = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 # ---------------------------------------------------------------------------
@@ -260,3 +347,32 @@ def price_for(
 # ``cache_creation_input_tokens`` / ``cache_read_input_tokens``.
 ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25
 ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
+
+
+# Models that have deprecated the ``temperature`` parameter. Newer
+# reasoning-tier Claude models (Opus 4.7+) reject requests containing
+# ``temperature`` with a 400 BadRequest "temperature is deprecated for
+# this model" error. AnthropicProvider checks this set before adding
+# the field to ``messages.create`` kwargs. Both canonical Anthropic
+# IDs and the Bedrock-prefixed variants are listed so the same set
+# works for AnthropicProvider and BedrockProvider.
+MODELS_WITHOUT_TEMPERATURE = frozenset({
+    # Anthropic canonical
+    "claude-opus-4-7",
+    # Bedrock region-pinned + cross-region inference profiles
+    "anthropic.claude-opus-4-7",
+    "us.anthropic.claude-opus-4-7",
+    "eu.anthropic.claude-opus-4-7",
+    "au.anthropic.claude-opus-4-7",
+    "global.anthropic.claude-opus-4-7",
+})
+
+
+def supports_temperature(model: str) -> bool:
+    """Return False for models that have deprecated the ``temperature``
+    request parameter (Opus 4.7+). Callers should omit ``temperature``
+    from their request kwargs when this returns False — passing it
+    causes the Anthropic / Bedrock API to reject the request with a
+    400. Defaults to True for unknown models (safer default — most
+    models still accept temperature)."""
+    return model not in MODELS_WITHOUT_TEMPERATURE

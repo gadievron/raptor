@@ -15,6 +15,7 @@ If external LLM fails entirely, falls back to CC dispatch automatically.
 
 import copy
 import logging
+import os
 import shutil
 import threading
 import time
@@ -232,6 +233,17 @@ def build_llm_config_from_flags(
                 entry["api_key"] = cfg_entry["api_key"]
                 break
         mc = _model_config_from_entry(entry)
+        # Bedrock authenticates via the boto3 credential chain (env,
+        # profile, IAM role) — there is no API key. Treat
+        # AWS_REGION / AWS_DEFAULT_REGION as the "key marker" so the
+        # validation here doesn't reject a valid Bedrock config that
+        # legitimately has ``api_key=None``.
+        if provider == "bedrock":
+            if not (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")):
+                print(f"\n  Error: no AWS_REGION for --model {name}")
+                print(f"  Set AWS_REGION (or AWS_DEFAULT_REGION) and ensure boto3 has credentials")
+                return None
+            return mc
         if not mc.api_key:
             env_key = PROVIDER_ENV_KEYS.get(provider, "???")
             print(f"\n  Error: no API key for --model {name}")

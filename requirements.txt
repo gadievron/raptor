@@ -26,6 +26,7 @@ instructor==1.15.1
 # pip install openai        # OpenAI, Gemini (via shim), Mistral, Ollama
 # pip install anthropic     # Anthropic Claude (native structured output)
 # pip install google-genai  # Google Gemini (native SDK, accurate thinking token costs)
+# pip install boto3         # AWS Bedrock (Claude via SigV4 — pairs with anthropic SDK above)
 
 # Optional: Rich inventory metadata (decorators, annotations, visibility, typed params)
 # pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript tree-sitter-c tree-sitter-go

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from core.logging import get_logger
 from .config import ModelConfig
+from .model_data import supports_temperature
 # Wire-shape types for tool-use turn primitive. These live in
 # ``core.llm.tool_use.types`` (zero dependencies on this module);
 # importing them here doesn't create a cycle.
@@ -73,7 +74,7 @@ def _safe_int(value: Any, *, default: int) -> int:
 
 
 # SDK availability flags (canonical source is detection.py)
-from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE  # noqa: E402
+from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE, BEDROCK_AVAILABLE  # noqa: E402
 
 # Re-import the actual modules where available (config.py only sets flags)
 if OPENAI_SDK_AVAILABLE:
@@ -82,6 +83,13 @@ if ANTHROPIC_SDK_AVAILABLE:
     import anthropic
 if GENAI_SDK_AVAILABLE:
     from google import genai as _genai_module
+if BEDROCK_AVAILABLE:
+    # AnthropicBedrock exposes the same .messages.create surface as
+    # the regular anthropic.Anthropic client, but routes through
+    # AWS Bedrock with SigV4 auth via boto3. This is the official
+    # Anthropic-supported way to use Claude on Bedrock — no manual
+    # boto3 invoke_model wrangling needed.
+    from anthropic import AnthropicBedrock
 
 try:
     import instructor
@@ -1515,9 +1523,14 @@ class AnthropicProvider(LLMProvider):
         create_kwargs = {
             "model": self.config.model_name,
             "messages": messages,
-            "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
         }
+        # Newer reasoning-tier Claude models (Opus 4.7+) reject
+        # ``temperature`` with a 400 BadRequest. ``supports_temperature``
+        # gates the field for forward-compat — older models still
+        # honour the configured value.
+        if supports_temperature(self.config.model_name):
+            create_kwargs["temperature"] = kwargs.get("temperature", self.config.temperature)
         if system_prompt:
             create_kwargs["system"] = system_prompt
 
@@ -1599,9 +1612,12 @@ class AnthropicProvider(LLMProvider):
                     "model": self.config.model_name,
                     "response_model": pydantic_model,
                     "messages": messages,
-                    "temperature": temperature,
                     "max_tokens": self.config.max_tokens,
                 }
+                # Newer reasoning-tier Claude models (Opus 4.7+) reject
+                # ``temperature`` with a 400 BadRequest.
+                if supports_temperature(self.config.model_name):
+                    create_kwargs["temperature"] = temperature
                 if system_prompt:
                     create_kwargs["system"] = system_prompt
 
@@ -2029,6 +2045,103 @@ def _attach_anthropic_cache_marker(message: Dict[str, Any]) -> None:
     last = dict(message["content"][-1])
     last["cache_control"] = {"type": "ephemeral"}
     message["content"][-1] = last
+
+
+class BedrockProvider(AnthropicProvider):
+    """LLM provider for AWS Bedrock — Claude models via SigV4 auth.
+
+    Bedrock hosts the same Anthropic Claude models as the Anthropic
+    API but uses AWS-prefixed model IDs and authenticates via the
+    boto3 credential chain (env vars, profile, IAM role) rather than
+    an API key. Anthropic's official SDK ships ``AnthropicBedrock``
+    with the same ``.messages.create`` / ``.beta.messages.create``
+    surface as ``anthropic.Anthropic``, so this provider only
+    overrides ``__init__`` to swap the client. All other behaviour
+    (tool use, prompt caching, structured output, cost computation,
+    transient-error retry) is inherited unchanged from
+    :class:`AnthropicProvider`.
+
+    Auth resolution:
+        1. boto3 default credential chain (env, profile, IAM role)
+        2. ``AWS_REGION`` (preferred) or ``AWS_DEFAULT_REGION`` env var
+        3. ``AWS_PROFILE`` env var (when using a named profile)
+
+    No API key is ever passed through ``ModelConfig.api_key`` — leave
+    it ``None``. The underlying boto3 client handles credentials
+    transparently.
+
+    Pricing parity:
+        Bedrock Claude pricing tracks Anthropic's published rates for
+        the same model. ``model_data.MODEL_COSTS`` carries Bedrock
+        model IDs as aliases for the underlying Anthropic entries, so
+        cost tracking works identically across both providers.
+
+    Cross-region inference:
+        Use ``us.``, ``eu.``, ``apac.``, or ``global.`` prefixes
+        (e.g. ``us.anthropic.claude-sonnet-4-5-20250929-v1:0``) to
+        opt into cross-region inference profiles for higher
+        throughput. Region-pinned IDs (without prefix) work in
+        regions that support on-demand for the model.
+
+    Caveats:
+        - Prompt caching is supported on Bedrock for most Claude
+          models but the cache TTL and pricing match Anthropic
+          direct. The inherited ``supports_prompt_caching`` returns
+          True; the actual cache HIT/WRITE costs come from the same
+          ``MODEL_COSTS`` table via the alias map.
+        - The credential-isolation dispatcher (Phase B/C) is not yet
+          wired for Bedrock — it's an Anthropic-direct-only feature.
+          When ``RAPTOR_LLM_SOCKET`` is set, the parent must already
+          have used :class:`AnthropicProvider` to construct the
+          dispatcher; downstream Bedrock workers fall back to
+          direct boto3 auth.
+    """
+
+    def __init__(self, config: ModelConfig):
+        # Skip AnthropicProvider.__init__ to avoid the
+        # ANTHROPIC_SDK_AVAILABLE check and the dispatcher route
+        # (which only wraps the Anthropic-direct client). Replicate
+        # only the bits we need.
+        LLMProvider.__init__(self, config)
+
+        if not BEDROCK_AVAILABLE:
+            raise ImportError(
+                "Bedrock provider requires both: "
+                "pip install boto3 anthropic"
+            )
+
+        # boto3 picks up region from AWS_REGION / AWS_DEFAULT_REGION /
+        # boto3 default config; profile from AWS_PROFILE; credentials
+        # from the standard chain (env, profile, IAM role, IMDS).
+        # ModelConfig may carry an explicit aws_region override in
+        # future — for now rely on the env/SDK chain.
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        client_kwargs: Dict[str, Any] = {}
+        if region:
+            client_kwargs["aws_region"] = region
+
+        self.client = AnthropicBedrock(
+            timeout=config.timeout,
+            **client_kwargs,
+        )
+        logger.debug(
+            "BedrockProvider: region=%s model=%s",
+            region or "(boto3 default)",
+            config.model_name,
+        )
+
+        # Mirror AnthropicProvider's instructor + caching state so
+        # inherited methods can use them unchanged.
+        self.instructor_client = None
+        self._instructor_warned = False
+        if INSTRUCTOR_AVAILABLE:
+            self.instructor_client = instructor.from_anthropic(self.client)
+        else:
+            logger.warning(
+                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
+                "For more reliable structured output: pip install instructor"
+            )
+        self._caching_warning_emitted = False
 
 
 class GeminiProvider(LLMProvider):
@@ -2921,6 +3034,12 @@ def create_provider(config: ModelConfig) -> LLMProvider:
     provider = config.provider.lower()
     if provider in ("claudecode", "claude_code", "claude-code"):
         return ClaudeCodeLLMProvider(config)
+    if provider == "bedrock":
+        if BEDROCK_AVAILABLE:
+            return BedrockProvider(config)
+        raise RuntimeError(
+            "Bedrock provider requires: pip install boto3 anthropic"
+        )
     if provider == "anthropic":
         if ANTHROPIC_SDK_AVAILABLE:
             return AnthropicProvider(config)

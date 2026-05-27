@@ -283,6 +283,42 @@ def _build_anthropic_config() -> Optional['ModelConfig']:
     )
 
 
+def _build_bedrock_config() -> Optional['ModelConfig']:
+    """AWS Bedrock provider config builder.
+
+    Triggered when boto3 + AnthropicBedrock SDKs are importable AND
+    AWS_REGION (or AWS_DEFAULT_REGION) is set. boto3's credential
+    chain (env vars, profile, IAM role) handles auth — RAPTOR never
+    sees the credentials directly.
+
+    The default model is a cross-region inference profile for broadest
+    regional availability. Override in models.json if you need a
+    region-specific or non-default model.
+    """
+    from .detection import BEDROCK_AVAILABLE
+    if not BEDROCK_AVAILABLE:
+        return None
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if not region:
+        return None
+    default_model = PROVIDER_DEFAULT_MODELS.get(
+        "bedrock", "us.anthropic.claude-opus-4-7"
+    )
+    limits = MODEL_LIMITS.get(default_model, {})
+    costs = MODEL_COSTS.get(default_model, {})
+    return ModelConfig(
+        provider="bedrock",
+        model_name=default_model,
+        # api_key intentionally None — Bedrock auth is via boto3
+        # credential chain, not key passthrough.
+        api_key=None,
+        max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
+        max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
+        temperature=0.7,
+        cost_per_1k_tokens=(costs.get("input", 0.003) + costs.get("output", 0.015)) / 2,
+    )
+
+
 def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
     """Generic builder for OpenAI / Gemini / Mistral — same shape, different env var + endpoint."""
     env_var_map = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY", "mistral": "MISTRAL_API_KEY"}
@@ -401,6 +437,7 @@ def _build_claudecode_config() -> Optional['ModelConfig']:
 
 _PROVIDER_BUILDERS = {
     "anthropic":  _build_anthropic_config,
+    "bedrock":    _build_bedrock_config,
     "openai":     lambda: _build_openai_compat_config("openai"),
     "gemini":     lambda: _build_openai_compat_config("gemini"),
     "mistral":    lambda: _build_openai_compat_config("mistral"),
