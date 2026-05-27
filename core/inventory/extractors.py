@@ -22,6 +22,9 @@ KIND_FUNCTION = "function"
 KIND_GLOBAL = "global"
 KIND_MACRO = "macro"
 KIND_CLASS = "class"
+KIND_TOP_LEVEL = "top_level"        # module-scope executable code (runs at import)
+KIND_INTERSTITIAL = "interstitial"  # residue not yet classified — trends to glue
+                                    # (whitespace/braces/comments) as kinds fill in
 
 
 @dataclass
@@ -142,11 +145,31 @@ class PythonExtractor:
                 warnings.simplefilter("ignore", SyntaxWarning)
                 tree = ast.parse(content)
             self._walk(tree, functions, class_name=None)
+            functions.extend(self._top_level_items(tree))
         except SyntaxError as e:
             logger.warning(f"Failed to parse {filepath}: {e}")
             functions = self._regex_fallback(content)
 
         return functions
+
+    def _top_level_items(self, tree: ast.AST) -> List["CodeItem"]:
+        """Module-scope executable statements that run at import — a bare
+        expression statement containing a call (e.g. ``os.system(...)``,
+        ``eval(...)``). Captured as ``top_level`` so it's a named, reviewable,
+        reachability-eligible unit instead of anonymous interstitial.
+        Assignments are globals; defs/classes/imports are their own kinds."""
+        out: List[CodeItem] = []
+        for node in getattr(tree, "body", []):
+            if isinstance(node, ast.Expr) and any(
+                isinstance(n, ast.Call) for n in ast.walk(node)
+            ):
+                out.append(CodeItem(
+                    name=f"top_level:{node.lineno}",
+                    kind=KIND_TOP_LEVEL,
+                    line_start=node.lineno,
+                    line_end=getattr(node, "end_lineno", None) or node.lineno,
+                ))
+        return out
 
     def _walk(self, node: ast.AST, functions: List[FunctionInfo],
               class_name: Optional[str]) -> None:
@@ -1449,6 +1472,48 @@ def extract_functions(filepath: str, language: str, content: str) -> List[Functi
     return extractor.extract(filepath, content)
 
 
+def compute_interstitial_items(
+    items: List[CodeItem], content: str,
+) -> List[CodeItem]:
+    """Synthesise ``interstitial`` items for line ranges NOT inside any
+    extracted item — the safety net that makes "every meaningful line belongs
+    to a CodeItem" true (coverage-layer Decision #2), so non-function code
+    (top-level statements, missed globals, file-scope logic) is never invisible
+    to coverage. One item per contiguous gap; gaps with no non-blank line are
+    skipped (pure blank-line runs aren't worth a coverage unit). Line numbers
+    are 1-based, matching the extractors.
+    """
+    lines = content.splitlines()
+    total = len(lines)
+    if total == 0:
+        return []
+    covered = [False] * (total + 2)  # 1-based; index 0 and total+1 unused
+    for it in items:
+        lo = max(1, it.line_start or 0)
+        hi = it.line_end if it.line_end is not None else it.line_start or lo
+        for ln in range(lo, min(total, hi) + 1):
+            covered[ln] = True
+
+    out: List[CodeItem] = []
+    ln = 1
+    while ln <= total:
+        if covered[ln]:
+            ln += 1
+            continue
+        start = ln
+        while ln <= total and not covered[ln]:
+            ln += 1
+        end = ln - 1
+        if any(lines[i - 1].strip() for i in range(start, end + 1)):
+            out.append(CodeItem(
+                name=f"interstitial:{start}-{end}",
+                kind=KIND_INTERSTITIAL,
+                line_start=start,
+                line_end=end,
+            ))
+    return out
+
+
 def extract_items(filepath: str, language: str, content: str,
                   _tree_cache: dict = None) -> List[CodeItem]:
     """Extract all code items (functions + globals + macros) from a file.
@@ -1487,18 +1552,26 @@ def extract_items(filepath: str, language: str, content: str,
         except Exception:
             pass  # Fall through to AST/regex fallback
 
-        # Globals from the same parse tree (independent of function extraction)
+        # Globals + module-scope executable code from the same parse tree
         try:
             items.extend(_extract_globals_ts(tree.root_node, language))
+        except Exception:
+            pass
+        try:
+            items.extend(_extract_top_level_ts(tree.root_node, language))
         except Exception:
             pass
 
     # Fallback: functions from AST/regex if tree-sitter didn't produce any
     if not ts_parsed or not any(i.kind == KIND_FUNCTION for i in items):
-        items = [i for i in items if i.kind != KIND_FUNCTION]  # keep non-function items
         if language == "python":
+            # PythonExtractor (AST) re-derives functions AND top_level; drop any
+            # tree-sitter-derived ones first to avoid duplicates (keep globals).
+            items = [i for i in items
+                     if i.kind not in (KIND_FUNCTION, KIND_TOP_LEVEL)]
             items.extend(PythonExtractor().extract(filepath, content))
         else:
+            items = [i for i in items if i.kind != KIND_FUNCTION]
             extractor = _REGEX_EXTRACTORS.get(language, GenericExtractor())
             items.extend(extractor.extract(filepath, content))
 
@@ -1507,6 +1580,43 @@ def extract_items(filepath: str, language: str, content: str,
         items.extend(_extract_macros_regex(content))
 
     return items
+
+
+_TOP_LEVEL_LANGS = ("python", "javascript", "typescript", "tsx")
+_CALL_NODE_TYPES = ("call", "call_expression")
+_ASSIGN_NODE_TYPES = ("assignment", "assignment_expression", "augmented_assignment")
+
+
+def _ts_contains_call(node, depth: int = 0) -> bool:
+    if node.type in _CALL_NODE_TYPES:
+        return True
+    if depth > 5:
+        return False
+    return any(_ts_contains_call(c, depth + 1) for c in node.children)
+
+
+def _extract_top_level_ts(root_node, language: str) -> List[CodeItem]:
+    """Module-scope executable statements (run at import) as ``top_level`` items
+    — a root-level ``expression_statement`` containing a call but not an
+    assignment (assignments are globals). Captures the security-relevant case
+    (``os.system(...)`` / ``eval(...)`` at module scope) as a named, reviewable
+    unit instead of anonymous interstitial. Script-like languages only."""
+    if language not in _TOP_LEVEL_LANGS:
+        return []
+    out: List[CodeItem] = []
+    for child in root_node.children:
+        if child.type != "expression_statement":
+            continue
+        if any(c.type in _ASSIGN_NODE_TYPES for c in child.children):
+            continue
+        if _ts_contains_call(child):
+            out.append(CodeItem(
+                name=f"top_level:{child.start_point[0] + 1}",
+                kind=KIND_TOP_LEVEL,
+                line_start=child.start_point[0] + 1,
+                line_end=child.end_point[0] + 1,
+            ))
+    return out
 
 
 def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
@@ -1646,6 +1756,39 @@ def _global_names(node, language: str):
         yield name
 
 
+def _c_declarator_name(node, depth: int = 0) -> Optional[str]:
+    """Descend C/C++ declarator wrappers to the declared identifier. Returns the
+    first identifier found, or None.
+
+    For ``init_declarator`` only the declarator side is followed, never the RHS
+    init value — otherwise ``int (*handler)(int) = foo;`` would return the
+    initializer ``foo`` (the declared name ``handler`` is nested in the
+    function-pointer declarator). The pointer/parenthesized recursion still
+    reaches the real name (function-pointer *variables* declare a name;
+    plain function prototypes are rejected earlier by the function_declarator
+    guard on the declaration's direct children)."""
+    if depth > 6:
+        return None
+    if node.type == "identifier":            # the declarator IS the name
+        return node.text.decode()
+    for child in node.children:
+        if child.type == "identifier":
+            return child.text.decode()
+        if child.type == "init_declarator":
+            decl = child.child_by_field_name("declarator")
+            if decl is None and child.children:
+                decl = child.children[0]
+            name = _c_declarator_name(decl, depth + 1) if decl is not None else None
+            if name:
+                return name
+        elif child.type in ("array_declarator", "pointer_declarator",
+                            "parenthesized_declarator", "function_declarator"):
+            name = _c_declarator_name(child, depth + 1)
+            if name:
+                return name
+    return None
+
+
 def _global_name(node, language: str) -> Optional[str]:
     """Extract the name from a global declaration node."""
     if language == "python":
@@ -1679,14 +1822,13 @@ def _global_name(node, language: str) -> Optional[str]:
         for child in node.children:
             if child.type == "function_declarator":
                 return None
-        for child in node.children:
-            if child.type == "init_declarator":
-                for sub in child.children:
-                    if sub.type == "identifier":
-                        return sub.text.decode()
-            if child.type == "identifier":
-                return child.text.decode()
-        return None
+        # Descend declarator wrappers to the identifier. Pre-fix this only
+        # handled init_declarator/bare identifier, so array globals
+        # (`char g_buf[8]` → array_declarator) and pointer globals
+        # (`char *p` → pointer_declarator) were missed and fell to
+        # interstitial. Recursion catches the common wrapped forms; exotic
+        # shapes (multi-declarator, function-pointer) remain unclassified.
+        return _c_declarator_name(node)
 
     if language == "java":
         for child in node.children:

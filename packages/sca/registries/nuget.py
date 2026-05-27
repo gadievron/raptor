@@ -17,6 +17,8 @@ from typing import List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,8 +78,7 @@ class NugetClient:
             data = self._http.get_json(
                 f"https://api.nuget.org/v3-flatcontainer/{canon}/index.json")
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.nuget: fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.nuget", name, e)
             if self._cache is not None:
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []

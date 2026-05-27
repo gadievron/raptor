@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,17 +54,54 @@ class BuildResult:
     record_count: int
 
 
+def _build_one_source(source: str, out_dir: Path, http: Any) -> BuildResult:
+    """Run one source's fetcher, never raising — failures (and unknown
+    sources) come back as a ``BuildResult`` with ``error`` set.
+
+    The dispatch table is built here (not at module level) because the
+    ``_build_*`` functions are defined further down the module.
+    """
+    builders = {
+        "kev": _build_kev,
+        "epss": _build_epss,
+        "exploitdb": _build_exploitdb,
+        "metasploit": _build_metasploit,
+        "github_poc": _build_github_poc,
+        "osv_evidence": _build_osv_evidence,
+        "vulnrichment": _build_vulnrichment,
+    }
+    fn = builders.get(source)
+    if fn is None:
+        return BuildResult(source=source, written=False,
+                           error=f"unknown source {source!r}", record_count=0)
+    try:
+        return fn(out_dir, http)
+    except Exception as e:                              # noqa: BLE001
+        # Defensive: an individual source breaking shouldn't abort the rest.
+        logger.warning("sca.calibration: %s build failed: %s", source, e,
+                       exc_info=True)
+        return BuildResult(source=source, written=False,
+                           error=str(e), record_count=0)
+
+
 def build_corpus(
     *,
     out_dir: Optional[Path] = None,
     http: Optional[Any] = None,
     sources: Optional[List[str]] = None,
+    jobs: int = 0,
 ) -> List[BuildResult]:
     """Refresh the calibration corpus.
 
     ``sources`` filters which fetchers run. Default is all known
     sources. Each source is independent — one failure doesn't abort
-    the rest; the BuildResult list reports per-source status.
+    the rest; the BuildResult list reports per-source status (always in
+    input order, regardless of completion order).
+
+    Sources are fetched in parallel by default (``jobs=0`` → one thread per
+    source, capped): each is an independent bulk download to a distinct host
+    and writes its own file, so they overlap cleanly and share the one
+    keep-alive HTTP pool. ``jobs=1`` forces sequential.
 
     The function never raises on individual source failures —
     captures them in BuildResult.error so the CI workflow can keep
@@ -82,41 +120,22 @@ def build_corpus(
         sources = ["kev", "epss", "exploitdb", "metasploit",
                    "github_poc", "osv_evidence", "vulnrichment"]
 
-    results: List[BuildResult] = []
-    for source in sources:
-        try:
-            if source == "kev":
-                results.append(_build_kev(out_dir, http))
-            elif source == "epss":
-                results.append(_build_epss(out_dir, http))
-            elif source == "exploitdb":
-                results.append(_build_exploitdb(out_dir, http))
-            elif source == "metasploit":
-                results.append(_build_metasploit(out_dir, http))
-            elif source == "github_poc":
-                results.append(_build_github_poc(out_dir, http))
-            elif source == "osv_evidence":
-                results.append(_build_osv_evidence(out_dir, http))
-            elif source == "vulnrichment":
-                results.append(_build_vulnrichment(out_dir, http))
-            else:
-                results.append(BuildResult(
-                    source=source, written=False,
-                    error=f"unknown source {source!r}",
-                    record_count=0,
-                ))
-        except Exception as e:                          # noqa: BLE001
-            # Defensive: an individual source breaking shouldn't
-            # abort the rest. Logged + surfaced in BuildResult.
-            logger.warning(
-                "sca.calibration: %s build failed: %s", source, e,
-                exc_info=True,
-            )
-            results.append(BuildResult(
-                source=source, written=False,
-                error=str(e), record_count=0,
-            ))
-    return results
+    if jobs <= 0:
+        jobs = min(len(sources), 8) or 1
+
+    results: List[Optional[BuildResult]] = [None] * len(sources)
+    if jobs <= 1 or len(sources) <= 1:
+        for i, source in enumerate(sources):
+            results[i] = _build_one_source(source, out_dir, http)
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            fut_to_idx = {
+                pool.submit(_build_one_source, source, out_dir, http): i
+                for i, source in enumerate(sources)
+            }
+            for fut in as_completed(fut_to_idx):
+                results[fut_to_idx[fut]] = fut.result()
+    return [r for r in results if r is not None]
 
 
 # ---------------------------------------------------------------------------

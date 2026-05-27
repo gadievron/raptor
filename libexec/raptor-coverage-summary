@@ -3,6 +3,8 @@
 
 Usage:
   raptor-coverage-summary [<dir>] [--detailed]          Show coverage summary
+  raptor-coverage-summary [<dir>] --store               Show persistent-store view
+                                                        (category/depth + LLM-review gap)
   raptor-coverage-summary [<dir>] --gaps                List unreviewed items
   raptor-coverage-summary [<dir>] --mark <file:item>    Mark item(s) as reviewed
   raptor-coverage-summary [<dir>] --mark-file <json>    Mark functions from JSON file
@@ -151,6 +153,61 @@ def _get_summary(args):
         return compute_summary(run_dir), run_dir
 
 
+def _store_inputs(args):
+    """Resolve (checklist, run_dirs, store_path, annotations_base)."""
+    from core.json import load_json
+
+    project = run_dir = None
+    if args:
+        project, run_dir = _resolve_dir(args[0])
+        if not project and not run_dir:
+            d = Path(args[0])
+            if d.exists():
+                run_dir = d
+    else:
+        project = _resolve_active_project()
+
+    if project:
+        base = Path(project.output_dir)
+        try:
+            run_dirs = list(project.get_run_dirs(sweep=False))
+        except Exception:
+            run_dirs = []
+        return (load_json(base / "checklist.json"), run_dirs,
+                base / "coverage.json", base / "annotations")
+    if run_dir:
+        return (load_json(run_dir / "checklist.json"), [run_dir],
+                run_dir / "coverage.json", run_dir / "annotations")
+    return None, [], None, None
+
+
+def _cmd_store_view(args):
+    """Build the store on-demand (load persisted + import current records +
+    durable annotations) and print the category/depth + gap view. Read-only:
+    does not persist."""
+    from core.coverage.importer import backfill
+    from core.coverage.store import CoverageStore
+    from core.coverage.store_summary import (
+        file_level_view, format_file_level_view, format_store_view, store_view,
+    )
+
+    checklist, run_dirs, store_path, annotations_base = _store_inputs(args)
+    if not checklist:
+        # No function inventory (e.g. a standalone /scan or /codeql, which
+        # build none). The lifecycle still recorded what ran + which files each
+        # tool examined, so degrade to the file-level tier rather than erroring.
+        if run_dirs:
+            print(format_file_level_view(file_level_view(run_dirs)))
+            return
+        print("No coverage data (no checklist and no run records).", file=sys.stderr)
+        sys.exit(1)
+    # Loads an existing coverage.json if present (durable accumulation);
+    # re-importing current records is idempotent (interval coalesce).
+    store = CoverageStore(store_path)
+    backfill(store, run_dirs, checklist, annotations_base=annotations_base)
+    print(format_store_view(store_view(store, checklist)))
+
+
 def _cmd_gaps(summary):
     """Print unreviewed items."""
     if not summary:
@@ -180,7 +237,6 @@ def _cmd_mark(mark_targets, run_dir):
         sys.exit(1)
 
     from core.coverage.record import load_records, write_record
-    from core.json import load_json
 
     # Load existing LLM record or create new
     records = load_records(run_dir)
@@ -268,6 +324,7 @@ def main():
     argv = sys.argv[1:]
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
+    show_store = "--store" in argv
 
     # Extract --mark, --mark-file, --unmark targets
     mark_targets = []
@@ -354,6 +411,10 @@ def main():
             _cmd_mark(mark_targets, run_dir)
         if unmark_targets:
             _cmd_unmark(unmark_targets, run_dir)
+        return
+
+    if show_store:
+        _cmd_store_view(args)
         return
 
     summary, _ = _get_summary(args)

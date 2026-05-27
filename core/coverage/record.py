@@ -473,12 +473,24 @@ def load_records(run_dir: Path) -> List[Dict[str, Any]]:
     """
     run_dir = Path(run_dir)
     records = []
-    # Per-tool files (must be dicts with a "tool" key)
-    for p in sorted(run_dir.glob("coverage-*.json")):
+    seen_tools = set()
+    # Per-tool files at the run-dir top level AND in immediate tool subdirs.
+    # Producers write coverage records into their own subdir (agentic's scanner
+    # -> scan/, codeql -> codeql/), while a standalone /scan writes them at the
+    # top level. coverage-*.json only appears in those tool dirs, so the
+    # one-level subdir glob picks up nothing unrelated. Top level is listed
+    # first so it wins the per-tool de-dup if a tool's record is in both places.
+    candidates = (sorted(run_dir.glob("coverage-*.json"))
+                  + sorted(run_dir.glob("*/coverage-*.json")))
+    for p in candidates:
         if p.name == COVERAGE_RECORD_FILE:
             continue
         data = load_json(p)
         if isinstance(data, dict) and "tool" in data:
+            tool = data.get("tool")
+            if tool in seen_tools:
+                continue
+            seen_tools.add(tool)
             records.append(data)
     # Legacy single file (if no per-tool files found)
     if not records:

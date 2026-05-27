@@ -26,7 +26,7 @@ from .exclusions import (
     is_generated_file,
     match_exclusion_reason,
 )
-from .extractors import extract_items, count_sloc
+from .extractors import extract_items, count_sloc, compute_interstitial_items
 from .call_graph import (
     extract_call_graph_c,
     extract_call_graph_cpp,
@@ -644,6 +644,10 @@ def _process_single_file(
         parse_text = view.parse_text
         tree_cache = {}
         items = extract_items(str(filepath), language, parse_text, _tree_cache=tree_cache)
+        # Safety net: every SLOC-bearing line outside an extracted item becomes
+        # an interstitial item, so non-function code (top-level statements,
+        # missed globals) is never invisible to coverage (coverage Decision #2).
+        items = items + compute_interstitial_items(items, parse_text)
         sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
         record: Dict[str, Any] = {

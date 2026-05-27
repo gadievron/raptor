@@ -61,6 +61,20 @@ class Project:
     def output_path(self) -> Path:
         return Path(self.output_dir)
 
+    @property
+    def content_id(self) -> Optional[str]:
+        """The project's content-equivalence id, read lazily from the durable
+        coverage store (``coverage.json``). The store is the single source of
+        truth for this id (L2-owned); it is ``None`` until a coverage build has
+        stamped one. Two acquisitions of identical source (git checkout vs zip
+        extraction) share a ``content_id`` even though their ``target`` paths
+        differ — this is what lets them resolve to the same project."""
+        try:
+            data = load_json(self.output_path / "coverage.json")
+        except Exception:
+            return None
+        return data.get("content_id") if isinstance(data, dict) else None
+
     def _list_run_dirs(self) -> List[Path]:
         """List run directories (unsorted). Shared by get_run_dirs and sweep."""
         if not self.output_path.exists():
@@ -530,10 +544,32 @@ class ProjectManager:
                 active_link.unlink(missing_ok=True)
         return None
 
-    def find_project_for_target(self, target: str) -> Optional[Project]:
-        """Auto-detect: find a project whose target matches the given path."""
+    def find_project_for_target(
+        self, target: str, content_id: Optional[str] = None,
+    ) -> Optional[Project]:
+        """Auto-detect a project for the given target.
+
+        Path match first (unchanged default). When ``content_id`` is supplied
+        and no project's path matches, fall back to a content match: a project
+        whose durable store carries the same content-equivalence id. This is
+        what lets a git checkout and a zip extraction of identical source share
+        one project/store even though their ``target`` paths differ. Callers
+        that have built an inventory pass its ``content_identity``; callers that
+        haven't pass nothing and get the original path-only behaviour."""
         resolved = str(Path(target).resolve())
         for project in self.list_projects():
             if project.target == resolved:
+                return project
+        if content_id:
+            return self.find_project_by_content_id(content_id)
+        return None
+
+    def find_project_by_content_id(self, content_id: str) -> Optional[Project]:
+        """Find a project whose durable store carries ``content_id`` (the
+        content-equivalence id). Returns ``None`` if none match."""
+        if not content_id:
+            return None
+        for project in self.list_projects():
+            if project.content_id == content_id:
                 return project
         return None

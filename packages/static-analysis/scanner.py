@@ -756,6 +756,19 @@ def run_cocci(
     sarif_path = out_dir / "cocci.sarif"
     save_json(sarif_path, sarif_doc)
 
+    # Coverage record — the SARIF translation drops files_examined, so build it
+    # from the spatch results (the true examined-set). Best-effort: a coverage
+    # write must never fail the scan. Previously cocci's examined-set was
+    # recorded nowhere, in any context.
+    try:
+        from packages.coccinelle.runner import version as _spatch_version
+        from core.coverage.record import build_from_cocci, write_record
+        cov = build_from_cocci(results, spatch_version=_spatch_version())
+        if cov:
+            write_record(out_dir, cov, tool_name="coccinelle")
+    except Exception:
+        logger.debug("cocci: coverage record write failed", exc_info=True)
+
     n_results = sum(len(r.matches) for r in results)
     n_errors = sum(len(r.errors or []) for r in results)
     logger.info(

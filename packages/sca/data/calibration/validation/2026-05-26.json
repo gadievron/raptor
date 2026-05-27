@@ -1,52 +1,52 @@
 {
   "by_ecosystem": {
     "Cargo": {
-      "spearman_rho": 0.6660836424323475,
-      "top_20_precision": 0.55,
+      "spearman_rho": 0.6953433509574232,
+      "top_20_precision": 0.9,
       "total": 266,
       "with_signal": 36
     },
     "Go": {
-      "spearman_rho": 0.4913011116165823,
+      "spearman_rho": 0.567755839190506,
       "top_20_precision": 1.0,
-      "total": 1007,
-      "with_signal": 104
+      "total": 3275,
+      "with_signal": 217
     },
     "Maven": {
-      "spearman_rho": 0.5815243289102383,
+      "spearman_rho": 0.6031453579834174,
       "top_20_precision": 1.0,
-      "total": 637,
-      "with_signal": 69
+      "total": 717,
+      "with_signal": 71
     },
     "NuGet": {
-      "spearman_rho": 0.5862044817927171,
-      "top_20_precision": 0.1,
-      "total": 35,
-      "with_signal": 2
+      "spearman_rho": 0.681868743047831,
+      "top_20_precision": 0.2,
+      "total": 30,
+      "with_signal": 4
     },
     "Packagist": {
-      "spearman_rho": 0.5417547531042168,
-      "top_20_precision": 0.55,
-      "total": 210,
+      "spearman_rho": 0.5824521843077592,
+      "top_20_precision": 0.6,
+      "total": 215,
       "with_signal": 54
     },
     "PyPI": {
-      "spearman_rho": 0.5715103107577506,
+      "spearman_rho": 0.6541721621067451,
       "top_20_precision": 0.85,
-      "total": 170,
-      "with_signal": 21
+      "total": 342,
+      "with_signal": 46
     },
     "RubyGems": {
-      "spearman_rho": 0.432864764923627,
-      "top_20_precision": 0.2,
-      "total": 483,
-      "with_signal": 42
+      "spearman_rho": 0.5944888435974358,
+      "top_20_precision": 0.95,
+      "total": 581,
+      "with_signal": 51
     },
     "npm": {
-      "spearman_rho": 0.6694297479901871,
-      "top_20_precision": 0.85,
-      "total": 1654,
-      "with_signal": 524
+      "spearman_rho": 0.7147319988077971,
+      "top_20_precision": 0.95,
+      "total": 2852,
+      "with_signal": 956
     }
   },
   "corpus_provenance": {
@@ -55,12 +55,12 @@
     "kev_signals.json": "2026-05-26T17:00:21Z",
     "metasploit_signals.json": "2026-05-26T17:00:37Z"
   },
-  "findings_total": 4462,
-  "findings_with_score": 4462,
-  "findings_with_signal": 852,
+  "findings_total": 8278,
+  "findings_with_score": 8278,
+  "findings_with_signal": 1435,
   "notes": [],
   "snapshot_date": "2026-05-26",
-  "spearman_rho": 0.5330037906847411,
+  "spearman_rho": 0.6368776169189008,
   "threshold_spearman": 0.4,
   "threshold_top_20": 0.5,
   "top_20_precision": 1.0,

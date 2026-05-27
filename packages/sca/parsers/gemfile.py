@@ -159,6 +159,13 @@ def parse_lockfile(path: Path) -> List[Dependency]:
             continue
         name = m.group(1)
         version = m.group(2).strip()
+        # A Bundler-resolved version always starts with a digit (optionally
+        # with a ``-platform`` suffix). Anything else is a malformed /
+        # non-standard ``specs:`` row (templated lockfile, source annotation
+        # mis-captured) — skip it rather than emit a phantom gem that 404s
+        # on every registry lookup.
+        if not (version and version[0].isdigit()):
+            continue
         # ``<version>-<platform>`` forms (e.g. ``1.0.0-x86_64-linux``)
         # — keep the version as-is; OSV matches per-platform.
         dep = Dependency(
@@ -247,6 +254,13 @@ def _parse_version_specs(rest: str) -> Tuple[PinStyle, Optional[str]]:
     m = matches[0]
     op = m.group("op") or "="
     ver = m.group("ver")
+    # A RubyGems version always starts with a digit. A hand-written Gemfile
+    # can quote a non-literal where a version goes (e.g. a constant such as
+    # ``gem 'ibm_db', IBM_DB`` lexed loosely), which would otherwise be
+    # emitted as version "IBM_DB" and 404 on every registry lookup. Reject
+    # anything that isn't version-shaped — treat the gem as unpinned.
+    if not (ver and ver[0].isdigit()):
+        return PinStyle.WILDCARD, None
     if op in ("=",):
         return PinStyle.EXACT, ver
     if op == "~>":

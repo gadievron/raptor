@@ -34,6 +34,31 @@ from core.json import JsonCache, MISSING
 
 logger = logging.getLogger(__name__)
 
+# HTTP statuses that mean "the registry has no such package/version" — an
+# expected, non-fatal outcome (the caller falls back to a sentinel). Distinct
+# from a network/timeout/5xx error, which is a real (often transient) problem.
+_NOT_FOUND_STATUSES = frozenset({404, 410})
+
+
+def log_fetch_failure(
+    log: logging.Logger, log_prefix: str, item_name: str, exc: Exception,
+) -> None:
+    """Log a registry fetch failure at the level its cause warrants.
+
+    A 404/410 (the package or version simply isn't in the registry) is
+    routine and non-fatal — log it at DEBUG so it doesn't drown the run log
+    (a single SCA scan can legitimately miss hundreds of private/yanked
+    names). Anything else (timeout, connection error, 5xx, parse failure) is a
+    real problem worth a WARNING. ``exc`` is inspected for a ``status``
+    attribute (set by :class:`core.http.HttpError`); absent it, WARNING.
+    """
+    status = getattr(exc, "status", None)
+    level = logging.DEBUG if status in _NOT_FOUND_STATUSES else logging.WARNING
+    if item_name:
+        log.log(level, "%s: fetch failed for %r: %s", log_prefix, item_name, exc)
+    else:
+        log.log(level, "%s: fetch failed: %s", log_prefix, exc)
+
 
 def fetch_or_negative_cache(
     cache: Optional[JsonCache],
@@ -67,11 +92,7 @@ def fetch_or_negative_cache(
     try:
         data = fetch()
     except Exception as e:                                # noqa: BLE001
-        if item_name:
-            logger.warning("%s: fetch failed for %r: %s",
-                           log_prefix, item_name, e)
-        else:
-            logger.warning("%s: fetch failed: %s", log_prefix, e)
+        log_fetch_failure(logger, log_prefix, item_name, e)
         if cache is not None:
             cache.put(key, negative_value, ttl_seconds=ttl_seconds)
         return negative_value
@@ -80,4 +101,4 @@ def fetch_or_negative_cache(
     return data
 
 
-__all__ = ["fetch_or_negative_cache"]
+__all__ = ["fetch_or_negative_cache", "log_fetch_failure"]

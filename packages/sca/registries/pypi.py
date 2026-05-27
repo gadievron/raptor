@@ -23,6 +23,8 @@ from packaging.version import InvalidVersion, Version
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,8 +183,7 @@ class PyPIClient:
                 headers=self._request_headers(),
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.pypi: meta fetch failed for %r: %s",
-                           canon, e)
+            log_fetch_failure(logger, "sca.registries.pypi", canon, e)
             if self._cache is not None:
                 self._cache.put(cache_key, None, ttl_seconds=self._ttl)
             return None
@@ -223,7 +224,11 @@ class PyPIClient:
                 url, headers=self._request_headers(),
             )
         except Exception as e:                            # noqa: BLE001
-            logger.warning(
+            # A 404 here is expected and non-fatal: yanked releases (e.g.
+            # codecov 2.0.22) have no per-version JSON, and the caller treats
+            # None as "no data". Keep it at debug so a routine miss doesn't
+            # spam the run log — yank detection is the yanked-versions stage's.
+            logger.debug(
                 "sca.registries.pypi: version-meta fetch failed for "
                 "%r==%r: %s", canon, version, e,
             )
@@ -251,8 +256,7 @@ class PyPIClient:
                 headers=self._request_headers(),
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.pypi: fetch failed for %r: %s",
-                           canon, e)
+            log_fetch_failure(logger, "sca.registries.pypi", canon, e)
             if self._cache is not None:
                 self._cache.put(cache_key, [], ttl_seconds=self._ttl)
             return []

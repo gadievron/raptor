@@ -233,6 +233,17 @@ def test_rubygems_dedup_duplicate_entries() -> None:
     assert client.list_versions("foo") == ["1.0.0"]
 
 
+def test_rubygems_version_meta_strips_platform_suffix() -> None:
+    """Lockfiles spell platform gems "1.9.18-java"; the v2 per-version
+    endpoint keys on the canonical version only, so the platform tag must
+    be stripped or every platform-pinned gem 404s."""
+    http = _FakeHttp(json_payload={"version": "1.9.18"})
+    client = RubyGemsClient(http)
+    client.get_version_metadata("ffi", "1.9.18-x64-mingw32")
+    assert http.calls[-1].endswith("/rubygems/ffi/versions/1.9.18.json")
+    assert "mingw32" not in http.calls[-1]
+
+
 # ---------------------------------------------------------------------------
 # Go modules
 # ---------------------------------------------------------------------------

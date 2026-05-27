@@ -61,11 +61,12 @@ report can show where each dep came from.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from core.json.jsonc import load_jsonc
 
 from ...models import Confidence, Dependency, PinStyle
 from .. import register
@@ -155,6 +156,12 @@ def _collapse_continuations(text: str) -> List[Tuple[int, str, bool]]:
     return out
 
 
+# GitHub Actions template expressions: ``${{ matrix.x }}``, ``${{ env.Y }}``,
+# ``${{ secrets.Z }}``. Never literal install targets — stripped before
+# tokenising so they don't surface as phantom packages.
+_GHA_EXPR_RE = re.compile(r"\$\{\{.*?\}\}")
+
+
 def _scan_shell_lines(
     lines: List[Tuple[int, str, bool]],
     declared_in: Path,
@@ -177,6 +184,12 @@ def _scan_shell_lines(
     deps: List[Dependency] = []
     for line_no, body, commented in lines:
         cleaned = _strip_inline_comment(body)
+        # Drop GHA template expressions before tokenising. A workflow line
+        # like ``run: npm i ${{ matrix.npm-i }}`` would otherwise yield a
+        # bogus package "matrix.npm-i" (dots/dashes are legal npm chars) that
+        # 404s — the expression is a placeholder, never a literal install
+        # target. Harmless on non-GHA sources (the syntax doesn't occur).
+        cleaned = _GHA_EXPR_RE.sub(" ", cleaned)
         for sub in _split_compound(cleaned):
             best: Optional[Tuple[_PkgManager, "re.Match[str]"]] = None
             for mgr in _MANAGERS:
@@ -743,12 +756,12 @@ def _safe_read(path: Path) -> Optional[str]:
 
 
 def _load_jsonc(text: str) -> dict:
-    """Tolerant JSON-with-comments loader (devcontainer.json convention)."""
-    cleaned = re.sub(r"//[^\n]*", "", text)
-    cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
-    # Tolerate trailing commas: ``{ "a": 1, }``.
-    cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
-    return json.loads(cleaned)
+    """Tolerant JSON-with-comments loader (devcontainer.json convention).
+
+    Delegates to the shared string-aware loader so the ``//``-inside-a-URL
+    bug is fixed in exactly one place (see :mod:`core.json.jsonc`).
+    """
+    return load_jsonc(text)
 
 
 def _flatten_command(val) -> List[str]:

@@ -406,3 +406,92 @@ class TestCppTreeSitter:
         funcs = extract_functions("t.cpp", "cpp", src)
         names = [f.name for f in funcs]
         assert "upper" in names
+
+
+class TestInterstitialItems:
+    """compute_interstitial_items — the 'every SLOC belongs to an item' net."""
+
+    def test_gaps_between_items_become_interstitial(self):
+        from core.inventory.extractors import (
+            CodeItem, KIND_FUNCTION, KIND_INTERSTITIAL,
+            compute_interstitial_items,
+        )
+        # 1: import os   2: (blank)   3: def f():   4:   pass   5: x = os.system(z)
+        content = "import os\n\ndef f():\n    pass\nx = os.system('z')\n"
+        items = [CodeItem(name="f", kind=KIND_FUNCTION, line_start=3, line_end=4)]
+        inter = compute_interstitial_items(items, content)
+        ranges = {(it.line_start, it.line_end): it.kind for it in inter}
+        assert ranges.get((1, 2)) == KIND_INTERSTITIAL    # import (blank trailing kept)
+        assert ranges.get((5, 5)) == KIND_INTERSTITIAL    # top-level os.system
+
+    def test_blank_only_gap_is_skipped(self):
+        from core.inventory.extractors import (
+            CodeItem, KIND_FUNCTION, compute_interstitial_items,
+        )
+        content = "def a():\n    pass\n\n\ndef b():\n    pass\n"
+        items = [
+            CodeItem(name="a", kind=KIND_FUNCTION, line_start=1, line_end=2),
+            CodeItem(name="b", kind=KIND_FUNCTION, line_start=5, line_end=6),
+        ]
+        # lines 3-4 are blank-only → no interstitial item
+        assert compute_interstitial_items(items, content) == []
+
+    def test_fully_covered_file_has_no_interstitial(self):
+        from core.inventory.extractors import (
+            CodeItem, KIND_FUNCTION, compute_interstitial_items,
+        )
+        content = "def a():\n    pass\n"
+        items = [CodeItem(name="a", kind=KIND_FUNCTION, line_start=1, line_end=2)]
+        assert compute_interstitial_items(items, content) == []
+
+
+class TestTopLevelItems:
+    """top_level — module-scope executable code (runs at import)."""
+
+    def test_python_module_level_call_is_top_level(self):
+        # AST path (no tree-sitter needed → testable in CI).
+        from core.inventory.extractors import PythonExtractor, KIND_TOP_LEVEL
+        content = "import os\nos.system('x')\ndef f():\n    pass\n"
+        items = PythonExtractor().extract("t.py", content)
+        kinds = {(i.kind, i.line_start) for i in items}
+        assert (KIND_TOP_LEVEL, 2) in kinds          # os.system at module scope
+        assert any(i.kind == "function" for i in items)
+
+    def test_python_bare_non_call_expr_is_not_top_level(self):
+        # A docstring / bare literal isn't executable-of-interest.
+        from core.inventory.extractors import PythonExtractor
+        content = '"""module docstring"""\n42\n'
+        items = PythonExtractor().extract("t.py", content)
+        assert not any(i.kind == "top_level" for i in items)
+
+
+class TestCGlobalDeclarators:
+    """C/C++ globals through declarator wrappers (array/pointer)."""
+
+    def test_c_array_and_pointer_globals_captured(self):
+        from core.inventory.extractors import (
+            _TS_AVAILABLE, extract_items, KIND_GLOBAL,
+        )
+        if not _TS_AVAILABLE:
+            pytest.skip("tree-sitter required for C global extraction")
+        content = ("char g_buf[8];\nchar *p;\nint x = 0;\n"
+                   "int f(void) { return 0; }\n")
+        items = extract_items("t.c", "c", content)
+        names = {i.name for i in items if i.kind == KIND_GLOBAL}
+        assert {"g_buf", "p", "x"} <= names      # array, pointer, scalar
+        assert "f" not in names                  # function not a global
+
+    def test_function_pointer_global_named_by_variable_not_initializer(self):
+        # Regression: `int (*h)(int) = foo;` must be the variable `h`, NOT the
+        # initializer `foo` (the declared name is nested in the FP declarator).
+        from core.inventory.extractors import (
+            _TS_AVAILABLE, extract_items, KIND_GLOBAL,
+        )
+        if not _TS_AVAILABLE:
+            pytest.skip("tree-sitter required for C global extraction")
+        content = "int (*h)(int) = foo;\nint x = 0;\n"
+        names = {i.name for i in extract_items("t.c", "c", content)
+                 if i.kind == KIND_GLOBAL}
+        assert "h" in names              # the function-pointer variable
+        assert "foo" not in names        # NOT the initializer value
+        assert "x" in names              # plain scalar still works

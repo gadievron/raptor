@@ -197,6 +197,74 @@ def _emit_entry_points(
         _write(base_dir, ann, counts, "entry_point")
 
 
+def _emit_site_annotations(
+    cmap: Dict[str, Any],
+    base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
+    counts: SynthCounts,
+) -> None:
+    """Emit ONE annotation per function aggregating its mechanically-detected
+    ownership + privilege sites (from ``context_map_sites``).
+
+    Aggregation is mandatory: annotations key on ``(file, function)`` and a
+    function commonly holds several sites (e.g. alloc + double-free, or
+    ownership *and* a capability check), so a per-site write would clobber
+    down to the last one. Each site already carries its ``function``
+    (source_intel's enclosing function); checklist resolution is a fallback so
+    coverage survives an inventory miss. Source is ``source_intel`` and the
+    substrate's ``respect-manual`` write never clobbers an operator note.
+    """
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for category, section_key in (
+        ("ownership", "ownership_model"),
+        ("privilege", "privilege_model"),
+    ):
+        for item in _safe_list_of_dicts(cmap, section_key):
+            file_path = item.get("file")
+            line = item.get("line")
+            func_name = item.get("function")
+            func = _resolve(checklist, file_path, line, repo_root)
+            if not func_name and func:
+                func_name = func.get("name")
+            if not file_path or not func_name:
+                counts.skipped_no_function += 1
+                continue
+            g = groups.setdefault(
+                (file_path, func_name),
+                {"categories": set(), "kinds": [], "lines": [], "func": None},
+            )
+            if g["func"] is None and func:
+                g["func"] = func
+            g["categories"].add(category)
+            kind = item.get("kind") or "site"
+            g["kinds"].append(kind)
+            head = f"- {category} site: {kind}"
+            if line:
+                head += f" (line {line})"
+            detail = [head]
+            for k in ("allocator", "free_fn", "name", "grade", "role"):
+                if item.get(k):
+                    detail.append(f"  {k}: {item[k]}")
+            g["lines"].append("\n".join(detail))
+
+    for (file_path, func_name), g in groups.items():
+        body = (
+            "Mechanically-detected sites (source_intel):\n\n"
+            + "\n".join(g["lines"])
+        )
+        metadata = {
+            "source": "source_intel",
+            "status": "source_intel_site",
+            "site_categories": _safe_meta(",".join(sorted(g["categories"]))),
+            "site_kinds": _safe_meta(",".join(sorted(set(g["kinds"])))),
+        }
+        if g["func"]:
+            metadata.update(_hash_metadata(repo_root, file_path, g["func"]))
+        ann = Annotation(
+            file=file_path, function=func_name, body=body, metadata=metadata,
+        )
+        _write(base_dir, ann, counts, "source_intel_site")
+
+
 def _emit_sinks(
     cmap: Dict[str, Any],
     base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
@@ -536,6 +604,7 @@ def synthesise_from_understand_output(
         _emit_sinks(cmap, base_dir, checklist, repo_root, counts)
         _emit_trust_boundaries(cmap, base_dir, checklist, repo_root, counts)
         _emit_unchecked_flows(cmap, base_dir, checklist, repo_root, counts)
+        _emit_site_annotations(cmap, base_dir, checklist, repo_root, counts)
 
     variants_data = _load_json(output_dir / "variants.json")
     if variants_data:

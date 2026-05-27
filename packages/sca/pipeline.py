@@ -937,8 +937,12 @@ def run_sca(
     total = (len(vuln_findings) + len(hygiene_findings)
               + len(supply_chain_findings) + len(license_findings))
     progress.done("findings.json · report.md · sbom · sarif")
+    # Surface cache hits/misses so a run shows dedup working at a glance —
+    # a project scanned after others that share deps (or a warm cross-run
+    # cache) reports mostly hits; a host that keeps missing stands out.
     progress.end(f"{len(vuln_findings)} vuln · {kev_count} KEV "
-                  f"· {total} findings total")
+                  f"· {total} findings total "
+                  f"· cache {cache.hits} hit/{cache.misses} miss")
 
     return RunResult(
         target=target,

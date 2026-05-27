@@ -18,6 +18,8 @@ from typing import List, Optional
 from core.json import JsonCache, MISSING
 from core.http import HttpClient
 
+from ._negative_cache import log_fetch_failure
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,8 +157,7 @@ class NpmClient:
                 max_bytes=_NPM_META_MAX_BYTES,
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.npm: meta fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.npm", name, e)
             if self._cache is not None:
                 # Cache the failure for the same TTL so subsequent
                 # detectors don't re-query the same dead name.
@@ -194,8 +195,7 @@ class NpmClient:
                 max_bytes=_NPM_META_MAX_BYTES,
             )
         except Exception as e:                # noqa: BLE001
-            logger.warning("sca.registries.npm: fetch failed for %r: %s",
-                           name, e)
+            log_fetch_failure(logger, "sca.registries.npm", name, e)
             if self._cache is not None:
                 # Negative-cache the empty result so re-queries on the
                 # same TTL window don't re-hit the registry. Same

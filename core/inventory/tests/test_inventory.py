@@ -1211,6 +1211,169 @@ class TestJavaFrameworkEntries:
         assert verdict("Plain.java", "lonely") == "not_called"                   # control
 
 
+class TestVirtualDispatchCHA:
+    """Type-free Class Hierarchy Analysis: a polymorphic-dispatch OVERRIDE (a
+    method of a class that extends/implements something) whose name is
+    dispatched via an unresolved member call (``h.handle()``) reads UNCERTAIN,
+    not NOT_CALLED — a virtual call could reach it at runtime even with no
+    resolved edge. Surface-only; precise typed resolution is CodeQL's job."""
+
+    _FILES = {
+        "Handler.java": "package x;\npublic interface Handler { void handle(); }\n",
+        "FooHandler.java": (
+            "package x;\npublic class FooHandler implements Handler {\n"
+            "  public void handle() {}\n}\n"),
+        "Dispatcher.java": (
+            "package x;\npublic class Dispatcher {\n"
+            "  void run(Handler h) { h.handle(); }\n}\n"),
+        # controls
+        "Plain.java": "package x;\npublic class Plain {\n  public void dead() {}\n}\n",
+        "Lonely.java": (
+            "package x;\npublic class Lonely implements Handler {\n"
+            "  public void unrelated() {}\n}\n"),
+        # name-collision: an override candidate whose name matches an UNRELATED
+        # dispatched name (Closeable.close, not Widget). Type-free CHA can't
+        # tell the receiver types apart, so it stays UNCERTAIN — the FN-safe
+        # over-approximation (the type-free ceiling). Pinned so a refactor can't
+        # silently "correct" it to not_called (which would risk an FN if the
+        # collision were a real hierarchy). Tier 2 declared-type capture is the
+        # precise fix.
+        "Widget.java": "package x;\npublic class Widget {}\n",
+        "Gadget.java": (
+            "package x;\npublic class Gadget extends Widget {\n"
+            "  private void close() {}\n}\n"),
+        "Stream.java": (
+            "package x;\npublic class Stream {\n"
+            "  void use(java.io.Closeable c) throws Exception { c.close(); }\n}\n"),
+    }
+
+    def test_override_dispatched_reads_uncertain(self, tmp_path):
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.reach_audit import classify_reachability
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(rel, name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name and f["path"].endswith(rel):
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), f["path"].rsplit(".", 1)[0])
+            return None
+
+        # the impl, overriding + dispatched via h.handle() → uncertain (not demoted)
+        assert verdict("FooHandler.java", "handle") == "uncertain"
+        # controls stay not_called:
+        assert verdict("Plain.java", "dead") == "not_called"          # no base, not dispatched
+        assert verdict("Lonely.java", "unrelated") == "not_called"    # has base but name not dispatched
+        # name-collision override candidate → UNCERTAIN (FN-safe over-approx)
+        assert verdict("Gadget.java", "close") == "uncertain"
+
+
+class TestTypeScriptCHA:
+    """CHA for TypeScript. TS wraps class bases in extends_clause /
+    implements_clause, which the JS/TS walker did not descend into, so TS
+    classes recorded NO bases and CHA never saw any override candidate — a
+    virtual-dispatch override (a method of a class that implements an
+    interface, dispatched via an interface-typed receiver) wrongly read
+    not_called. With heritage capture fixed, CHA fires for TS too: the
+    override reads UNCERTAIN, controls stay not_called. Needs
+    tree-sitter-typescript."""
+
+    def test_ts_heritage_extends_implements_captured(self):
+        pytest.importorskip("tree_sitter_typescript")
+        from core.inventory.call_graph import extract_call_graph_javascript
+        g = extract_call_graph_javascript(
+            "class C extends B implements I, J {}", language="typescript")
+        bases = {c.name: c.bases for c in g.classes}
+        assert bases["C"] == ["B", "I", "J"]
+
+    def test_ts_override_dispatched_reads_uncertain(self, tmp_path):
+        pytest.importorskip("tree_sitter_typescript")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "shapes.ts").write_text(
+            "interface IShape { area(): number; }\n"
+            "class Circle implements IShape { area(): number { return 1; } }\n"
+            "class Calc { total(s: IShape): number { return s.area(); } }\n")
+        (tmp_path / "plain.ts").write_text("class Plain { dead(): void {} }\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(rel, name, cls):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    md = it.get("metadata") or {}
+                    if (it.get("name") == name and md.get("class_name") == cls
+                            and f["path"].endswith(rel)):
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), f["path"].rsplit(".", 1)[0])
+            return None
+
+        # Circle.area overrides IShape.area and is dispatched via s.area()
+        # (s: IShape) → a virtual call could reach it → uncertain, not dead.
+        assert verdict("shapes.ts", "area", "Circle") == "uncertain"
+        # control: no base, not dispatched → not_called
+        assert verdict("plain.ts", "dead", "Plain") == "not_called"
+
+
+class TestReceiverTypeCapture:
+    """``CallSite.receiver_type`` — the declared type of a length-2
+    ``recv.m()`` receiver (a method parameter, local variable, or class
+    field). Captured substrate for type-aware consumers; the per-language
+    walkers (Java/C#/TS) resolve the receiver's declared type from scope.
+    Plain JS carries no type annotations, so it stays None. Each case
+    skips without its grammar."""
+
+    def test_java_receiver_type(self):
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.call_graph import extract_call_graph_java
+        g = extract_call_graph_java(
+            "package x;\nclass C {\n  Foo field;\n"
+            "  void r(Bar param) { Baz local = mk(); param.a(); local.b();"
+            " field.c(); chained().d(); }\n}\n")
+        by_chain = {".".join(c.chain): c.receiver_type for c in g.calls}
+        assert by_chain.get("param.a") == "Bar"      # parameter
+        assert by_chain.get("local.b") == "Baz"       # local
+        assert by_chain.get("field.c") == "Foo"       # field
+        assert by_chain.get("chained.d") is None      # chained — unresolvable
+
+    def test_csharp_receiver_type(self):
+        pytest.importorskip("tree_sitter_c_sharp")
+        from core.inventory.call_graph import extract_call_graph_csharp
+        g = extract_call_graph_csharp(
+            "class C {\n  Foo field;\n"
+            "  void R(Bar param) { Baz local = M(); param.A(); local.B();"
+            " field.C(); Chained().D(); }\n}\n")
+        by_chain = {".".join(c.chain): c.receiver_type for c in g.calls}
+        assert by_chain.get("param.A") == "Bar"
+        assert by_chain.get("local.B") == "Baz"
+        assert by_chain.get("field.C") == "Foo"
+        assert by_chain.get("Chained.D") is None
+
+    def test_typescript_receiver_type(self):
+        pytest.importorskip("tree_sitter_typescript")
+        from core.inventory.call_graph import extract_call_graph_javascript
+        g = extract_call_graph_javascript(
+            "class C {\n  field: Foo;\n"
+            "  run(param: Bar): void { const local: Baz = mk();"
+            " param.a(); local.b(); field.c(); chained().d(); }\n}\n",
+            language="typescript")
+        by_chain = {".".join(c.chain): c.receiver_type for c in g.calls}
+        assert by_chain.get("param.a") == "Bar"
+        assert by_chain.get("local.b") == "Baz"
+        assert by_chain.get("field.c") == "Foo"
+        assert by_chain.get("chained.d") is None
+
+    def test_plain_js_has_no_receiver_type(self):
+        pytest.importorskip("tree_sitter_javascript")
+        from core.inventory.call_graph import extract_call_graph_javascript
+        g = extract_call_graph_javascript(
+            "class C { run(param) { param.a(); } }", language="javascript")
+        assert all(c.receiver_type is None for c in g.calls)
+
+
 class TestTypeScriptCoverage:
     """End-to-end TypeScript coverage. Typed TS was parsed with the JS grammar,
     which errors on type annotations / decorators → ZERO functions extracted

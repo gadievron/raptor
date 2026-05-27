@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-09T21:10:54Z",
+    "fetched_at": "2026-05-26T23:45:50Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -9,204 +9,6 @@
     "url": "https://github.com/tokio-rs/tokio.git"
   },
   "findings": [
-    {
-      "advisory": {
-        "aliases": [
-          "RUSTSEC-2026-0097"
-        ],
-        "fixed_versions": [
-          "0.9.3",
-          "0.10.1",
-          "0.8.6"
-        ],
-        "id": "GHSA-cq8v-f236-94qc",
-        "modified": "2026-04-22T20:32:45.162648+00:00",
-        "published": "2026-04-14T01:03:36+00:00",
-        "references": [
-          "https://github.com/rust-random/rand/pull/1763",
-          "https://github.com/rust-random/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using rand::rng()"
-      },
-      "cvss_score": null,
-      "dep_name": "rand",
-      "dep_version": "0.8",
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:rand:0.8:GHSA-cq8v-f236-94qc",
-      "in_kev": false,
-      "purl": "pkg:cargo/rand@0.8",
-      "raptor_risk_estimate": 7.5009254167499995,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "crate referenced only by test/example/bench code"
-        },
-        "evidence": [
-          "tokio/tests/time_pause.rs:3",
-          "tokio/tests/time_pause.rs:5",
-          "tokio/tests/sync_broadcast.rs:568",
-          "benches/sync_watch.rs:1",
-          "benches/copy.rs:2"
-        ],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.6499999999999999,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.198084374999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium"
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "GHSA-cq8v-f236-94qc"
-        ],
-        "fixed_versions": [
-          "0.8.6",
-          "0.9.3",
-          "0.10.1"
-        ],
-        "id": "RUSTSEC-2026-0097",
-        "modified": "2026-04-17T16:17:26.292227+00:00",
-        "published": "2026-04-09T12:00:00+00:00",
-        "references": [
-          "https://crates.io/crates/rand",
-          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
-          "https://github.com/rust-random/rand/pull/1763"
-        ],
-        "severity": null,
-        "summary": "Rand is unsound with a custom logger using `rand::rng()`",
-        "informational": "unsound"
-      },
-      "cvss_score": null,
-      "dep_name": "rand",
-      "dep_version": "0.8",
-      "ecosystem": "Cargo",
-      "epss": null,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:rand:0.8:RUSTSEC-2026-0097",
-      "in_kev": false,
-      "purl": "pkg:cargo/rand@0.8",
-      "raptor_risk_estimate": 7.5009254167499995,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "crate referenced only by test/example/bench code"
-        },
-        "evidence": [
-          "tokio/tests/time_pause.rs:3",
-          "tokio/tests/time_pause.rs:5",
-          "tokio/tests/sync_broadcast.rs:568",
-          "benches/sync_watch.rs:1",
-          "benches/copy.rs:2"
-        ],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.6499999999999999,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 8.198084374999999,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium"
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2025-58160",
-          "RUSTSEC-2025-0055"
-        ],
-        "fixed_versions": [
-          "0.3.20"
-        ],
-        "id": "GHSA-xwfj-jgwm-7wp5",
-        "modified": "2026-02-04T02:43:59.643308+00:00",
-        "published": "2025-08-29T20:33:56+00:00",
-        "references": [
-          "https://github.com/tokio-rs/tracing/security/advisories/GHSA-xwfj-jgwm-7wp5",
-          "https://nvd.nist.gov/vuln/detail/CVE-2025-58160",
-          "https://github.com/tokio-rs/tracing",
-          "https://rustsec.org/advisories/RUSTSEC-2025-0055.html"
-        ],
-        "severity": null,
-        "summary": " Tracing logging user input may result in poisoning logs with ANSI escape sequences"
-      },
-      "cvss_score": null,
-      "dep_name": "tracing-subscriber",
-      "dep_version": "0.3.1",
-      "ecosystem": "Cargo",
-      "epss": 0.00077,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Cargo:tracing-subscriber:0.3.1:GHSA-xwfj-jgwm-7wp5",
-      "in_kev": false,
-      "purl": "pkg:cargo/tracing-subscriber@0.3.1",
-      "raptor_risk_estimate": 4.2167219726341045,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "crate referenced only by test/example/bench code"
-        },
-        "evidence": [
-          "examples/chat.rs:44"
-        ],
-        "verdict": "not_reachable"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 50.0,
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300539,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 3.7905293538124996,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 0.559,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium"
-    },
     {
       "advisory": {
         "aliases": [
@@ -247,7 +49,7 @@
       "finding_id": "sca:vuln:Cargo:futures-util:0.3.0:GHSA-5r9g-j7jj-hw6c",
       "in_kev": false,
       "purl": "pkg:cargo/futures-util@0.3.0",
-      "raptor_risk_estimate": 9.016805254874999,
+      "raptor_risk_estimate": 9.9169659793875,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -255,24 +57,32 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio-util/src/task/spawn_pinned.rs:1"
+          "tokio-test/tests/stream_mock.rs:1",
+          "tokio/tests/tcp_connect.rs:176",
+          "tokio-util/src/task/spawn_pinned.rs:1",
+          "tokio-util/tests/compat.rs:6",
+          "tokio-util/tests/io_sink_writer.rs:4"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.300378,
+        "epss_multiplier": 0.399575562,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.4550064875,
+        "final": 9.9169659793875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
-      "severity": "medium"
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     },
     {
       "advisory": {
@@ -315,7 +125,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.9:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.9",
-      "raptor_risk_estimate": 21.717657547582117,
+      "raptor_risk_estimate": 27.907818344553405,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -323,31 +133,240 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "tokio/src/net/unix/pipe.rs:5",
           "tokio/src/signal/unix.rs:14",
-          "tokio/src/runtime/signal/mod.rs:7",
-          "tokio/src/runtime/io/registration.rs:6",
-          "tokio/src/runtime/io/driver.rs:12",
-          "tokio/src/process/unix/mod.rs:35",
-          "... (+7 more)"
+          "tokio/src/io/async_fd.rs:4",
+          "tokio/src/io/poll_evented.rs:4",
+          "tokio/src/io/bsd/poll_aio.rs:6",
+          "... (+8 more)"
         ],
         "verdict": "imported"
       },
       "risk_components": {
         "calibration_status": "validated_v1",
         "cvss_base": 75.0,
+        "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.30655899999999997,
+        "epss_multiplier": 0.404081511,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.375106156249998,
+        "final": 27.907818344553405,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "high",
-      "ssvc_exploitation": "poc",
-      "ssvc_automatable": "yes"
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "RUSTSEC-2026-0097"
+        ],
+        "fixed_versions": [
+          "0.9.3",
+          "0.10.1",
+          "0.8.6"
+        ],
+        "id": "GHSA-cq8v-f236-94qc",
+        "modified": "2026-04-22T20:32:45.162648+00:00",
+        "published": "2026-04-14T01:03:36+00:00",
+        "references": [
+          "https://github.com/rust-random/rand/pull/1763",
+          "https://github.com/rust-random/rand",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html"
+        ],
+        "severity": null,
+        "summary": "Rand is unsound with a custom logger using rand::rng()"
+      },
+      "cvss_score": null,
+      "dep_name": "rand",
+      "dep_version": "0.8",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rand:0.8:GHSA-cq8v-f236-94qc",
+      "in_kev": false,
+      "purl": "pkg:cargo/rand@0.8",
+      "raptor_risk_estimate": 11.812822499999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "tokio/tests/sync_broadcast.rs:568",
+          "tokio/tests/time_pause.rs:3",
+          "tokio/tests/time_pause.rs:5"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.812822499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "GHSA-cq8v-f236-94qc"
+        ],
+        "fixed_versions": [
+          "0.8.6",
+          "0.9.3",
+          "0.10.1"
+        ],
+        "id": "RUSTSEC-2026-0097",
+        "informational": "unsound",
+        "modified": "2026-04-17T16:17:26.292227+00:00",
+        "published": "2026-04-09T12:00:00+00:00",
+        "references": [
+          "https://crates.io/crates/rand",
+          "https://rustsec.org/advisories/RUSTSEC-2026-0097.html",
+          "https://github.com/rust-random/rand/pull/1763"
+        ],
+        "severity": null,
+        "summary": "Rand is unsound with a custom logger using `rand::rng()`"
+      },
+      "cvss_score": null,
+      "dep_name": "rand",
+      "dep_version": "0.8",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:rand:0.8:RUSTSEC-2026-0097",
+      "in_kev": false,
+      "purl": "pkg:cargo/rand@0.8",
+      "raptor_risk_estimate": 11.812822499999998,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "tokio/tests/sync_broadcast.rs:568",
+          "tokio/tests/time_pause.rs:3",
+          "tokio/tests/time_pause.rs:5"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 11.812822499999998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-58160",
+          "RUSTSEC-2025-0055"
+        ],
+        "fixed_versions": [
+          "0.3.20"
+        ],
+        "id": "GHSA-xwfj-jgwm-7wp5",
+        "modified": "2026-02-04T02:43:59.643308+00:00",
+        "published": "2025-08-29T20:33:56+00:00",
+        "references": [
+          "https://github.com/tokio-rs/tracing/security/advisories/GHSA-xwfj-jgwm-7wp5",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-58160",
+          "https://github.com/tokio-rs/tracing",
+          "https://rustsec.org/advisories/RUSTSEC-2025-0055.html"
+        ],
+        "severity": null,
+        "summary": " Tracing logging user input may result in poisoning logs with ANSI escape sequences"
+      },
+      "cvss_score": null,
+      "dep_name": "tracing-subscriber",
+      "dep_version": "0.3.1",
+      "ecosystem": "Cargo",
+      "epss": 0.00112,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tracing-subscriber:0.3.1:GHSA-xwfj-jgwm-7wp5",
+      "in_kev": false,
+      "purl": "pkg:cargo/tracing-subscriber@0.3.1",
+      "raptor_risk_estimate": 4.8971245342145515,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "crate referenced only by test/example/bench code"
+        },
+        "evidence": [
+          "examples/chat.rs:44"
+        ],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.39987153599999997,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 4.8971245342145515,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
     }
   ]
 }

@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Enrich a context-map.json with mechanically-detected ownership/privilege sites.
+
+Usage: raptor-enrich-context-map-sites <understand_dir>
+
+Runs source_intel (cocci) on the run's target and projects its
+alloc / checked-alloc / paired-free / double-free sites (ownership_model)
+and capability-check / LSM-hook sites (privilege_model) into
+context-map.json via
+``packages.code_understanding.context_map_sites.enrich_context_map_with_sites``.
+
+Idempotent — safe to re-run. Best-effort and skip-silent: source_intel
+returns an empty result (no spatch on PATH, non-C/C++ target, or rules
+missing) rather than raising, so this no-ops cleanly on those targets and
+adds a cocci pass only where C/C++ source is present.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-enrich-context-map-sites",
+        description=(
+            "Enrich context-map.json with source_intel-detected ownership "
+            "(alloc/free/double-free) and privilege (capability/LSM-hook) "
+            "sites. Mechanical, deterministic, best-effort."
+        ),
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(
+            f"raptor-enrich-context-map-sites: {understand_dir} is not a "
+            "directory", file=sys.stderr,
+        )
+        return 1
+
+    context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.exists():
+        print(
+            f"raptor-enrich-context-map-sites: {context_map_path} does not "
+            "exist", file=sys.stderr,
+        )
+        return 1
+
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        print(
+            f"raptor-enrich-context-map-sites: {context_map_path} is not a "
+            "JSON object", file=sys.stderr,
+        )
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    if not target_path:
+        print(
+            "raptor-enrich-context-map-sites: checklist missing target_path; "
+            "skipping enrichment", file=sys.stderr,
+        )
+        return 0
+
+    try:
+        from packages.code_understanding.context_map_sites import (
+            enrich_context_map_with_sites,
+        )
+        from packages.source_intel import analyze
+    except Exception as e:  # noqa: BLE001 — best-effort
+        print(
+            f"raptor-enrich-context-map-sites: substrate unavailable ({e}); "
+            "skipping", file=sys.stderr,
+        )
+        return 0
+
+    # analyze() is skip-silent: spatch-missing / non-C / rules-missing all
+    # return an empty result rather than raising.
+    try:
+        si = analyze(Path(target_path))
+    except Exception as e:  # noqa: BLE001 — never abort the run on this
+        print(
+            f"raptor-enrich-context-map-sites: source_intel analysis "
+            f"skipped ({e})", file=sys.stderr,
+        )
+        return 0
+
+    counts = enrich_context_map_with_sites(
+        context_map, si, repo_root=target_path,
+    )
+    total = counts["ownership_model"] + counts["privilege_model"]
+    if total:
+        save_json(context_map_path, context_map)
+        print(
+            f"raptor-enrich-context-map-sites: enriched "
+            f"{counts['ownership_model']} ownership + "
+            f"{counts['privilege_model']} privilege site(s) in "
+            f"{context_map_path}"
+        )
+    else:
+        reason = getattr(si, "skipped_reason", None)
+        suffix = f" ({reason})" if reason else ""
+        print(
+            "raptor-enrich-context-map-sites: no ownership/privilege sites "
+            f"detected{suffix}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

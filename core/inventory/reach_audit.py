@@ -113,6 +113,13 @@ def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
     if R.Verdict.CALLED in verdicts:
         return "called"
     if R.Verdict.NOT_CALLED in verdicts:
+        # CHA: before demoting, check whether this is a polymorphic-dispatch
+        # override that's dispatched via an unresolved member call somewhere —
+        # a virtual call could reach it at runtime even though no resolved edge
+        # exists. If so fall through to UNCERTAIN (not_called would be unsafe);
+        # precise typed dispatch resolution is CodeQL's (Tier 2) job.
+        if R.is_virtual_dispatch_candidate(ctx.inventory, ctx.class_name, ctx.name):
+            return None
         return "not_called"
     return None
 

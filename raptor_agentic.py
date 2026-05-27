@@ -1267,6 +1267,10 @@ Examples:
             str(script_root / "packages/static-analysis/scanner.py"),
             "--repo", str(repo_path),
             "--policy_groups", args.policy_groups,
+            # Write into the run dir's scan/ subdir (mirrors codeql/) so the
+            # scanner's coverage records (semgrep + cocci) are first-class run
+            # artifacts the coverage store reads — no transient dir, no copy.
+            "--out", str(out_dir / "scan"),
             *sandbox_passthrough,
         ]
         logger.info("Running: Scanning code with Semgrep")
@@ -1394,29 +1398,29 @@ Examples:
                 sys.exit(1)
 
         if rc in (0, 1):
-            scanner_out_dir = RaptorConfig.get_out_dir()
-            scan_dirs = sorted(scanner_out_dir.glob("scan_*"), key=lambda p: p.stat().st_mtime, reverse=True)
+            # The scanner now writes into the run dir's scan/ subdir (--out
+            # above), so its outputs — combined.sarif, scan_metrics.json, and
+            # the coverage records — are first-class run artifacts. No transient
+            # dir to discover, no copy.
+            actual_scan_dir = out_dir / "scan"
+            logger.info(f"Semgrep output in run dir: {actual_scan_dir}")
 
-            if scan_dirs:
-                actual_scan_dir = scan_dirs[0]
-                logger.info(f"Found Semgrep output at: {actual_scan_dir}")
+            scan_metrics_file = actual_scan_dir / "scan_metrics.json"
+            if scan_metrics_file.exists():
+                semgrep_metrics = load_json(scan_metrics_file)
 
-                scan_metrics_file = actual_scan_dir / "scan_metrics.json"
-                if scan_metrics_file.exists():
-                    semgrep_metrics = load_json(scan_metrics_file)
+                print("\n✓ Semgrep scan complete:")
+                print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
+                print(f"  - Findings: {semgrep_metrics.get('total_findings', 0)}")
+                print(f"  - Critical: {semgrep_metrics.get('findings_by_severity', {}).get('error', 0)}")
+                print(f"  - Warnings: {semgrep_metrics.get('findings_by_severity', {}).get('warning', 0)}")
 
-                    print("\n✓ Semgrep scan complete:")
-                    print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
-                    print(f"  - Findings: {semgrep_metrics.get('total_findings', 0)}")
-                    print(f"  - Critical: {semgrep_metrics.get('findings_by_severity', {}).get('error', 0)}")
-                    print(f"  - Warnings: {semgrep_metrics.get('findings_by_severity', {}).get('warning', 0)}")
-
-                sarif_file = actual_scan_dir / "combined.sarif"
-                if sarif_file.exists():
-                    all_sarif_files.append(sarif_file)
-                else:
-                    semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
-                    all_sarif_files.extend(semgrep_sarifs)
+            sarif_file = actual_scan_dir / "combined.sarif"
+            if sarif_file.exists():
+                all_sarif_files.append(sarif_file)
+            else:
+                semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
+                all_sarif_files.extend(semgrep_sarifs)
         elif rc != -1:  # -1 is timeout, already reported
             print(f"❌ Semgrep scan failed (exit code {rc})")
             if not run_codeql:

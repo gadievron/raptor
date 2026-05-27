@@ -6,6 +6,26 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+def _run_dir_size(d: Path) -> int:
+    # `Path.rglob` follows symlinks under Python <3.13 with no opt-out; a
+    # malicious or accidental symlink under the run dir (e.g.
+    # `out/run-X/incoming -> /var/log`) would walk into and stat-sum
+    # unrelated trees, double-counting bytes and (worse) reading from
+    # arbitrary file descriptors. Use os.walk(followlinks=False) so we stay
+    # inside the run dir tree on every supported Python version.
+    size = 0
+    for root, _dirs, files in os.walk(d, followlinks=False):
+        for fname in files:
+            fp = Path(root) / fname
+            try:
+                st = fp.stat()
+            except OSError:
+                continue
+            if not fp.is_symlink():
+                size += st.st_size
+    return size
+
+
 def plan_clean(project, keep=1) -> Dict[str, Any]:
     """Plan which runs to delete. Returns stats with directory paths.
 
@@ -28,23 +48,7 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
             stats["kept"].append(d.name)
 
         for d in to_delete:
-            # `Path.rglob` follows symlinks under Python <3.13 with no
-            # opt-out; a malicious or accidental symlink under the run
-            # dir (e.g. `out/run-X/incoming -> /var/log`) would walk
-            # into and stat-sum unrelated trees, double-counting bytes
-            # and (worse) reading from arbitrary file descriptors. Use
-            # os.walk(followlinks=False) so we stay inside the run dir
-            # tree on every supported Python version.
-            size = 0
-            for root, _dirs, files in os.walk(d, followlinks=False):
-                for fname in files:
-                    fp = Path(root) / fname
-                    try:
-                        st = fp.stat()
-                    except OSError:
-                        continue
-                    if not fp.is_symlink():
-                        size += st.st_size
+            size = _run_dir_size(d)
             stats["freed_bytes"] += size
             type_freed += size
             stats["delete_dirs"].append(d)
@@ -57,6 +61,45 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
             "freed_bytes": type_freed,
         }
 
+    return stats
+
+
+def plan_dedup(project) -> Dict[str, Any]:
+    """Lossless dedup plan: per command type, drop runs fully subsumed (same
+    files examined, no unique findings) by a surviving run, keeping the newest
+    representative. Same shape as :func:`plan_clean` so the clean machinery
+    (coverage snapshot-before-delete, containment-checked execute) is reused.
+
+    Unlike recency-based ``--keep N``, this is provably lossless: only
+    duplicates are removed, and the to-be-deleted run's coverage is snapshotted
+    into the durable store before deletion. Does not modify the filesystem.
+    """
+    from core.coverage.clean import dedup_runs
+
+    groups = project.get_run_dirs_by_type()
+    stats: Dict[str, Any] = {
+        "delete_dirs": [], "deleted": [], "kept": [], "freed_bytes": 0,
+        "by_type": {},
+    }
+    for cmd_type, dirs in groups.items():
+        droppable, _ = dedup_runs(dirs)
+        drop_set = set(droppable)
+        type_freed = 0
+        for d in dirs:
+            if d in drop_set:
+                size = _run_dir_size(d)
+                stats["freed_bytes"] += size
+                type_freed += size
+                stats["delete_dirs"].append(d)
+                stats["deleted"].append(d.name)
+            else:
+                stats["kept"].append(d.name)
+        stats["by_type"][cmd_type] = {
+            "total": len(dirs),
+            "keep": len(dirs) - len(droppable),
+            "delete": len(droppable),
+            "freed_bytes": type_freed,
+        }
     return stats
 
 

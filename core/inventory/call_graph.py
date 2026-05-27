@@ -141,12 +141,26 @@ class CallSite:
     call site invokes it directly. Populated by extractors that
     bother — empty list when the extractor hasn't been taught to
     record arguments (backwards-compatible default).
+
+    ``receiver_type`` is the DECLARED type of the call's receiver when
+    the chain is a length-2 instance call (``recv.m()``) and ``recv`` is
+    a simple identifier whose declared type is resolvable in scope — a
+    method parameter, a local variable, or a field of the enclosing
+    class. ``Handler h = ...; h.handle()`` → ``"Handler"``. The simple
+    (unqualified) type name is stored, generics/arrays stripped to their
+    base. Used by the reachability resolver's typed-dispatch resolution
+    (Tier 2) to bind ``recv.m()`` to the implementors in ``recv``'s
+    declared-type hierarchy instead of every same-name override. ``None``
+    when the receiver type isn't statically resolvable (chained call,
+    ``var`` without an explicit type, generic type variable, etc.) — the
+    resolver then falls back to the type-free CHA over-approximation.
     """
     line: int
     chain: List[str]
     caller: Optional[str] = None
     receiver_class: Optional[str] = None
     argument_identifiers: List[str] = field(default_factory=list)
+    receiver_type: Optional[str] = None
 
 
 @dataclass
@@ -269,6 +283,8 @@ class FileCallGraph:
                 entry["caller"] = intern(c.caller)
             if c.receiver_class is not None:
                 entry["receiver_class"] = intern(c.receiver_class)
+            if c.receiver_type is not None:
+                entry["receiver_type"] = intern(c.receiver_type)
             # argument_identifiers omitted from serialised form when
             # empty — the vast majority of call sites have no
             # identifier args (constant args, no args, etc.) and
@@ -327,6 +343,7 @@ class FileCallGraph:
                     argument_identifiers=list(
                         c.get("argument_identifiers") or []
                     ),
+                    receiver_type=c.get("receiver_type"),
                 )
                 for c in (d.get("calls") or [])
             ],
@@ -728,6 +745,15 @@ class _JsCallGraph:
     _CLASS_HERITAGE = "class_heritage"
     _METHOD_DEF = "method_definition"
     _THIS_NODE = "this"
+    _FORMAL_PARAMS = "formal_parameters"
+    _PARAM_NODES = ("required_parameter", "optional_parameter")
+    _PUBLIC_FIELD = "public_field_definition"
+    _TYPE_ANNOTATION = "type_annotation"
+    _TYPE_IDENT = "type_identifier"
+    _NESTED_TYPE_IDENT = "nested_type_identifier"
+    _GENERIC_TYPE = "generic_type"
+    _ARRAY_TYPE = "array_type"
+    _PROP_IDENT = "property_identifier"
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
@@ -737,6 +763,13 @@ class _JsCallGraph:
         # but mixin patterns mean class_heritage may carry a call
         # expression — we capture the surface identifier when present.
         self._class_stack: List[ClassDef] = []
+        # Typed-dispatch scope tracking (Tier 2). Only TS/TSX carry the
+        # type annotations these read; on plain JS they're always absent
+        # so receiver_type stays None (no effect). ``_field_types`` is a
+        # per-class stack; ``_local_types`` the current function's typed
+        # params + locals.
+        self._field_types: List[Dict[str, str]] = []
+        self._local_types: Dict[str, str] = {}
 
     def walk(self, node) -> None:
         """Recursive descent. We push/pop the enclosing-function
@@ -759,12 +792,22 @@ class _JsCallGraph:
                     self._CLASS_HERITAGE,
                 ))
                 if heritage is not None:
-                    # ``extends Foo`` → identifier child; ``extends
-                    # mixin(Base)`` → call_expression. Capture the
-                    # innermost identifier where present.
+                    # JS: ``extends Foo`` puts the identifier directly in
+                    # class_heritage. TS wraps bases in ``extends_clause`` /
+                    # ``implements_clause`` (type_identifier children), so a
+                    # TS ``class C extends B implements I`` was capturing NO
+                    # bases at all — CHA never saw the hierarchy, so virtual-
+                    # dispatch overrides in TS read not_called. Capture direct
+                    # identifiers AND the clause-wrapped extends/implements
+                    # type names.
+                    base_node_types = (self._IDENT_NODE, "type_identifier")
                     for hc in heritage.children:
-                        if hc.type == self._IDENT_NODE:
+                        if hc.type in base_node_types:
                             bases.append(hc.text.decode())
+                        elif hc.type in ("extends_clause", "implements_clause"):
+                            for gc in hc.children:
+                                if gc.type in base_node_types:
+                                    bases.append(gc.text.decode())
                 cdef = ClassDef(
                     name=name_node.text.decode(),
                     line=node.start_point[0] + 1,
@@ -773,11 +816,16 @@ class _JsCallGraph:
                 )
                 self.graph.classes.append(cdef)
                 self._class_stack.append(cdef)
+                # Pre-scan typed fields (TS) so a field used before its
+                # textual declaration still resolves (Tier 2).
+                body = self._first_child_of_type(node, (self._CLASS_BODY,))
+                self._field_types.append(self._collect_field_types(body))
                 try:
                     for child in node.children:
                         self.walk(child)
                 finally:
                     self._class_stack.pop()
+                    self._field_types.pop()
                 return
             # Anon class — recurse without push.
             for child in node.children:
@@ -786,6 +834,14 @@ class _JsCallGraph:
 
         if node.type in self._FUNC_NODES:
             name = self._function_name(node)
+            # Scope the function's typed params (TS) for the duration of
+            # its body, for both named and anonymous functions. A nested
+            # closure that references an outer-scope var sees no binding
+            # (receiver_type None → unresolved → FN-safe).
+            saved_locals = self._local_types
+            self._local_types = self._collect_param_types(
+                self._first_child_of_type(node, (self._FORMAL_PARAMS,)))
+            pushed = False
             if name is not None:
                 # Register method on the immediate class (only when
                 # this is a method_definition, not a nested function
@@ -797,14 +853,15 @@ class _JsCallGraph:
                         (name, node.start_point[0] + 1),
                     )
                 self._enclosing.append(name)
-                try:
-                    for child in node.children:
-                        self.walk(child)
-                finally:
+                pushed = True
+            try:
+                for child in node.children:
+                    self.walk(child)
+            finally:
+                if pushed:
                     self._enclosing.pop()
-                return
-            # Anonymous function / arrow — descend without a frame
-            # so calls inside attribute to the outer named scope.
+                self._local_types = saved_locals
+            return
 
         # Top-level shapes we care about. Calls come first because
         # an import_statement can't contain a call (and we never
@@ -816,6 +873,8 @@ class _JsCallGraph:
 
         if node.type in self._LEX_DECL_NODES:
             self._visit_lex_decl(node)
+            # Bind typed locals in source order (TS ``const x: T = …``).
+            self._local_types.update(self._collect_local_types(node))
             # Continue descent so calls / functions inside (e.g.
             # ``const x = foo()`` — the ``foo()`` call) are seen.
 
@@ -962,6 +1021,96 @@ class _JsCallGraph:
         ))
 
     # ------------------------------------------------------------------
+    # Typed-dispatch scope (Tier 2) — TS/TSX only (JS has no annotations)
+    # ------------------------------------------------------------------
+
+    def _type_name(self, type_node) -> Optional[str]:
+        """Simple type name from a TS type node, or None for predefined
+        types (``string``/``number``/``void``) and shapes without a single
+        nominal type (unions, literals). ``Array<Foo>`` → ``Array``,
+        ``NS.T`` → ``T``, ``Foo[]`` → ``Foo``."""
+        if type_node is None:
+            return None
+        t = type_node.type
+        if t == self._TYPE_IDENT:
+            return type_node.text.decode("utf-8", errors="replace") or None
+        if t == self._NESTED_TYPE_IDENT:
+            ident = self._last_child_of_type(type_node, (self._TYPE_IDENT,))
+            return ident.text.decode() if ident is not None else None
+        if t == self._GENERIC_TYPE:
+            base = self._first_child_of_type(
+                type_node, (self._TYPE_IDENT, self._NESTED_TYPE_IDENT))
+            return self._type_name(base)
+        if t == self._ARRAY_TYPE:
+            inner = self._first_child_of_type(
+                type_node, (self._TYPE_IDENT, self._NESTED_TYPE_IDENT,
+                            self._GENERIC_TYPE, self._ARRAY_TYPE))
+            return self._type_name(inner)
+        return None  # predefined_type / union_type / literal / etc.
+
+    def _annotation_type(self, ann_node) -> Optional[str]:
+        """Simple type name from a ``type_annotation`` (``: T``)."""
+        if ann_node is None:
+            return None
+        for c in ann_node.children:
+            if c.type != ":":
+                return self._type_name(c)
+        return None
+
+    def _collect_param_types(self, params_node) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        if params_node is None:
+            return out
+        for p in params_node.children:
+            if p.type not in self._PARAM_NODES:
+                continue
+            name = self._first_child_of_type(p, (self._IDENT_NODE,))
+            tn = self._annotation_type(
+                self._first_child_of_type(p, (self._TYPE_ANNOTATION,)))
+            if tn and name is not None:
+                out[name.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _collect_field_types(self, class_body) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        if class_body is None:
+            return out
+        for member in class_body.children:
+            if member.type != self._PUBLIC_FIELD:
+                continue
+            name = self._first_child_of_type(member, (self._PROP_IDENT,))
+            tn = self._annotation_type(
+                self._first_child_of_type(member, (self._TYPE_ANNOTATION,)))
+            if tn and name is not None:
+                out[name.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _collect_local_types(self, lex_decl_node) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        for d in lex_decl_node.children:
+            if d.type != self._VAR_DECLARATOR_NODE:
+                continue
+            name = self._first_child_of_type(d, (self._IDENT_NODE,))
+            tn = self._annotation_type(
+                self._first_child_of_type(d, (self._TYPE_ANNOTATION,)))
+            if tn and name is not None:
+                out[name.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _resolve_receiver_type(self, chain: List[str]) -> Optional[str]:
+        """Declared type of a length-2 ``recv.m()`` receiver — local/param
+        then enclosing-class field. None for this/super receivers, longer
+        chains, or untyped receivers."""
+        if len(chain) != 2 or chain[0] in ("this", "super"):
+            return None
+        recv = chain[0]
+        if recv in self._local_types:
+            return self._local_types[recv]
+        if self._field_types and recv in self._field_types[-1]:
+            return self._field_types[-1][recv]
+        return None
+
+    # ------------------------------------------------------------------
     # Calls + indirection
     # ------------------------------------------------------------------
 
@@ -1031,12 +1180,19 @@ class _JsCallGraph:
                 and self._enclosing
                 and len(chain) >= 2 and chain[0] == "this"):
             receiver_class = self._class_stack[-1].name
+        # Typed dispatch (Tier 2, TS/TSX): declared type of a simple
+        # ``recv.m()`` receiver when not a this-call.
+        receiver_type = (
+            self._resolve_receiver_type(chain)
+            if receiver_class is None else None
+        )
         self.graph.calls.append(CallSite(
             line=node.start_point[0] + 1,
             chain=chain,
             caller=caller,
             receiver_class=receiver_class,
             argument_identifiers=self._call_identifier_args(node),
+            receiver_type=receiver_type,
         ))
 
     # ------------------------------------------------------------------
@@ -1738,6 +1894,17 @@ class _JavaCallGraph:
     _ASTERISK = "asterisk"
     _STATIC = "static"
     _STRING_LIT = "string_literal"
+    _FORMAL_PARAMS = "formal_parameters"
+    _FORMAL_PARAM = "formal_parameter"
+    _SPREAD_PARAM = "spread_parameter"
+    _FIELD_DECL = "field_declaration"
+    _LOCAL_VAR_DECL = "local_variable_declaration"
+    _VAR_DECLARATOR = "variable_declarator"
+    _CLASS_BODY = "class_body"
+    _SCOPED_TYPE_IDENT = "scoped_type_identifier"
+    _GENERIC_TYPE = "generic_type"
+    _ARRAY_TYPE = "array_type"
+    _TYPE_NODES = (_TYPE_IDENT, _SCOPED_TYPE_IDENT, _GENERIC_TYPE, _ARRAY_TYPE)
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
@@ -1747,6 +1914,16 @@ class _JavaCallGraph:
         # ``this.method()`` calls dispatch on. Captured for
         # class-aware narrowing parity with Python.
         self._class_stack: List[ClassDef] = []
+        # Typed-dispatch scope tracking (Tier 2). ``_field_types`` is a
+        # stack parallel to ``_class_stack`` — field name → declared
+        # type for the enclosing class (pre-scanned on class entry so a
+        # field used before its textual declaration still resolves).
+        # ``_local_types`` is the current method's param + local-var
+        # name → declared type (reset per method, populated in source
+        # order). A length-2 ``recv.m()`` whose ``recv`` resolves here
+        # gets ``CallSite.receiver_type``.
+        self._field_types: List[Dict[str, str]] = []
+        self._local_types: Dict[str, str] = {}
 
     def walk(self, node) -> None:
         """Recursive descent. Push/pop enclosing-method stack so
@@ -1763,11 +1940,15 @@ class _JavaCallGraph:
                     (method_name, node.start_point[0] + 1),
                 )
             self._enclosing.append(method_name)
+            saved_locals = self._local_types
+            self._local_types = self._collect_param_types(
+                self._first_child_of_type(node, (self._FORMAL_PARAMS,)))
             try:
                 for child in node.children:
                     self.walk(child)
             finally:
                 self._enclosing.pop()
+                self._local_types = saved_locals
             return
 
         if node.type == self._CONSTRUCTOR_DECL:
@@ -1779,11 +1960,15 @@ class _JavaCallGraph:
                     (ctor_name, node.start_point[0] + 1),
                 )
             self._enclosing.append(ctor_name)
+            saved_locals = self._local_types
+            self._local_types = self._collect_param_types(
+                self._first_child_of_type(node, (self._FORMAL_PARAMS,)))
             try:
                 for child in node.children:
                     self.walk(child)
             finally:
                 self._enclosing.pop()
+                self._local_types = saved_locals
             return
 
         if node.type == self._IMPORT_DECL:
@@ -1867,13 +2052,31 @@ class _JavaCallGraph:
                 )
                 self.graph.classes.append(cdef)
                 self._class_stack.append(cdef)
+                # Pre-scan depth-1 field declarations so a field used in
+                # a method before its textual declaration still resolves.
+                field_types: Dict[str, str] = {}
+                body = self._first_child_of_type(node, (self._CLASS_BODY,))
+                if body is not None:
+                    for member in body.children:
+                        if member.type == self._FIELD_DECL:
+                            field_types.update(self._collect_decl_types(member))
+                self._field_types.append(field_types)
                 try:
                     for child in node.children:
                         self.walk(child)
                 finally:
                     self._class_stack.pop()
+                    self._field_types.pop()
                 return
             # Anon / malformed — recurse without class push
+            for child in node.children:
+                self.walk(child)
+            return
+
+        if node.type == self._LOCAL_VAR_DECL:
+            # Bind locals in source order; Java requires declare-before-use
+            # so a call earlier in the method correctly sees no binding.
+            self._local_types.update(self._collect_decl_types(node))
             for child in node.children:
                 self.walk(child)
             return
@@ -1933,6 +2136,76 @@ class _JavaCallGraph:
             return ""
 
     # ------------------------------------------------------------------
+    # Typed-dispatch scope (Tier 2)
+    # ------------------------------------------------------------------
+
+    def _type_name(self, type_node) -> Optional[str]:
+        """Simple (unqualified) type name from a Java type node, or None
+        for primitives / unresolvable shapes. Strips generics + array
+        dimensions to the base reference type (``List<Foo>`` → ``List``,
+        ``com.x.Handler`` → ``Handler``, ``Foo[]`` → ``Foo``)."""
+        if type_node is None:
+            return None
+        t = type_node.type
+        if t == self._TYPE_IDENT:
+            return type_node.text.decode("utf-8", errors="replace") or None
+        if t == self._SCOPED_TYPE_IDENT:
+            txt = type_node.text.decode("utf-8", errors="replace")
+            return (txt.rsplit(".", 1)[-1].strip() or None) if txt else None
+        if t in (self._GENERIC_TYPE, self._ARRAY_TYPE):
+            base = self._first_child_of_type(
+                type_node, (self._TYPE_IDENT, self._SCOPED_TYPE_IDENT,
+                            self._GENERIC_TYPE, self._ARRAY_TYPE),
+            )
+            return self._type_name(base)
+        return None  # primitives (integral_type/void_type/…) — no dispatch
+
+    def _collect_param_types(self, params_node) -> Dict[str, str]:
+        """``name → declared type`` for a ``formal_parameters`` node."""
+        out: Dict[str, str] = {}
+        if params_node is None:
+            return out
+        for p in params_node.children:
+            if p.type not in (self._FORMAL_PARAM, self._SPREAD_PARAM):
+                continue
+            type_node = self._first_child_of_type(p, self._TYPE_NODES)
+            name_node = self._first_child_of_type(p, (self._IDENT,))
+            tn = self._type_name(type_node)
+            if tn and name_node is not None:
+                out[name_node.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _collect_decl_types(self, decl_node) -> Dict[str, str]:
+        """``name → declared type`` for a ``field_declaration`` or
+        ``local_variable_declaration`` (one type, ≥1 declarators)."""
+        out: Dict[str, str] = {}
+        tn = self._type_name(
+            self._first_child_of_type(decl_node, self._TYPE_NODES))
+        if not tn:
+            return out
+        for c in decl_node.children:
+            if c.type != self._VAR_DECLARATOR:
+                continue
+            name_node = self._first_child_of_type(c, (self._IDENT,))
+            if name_node is not None:
+                out[name_node.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _resolve_receiver_type(self, chain: List[str]) -> Optional[str]:
+        """Declared type of a length-2 ``recv.m()`` receiver — a local /
+        param (looked up first) or a field of the enclosing class. None
+        when unresolvable (longer chain, ``this``/``super`` receiver,
+        untyped local)."""
+        if len(chain) != 2 or chain[0] in ("this", "super"):
+            return None
+        recv = chain[0]
+        if recv in self._local_types:
+            return self._local_types[recv]
+        if self._field_types and recv in self._field_types[-1]:
+            return self._field_types[-1][recv]
+        return None
+
+    # ------------------------------------------------------------------
     # Calls + indirection
     # ------------------------------------------------------------------
 
@@ -1980,11 +2253,20 @@ class _JavaCallGraph:
             elif len(chain) == 2 and chain[0] == "this":
                 receiver_class = self._class_stack[-1].name
 
+        # Typed dispatch (Tier 2): when the receiver is a simple
+        # identifier with a declared type in scope (param/local/field),
+        # record it so the resolver can bind to that type's hierarchy.
+        receiver_type = (
+            self._resolve_receiver_type(chain)
+            if receiver_class is None else None
+        )
+
         self.graph.calls.append(CallSite(
             line=node.start_point[0] + 1,
             chain=chain,
             caller=caller,
             receiver_class=receiver_class,
+            receiver_type=receiver_type,
         ))
 
     def _invocation_chain(self, node) -> Optional[List[str]]:
@@ -2920,6 +3202,16 @@ class _CSharpCallGraph:
     _RECORD_DECL = "record_declaration"
     _BASE_LIST = "base_list"
     _THIS = "this_expression"
+    _PARAMETER_LIST = "parameter_list"
+    _PARAMETER = "parameter"
+    _FIELD_DECL = "field_declaration"
+    _LOCAL_DECL_STMT = "local_declaration_statement"
+    _VAR_DECLARATION = "variable_declaration"
+    _VAR_DECLARATOR = "variable_declarator"
+    _DECLARATION_LIST = "declaration_list"
+    _GENERIC_NAME = "generic_name"
+    _NULLABLE_TYPE = "nullable_type"
+    _ARRAY_TYPE = "array_type"
 
     _REFLECT_METHODS = {
         "Invoke", "GetMethod", "CreateInstance",
@@ -2935,6 +3227,12 @@ class _CSharpCallGraph:
         # (one node carrying dotted form) OR nested ``namespace Foo
         # { namespace Bar { ... } }``. Track each segment separately.
         self._ns_stack: List[str] = []
+        # Typed-dispatch scope tracking (Tier 2), mirroring the Java
+        # walker: ``_field_types`` is a per-class stack (field name →
+        # declared type, pre-scanned on class entry); ``_local_types``
+        # is the current method's param + local name → declared type.
+        self._field_types: List[Dict[str, str]] = []
+        self._local_types: Dict[str, str] = {}
 
     def walk(self, node) -> None:
         if node.type == self._FILE_NAMESPACE_DECL:
@@ -3003,11 +3301,23 @@ class _CSharpCallGraph:
                 )
                 self.graph.classes.append(cdef)
                 self._class_stack.append(cdef)
+                # Pre-scan depth-1 fields so a field used before its
+                # textual declaration still resolves (Tier 2).
+                field_types: Dict[str, str] = {}
+                body = self._first_child_of_type(node, (self._DECLARATION_LIST,))
+                if body is not None:
+                    for member in body.children:
+                        if member.type == self._FIELD_DECL:
+                            vd = self._first_child_of_type(
+                                member, (self._VAR_DECLARATION,))
+                            field_types.update(self._collect_decl_types(vd))
+                self._field_types.append(field_types)
                 try:
                     for c in node.children:
                         self.walk(c)
                 finally:
                     self._class_stack.pop()
+                    self._field_types.pop()
                 return
             for c in node.children:
                 self.walk(c)
@@ -3021,11 +3331,23 @@ class _CSharpCallGraph:
                     (method_name, node.start_point[0] + 1),
                 )
             self._enclosing.append(method_name)
+            saved_locals = self._local_types
+            self._local_types = self._collect_param_types(
+                self._first_child_of_type(node, (self._PARAMETER_LIST,)))
             try:
                 for c in node.children:
                     self.walk(c)
             finally:
                 self._enclosing.pop()
+                self._local_types = saved_locals
+            return
+
+        if node.type == self._LOCAL_DECL_STMT:
+            # Bind locals in source order (C# requires declare-before-use).
+            vd = self._first_child_of_type(node, (self._VAR_DECLARATION,))
+            self._local_types.update(self._collect_decl_types(vd))
+            for c in node.children:
+                self.walk(c)
             return
 
         if node.type == self._USING:
@@ -3050,10 +3372,17 @@ class _CSharpCallGraph:
                         receiver_class = self._class_stack[-1].name
                     elif len(chain) == 2 and chain[0] == "this":
                         receiver_class = self._class_stack[-1].name
+                # Typed dispatch (Tier 2): declared type of a simple
+                # ``recv.m()`` receiver, when not a this/implicit call.
+                receiver_type = (
+                    self._resolve_receiver_type(chain)
+                    if receiver_class is None else None
+                )
                 self.graph.calls.append(
                     CallSite(
                         line=line, chain=chain, caller=caller,
                         receiver_class=receiver_class,
+                        receiver_type=receiver_type,
                     )
                 )
                 # Indirection flags
@@ -3081,6 +3410,77 @@ class _CSharpCallGraph:
 
         for c in node.children:
             self.walk(c)
+
+    # ------------------------------------------------------------------
+    # Typed-dispatch scope (Tier 2)
+    # ------------------------------------------------------------------
+
+    def _type_name(self, type_node) -> Optional[str]:
+        """Simple type name from a C# type node, or None for predefined
+        types (``int``/``string``/``void``) and unresolvable shapes.
+        ``List<Foo>`` → ``List``, ``Foo.Bar`` → ``Bar``, ``Foo?``/``Foo[]``
+        → ``Foo``."""
+        if type_node is None:
+            return None
+        t = type_node.type
+        if t == self._IDENT:
+            return type_node.text.decode("utf-8", errors="replace") or None
+        if t == self._QUALIFIED:
+            parts = self._qualified_parts(type_node)
+            return parts[-1] if parts else None
+        if t == self._GENERIC_NAME:
+            ident = self._first_child_of_type(type_node, (self._IDENT,))
+            return ident.text.decode() if ident is not None else None
+        if t in (self._NULLABLE_TYPE, self._ARRAY_TYPE):
+            inner = type_node.child_by_field_name("type") or (
+                type_node.children[0] if type_node.children else None)
+            return self._type_name(inner)
+        return None  # predefined_type / pointer / tuple / etc.
+
+    def _collect_param_types(self, params_node) -> Dict[str, str]:
+        """``name → declared type`` for a ``parameter_list`` node."""
+        out: Dict[str, str] = {}
+        if params_node is None:
+            return out
+        for p in params_node.children:
+            if p.type != self._PARAMETER:
+                continue
+            tn = self._type_name(p.child_by_field_name("type"))
+            name = p.child_by_field_name("name")
+            if tn and name is not None:
+                out[name.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _collect_decl_types(self, var_decl_node) -> Dict[str, str]:
+        """``name → declared type`` for a ``variable_declaration`` (the
+        node inside a field_declaration / local_declaration_statement)."""
+        out: Dict[str, str] = {}
+        if var_decl_node is None:
+            return out
+        tn = self._type_name(var_decl_node.child_by_field_name("type"))
+        if not tn:
+            return out
+        for c in var_decl_node.children:
+            if c.type != self._VAR_DECLARATOR:
+                continue
+            name = c.child_by_field_name("name") or self._first_child_of_type(
+                c, (self._IDENT,))
+            if name is not None:
+                out[name.text.decode("utf-8", errors="replace")] = tn
+        return out
+
+    def _resolve_receiver_type(self, chain: List[str]) -> Optional[str]:
+        """Declared type of a length-2 ``recv.m()`` receiver — a local /
+        param then an enclosing-class field. None for ``this``/``base``
+        receivers, longer chains, or untyped receivers."""
+        if len(chain) != 2 or chain[0] in ("this", "base"):
+            return None
+        recv = chain[0]
+        if recv in self._local_types:
+            return self._local_types[recv]
+        if self._field_types and recv in self._field_types[-1]:
+            return self._field_types[-1][recv]
+        return None
 
     def _handle_using(self, node) -> None:
         # ``using System.Text;`` -> binds last component to full name.

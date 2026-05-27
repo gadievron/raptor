@@ -224,9 +224,12 @@ def main():
 
     # clean
     p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n",
-                             usage="raptor project clean [<name>] [--keep <n>] [--dry-run] [--yes]", **_F)
+                             usage="raptor project clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]", **_F)
     p_clean.add_argument("name", nargs="?", help="Project name")
     p_clean.add_argument("--keep", type=int, default=1, metavar="<n>", help="Runs to keep per type (default: 1)")
+    p_clean.add_argument("--dedup", action="store_true",
+                         help="Coverage-aware: drop only runs fully subsumed by a survivor "
+                              "(provably lossless), ignoring --keep")
     p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
     p_clean.add_argument("--yes", action="store_true", help="Skip confirmation")
 
@@ -700,7 +703,7 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            _do_clean(p, args.keep, args.dry_run, args.yes)
+            _do_clean(p, args.keep, args.dry_run, args.yes, dedup=args.dedup)
 
         elif args.subcommand == "merge":
             name = args.name or _get_active_project()
@@ -1371,14 +1374,16 @@ def _do_correlate(project, json_out=False):
         print(f"\n  Coverage: {', '.join(cov_parts)} files")
 
 
-def _do_clean(project, keep, dry_run, yes):
-    """Clean old runs from a project."""
-    from .clean import plan_clean, execute_clean
+def _do_clean(project, keep, dry_run, yes, dedup=False):
+    """Clean old runs from a project. With ``dedup``, the deletion set is the
+    coverage-aware lossless subset (runs fully subsumed by a survivor) rather
+    than recency-based ``--keep N``."""
+    from .clean import plan_clean, plan_dedup, execute_clean
 
-    plan = plan_clean(project, keep=keep)
+    plan = plan_dedup(project) if dedup else plan_clean(project, keep=keep)
 
     if not plan["deleted"]:
-        print("Nothing to clean.")
+        print("No redundant runs to dedup." if dedup else "Nothing to clean.")
         return
 
     # Per-type breakdown
@@ -1392,6 +1397,19 @@ def _do_clean(project, keep, dry_run, yes):
     total_runs = len(plan['deleted']) + len(plan['kept'])
     print(f"\n  Total: {total_runs} runs → {len(plan['kept'])} runs ({freed_mb:.1f}MB to free)")
 
+    # Coverage-aware: classify what each removal costs (read-only).
+    consequences = _classify_clean_coverage(project, plan)
+    if consequences:
+        from core.coverage.clean import format_consequence
+        print()
+        for c in consequences:
+            print(format_consequence(c))
+        lost = [c for c in consequences if c.lossy]
+        if lost:
+            n = sum(len(c.findings_lost) for c in lost)
+            print(_red(f"  ⚠ {n} unique finding(s) across {len(lost)} run(s) "
+                       f"will become re-review gaps (found-then-lost)."))
+
     if dry_run:
         print("\n(dry run — no changes)")
         return
@@ -1401,11 +1419,61 @@ def _do_clean(project, keep, dry_run, yes):
             print("Cancelled.")
             return
 
+    # Snapshot coverage into the durable store BEFORE deleting (preserves
+    # clean/examined coverage; flips sole-source findings to found_then_lost).
+    _apply_clean_coverage(project, plan, consequences)
+
     # Execute the exact plan that was shown — no re-query
     execute_clean(plan)
     for name in plan["deleted"]:
         print(_red(f"  Deleted: {name}"))
     print(f"Done. {len(plan['deleted'])} runs deleted ({freed_mb:.1f}MB freed)")
+
+
+def _classify_clean_coverage(project, plan):
+    """Read-only: per to-be-deleted run, classify the coverage consequence
+    (duplicate / sole-clean / sole-source-findings). Best-effort — a coverage
+    hiccup must never block a clean. Returns [] when there's no inventory."""
+    try:
+        from core.json import load_json
+        from core.coverage.clean import classify_removal
+
+        checklist = load_json(Path(project.output_dir) / "checklist.json")
+        victims = plan.get("delete_dirs", [])
+        if not checklist or not victims:
+            return []
+        victim_set = set(victims)
+        survivors = [d for d in project.get_run_dirs(sweep=False)
+                     if d not in victim_set]
+        return [classify_removal(v, survivors) for v in victims]
+    except Exception:
+        return []
+
+
+def _apply_clean_coverage(project, plan, consequences):
+    """Snapshot to-be-deleted runs' coverage into the durable project
+    ``coverage.json`` (and flip sole-source findings to found_then_lost)
+    before the dirs are removed. Best-effort — never blocks the clean."""
+    if not consequences:
+        return
+    try:
+        from core.json import load_json
+        from core.coverage.store import CoverageStore, coverage_store_lock
+        from core.coverage.clean import apply_removal
+
+        checklist = load_json(Path(project.output_dir) / "checklist.json")
+        if not checklist:
+            return
+        cov_path = Path(project.output_dir) / "coverage.json"
+        # Lock the whole read-modify-write: a run completing mid-clean snapshots
+        # into the same coverage.json (see _snapshot_run_coverage).
+        with coverage_store_lock(cov_path):
+            store = CoverageStore(cov_path)
+            for victim, cons in zip(plan.get("delete_dirs", []), consequences):
+                apply_removal(store, victim, checklist, cons)
+            store.save()
+    except Exception as e:
+        print(_red(f"  (coverage snapshot skipped: {e})"))
 
 
 def _do_merge(project, merge_type, yes):
