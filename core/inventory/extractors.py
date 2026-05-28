@@ -982,6 +982,19 @@ class TreeSitterExtractor:
                 for b in child.children:
                     if b.type in ("identifier", "attribute"):
                         out.append(b.text.decode().split(".")[-1].strip())
+            elif child.type == "base_list":
+                # C#: ``: ControllerBase, IFoo<int>`` — record base/interface
+                # tail names so framework base classes (ControllerBase / Hub /
+                # BackgroundService) mark the class's methods as entries. Bases
+                # are identifier / qualified_name / generic_name children.
+                for b in child.children:
+                    if b.type in ("identifier", "qualified_name"):
+                        out.append(b.text.decode().split(".")[-1].strip())
+                    elif b.type == "generic_name":
+                        ident = next((g for g in b.children
+                                      if g.type == "identifier"), None)
+                        if ident is not None:
+                            out.append(ident.text.decode())
         return out
 
     @staticmethod

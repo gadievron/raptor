@@ -1638,6 +1638,31 @@ class TestCSharpCoverage:
         assert verdict("DeadHelper") == "not_called"  # private uncalled
         assert verdict("Lonely") == "not_called"    # public, non-stereotype class
 
+    def test_csharp_base_class_stereotypes(self, tmp_path):
+        # Base CLASSES (no attribute) the runtime dispatches into — captured
+        # from the C# base_list into class_attributes.
+        pytest.importorskip("tree_sitter_c_sharp")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "f.cs").write_text(
+            "public class BlogController : ControllerBase {\n"
+            "  public IActionResult Index() { return Ok(); }\n}\n"
+            "public class ChatHub : Hub {\n  public void Send(string m) {} }\n"
+            "public class Plain {\n  public void Dead() {} }\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("Index") == "reachable"   # : ControllerBase (no [attr])
+        assert verdict("Send") == "reachable"     # : Hub (SignalR)
+        assert verdict("Dead") == "not_called"    # plain class control
+
 
 class TestRubyCoverage:
     """End-to-end Ruby / Rails coverage. Ruby used the regex extractor; now
@@ -1755,6 +1780,39 @@ class TestPythonFrameworkConvention:
         assert verdict("get") == "reachable"           # DRF APIView verb handler
         assert verdict("get_queryset") == "reachable"   # Django ListView hook
         assert verdict("dead") == "not_called"          # non-CBV control
+
+    def test_python_convention_breadth(self, tmp_path):
+        # Beyond web CBVs: Django management commands, DRF serializers, forms,
+        # admin — methods dispatched by the framework with no in-project caller.
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "fw.py").write_text(
+            "from django.core.management.base import BaseCommand\n"
+            "class Command(BaseCommand):\n"
+            "    def handle(self, *a, **k): return self._work()\n"
+            "    def _work(self): return 1\n"
+            "from rest_framework import serializers\n"
+            "class UserSer(serializers.ModelSerializer):\n"
+            "    def validate_email(self, v): return v\n"
+            "class ContactForm(forms.Form):\n"
+            "    def clean_email(self): return 1\n"
+            "class Plain:\n"
+            "    def dead(self): return 9\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "fw")
+            return None
+
+        assert verdict("handle") == "reachable"          # Django mgmt command
+        assert verdict("_work") == "reachable"            # transitively via this
+        assert verdict("validate_email") == "reachable"   # DRF serializer hook
+        assert verdict("clean_email") == "reachable"      # Django form hook
+        assert verdict("dead") == "not_called"            # control
 
 
 class TestPhpCoverage:

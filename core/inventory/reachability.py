@@ -2570,6 +2570,11 @@ _CSHARP_METHOD_DISPATCH_ATTRS = frozenset({
 # caller.
 _CSHARP_CLASS_STEREOTYPE_ATTRS = frozenset({
     "ApiController", "Controller", "Route",
+    # Base CLASSES the runtime dispatches into (class_attributes captures
+    # both [Attributes] and `: Base` types): MVC/API controllers without an
+    # explicit attribute, SignalR hubs, and hosted/background services whose
+    # ExecuteAsync/StartAsync the host invokes with no in-project caller.
+    "ControllerBase", "Hub", "BackgroundService", "IHostedService",
 })
 
 
@@ -2670,12 +2675,24 @@ _PYTHON_FRAMEWORK_BASES = frozenset({
     # Django generic class-based views
     "View", "TemplateView", "RedirectView", "ListView", "DetailView",
     "CreateView", "UpdateView", "DeleteView", "FormView", "ArchiveIndexView",
-    # Django REST Framework
+    # Django REST Framework views
     "APIView", "GenericAPIView", "ViewSet", "ViewSetMixin", "GenericViewSet",
     "ModelViewSet", "ReadOnlyModelViewSet", "ListAPIView", "RetrieveAPIView",
     "CreateAPIView", "UpdateAPIView", "DestroyAPIView", "ListCreateAPIView",
     "RetrieveUpdateAPIView", "RetrieveDestroyAPIView",
     "RetrieveUpdateDestroyAPIView",
+    # DRF serializers / permissions / auth (validate_*/create/update,
+    # has_permission, authenticate are framework-dispatched by convention)
+    "Serializer", "ModelSerializer", "ListSerializer",
+    "HyperlinkedModelSerializer", "BasePermission", "BaseAuthentication",
+    # Django management commands (the runner invokes handle()/add_arguments)
+    "BaseCommand", "AppCommand", "LabelCommand",
+    # Django forms (clean_*/clean dispatched on validation)
+    "Form", "ModelForm", "BaseForm",
+    # Django admin (action / display callables) + middleware
+    "ModelAdmin", "TabularInline", "StackedInline", "MiddlewareMixin",
+    # Celery class-based tasks (run() invoked by the worker)
+    "Task",
     # Flask / Flask-RESTful
     "MethodView", "Resource",
 })
