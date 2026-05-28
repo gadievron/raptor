@@ -1,0 +1,387 @@
+"""Walk a CVEfixes metadata DB: drive each fix pair through CodeQL, harvest yielders.
+
+For each CWE-filtered, CodeQL-language fix pair (from :mod:`cvefix_loader`):
+fetch the repo at fix+parent (shallow, by-SHA), build before/after CodeQL DBs,
+run the CWE-appropriate query, and record the before/after finding counts.
+
+Designed for a long unattended campaign over thousands of pairs:
+  * **Resumable** — results persist to a SQLite (`walk_results`, keyed by
+    fix_hash); already-processed pairs are skipped on restart.
+  * **Disk-safe** — each pair's clone + DBs are removed after measuring; a
+    yielder is cheaply rebuilt later from its recorded repo + hashes.
+  * **Bounded** — per-step timeouts; failures are recorded as a status, never
+    fatal to the walk.
+
+A pair with ``before_count > 0`` is a real CVE CodeQL flags (a TP); additionally
+``after_count > 0`` is a candidate missing-sanitizer FP — the trust sound-tier's
+input. The git/CodeQL steps are module-level functions so tests stub them.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sqlite3
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Sequence
+
+from core.config import RaptorConfig
+from core.dataflow.cvefix_loader import CveFixPair, INJECTION_CWES, load_pairs
+
+DEFAULT_CODEQL_BIN = "codeql"
+
+# Package repos autobuild may fetch from. A build needing other repos fails the
+# egress allowlist and falls back to buildless (graceful) — see _run_autobuild_sandboxed.
+_MAVEN_PROXY_HOSTS = [
+    "repo.maven.apache.org", "repo1.maven.org", "repo.maven.org",
+    "central.sonatype.com", "oss.sonatype.org", "maven.google.com", "dl.google.com",
+]
+
+# codeql extractor language -> (queries pack, {cwe: pack-relative query path}).
+# Ruby uses a different path scheme (lowercase queries/security/cwe-0XX) and query
+# names (ReflectedXSS, not ReflectedXss; PathInjection, not TaintedPath).
+_QUERIES = {
+    "python": ("python-queries", {
+        "CWE-89": "Security/CWE-089/SqlInjection.ql",
+        "CWE-78": "Security/CWE-078/CommandInjection.ql",
+        "CWE-79": "Security/CWE-079/ReflectedXss.ql",
+        "CWE-22": "Security/CWE-022/PathInjection.ql",
+    }),
+    "javascript": ("javascript-queries", {
+        "CWE-89": "Security/CWE-089/SqlInjection.ql",
+        "CWE-78": "Security/CWE-078/CommandInjection.ql",
+        "CWE-79": "Security/CWE-079/ReflectedXss.ql",
+        "CWE-22": "Security/CWE-022/TaintedPath.ql",
+    }),
+    "ruby": ("ruby-queries", {
+        "CWE-89": "queries/security/cwe-089/SqlInjection.ql",
+        "CWE-78": "queries/security/cwe-078/CommandInjection.ql",
+        "CWE-79": "queries/security/cwe-079/ReflectedXSS.ql",
+        "CWE-22": "queries/security/cwe-022/PathInjection.ql",
+    }),
+    "java": ("java-queries", {
+        "CWE-89": "Security/CWE/CWE-089/SqlTainted.ql",
+        "CWE-78": "Security/CWE/CWE-078/ExecTainted.ql",
+        "CWE-79": "Security/CWE/CWE-079/XSS.ql",
+        "CWE-22": "Security/CWE/CWE-022/TaintedPath.ql",
+    }),
+}
+
+# CVEfixes repo_language -> codeql extractor language. TypeScript extracts with
+# the javascript extractor; Ruby/Java are their own; else python/js.
+_LANG_MAP = {"Python": "python", "Ruby": "ruby", "Java": "java"}
+
+# Compiled languages we extract build-free via `--build-mode=none`. Source-
+# extracted langs (python/js/ruby) take no build mode. Java's buildless recall is
+# weaker (no type resolution → Spring/interface flows missed); the build-promote
+# pass recovers those `before==0` misses with a real build.
+_BUILDLESS_COMPILED = {"java"}
+
+
+def _codeql_lang(repo_language: str) -> str:
+    return _LANG_MAP.get(repo_language, "javascript")
+
+
+def query_for(repo_language: str, cwe: str) -> Optional[str]:
+    pack, table = _QUERIES[_codeql_lang(repo_language)]
+    sub = table.get(cwe)
+    return None if sub is None else f"codeql/{pack}:{sub}"
+
+
+@dataclass(frozen=True)
+class WalkResult:
+    fix_hash: str
+    status: str               # ok | fetch_fail | build_fail | analyze_fail | no_query
+    before_count: int = -1
+    after_count: int = -1
+
+    @property
+    def is_yield(self) -> bool:
+        return self.status == "ok" and self.before_count > 0
+
+    @property
+    def is_fp_candidate(self) -> bool:
+        return self.status == "ok" and self.after_count > 0
+
+
+# --- subprocess steps (module-level so tests can stub them) ---
+
+def _run(cmd, timeout) -> bool:
+    # get_safe_env() strips env vars tools may shell-evaluate (untrusted-repo
+    # hygiene per CLAUDE.md); buildless extraction + git read-only ops only.
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           check=False, env=RaptorConfig.get_safe_env())
+        return r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _toolchain_readable_paths(codeql_bin: str) -> list:
+    """Paths the sandboxed autobuild must read/exec (codeql install, system
+    toolchain, CA certs) on top of the work area — restrict_reads denies $HOME."""
+    real = os.path.realpath(shutil.which(codeql_bin) or codeql_bin)
+    return [
+        str(Path(real).resolve().parent), str(Path.home() / ".local"),
+        "/usr", "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates",
+    ]
+
+
+def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str, timeout: int) -> bool:
+    """Run `codeql database create --build-mode=autobuild` — which EXECUTES the
+    untrusted project build (mvn runs pom plugins = arbitrary code) — under the
+    untrusted sandbox. FAIL CLOSED: refuse rather than run an untrusted build
+    unsandboxed. Landlock restricts writes to the work area, reads exclude host
+    credentials, egress is allowlisted to package repos; maven's local repo is
+    redirected into the work area so the build never writes to host ~/.m2.
+    """
+    try:
+        from core.sandbox import check_landlock_available, run_untrusted_networked
+    except ImportError as exc:
+        raise RuntimeError(
+            "core.sandbox unavailable — refusing to autobuild an untrusted repo") from exc
+    if not check_landlock_available():
+        raise RuntimeError(
+            "Landlock unavailable — refusing to autobuild an untrusted repo unsandboxed")
+    env = RaptorConfig.get_safe_env(preserve_proxy=True)
+    env["MAVEN_OPTS"] = f"-Dmaven.repo.local={work_root / '.m2'}"
+    try:
+        proc = run_untrusted_networked(
+            cmd, target=str(work_root), output=str(work_root),
+            proxy_hosts=_MAVEN_PROXY_HOSTS,
+            readable_paths=_toolchain_readable_paths(codeql_bin),
+            env=env, timeout=timeout,
+        )
+        return proc.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    if not _run(["git", "init", "-q", str(dest)], 30):
+        return False
+    if not _run(["git", "-C", str(dest), "remote", "add", "origin", repo_url], 30):
+        return False
+    # --depth 2 brings the fix + its single parent.
+    return _run(["git", "-C", str(dest), "fetch", "-q", "--depth", "2", "origin", fix_hash], timeout)
+
+
+def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, timeout: int,
+              build_mode: Optional[str] = None) -> bool:
+    if not _run(["git", "-C", str(src), "checkout", "-q", commit], 60):
+        return False
+    cmd = [codeql_bin, "database", "create", str(db), f"--language={lang}",
+           f"--source-root={src}", "--overwrite"]
+    if build_mode:
+        cmd.append(f"--build-mode={build_mode}")
+    # autobuild executes untrusted build scripts → must be sandboxed (fail-closed).
+    # Buildless/source extraction runs no repo code → plain spawn (get_safe_env).
+    if build_mode == "autobuild":
+        return _run_autobuild_sandboxed(cmd, work_root=db.parent, codeql_bin=codeql_bin,
+                                        timeout=timeout)
+    return _run(cmd, timeout)
+
+
+def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int) -> Optional[int]:
+    if not _run([codeql_bin, "database", "analyze", str(db), query,
+                 "--format=sarif-latest", f"--output={out}"], timeout):
+        return None
+    try:
+        import json
+        data = json.loads(out.read_text())
+        return sum(len(r.get("results", [])) for r in data.get("runs", []))
+    except (OSError, ValueError):
+        return None
+
+
+def process_pair(
+    pair: CveFixPair, *, work_dir: Path, codeql_bin: str = DEFAULT_CODEQL_BIN,
+    fetch_timeout: int = 150, build_timeout: int = 240, analyze_timeout: int = 180,
+    build_mode: Optional[str] = None,
+) -> WalkResult:
+    """Fetch, build before/after DBs, run the CWE query; clean up; return counts.
+
+    ``build_mode`` overrides the CodeQL extraction mode; when None it is auto-
+    picked per language (``none`` for buildless-compiled langs like Java, no flag
+    for source-extracted langs). The build-promote pass passes ``autobuild``.
+    """
+    query = query_for(pair.repo_language, pair.cwe)
+    if query is None:
+        return WalkResult(pair.fix_hash, "no_query")
+    lang = _codeql_lang(pair.repo_language)
+    mode = build_mode or ("none" if lang in _BUILDLESS_COMPILED else None)
+    repo = work_dir / "repo"
+    db_a, db_b = work_dir / "db-a", work_dir / "db-b"
+    sa, sb = work_dir / "a.sarif", work_dir / "b.sarif"
+    try:
+        if not _fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
+            return WalkResult(pair.fix_hash, "fetch_fail")
+        if not _build_db(repo, pair.fix_hash, db_a, lang, codeql_bin, build_timeout, mode):
+            return WalkResult(pair.fix_hash, "build_fail")
+        if not _build_db(repo, pair.parent_hash, db_b, lang, codeql_bin, build_timeout, mode):
+            return WalkResult(pair.fix_hash, "build_fail")
+        after = _count_query(db_a, query, sa, codeql_bin, analyze_timeout)
+        before = _count_query(db_b, query, sb, codeql_bin, analyze_timeout)
+        if after is None or before is None:
+            return WalkResult(pair.fix_hash, "analyze_fail")
+        return WalkResult(pair.fix_hash, "ok", before_count=before, after_count=after)
+    finally:
+        for p in (repo, db_a, db_b, sa, sb):
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+
+
+# --- resumable results store ---
+
+# Keyed by (fix_hash, cwe): the before/after result depends on the commit AND the
+# CWE-specific query, so one commit that fixes two CWEs yields two distinct
+# results. (Keying on fix_hash alone collapses them.) Same fix_hash+cwe under
+# different CVE ids is genuinely redundant — same DB, same query — so deduped.
+_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS walk_results ("
+    "fix_hash TEXT, cve_id TEXT, cwe TEXT, repo_language TEXT,"
+    "repo_url TEXT, parent_hash TEXT, status TEXT, before_count INT,"
+    "after_count INT, ts REAL, PRIMARY KEY (fix_hash, cwe))"
+)
+
+
+def _processed(con: sqlite3.Connection) -> set:
+    return {(r[0], r[1]) for r in con.execute("SELECT fix_hash, cwe FROM walk_results")}
+
+
+def _record(con: sqlite3.Connection, pair: CveFixPair, res: WalkResult) -> None:
+    con.execute(
+        "INSERT OR REPLACE INTO walk_results VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (res.fix_hash, pair.cve_id, pair.cwe, pair.repo_language, pair.repo_url,
+         pair.parent_hash, res.status, res.before_count, res.after_count, time.time()),
+    )
+    con.commit()
+
+
+def walk(
+    db_path: Path, results_db: Path, *,
+    cwes: Sequence[str] = INJECTION_CWES,
+    languages=("Python", "JavaScript", "TypeScript"),
+    work_dir: Path = Path("/data/corpus/clones/walk"),
+    codeql_bin: str = DEFAULT_CODEQL_BIN,
+    limit: Optional[int] = None,
+    log=print,
+) -> dict:
+    """Walk the metadata DB's pairs through CodeQL, recording results (resumable)."""
+    pairs = load_pairs(db_path, cwes=cwes, languages=languages)
+    con = sqlite3.connect(str(results_db))
+    con.execute(_SCHEMA)
+    done = _processed(con)
+    todo = [p for p in pairs if (p.fix_hash, p.cwe) not in done]
+    log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for pair in todo:
+        if limit is not None and n >= limit:
+            break
+        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin)
+        _record(con, pair, res)
+        n += 1
+        tag = "YIELD" if res.is_yield else res.status
+        log(f"  [{n}/{len(todo)}] {pair.cve_id} {pair.cwe} {pair.repo_language} "
+            f"{pair.repo_url.split('github.com/')[-1]}: {tag} "
+            f"before={res.before_count} after={res.after_count}")
+    summary = dict(con.execute(
+        "SELECT 'total', count(*) FROM walk_results UNION ALL "
+        "SELECT 'yield', count(*) FROM walk_results WHERE status='ok' AND before_count>0 UNION ALL "
+        "SELECT 'fp_candidate', count(*) FROM walk_results WHERE status='ok' AND after_count>0"
+    ).fetchall())
+    con.close()
+    return summary
+
+
+def promote_misses(
+    results_db: Path, *,
+    work_dir: Path = Path("/data/corpus/clones/promote"),
+    codeql_bin: str = DEFAULT_CODEQL_BIN,
+    promote_languages: Sequence[str] = ("Java",),
+    build_timeout: int = 600,
+    limit: Optional[int] = None,
+    log=print,
+) -> dict:
+    """Build-promote buildless misses (the second half of the Java plan).
+
+    For ``ok`` rows in ``promote_languages`` whose buildless run flagged nothing
+    (``before_count == 0`` — a likely type-resolution miss, e.g. Spring/interface
+    dispatch), retry with a real ``--build-mode=autobuild``. Update the row ONLY
+    if the build recovers a yielder (``before_count > 0``, status ``ok_built``);
+    autobuild failures or still-0 keep the buildless row, so the result is never
+    worse than buildless-only. Targeted at exactly the cases a build can help, so
+    the expensive autobuilds are bounded to the buildless false-negative set.
+    """
+    con = sqlite3.connect(str(results_db))
+    con.execute(_SCHEMA)
+    ph = ",".join("?" * len(promote_languages))
+    rows = con.execute(
+        f"SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash "
+        f"FROM walk_results WHERE status='ok' AND before_count=0 "
+        f"AND repo_language IN ({ph}) ORDER BY cve_id", tuple(promote_languages)
+    ).fetchall()
+    log(f"promote: {len(rows)} buildless-miss rows in {tuple(promote_languages)}")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    promoted = n = 0
+    for fix_hash, cve_id, cwe, lang, repo_url, parent_hash in rows:
+        if limit is not None and n >= limit:
+            break
+        n += 1
+        pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
+        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                           build_timeout=build_timeout, build_mode="autobuild")
+        if res.status == "ok" and res.before_count > 0:
+            con.execute(
+                "UPDATE walk_results SET status=?, before_count=?, after_count=?, ts=? "
+                "WHERE fix_hash=? AND cwe=?",
+                ("ok_built", res.before_count, res.after_count, time.time(), fix_hash, cwe))
+            con.commit()
+            promoted += 1
+            log(f"  [{n}/{len(rows)}] PROMOTED {cve_id} {cwe} "
+                f"{repo_url.split('github.com/')[-1]}: before={res.before_count} "
+                f"after={res.after_count}")
+        else:
+            log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
+                f"{res.status} before={res.before_count}")
+    con.close()
+    return {"candidates": len(rows), "promoted": promoted}
+
+
+def main(argv=None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Walk CVEfixes pairs through CodeQL, harvest yielders.")
+    ap.add_argument("--db", type=Path, default=Path("/data/corpus/cvefixes-meta.db"))
+    ap.add_argument("--results", type=Path, default=Path("/data/corpus/walk-results.db"))
+    ap.add_argument("--work-dir", type=Path, default=Path("/data/corpus/clones/walk"))
+    ap.add_argument("--languages", nargs="+", default=["Python", "JavaScript", "TypeScript"])
+    ap.add_argument("--cwes", nargs="+", default=list(INJECTION_CWES))
+    ap.add_argument("--codeql-bin", default=DEFAULT_CODEQL_BIN)
+    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--promote", action="store_true",
+                    help="build-promote buildless misses (autobuild) instead of walking")
+    ap.add_argument("--promote-languages", nargs="+", default=["Java"])
+    a = ap.parse_args(argv)
+    log = lambda m: print(m, flush=True)  # noqa: E731
+    if a.promote:
+        summary = promote_misses(
+            a.results, work_dir=a.work_dir, codeql_bin=a.codeql_bin,
+            promote_languages=a.promote_languages, limit=a.limit, log=log,
+        )
+        print(f"=== PROMOTE SUMMARY {summary} ===", flush=True)
+        return
+    summary = walk(
+        a.db, a.results, cwes=a.cwes, languages=a.languages,
+        work_dir=a.work_dir, codeql_bin=a.codeql_bin, limit=a.limit, log=log,
+    )
+    print(f"=== SUMMARY {summary} ===", flush=True)
+
+
+if __name__ == "__main__":
+    main()

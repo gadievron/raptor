@@ -35,11 +35,58 @@ from core.dataflow.codeql_augmented_run import (
     analyze,
 )
 
-# sink-class -> (customizations module, module name exposing Source/Sink/Sanitizer)
+# sink-class -> (customizations module, module name exposing Source/Sink/Sanitizer).
+# Python: each module imports Concepts/RemoteFlowSources/BarrierGuards and
+# defines its concrete Source/Sink subclasses in-file, so importing the
+# customizations module alone registers sources + sinks for the taint flow.
 _CUSTOMIZATIONS = {
     "cmdi": ("semmle.python.security.dataflow.CommandInjectionCustomizations", "CommandInjection"),
     "sqli": ("semmle.python.security.dataflow.SqlInjectionCustomizations", "SqlInjection"),
     "pathtrav": ("semmle.python.security.dataflow.PathInjectionCustomizations", "PathInjection"),
+    "xss": ("semmle.python.security.dataflow.ReflectedXSSCustomizations", "ReflectedXss"),
+}
+
+# JavaScript/TypeScript equivalents. JS uses the legacy TaintTracking::Configuration
+# class API (the new ConfigSig/BarrierGuard the Python dialect uses is unused in the
+# JS libs), so barriers go through `isSanitizerGuard` + a SanitizerGuardNode subclass
+# rather than a flat `proposedGuard/3` predicate — a different proposer contract.
+_JS_CUSTOMIZATIONS = {
+    "cmdi": ("semmle.javascript.security.dataflow.CommandInjectionCustomizations", "CommandInjection"),
+    "sqli": ("semmle.javascript.security.dataflow.SqlInjectionCustomizations", "SqlInjection"),
+    "pathtrav": ("semmle.javascript.security.dataflow.TaintedPathCustomizations", "TaintedPath"),
+    "xss": ("semmle.javascript.security.dataflow.ReflectedXssCustomizations", "ReflectedXss"),
+}
+
+# Ruby. Like Python it uses the new ConfigSig/BarrierGuard API (the legacy
+# Configuration class is deprecated), so the Ruby dialect mirrors the Python
+# template — but with Ruby imports and a Ruby guard signature
+# (proposedGuard(CfgNodes::AstCfgNode g, CfgNode node, boolean branch)). Source/
+# Sink/Sanitizer are pulled in unqualified via `import <file>::<module>`.
+_RB_CUSTOMIZATIONS = {
+    "cmdi": ("codeql.ruby.security.CommandInjectionCustomizations", "CommandInjection"),
+    "sqli": ("codeql.ruby.security.SqlInjectionCustomizations", "SqlInjection"),
+    "pathtrav": ("codeql.ruby.security.PathInjectionCustomizations", "PathInjection"),
+    "xss": ("codeql.ruby.security.XSS", "ReflectedXss"),
+}
+
+# Java. New ConfigSig/BarrierGuard API like Python/Ruby, guard sig uses a
+# boolean branch (proposedGuard(Guard g, Expr e, boolean branch)) — so the
+# dialect is Python-shaped with Java imports. Unlike the others Java has no
+# uniform <X>::Source/Sink module: the source is always RemoteFlowSource and the
+# sink is a per-CWE class/predicate. Map: sink_class -> (sink import, isSink body).
+_JAVA_SINKS = {
+    "sqli": ("semmle.code.java.security.QueryInjection", "n instanceof QueryInjectionSink"),
+    "cmdi": ("semmle.code.java.security.CommandLineQuery", "n instanceof CommandInjectionSink"),
+    "xss": ("semmle.code.java.security.XSS", "n instanceof XssSink"),
+    "pathtrav": ("semmle.code.java.dataflow.ExternalFlow", 'sinkNode(n, "path-injection")'),
+}
+
+# language -> the CodeQL standard-library pack the assembled query depends on.
+_LANG_PACK = {
+    "python": "codeql/python-all",
+    "javascript": "codeql/javascript-all",
+    "ruby": "codeql/ruby-all",
+    "java": "codeql/java-all",
 }
 
 
@@ -47,10 +94,11 @@ _CUSTOMIZATIONS = {
 class BarrierProposal:
     """Context handed to the proposer for one flagged FP."""
 
-    sink_class: str          # "cmdi" | "sqli" | "pathtrav"
+    sink_class: str          # "cmdi" | "sqli" | "pathtrav" | "xss"
     finding_id: str
     sink_snippet: str
     source_context: str      # the function/path source the LLM reasons over
+    language: str = "python"  # "python" | "javascript" (selects the QL dialect)
 
 
 # proposer(proposal, prior_error) -> a CodeQL guardChecks predicate named
@@ -82,9 +130,28 @@ class SynthResult:
         return self.suppressed_fp and self.preserved_tp
 
 
-def assemble_barrier_query(proposed_guard: str, *, sink_class: str, query_id: str) -> str:
-    """Wrap a proposed ``proposedGuard`` predicate into a runnable CWE-class
-    taint query (the validated §9 template)."""
+def assemble_barrier_query(
+    proposed_guard: str, *, sink_class: str, query_id: str, language: str = "python",
+) -> str:
+    """Wrap a proposed barrier into a runnable CWE-class taint query.
+
+    ``language`` selects the QL dialect: ``python`` uses the new
+    ``ConfigSig``/``BarrierGuard<proposedGuard/3>`` API (§9 template); ``javascript``
+    uses the legacy ``TaintTracking::Configuration`` + a ``ProposedGuard``
+    SanitizerGuardNode subclass (the only API the JS libs expose)."""
+    if language == "python":
+        return _assemble_python(proposed_guard, sink_class, query_id)
+    if language == "javascript":
+        return _assemble_javascript(proposed_guard, sink_class, query_id)
+    if language == "ruby":
+        return _assemble_ruby(proposed_guard, sink_class, query_id)
+    if language == "java":
+        return _assemble_java(proposed_guard, sink_class, query_id)
+    raise ValueError(
+        f"unknown language {language!r}; known: {sorted(_LANG_PACK)}")
+
+
+def _assemble_python(proposed_guard: str, sink_class: str, query_id: str) -> str:
     if sink_class not in _CUSTOMIZATIONS:
         raise ValueError(f"unknown sink_class {sink_class!r}; "
                          f"known: {sorted(_CUSTOMIZATIONS)}")
@@ -121,6 +188,118 @@ select sink, "synthesized-barrier {sink_class}"
 """
 
 
+def _assemble_javascript(proposed_guard: str, sink_class: str, query_id: str) -> str:
+    if sink_class not in _JS_CUSTOMIZATIONS:
+        raise ValueError(f"unknown sink_class {sink_class!r}; "
+                         f"known: {sorted(_JS_CUSTOMIZATIONS)}")
+    if "ProposedGuard" not in proposed_guard:
+        raise ValueError(
+            "proposer must define a `ProposedGuard` SanitizerGuardNode subclass")
+    module_import, module_name = _JS_CUSTOMIZATIONS[sink_class]
+    return f"""/**
+ * @name Synthesized barrier ({sink_class}) [js]
+ * @kind problem
+ * @problem.severity error
+ * @id {query_id}
+ */
+import javascript
+import {module_import}::{module_name}
+
+{proposed_guard.strip()}
+
+class SynthConfig extends TaintTracking::Configuration {{
+  SynthConfig() {{ this = "raptor-synth-{sink_class}" }}
+  override predicate isSource(DataFlow::Node n) {{ n instanceof Source }}
+  override predicate isSink(DataFlow::Node n) {{ n instanceof Sink }}
+  override predicate isSanitizer(DataFlow::Node n) {{
+    super.isSanitizer(n) or n instanceof Sanitizer
+  }}
+  override predicate isSanitizerGuard(TaintTracking::SanitizerGuardNode g) {{
+    g instanceof ProposedGuard
+  }}
+}}
+
+from SynthConfig cfg, DataFlow::Node source, DataFlow::Node sink
+where cfg.hasFlow(source, sink)
+select sink, "synthesized-barrier {sink_class} [js]"
+"""
+
+
+def _assemble_ruby(proposed_guard: str, sink_class: str, query_id: str) -> str:
+    if sink_class not in _RB_CUSTOMIZATIONS:
+        raise ValueError(f"unknown sink_class {sink_class!r}; "
+                         f"known: {sorted(_RB_CUSTOMIZATIONS)}")
+    if "proposedGuard" not in proposed_guard:
+        raise ValueError("proposer must define a `proposedGuard` predicate")
+    module_import, module_name = _RB_CUSTOMIZATIONS[sink_class]
+    return f"""/**
+ * @name Synthesized barrier ({sink_class}) [rb]
+ * @kind problem
+ * @problem.severity error
+ * @id {query_id}
+ */
+import codeql.ruby.DataFlow
+import codeql.ruby.TaintTracking
+import codeql.ruby.CFG
+import {module_import}::{module_name}
+
+{proposed_guard.strip()}
+
+module Cfg implements DataFlow::ConfigSig {{
+  predicate isSource(DataFlow::Node n) {{ n instanceof Source }}
+  predicate isSink(DataFlow::Node n) {{ n instanceof Sink }}
+  predicate isBarrier(DataFlow::Node n) {{
+    n instanceof Sanitizer or
+    n = DataFlow::BarrierGuard<proposedGuard/3>::getABarrierNode()
+  }}
+}}
+
+module Flow = TaintTracking::Global<Cfg>;
+
+from DataFlow::Node source, DataFlow::Node sink
+where Flow::flow(source, sink)
+select sink, "synthesized-barrier {sink_class} [rb]"
+"""
+
+
+def _assemble_java(proposed_guard: str, sink_class: str, query_id: str) -> str:
+    if sink_class not in _JAVA_SINKS:
+        raise ValueError(f"unknown sink_class {sink_class!r}; "
+                         f"known: {sorted(_JAVA_SINKS)}")
+    if "proposedGuard" not in proposed_guard:
+        raise ValueError("proposer must define a `proposedGuard` predicate")
+    sink_import, sink_expr = _JAVA_SINKS[sink_class]
+    return f"""/**
+ * @name Synthesized barrier ({sink_class}) [java]
+ * @kind problem
+ * @problem.severity error
+ * @id {query_id}
+ */
+import java
+import semmle.code.java.dataflow.DataFlow
+import semmle.code.java.dataflow.TaintTracking
+import semmle.code.java.dataflow.FlowSources
+import semmle.code.java.controlflow.Guards
+import {sink_import}
+
+{proposed_guard.strip()}
+
+module Cfg implements DataFlow::ConfigSig {{
+  predicate isSource(DataFlow::Node n) {{ n instanceof RemoteFlowSource }}
+  predicate isSink(DataFlow::Node n) {{ {sink_expr} }}
+  predicate isBarrier(DataFlow::Node n) {{
+    n = DataFlow::BarrierGuard<proposedGuard/3>::getABarrierNode()
+  }}
+}}
+
+module Flow = TaintTracking::Global<Cfg>;
+
+from DataFlow::Node source, DataFlow::Node sink
+where Flow::flow(source, sink)
+select sink, "synthesized-barrier {sink_class} [java]"
+"""
+
+
 def _count_sarif_results(sarif_path: Path) -> int:
     data = json.loads(Path(sarif_path).read_text())
     return sum(len(r.get("results", [])) for r in data.get("runs", []))
@@ -131,6 +310,7 @@ def adjudicate(
     db_path: Path,
     *,
     work_dir: Path,
+    language: str = "python",
     search_path: Optional[str] = None,
     codeql_bin: str = DEFAULT_CODEQL_BIN,
     runner: Optional[RunnerFn] = None,
@@ -139,9 +319,12 @@ def adjudicate(
     finding count. Writes the query + a minimal qlpack into ``work_dir``."""
     pack = work_dir
     pack.mkdir(parents=True, exist_ok=True)
+    dep = _LANG_PACK.get(language)
+    if dep is None:
+        raise ValueError(f"unknown language {language!r}; known: {sorted(_LANG_PACK)}")
     (pack / "qlpack.yml").write_text(
         'name: raptor/barrier-synth\nversion: 0.0.1\n'
-        'dependencies:\n  codeql/python-all: "*"\n'
+        f'dependencies:\n  {dep}: "*"\n'
     )
     ql = pack / "SynthBarrier.ql"
     ql.write_text(query_ql)
@@ -180,12 +363,15 @@ def run_synthesis_loop(
             query_ql = assemble_barrier_query(
                 proposed, sink_class=proposal.sink_class,
                 query_id=f"raptor/synth/{proposal.finding_id}/{attempt}",
+                language=proposal.language,
             )
             after_count = adjudicate(
                 query_ql, after_db, work_dir=work_dir / f"after-{attempt}",
+                language=proposal.language,
                 search_path=search_path, codeql_bin=codeql_bin, runner=runner)
             before_count = adjudicate(
                 query_ql, before_db, work_dir=work_dir / f"before-{attempt}",
+                language=proposal.language,
                 search_path=search_path, codeql_bin=codeql_bin, runner=runner)
         except (ValueError, CodeQLRunError) as exc:
             prior_error = f"{type(exc).__name__}: {exc}"
@@ -274,7 +460,7 @@ def render_corpus_report(r: CorpusSynthReport) -> str:
 # proposer is testable with a stub and the real LLM is wired lazily.
 Completer = Callable[[str, str], str]
 
-_SYSTEM_PROMPT = (
+_PY_SYSTEM_PROMPT = (
     "You are a CodeQL expert. A taint-analysis finding has been flagged as a "
     "false positive because a PROJECT-SPECIFIC validator/sanitizer on the path "
     "neutralizes the attacker input — but the analyzer doesn't model it. Your "
@@ -288,15 +474,72 @@ _SYSTEM_PROMPT = (
     "customizations module are already imported. No prose, no markdown fences."
 )
 
+_JS_SYSTEM_PROMPT = (
+    "You are a CodeQL expert. A JavaScript taint-analysis finding has been flagged "
+    "as a false positive because a PROJECT-SPECIFIC validator/sanitizer on the path "
+    "neutralizes the attacker input — but the analyzer doesn't model it. Your job: "
+    "emit a CodeQL SanitizerGuardNode subclass that recognizes that validator.\n\n"
+    "Output ONLY a CodeQL class, exactly this name and shape:\n"
+    "  class ProposedGuard extends TaintTracking::SanitizerGuardNode {\n"
+    "    ProposedGuard() { /* select the guard node: the validator call/comparison */ }\n"
+    "    override predicate sanitizes(boolean outcome, Expr e) "
+    "{ /* `e` is safe on the `outcome` branch */ }\n"
+    "  }\n"
+    "Semantics: the constructor selects the guard DataFlow node; `sanitizes(outcome, e)` "
+    "holds when expression `e` is neutralized on the `outcome` branch of the guard. "
+    "`javascript`, `DataFlow`, `TaintTracking`, and the relevant security "
+    "customizations module are already imported. No prose, no markdown fences."
+)
+
+_RB_SYSTEM_PROMPT = (
+    "You are a CodeQL expert. A Ruby taint-analysis finding has been flagged as a "
+    "false positive because a PROJECT-SPECIFIC validator/sanitizer on the path "
+    "neutralizes the attacker input — but the analyzer doesn't model it. Your job: "
+    "emit a CodeQL guard predicate that recognizes that validator.\n\n"
+    "Output ONLY a CodeQL predicate, exactly this signature and name:\n"
+    "  predicate proposedGuard(CfgNodes::AstCfgNode g, CfgNode node, boolean branch)\n"
+    "Semantics: `g` is the guard (the validator call/comparison); `node` is the CFG "
+    "node of the value it checks; `branch` is the boolean value of `g` on which "
+    "`node` is safe. `codeql.ruby.DataFlow`, `TaintTracking`, `CFG`, and the relevant "
+    "security customizations module are already imported. No prose, no markdown fences."
+)
+
+_JAVA_SYSTEM_PROMPT = (
+    "You are a CodeQL expert. A Java taint-analysis finding has been flagged as a "
+    "false positive because a PROJECT-SPECIFIC validator/sanitizer on the path "
+    "neutralizes the attacker input — but the analyzer doesn't model it. Your job: "
+    "emit a CodeQL guard predicate that recognizes that validator.\n\n"
+    "Output ONLY a CodeQL predicate, exactly this signature and name:\n"
+    "  predicate proposedGuard(Guard g, Expr e, boolean branch)\n"
+    "Semantics: `g` is the guard (the validator call/comparison); `e` is the "
+    "expression it checks; `branch` is the boolean value of `g` on which `e` is "
+    "safe. `java`, `DataFlow`, `TaintTracking`, `Guards`, and the relevant security "
+    "module are already imported. No prose, no markdown fences."
+)
+
+_SYSTEM_PROMPTS = {
+    "python": _PY_SYSTEM_PROMPT,
+    "javascript": _JS_SYSTEM_PROMPT,
+    "ruby": _RB_SYSTEM_PROMPT,
+    "java": _JAVA_SYSTEM_PROMPT,
+}
+
 
 def _build_prompt(proposal: BarrierProposal, prior_error: Optional[str]) -> str:
+    emit = (
+        "Emit the `ProposedGuard` SanitizerGuardNode subclass recognizing the "
+        "validator on this path."
+        if proposal.language == "javascript"
+        else "Emit the `proposedGuard` predicate recognizing the validator on this path."
+    )
     parts = [
         f"sink class: {proposal.sink_class}",
+        f"language: {proposal.language}",
         f"flagged sink: {proposal.sink_snippet}",
         "source (the function/path the finding flows through):",
         proposal.source_context,
         "",
-        "Emit the `proposedGuard` predicate recognizing the validator on this path.",
+        emit,
     ]
     if prior_error:
         parts += [
@@ -322,7 +565,8 @@ def _extract_ql(reply: str) -> str:
 def make_llm_proposer(complete: Completer) -> BarrierProposer:
     """Build a proposer backed by an LLM ``complete`` callable."""
     def propose(proposal: BarrierProposal, prior_error: Optional[str]) -> str:
-        return _extract_ql(complete(_SYSTEM_PROMPT, _build_prompt(proposal, prior_error)))
+        system_prompt = _SYSTEM_PROMPTS.get(proposal.language, _PY_SYSTEM_PROMPT)
+        return _extract_ql(complete(system_prompt, _build_prompt(proposal, prior_error)))
     return propose
 
 
@@ -346,6 +590,7 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("before_db", type=Path, help="CodeQL DB of the pre-fix (vulnerable) source")
     p.add_argument("after_db", type=Path, help="CodeQL DB of the post-fix (sanitized) source")
     p.add_argument("--sink-class", required=True, choices=sorted(_CUSTOMIZATIONS))
+    p.add_argument("--language", default="python", choices=sorted(_LANG_PACK))
     p.add_argument("--finding-id", required=True)
     p.add_argument("--sink", required=True, help="flagged sink snippet/description")
     p.add_argument("--source-file", type=Path, required=True,
@@ -356,7 +601,7 @@ def main(argv: Optional[list] = None) -> int:
     args = p.parse_args(argv)
 
     proposal = BarrierProposal(
-        sink_class=args.sink_class, finding_id=args.finding_id,
+        sink_class=args.sink_class, finding_id=args.finding_id, language=args.language,
         sink_snippet=args.sink, source_context=args.source_file.read_text(encoding="utf-8"),
     )
     res = run_synthesis_loop(
