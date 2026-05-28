@@ -48,11 +48,30 @@ class TestClean(unittest.TestCase):
             self.assertIn("scan-20260404", stats["kept"])
             self.assertIn("scan-20260403", stats["kept"])
 
-    def test_keep_zero_rejected(self):
+    def test_keep_zero_preserves_last_run_per_type(self):
+        # --keep 0 is valid (design): delete as aggressively as possible,
+        # bounded by the clean-safety floor that never deletes the last run of
+        # a command type. The durable coverage store retains deleted verdicts.
+        with TemporaryDirectory() as d:
+            p = _make_project_with_runs(d, [
+                ("scan", "scan-20260401"),
+                ("scan", "scan-20260402"),
+                ("validate", "validate-20260401"),
+            ])
+            stats = clean_project(p, keep=0)
+            # Newest scan + the sole validate survive; the older scan goes.
+            self.assertEqual(len(stats["kept"]), 2)
+            self.assertEqual(len(stats["deleted"]), 1)
+            self.assertIn("scan-20260402", stats["kept"])
+            self.assertIn("validate-20260401", stats["kept"])
+            self.assertIn("scan-20260401", stats["deleted"])
+            self.assertFalse((p.output_path / "scan-20260401").exists())
+
+    def test_keep_negative_rejected(self):
         with TemporaryDirectory() as d:
             p = _make_project_with_runs(d, [("scan", "scan-20260401")])
             with self.assertRaises(ValueError):
-                clean_project(p, keep=0)
+                clean_project(p, keep=-1)
 
     def test_keep_one_preserves_single_run(self):
         with TemporaryDirectory() as d:

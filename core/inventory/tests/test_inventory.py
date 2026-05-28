@@ -30,6 +30,7 @@ from core.inventory import (
     KIND_FUNCTION,
     KIND_GLOBAL,
     KIND_MACRO,
+    KIND_CLASS,
     PythonExtractor,
     JavaScriptExtractor,
     CExtractor,
@@ -668,6 +669,59 @@ class TestExtractItems:
         names = [m.name for m in macros]
         assert "BUF_SIZE" in names
         assert "MAX" in names
+
+    def test_c_multi_declarator_globals(self):
+        # `int a, b, c;` declares three globals — pre-fix only `a` was kept,
+        # the rest fell to interstitial. Pointer/array declarators too.
+        code = "int a, b, c;\nchar *p, q[8];\nvoid f(void) {}\n"
+        items = extract_items("test.c", "c", code)
+        names = {g.name for g in items if g.kind == KIND_GLOBAL}
+        if not names:
+            import pytest
+            pytest.skip("tree-sitter not available — C globals are TS-only")
+        assert {"a", "b", "c", "p", "q"} <= names
+
+    def test_c_typedef_and_record_defs_are_class_kind(self):
+        code = (
+            "typedef struct { int x; } Foo;\n"
+            "struct Bar { int y; };\n"
+            "enum Color { RED, GREEN };\n"
+            "typedef int myint;\n"
+        )
+        items = extract_items("test.c", "c", code)
+        types = {t.name for t in items if t.kind == KIND_CLASS}
+        if not types:
+            import pytest
+            pytest.skip("tree-sitter not available — C type defs are TS-only")
+        assert {"Foo", "Bar", "Color", "myint"} <= types
+
+    def test_c_forward_decl_and_prototype_not_captured(self):
+        # A forward declaration / use-of-existing-type is not a type
+        # definition; a prototype is not a global. Neither should be emitted.
+        code = (
+            "struct FwdDecl;\n"
+            "struct FwdDecl use_it;\n"   # global of an existing type
+            "int proto(int x);\n"        # prototype, not a global
+            "void real(void) {}\n"
+        )
+        items = extract_items("test.c", "c", code)
+        if not any(i.kind in (KIND_GLOBAL, KIND_CLASS) for i in items):
+            import pytest
+            pytest.skip("tree-sitter not available — C globals/types are TS-only")
+        types = {t.name for t in items if t.kind == KIND_CLASS}
+        globals_ = {g.name for g in items if g.kind == KIND_GLOBAL}
+        assert "FwdDecl" not in types       # no body -> not a definition
+        assert "proto" not in globals_      # prototype is not a global
+        assert "use_it" in globals_         # the global IS captured
+
+    def test_js_multi_declarator_globals(self):
+        code = "const a = 1, b = 2;\nlet x = 3;\n"
+        items = extract_items("test.js", "javascript", code)
+        names = {g.name for g in items if g.kind == KIND_GLOBAL}
+        if not names:
+            import pytest
+            pytest.skip("tree-sitter not available — JS globals are TS-only")
+        assert {"a", "b", "x"} <= names
 
     def test_returns_code_items(self):
         code = "def foo(): pass\n"

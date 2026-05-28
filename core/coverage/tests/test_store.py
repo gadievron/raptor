@@ -115,12 +115,12 @@ def test_load_keeps_persisted_target_over_constructor_arg(tmp_path):
 
 _CHECKLIST = {
     "files": [
-        {"path": "a.c", "sha256": "x", "total_lines": 100, "sloc": 80,
+        {"path": "a.c", "sha256": "x", "lines": 100, "sloc": 80,
          "items": [
              {"name": "f1", "line_start": 0, "line_end": 20},
              {"name": "f2", "line_start": 30, "line_end": 60},
          ]},
-        {"path": "b.c", "sha256": "y", "total_lines": 50,
+        {"path": "b.c", "sha256": "y", "lines": 50,
          "functions": [   # fallback key
              {"name": "g1", "line_start": 0, "line_end": 10},
          ]},

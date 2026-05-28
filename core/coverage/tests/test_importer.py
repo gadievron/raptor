@@ -20,12 +20,12 @@ def _store(tmp_path):
 
 _CHECKLIST = {
     "files": [
-        {"path": "a.c", "total_lines": 100, "items": [
+        {"path": "a.c", "lines": 100, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20},
             {"name": "f2", "line_start": 30, "line_end": 60,
              "checked_by": ["validate:stage-a"]},
         ]},
-        {"path": "b.c", "total_lines": 50, "functions": [
+        {"path": "b.c", "lines": 50, "functions": [
             {"name": "g1", "line_start": 0, "line_end": 10},
         ]},
     ],
@@ -92,19 +92,24 @@ def test_absolute_scanner_paths_join_to_relative_inventory(tmp_path):
 
 
 def test_file_level_coverage_uses_real_inventory_lines_field(tmp_path):
-    # Regression: the inventory emits per-file `lines`, not `total_lines`
-    # (the latter only appears in hand-built test checklists). Reading the
-    # wrong key silently drops ALL file-level scanner coverage — caught only
-    # against a real checklist. backfill must place whole-file marks here.
+    # Regression: file-level marks read the inventory's `lines` key — what
+    # builder.py actually emits. `total_lines` is NOT a recognised inventory
+    # key (the line-count read was standardised on `lines`, dropping the old
+    # dual-key shim); a `total_lines`-only entry has unknown extent and is
+    # skipped. Reading the wrong key silently drops ALL file-level scanner
+    # coverage, so both halves are asserted here.
     s = _store(tmp_path)
     checklist = {"files": [
         {"path": "a.c", "lines": 40, "sloc": 30, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20}]},
+        {"path": "legacy.c", "total_lines": 40, "items": [
+            {"name": "g1", "line_start": 0, "line_end": 20}]},
     ]}
     run = tmp_path / "scan-1"
     run.mkdir()
     (run / "coverage-semgrep.json").write_text(json.dumps(
-        {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+        {"tool": "semgrep", "files_examined": ["a.c", "legacy.c"],
+         "timestamp": "t"}))
     (run / "findings.json").write_text("[]")
     backfill(s, [run], checklist)
     assert s.who_checked("a.c", 10) == ["semgrep"]    # whole file marked
@@ -112,6 +117,8 @@ def test_file_level_coverage_uses_real_inventory_lines_field(tmp_path):
     assert s.who_checked("a.c", 40) == ["semgrep"]
     assert s.who_checked("a.c", 0) == []
     assert s.function_covered("a.c", 1, 20, category="static") is True
+    # `total_lines`-only entry: extent unknown -> no whole-file mark.
+    assert s.who_checked("legacy.c", 10) == []
 
 
 def test_import_run_dir_reads_per_tool_records(tmp_path):

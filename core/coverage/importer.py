@@ -7,7 +7,7 @@ Producers keep emitting per-run ``coverage-record.json`` (file-level
 ``/project clean``; this module is the bridge that imports both. Call
 :func:`import_run_dir` per run, or :func:`backfill` over all run dirs once.
 
-File-level marks need each file's ``total_lines`` (from the inventory) to
+File-level marks need each file's line count (the inventory's ``lines``) to
 place the whole-file interval; files absent from the inventory are skipped
 (their extent is unknown). Granularity is therefore: whole-file from the
 records, function-level from ``checked_by``. True line-level coverage
@@ -31,7 +31,7 @@ from core.run.provenance import (
 
 from .record import load_records
 from .registry import category_of
-from .store import CoverageStore, file_line_count
+from .store import CoverageStore
 from .summary import _match_to_inventory
 
 
@@ -98,7 +98,7 @@ def _total_lines_by_file(checklist: Dict[str, Any]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for fe in checklist.get("files", []):
         path = fe.get("path")
-        tl = file_line_count(fe)
+        tl = fe.get("lines")
         if path and tl:
             out[path] = tl
     return out

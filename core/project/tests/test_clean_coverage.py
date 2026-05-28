@@ -26,7 +26,7 @@ def _proj(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "checklist.json").write_text(json.dumps({"files": [
-        {"path": "a.c", "total_lines": 100, "items": [
+        {"path": "a.c", "lines": 100, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20},
             {"name": "f2", "line_start": 30, "line_end": 60},
         ]}]}))

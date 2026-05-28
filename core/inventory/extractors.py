@@ -1561,6 +1561,10 @@ def extract_items(filepath: str, language: str, content: str,
             items.extend(_extract_top_level_ts(tree.root_node, language))
         except Exception:
             pass
+        try:
+            items.extend(_extract_c_types_ts(tree.root_node, language))
+        except Exception:
+            pass
 
     # Fallback: functions from AST/regex if tree-sitter didn't produce any
     if not ts_parsed or not any(i.kind == KIND_FUNCTION for i in items):
@@ -1687,6 +1691,76 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
     return globals_found
 
 
+_RECORD_BODY_TYPES = ("field_declaration_list", "enumerator_list")
+
+
+def _specifier_tag_name(spec) -> Optional[str]:
+    """Tag name of a struct/union/enum/class specifier that *defines* a type
+    (has a body). Returns None for a forward declaration / use of an existing
+    type (no body) or an anonymous specifier (no tag — a typedef names it
+    instead, handled via ``_typedef_name``)."""
+    if not any(b.type in _RECORD_BODY_TYPES for b in spec.children):
+        return None
+    for b in spec.children:
+        if b.type == "type_identifier":
+            return b.text.decode()
+    return None
+
+
+def _typedef_name(node) -> Optional[str]:
+    """The new type name introduced by a C/C++ ``type_definition`` (typedef).
+    ``typedef struct {…} Foo;`` -> ``Foo``; ``typedef int (*cb)(int);`` -> ``cb``.
+    """
+    decl = node.child_by_field_name("declarator")
+    if decl is not None:
+        if decl.type in ("type_identifier", "identifier"):
+            return decl.text.decode()
+        inner = _c_declarator_name(decl)
+        if inner:
+            return inner
+    # Fallback: a direct type_identifier child (not nested in a specifier).
+    for c in node.children:
+        if c.type in ("type_identifier", "identifier"):
+            return c.text.decode()
+    return None
+
+
+def _extract_c_types_ts(root_node, language: str) -> List[CodeItem]:
+    """File-scope C/C++ type definitions as ``class``-kind items: ``typedef``s
+    and named struct/union/enum (and C++ class) *definitions*. Without these a
+    header of type declarations collapses to anonymous interstitial. Forward
+    declarations and uses of existing types (no body) are not definitions and
+    are skipped; the type's tag is the item name (the typedef name for an
+    anonymous record). A ``struct Foo {…} g;`` yields BOTH the type ``Foo``
+    here and the global ``g`` via ``_extract_globals_ts`` — both are real."""
+    if language not in ("c", "cpp"):
+        return []
+    specifiers = ("struct_specifier", "union_specifier", "enum_specifier")
+    if language == "cpp":
+        specifiers = specifiers + ("class_specifier",)
+    out: List[CodeItem] = []
+    for child in root_node.children:
+        name = None
+        if child.type == "type_definition":
+            name = _typedef_name(child)
+        elif child.type == "declaration":
+            name = next(
+                (_specifier_tag_name(c) for c in child.children
+                 if c.type in specifiers and _specifier_tag_name(c)),
+                None,
+            )
+        elif child.type in specifiers:
+            name = _specifier_tag_name(child)
+        if name:
+            out.append(CodeItem(
+                name=name,
+                kind=KIND_CLASS,
+                line_start=child.start_point[0] + 1,
+                line_end=child.end_point[0] + 1,
+            ))
+    return out
+
+
 def _global_names(node, language: str):
     """Yield every global name in a declaration node.
 
@@ -1750,10 +1824,46 @@ def _global_names(node, language: str):
                 current = next_assignment
             return
 
+    if language in ("c", "cpp"):
+        yield from _c_global_names(node)
+        return
+
+    if language in ("javascript", "typescript", "tsx"):
+        # `const a = 1, b = 2;` is one declaration with multiple
+        # variable_declarators — yield every name, not just the first.
+        # Pre-fix `_global_name` returned only the first, dropping `b`.
+        for child in node.children:
+            if child.type == "variable_declarator":
+                for sub in child.children:
+                    if sub.type in ("identifier", "name"):
+                        yield sub.text.decode()
+                        break
+        return
+
     # Other languages: defer to the single-name function.
     name = _global_name(node, language)
     if name:
         yield name
+
+
+def _c_global_names(node):
+    """Yield every declared name in a C/C++ ``declaration`` node.
+
+    Handles multi-declarator declarations (``int a, b, c;``) where only the
+    first name was captured before (``_c_declarator_name`` on the whole node
+    stops at the first identifier). A bare function prototype (``int foo(int);``
+    — a ``function_declarator`` child) declares no variable, so it yields
+    nothing; its definition is captured as a function elsewhere.
+    """
+    _DECLARATORS = ("identifier", "init_declarator", "array_declarator",
+                    "pointer_declarator", "parenthesized_declarator")
+    if any(c.type == "function_declarator" for c in node.children):
+        return
+    for child in node.children:
+        if child.type in _DECLARATORS:
+            name = _c_declarator_name(child)
+            if name:
+                yield name
 
 
 def _c_declarator_name(node, depth: int = 0) -> Optional[str]:

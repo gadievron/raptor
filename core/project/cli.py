@@ -226,7 +226,9 @@ def main():
     p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n",
                              usage="raptor project clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]", **_F)
     p_clean.add_argument("name", nargs="?", help="Project name")
-    p_clean.add_argument("--keep", type=int, default=1, metavar="<n>", help="Runs to keep per type (default: 1)")
+    p_clean.add_argument("--keep", type=int, default=1, metavar="<n>",
+                         help="Runs to keep per type (default: 1; 0 keeps only "
+                              "the newest — the last run is never deleted)")
     p_clean.add_argument("--dedup", action="store_true",
                          help="Coverage-aware: drop only runs fully subsumed by a survivor "
                               "(provably lossless), ignoring --keep")

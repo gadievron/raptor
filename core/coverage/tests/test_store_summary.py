@@ -7,11 +7,11 @@ from core.coverage.store_summary import format_store_view, store_view
 
 _CHECKLIST = {
     "files": [
-        {"path": "a.c", "total_lines": 100, "items": [
+        {"path": "a.c", "lines": 100, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20},
             {"name": "f2", "line_start": 30, "line_end": 60},
         ]},
-        {"path": "b.c", "total_lines": 50, "functions": [
+        {"path": "b.c", "lines": 50, "functions": [
             {"name": "g1", "line_start": 0, "line_end": 10},
         ]},
     ],
