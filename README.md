@@ -201,6 +201,46 @@ export MISTRAL_API_KEY=...             # Mistral
 export OLLAMA_HOST=http://localhost:11434  # Local Ollama
 ```
 
+### AWS Bedrock
+
+Run Claude on Bedrock instead of the Anthropic API. Same models, same wire format, AWS-native auth via SigV4 — no API keys flow through models.json.
+
+Install the SDKs:
+
+```bash
+pip install boto3 anthropic
+```
+
+Set your region (boto3 picks up credentials from the standard chain — env vars, profile, IAM role):
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_PROFILE=my-profile          # optional
+```
+
+Configure a model in `~/.config/raptor/models.json`:
+
+```json
+{
+  "models": [
+    {
+      "provider": "bedrock",
+      "model": "us.anthropic.claude-opus-4-7",
+      "role": "analysis"
+    },
+    {
+      "provider": "bedrock",
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "role": "fallback"
+    }
+  ]
+}
+```
+
+Bedrock is opt-in only — RAPTOR will not auto-detect Bedrock from ambient `AWS_REGION` unless you explicitly select it via `models.json` or `RAPTOR_PROVIDER_PREFER=bedrock`. This avoids surprising users with AWS env vars set for unrelated reasons.
+
+Cross-region inference profiles (`us.`, `eu.`, `apac.`, `global.` prefixes) work the same as region-pinned IDs. Pricing tracks the underlying Anthropic models and is shared with the Anthropic provider's cost tables.
+
 Model roles let you assign different models to different tasks:
 
 | Role | What it does |

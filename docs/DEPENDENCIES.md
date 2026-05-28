@@ -62,6 +62,14 @@ For example CodeQL does not allow commerical use.
 - Usage: RAPTOR connects to Ollama server for local model inference
 - Note: User installs separately, supports both local and remote servers
 
+**boto3 + AnthropicBedrock** (AWS Bedrock LLM provider)
+- Install: `pip install boto3 anthropic`
+- License: boto3 Apache 2.0; anthropic MIT
+- Source: https://github.com/boto/boto3, https://github.com/anthropics/anthropic-sdk-python
+- Usage: RAPTOR's `BedrockProvider` uses `anthropic.AnthropicBedrock` (the SDK's Bedrock client) to call Claude models via AWS Bedrock with SigV4 auth through the boto3 credential chain.
+- Auth: Operator configures via `AWS_REGION` (or `AWS_DEFAULT_REGION`) plus the standard boto3 credential chain (env vars, profile, IAM role). No API key flows through `models.json`.
+- Activation: Opt-in only — set `provider: "bedrock"` in `~/.config/raptor/models.json` or `RAPTOR_PROVIDER_PREFER=bedrock`. Ambient `AWS_REGION` does not auto-promote to Bedrock.
+
 **rr** (Record-replay debugger)
 - Install: `apt install rr` (Linux) or build from https://github.com/rr-debugger/rr
 - License: MIT

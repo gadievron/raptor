@@ -93,7 +93,30 @@ def provider_for_family(family: Family) -> str:
 
 
 def provider_of(model_id: str) -> str:
-    """Shorthand: model identifier → provider string."""
+    """Shorthand: model identifier → provider string.
+
+    Bedrock-hosted model IDs (``us.anthropic.claude-opus-4-7``,
+    ``anthropic.claude-haiku-4-5-20251001-v1:0``,
+    ``eu.anthropic.claude-...``, ``au.anthropic.claude-...``,
+    ``global.anthropic.claude-...``) route to the ``bedrock`` provider
+    regardless of underlying lineage. The family itself remains the
+    model's training lineage (Claude → ``"anthropic"`` family) so
+    cross-family validation logic continues to treat Bedrock-hosted
+    Claude and direct-API Claude as the same lineage — they ARE the
+    same model, just behind a different transport.
+    """
+    needle = model_id.lower()
+    _BEDROCK_PREFIXES = (
+        "anthropic.claude-",     # region-pinned Bedrock IDs
+        "us.anthropic.",
+        "eu.anthropic.",
+        "au.anthropic.",
+        "apac.anthropic.",
+        "global.anthropic.",
+    )
+    for prefix in _BEDROCK_PREFIXES:
+        if needle.startswith(prefix):
+            return "bedrock"
     return provider_for_family(family_of(model_id))
 
 

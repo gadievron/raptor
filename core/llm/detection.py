@@ -38,6 +38,19 @@ except ImportError as _e:
     logger.debug("openai SDK probe failed: %s", _e)
     OPENAI_SDK_AVAILABLE = False
 
+# Bedrock requires both boto3 (for the AWS SDK and credential chain)
+# and AnthropicBedrock from the anthropic SDK (for the Messages API
+# wire format that BedrockProvider proxies to). If either is missing,
+# bedrock is not usable — even when AWS_REGION is set — and the
+# detection layer flags the misconfiguration.
+try:
+    import boto3 as _boto3_module  # noqa: F401 — availability probe
+    from anthropic import AnthropicBedrock as _ab  # noqa: F401 — availability probe
+    BEDROCK_AVAILABLE = True
+except ImportError as _e:
+    logger.debug("Bedrock SDK probe failed: %s (need boto3 + anthropic)", _e)
+    BEDROCK_AVAILABLE = False
+
 try:
     import anthropic as _anthropic_module  # noqa: F401 — availability probe
     ANTHROPIC_SDK_AVAILABLE = True
@@ -480,6 +493,9 @@ def _config_has_keyed_models() -> bool:
         if provider == "anthropic":
             if not (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE):
                 continue
+        elif provider == "bedrock":
+            if not BEDROCK_AVAILABLE:
+                continue
         elif provider == "ollama":
             if not OPENAI_SDK_AVAILABLE:
                 continue
@@ -532,8 +548,16 @@ def detect_llm_availability() -> LLMAvailability:
     has_openai = bool(os.getenv("OPENAI_API_KEY")) and OPENAI_SDK_AVAILABLE
     has_gemini = bool(os.getenv("GEMINI_API_KEY")) and (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
     has_mistral = bool(os.getenv("MISTRAL_API_KEY")) and OPENAI_SDK_AVAILABLE
+    # Bedrock signal: any AWS_REGION (or AWS_DEFAULT_REGION) plus the
+    # required SDKs. The boto3 credential chain handles actual auth —
+    # IAM role, profile, or env-var creds all work without any
+    # RAPTOR-side key handling.
+    has_bedrock = (
+        BEDROCK_AVAILABLE
+        and bool(os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
+    )
 
-    has_cloud_keys = has_anthropic or has_openai or has_gemini or has_mistral
+    has_cloud_keys = has_anthropic or has_openai or has_gemini or has_mistral or has_bedrock
 
     # Phase B credential-isolation: a worker spawned via the
     # dispatcher has ``RAPTOR_LLM_SOCKET`` set but no API keys in
@@ -594,6 +618,7 @@ def _warn_unusable_keys():
         "openai": ("openai", OPENAI_SDK_AVAILABLE),
         "gemini": ("google-genai or openai", GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
         "mistral": ("openai", OPENAI_SDK_AVAILABLE),
+        "bedrock": ("boto3 + anthropic", BEDROCK_AVAILABLE),
     }
 
     for provider, env_var in PROVIDER_ENV_KEYS.items():
