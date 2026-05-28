@@ -84,7 +84,7 @@ the highest-yield attacks.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 from ..models import Confidence, Dependency
@@ -180,14 +180,29 @@ class SlopsquatFinding:
 
 
 def scan_deps(deps: Iterable[Dependency]) -> List[SlopsquatFinding]:
-    """Run the heuristic on every direct dep."""
+    """Run the heuristic on every direct dep.
+
+    Like the typosquat detector, the verdict is a pure function of
+    ``(ecosystem, name)``, so it is memoised per unique name and
+    fanned back out to each declaring dep object — a monorepo that
+    repeats a dep across N manifests pays one ``check_dep`` instead
+    of N. Output is unchanged (each dep keeps its own ``declared_in``
+    in the downstream finding id)."""
     out: List[SlopsquatFinding] = []
+    memo: Dict[Tuple[str, str], Optional[SlopsquatFinding]] = {}
     for d in deps:
         if not d.direct:
             continue
-        finding = check_dep(d)
-        if finding is not None:
-            out.append(finding)
+        key = (d.ecosystem, d.name)
+        if key in memo:
+            verdict = memo[key]
+            if verdict is not None:
+                out.append(replace(verdict, dependency=d))
+            continue
+        verdict = check_dep(d)
+        memo[key] = verdict
+        if verdict is not None:
+            out.append(verdict)
     return out
 
 
@@ -230,11 +245,16 @@ def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
     # --- 1. Lookalike-character collapse against popular names.
     collapsed = _collapse_lookalikes(name)
     if collapsed != name:
-        for pop in popular_list:
-            if _collapse_lookalikes(pop) == collapsed:
-                reasons.append("lookalike_collapse_match")
-                suspected_root = pop
-                break
+        # Index built once per ecosystem: ``{collapsed_form: first_pop}``.
+        # Pre-fix this re-collapsed every popular name on every dep —
+        # O(deps × list) ``str.translate`` calls (24s of the 10k-dep
+        # monorepo scan after #686 grew the lists ~40×). The index keeps
+        # the first popular name per collapsed form, matching the prior
+        # ``for pop in popular_list: … break`` first-hit-wins order.
+        match = _collapsed_index(eco).get(collapsed)
+        if match is not None:
+            reasons.append("lookalike_collapse_match")
+            suspected_root = match
 
     # --- 2. Generic suffix on a popular prefix.
     prefix, suffix = _split_suffix(name)
@@ -276,6 +296,24 @@ def _check_one(dep: Dependency) -> Optional[SlopsquatFinding]:
         severity=severity,
         confidence=confidence,
     )
+
+
+# Per-ecosystem ``{collapsed_form: first_popular_name}`` index, built
+# lazily from the popular list. Re-used across every dep in a scan.
+_COLLAPSED_INDEX: Dict[str, Dict[str, str]] = {}
+
+
+def _collapsed_index(ecosystem: str) -> Dict[str, str]:
+    """Map each popular name's lookalike-collapsed form to the first
+    popular name that produces it (list order = first-hit-wins)."""
+    cached = _COLLAPSED_INDEX.get(ecosystem)
+    if cached is not None:
+        return cached
+    index: Dict[str, str] = {}
+    for pop in _load_popular(ecosystem):
+        index.setdefault(_collapse_lookalikes(pop), pop)
+    _COLLAPSED_INDEX[ecosystem] = index
+    return index
 
 
 def _collapse_lookalikes(s: str) -> str:

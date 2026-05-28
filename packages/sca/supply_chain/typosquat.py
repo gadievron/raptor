@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -37,6 +37,38 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "popular"
 # Distances above this are not interesting; below it we always flag
 # (with severity scaled by distance).
 _MAX_DISTANCE = 2
+
+# Sound prefilter cutoff for the character-set bitmask check in
+# ``_check_one``. A single edit (insert / delete / substitute /
+# transpose) changes a name's *set* of characters by at most two
+# elements, so ``distance >= popcount(set_a △ set_b) / 2``. A pair
+# within ``_MAX_DISTANCE`` therefore has a symmetric-set-difference of
+# at most ``2 * _MAX_DISTANCE`` bits — anything larger is certain to
+# exceed the cutoff and can skip the O(L²) Damerau-Levenshtein DP. This
+# is exact (never skips a pair the DP would have flagged), unlike a
+# heuristic n-gram filter; the lists grew ~40× in #686 and the DP cost
+# is quadratic per pair, so pruning the ~99% of certain-fails up front
+# is what keeps the 10k-dep monorepo scan inside its perf budget.
+_SYMDIFF_CUTOFF = 2 * _MAX_DISTANCE
+
+# Character → bit position for that set-membership mask. Package names
+# are [a-z0-9] plus a handful of separators; any other character folds
+# onto a single shared "other" bit. Folding only ever *shrinks* the
+# measured symmetric difference, which can make us run the DP on a pair
+# we could have skipped — never the reverse — so the prefilter stays
+# sound regardless of the input alphabet.
+_BIT_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789-_.@/+~"
+_CHAR_BIT: Dict[str, int] = {c: i for i, c in enumerate(_BIT_ALPHABET)}
+_OTHER_BIT = 63
+
+
+def _char_mask(name: str) -> int:
+    """Bitmask of the distinct characters present in ``name``."""
+    mask = 0
+    get = _CHAR_BIT.get
+    for c in name:
+        mask |= 1 << get(c, _OTHER_BIT)
+    return mask
 
 # Per-ecosystem popular-name caches. Loaded lazily and re-used.
 _POPULAR_BY_ECO: Dict[str, List[str]] = {}
@@ -51,7 +83,7 @@ _POPULAR_BY_ECO: Dict[str, List[str]] = {}
 # from the first ``abs(la-lb) >= cutoff`` early-out anyway, so the
 # bucket index is purely a faster way to enforce a check the inner
 # function was already doing — output is byte-identical.
-_POPULAR_BY_LEN: Dict[str, Dict[int, List[str]]] = {}
+_POPULAR_BY_LEN: Dict[str, Dict[int, List[Tuple[str, int]]]] = {}
 # Set view of the popular list for the O(1) "is it popular" test
 # in ``_check_one`` (was a list ``in`` linear scan pre-fix).
 _POPULAR_SET: Dict[str, set] = {}
@@ -67,14 +99,31 @@ class TyposquatFinding:
 
 
 def scan_deps(deps: Iterable[Dependency]) -> List[TyposquatFinding]:
-    """Run the candidate check on every direct dep."""
+    """Run the candidate check on every direct dep.
+
+    The verdict depends only on ``(ecosystem, name)`` — the popular
+    list is the sole other input — so it is computed once per unique
+    name and fanned back out to every dep object that declares it.
+    A monorepo repeating the same dep across N workspace manifests
+    pays one ``_check_one`` rather than N. Each surviving dep still
+    emits its own finding (the downstream id keys on ``declared_in``),
+    so the output is unchanged.
+    """
     out: List[TyposquatFinding] = []
+    memo: Dict[Tuple[str, str], Optional[TyposquatFinding]] = {}
     for d in deps:
         if not d.direct:
             continue
-        finding = _check_one(d)
-        if finding is not None:
-            out.append(finding)
+        key = (d.ecosystem, d.name)
+        if key in memo:
+            verdict = memo[key]
+            if verdict is not None:
+                out.append(replace(verdict, dependency=d))
+            continue
+        verdict = _check_one(d)
+        memo[key] = verdict
+        if verdict is not None:
+            out.append(verdict)
     return out
 
 
@@ -109,18 +158,25 @@ def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
         # skipped. Walking the buckets directly avoids the function-
         # call overhead for those certain-fails.
         cand_len = len(cand)
+        cand_mask = _char_mask(cand)
         lo, hi = cand_len - _MAX_DISTANCE, cand_len + _MAX_DISTANCE
         for length in range(lo, hi + 1):
             shortlist = by_len.get(length)
             if not shortlist:
                 continue
-            for pop in shortlist:
+            for pop, pop_mask in shortlist:
                 if cand == pop:
                     # Bare-form exact match inside a non-popular scope.
                     # ``@evil/lodash`` shape — scoped-namespace squat
                     # rather than a typo.
                     if best is None or 0 < best[0]:
                         best = (0, pop)
+                    continue
+                # Sound prefilter: ``distance >= popcount(symdiff)/2``.
+                # If the character sets already differ by more than
+                # ``2*_MAX_DISTANCE`` bits the DP is certain to return
+                # ``cutoff`` — skip it. Exact, so no match is ever lost.
+                if (cand_mask ^ pop_mask).bit_count() > _SYMDIFF_CUTOFF:
                     continue
                 d = _damerau_levenshtein(cand, pop, _MAX_DISTANCE + 1)
                 if d > _MAX_DISTANCE:
@@ -196,8 +252,12 @@ def _popular_set(ecosystem: str) -> set:
     return s
 
 
-def _popular_by_len(ecosystem: str) -> Dict[int, List[str]]:
+def _popular_by_len(ecosystem: str) -> Dict[int, List[Tuple[str, int]]]:
     """Return the popular list indexed by name length.
+
+    Each bucket holds ``(name, char_mask)`` pairs — the mask is
+    precomputed once here so the per-dep ``_check_one`` prefilter is a
+    bare XOR + popcount rather than re-scanning each popular name.
 
     Walking only the buckets at lengths within ``_MAX_DISTANCE`` of
     the query length cuts the inner ``_damerau_levenshtein`` calls
@@ -208,9 +268,9 @@ def _popular_by_len(ecosystem: str) -> Dict[int, List[str]]:
     cached = _POPULAR_BY_LEN.get(ecosystem)
     if cached is not None:
         return cached
-    by_len: Dict[int, List[str]] = {}
+    by_len: Dict[int, List[Tuple[str, int]]] = {}
     for name in _load_popular(ecosystem):
-        by_len.setdefault(len(name), []).append(name)
+        by_len.setdefault(len(name), []).append((name, _char_mask(name)))
     _POPULAR_BY_LEN[ecosystem] = by_len
     return by_len
 
@@ -230,11 +290,18 @@ def _damerau_levenshtein(a: str, b: str, cutoff: int) -> int:
     if lb == 0:
         return min(la, cutoff)
 
-    prev_prev = list(range(lb + 1))
-    prev = [0] * (lb + 1)
-    cur = [0] * (lb + 1)
+    # Base row d[0][j] = j (cost of inserting j chars of b into empty a).
+    # The pre-fix code zero-initialised ``prev`` and then rotated it at the
+    # START of each iteration, which discarded the base row entirely — at
+    # i=1, ``prev`` was [0,0,…,0] instead of [0,1,2,…,lb]. The DP then
+    # propagated a 0 to ``cur[j]`` for any j where ``a[0] == b[j-1]``,
+    # making ``DL("a", "cma") = 0`` instead of 2 (similarly ``DL("a", "ba")``,
+    # ``DL("a", "aa")``). Fix: initialise ``prev`` correctly and rotate at
+    # the END of each iteration so the first body sees the right base row.
+    prev_prev = [0] * (lb + 1)         # unused at i=1; placeholder
+    prev = list(range(lb + 1))         # d[0]
+    cur = [0] * (lb + 1)               # d[1] scratch
     for i in range(1, la + 1):
-        cur, prev, prev_prev = [0] * (lb + 1), cur, prev
         cur[0] = i
         row_min = cur[0]
         for j in range(1, lb + 1):
@@ -252,7 +319,11 @@ def _damerau_levenshtein(a: str, b: str, cutoff: int) -> int:
                 row_min = cur[j]
         if row_min >= cutoff:
             return cutoff
-    return min(cur[lb], cutoff)
+        # Rotate AFTER computing this row: the just-filled ``cur`` is
+        # next iteration's ``prev``; ``prev`` becomes ``prev_prev``.
+        cur, prev, prev_prev = [0] * (lb + 1), cur, prev
+    # After the final rotation the last filled row is in ``prev``.
+    return min(prev[lb], cutoff)
 
 
 __all__ = ["TyposquatFinding", "scan_deps"]
