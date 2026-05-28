@@ -136,7 +136,10 @@ def _get_json(
     raise last
 
 
-def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
+def _fetch_pypi_ranked(http: HttpClient, top_n: int) -> List[str]:
+    """Rank-ordered (most-popular-first) PyPI names — the order the typosquat
+    curation audit needs (rank is the signal it reasons about). May contain
+    duplicates; callers that want the canonical bundle ``sorted(set(...))`` it."""
     data = _get_json(http, _HUGOVK_TOP_PYPI)
     rows = data.get("rows") or data.get("packages") or []
     names: List[str] = []
@@ -146,10 +149,15 @@ def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
         n = r.get("project") or r.get("name")
         if isinstance(n, str) and n:
             names.append(n.lower())
-    return sorted(set(names))
+    return names
 
 
-def fetch_npm(http: HttpClient, top_n: int) -> List[str]:
+def fetch_pypi(http: HttpClient, top_n: int) -> List[str]:
+    return sorted(set(_fetch_pypi_ranked(http, top_n)))
+
+
+def _fetch_npm_ranked(http: HttpClient, top_n: int) -> List[str]:
+    """Rank-ordered (most-depended-upon-first) npm names. See _fetch_pypi_ranked."""
     data = _get_json(http, _ANVAKA_NPM_RANK, max_bytes=_NPM_MAX_BYTES)
     # The anvaka npmrank format is ``{"tags": {...}, "rank": {name: score}}``
     # where ``score`` is a (stringified) pagerank-style weight over the
@@ -168,10 +176,14 @@ def fetch_npm(http: HttpClient, top_n: int) -> List[str]:
         except (TypeError, ValueError):
             continue
     scored.sort(key=lambda ns: ns[1], reverse=True)
-    return sorted({n for n, _ in scored[:top_n]})
+    return [n for n, _ in scored[:top_n]]
 
 
-def fetch_crates(
+def fetch_npm(http: HttpClient, top_n: int) -> List[str]:
+    return sorted(set(_fetch_npm_ranked(http, top_n)))
+
+
+def _fetch_crates_ranked(
     http: HttpClient, top_n: int, *, per_page: int = 100,
 ) -> List[str]:
     """crates.io paginates ``per_page`` (max 100) per request. Fetch
@@ -179,7 +191,7 @@ def fetch_crates(
     rate-limited; honour rate limits via ``retries=`` (the proxy +
     backoff path handles 429 transparently). ``per_page`` is a
     parameter so tests can exercise pagination with small fixtures.
-    """
+    Returns names in download-rank order (see _fetch_pypi_ranked)."""
     names: List[str] = []
     pages = (top_n + per_page - 1) // per_page
     for page in range(1, pages + 1):
@@ -199,11 +211,18 @@ def fetch_crates(
                 names.append(n.lower())
         if len(crates) < per_page:
             break
-    return sorted(set(names))[:top_n]
+    return names
 
 
-def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
-    """Packagist's popular endpoint is paginated; ``page=N`` query param."""
+def fetch_crates(
+    http: HttpClient, top_n: int, *, per_page: int = 100,
+) -> List[str]:
+    return sorted(set(_fetch_crates_ranked(http, top_n, per_page=per_page)))[:top_n]
+
+
+def _fetch_packagist_ranked(http: HttpClient, top_n: int) -> List[str]:
+    """Packagist's popular endpoint is paginated; ``page=N`` query param.
+    Returns names in popularity-rank order (see _fetch_pypi_ranked)."""
     names: List[str] = []
     page = 1
     while len(names) < top_n:
@@ -226,7 +245,11 @@ def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
         page += 1
         if page > 200:               # safety: 200 pages × 12/pg ≈ 2400
             break
-    return sorted(set(names))[:top_n]
+    return names
+
+
+def fetch_packagist(http: HttpClient, top_n: int) -> List[str]:
+    return sorted(set(_fetch_packagist_ranked(http, top_n)))[:top_n]
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,18 @@
+{
+  "_comment": "Confirmed-legitimate near-name packages: real, independent projects whose names are one edit from a more-popular package (npm 'preact' vs 'react'). They are NOT typosquats and stay trusted in the popularity feeds. This file is NOT read by the detector (legit names are already trusted by popular-list membership) — it exists only to SUPPRESS these names from the typosquat-curation candidate queue (see typosquat_audit.py) so the recurring review delta de-noises to near-empty and a genuinely-new near-name stands out. Counterpart to typosquat_denylist.json (confirmed squats, which the detector DOES subtract). Adding here is FP-safe (changes nothing about trust); adding to the denylist is the FP-creating action and stays human-gated. Keys are ecosystem names; values map name -> {near_twin, decided_by, date, note}. Seeded from a 2026-05-28 audit of the npm top-5000 (all distance-1 candidates were legit except 'loadash', which is on the denylist).",
+  "npm": {
+    "preact": {"near_twin": "react", "decided_by": "human", "date": "2026-05-28", "note": "distinct project: fast 3kB React alternative"},
+    "enquirer": {"near_twin": "inquirer", "decided_by": "human", "date": "2026-05-28", "note": "distinct, widely-used prompt library"},
+    "gaxios": {"near_twin": "axios", "decided_by": "human", "date": "2026-05-28", "note": "Google's HTTP client (google-gax); real project"},
+    "mquery": {"near_twin": "jquery", "decided_by": "human", "date": "2026-05-28", "note": "MongoDB query builder; unrelated to jquery"},
+    "useragent": {"near_twin": "superagent", "decided_by": "human", "date": "2026-05-28", "note": "UA-string parser; unrelated to the HTTP client"},
+    "vasync": {"near_twin": "async", "decided_by": "human", "date": "2026-05-28", "note": "Joyent's async-control library; real project"},
+    "inherit": {"near_twin": "inherits", "decided_by": "human", "date": "2026-05-28", "note": "real OOP-inheritance helper, distinct from inherits"},
+    "rambda": {"near_twin": "ramda", "decided_by": "human", "date": "2026-05-28", "note": "deliberate lightweight ramda alternative; real project"},
+    "jslint": {"near_twin": "eslint", "decided_by": "human", "date": "2026-05-28", "note": "Crockford's original linter; predates eslint"},
+    "reqwest": {"near_twin": "request", "decided_by": "human", "date": "2026-05-28", "note": "real AJAX library; deliberate pun name"}
+  },
+  "PyPI": {},
+  "Cargo": {},
+  "Packagist": {}
+}

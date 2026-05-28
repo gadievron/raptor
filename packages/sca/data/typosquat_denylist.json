@@ -1,0 +1,9 @@
+{
+  "_comment": "Hand-vetted typosquat / confusable package names that must NOT be trusted even when they appear in the bundled popularity feeds (data/popular/<eco>.json). The popularity feeds are download/dependent rank lists; a name that ranks high enough can slip in (e.g. npm 'loadash' at rank ~3851, one edit from 'lodash') and, once trusted by an exact match, can never be flagged. Subtracting it here forces the detector to evaluate it as distance-1 from its near-twin. CURATION RULE: only add a name a human has confirmed is a confusable near-miss of a more-popular package (not an independent legitimate project). This is deliberately manual: automated rank/edit-distance heuristics were validated as ~10:1 false-positive (preact, enquirer, jslint, boto, pipx are all legit near-names), and OSV MAL- records cover legit packages with compromised versions (litellm, node-ipc), so neither is safe to auto-apply. Keys are ecosystem names matching data/popular/<eco>.json; values are lowercased names.",
+  "npm": [
+    "loadash"
+  ],
+  "PyPI": [],
+  "Cargo": [],
+  "Packagist": []
+}

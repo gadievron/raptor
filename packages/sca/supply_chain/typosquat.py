@@ -34,6 +34,19 @@ logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "popular"
 
+# Hand-vetted typosquat / confusable names to subtract from the popular feeds
+# before they become a trusted exact-match. The popularity feeds occasionally
+# carry a name that is one edit from a far-more-popular package (npm ``loadash``
+# vs ``lodash``); once it sits in the trusted list an exact match short-circuits
+# the scan and it can never be flagged. This denylist is the *sound* fix:
+# automated rank/edit-distance heuristics were validated at ~10:1 false-positive
+# (``preact``/``enquirer``/``jslint``/``boto``/``pipx`` are all legitimate
+# near-names — lower rank does NOT mean "typosquat"), and OSV ``MAL-`` records
+# cover legit packages with compromised *versions* (``litellm``, ``node-ipc``),
+# so neither is safe to auto-apply. Only hand-confirmed names go here → zero
+# false positives by construction.
+_DENYLIST_PATH = _DATA_DIR.parent / "typosquat_denylist.json"
+
 # Distances above this are not interesting; below it we always flag
 # (with severity scaled by distance).
 _MAX_DISTANCE = 2
@@ -55,6 +68,10 @@ _POPULAR_BY_LEN: Dict[str, Dict[int, List[str]]] = {}
 # Set view of the popular list for the O(1) "is it popular" test
 # in ``_check_one`` (was a list ``in`` linear scan pre-fix).
 _POPULAR_SET: Dict[str, set] = {}
+# Per-ecosystem denylist sets, loaded once from ``_DENYLIST_PATH``.
+_DENYLIST_BY_ECO: Dict[str, set] = {}
+# Sentinel so a missing/!exists denylist file is loaded (and logged) once.
+_DENYLIST_RAW: Optional[Dict[str, set]] = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +197,50 @@ def _load_popular(ecosystem: str) -> List[str]:
     if not isinstance(data, list):
         _POPULAR_BY_ECO[ecosystem] = []
         return []
-    cleaned = [n.lower() for n in data if isinstance(n, str)]
+    # Subtract the hand-vetted denylist so a confusable name that rode the
+    # popularity feed into the list (npm ``loadash``) is no longer a trusted
+    # exact-match — the detector then evaluates it as distance-1 from its
+    # near-twin. See ``_DENYLIST_PATH``.
+    denied = _load_denylist(ecosystem)
+    cleaned = [n.lower() for n in data
+               if isinstance(n, str) and n.lower() not in denied]
     _POPULAR_BY_ECO[ecosystem] = cleaned
     return cleaned
+
+
+def _load_denylist(ecosystem: str) -> set:
+    """Return the lowercased denylist name-set for ``ecosystem`` (empty if the
+    file is absent, malformed, or has no entry for it). Loaded once and cached;
+    a missing/malformed file degrades to "no denylist" (never raises)."""
+    global _DENYLIST_RAW
+    if _DENYLIST_RAW is None:
+        _DENYLIST_RAW = {}
+        try:
+            raw = _json.loads(_DENYLIST_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, _json.JSONDecodeError) as e:
+            logger.warning("sca.supply_chain.typosquat: failed to load "
+                           "denylist %s: %s", _DENYLIST_PATH, e)
+            raw = {}
+        if isinstance(raw, dict):
+            for eco, names in raw.items():
+                # Two accepted shapes per ecosystem: a bare ``[name, ...]``
+                # list, or an enriched ``{name: {provenance...}}`` map (the
+                # curation pipeline records who/when/why). Either way we only
+                # need the name set here. A ``_comment`` string key is neither
+                # and is skipped.
+                if isinstance(names, list):
+                    _DENYLIST_RAW[eco] = {
+                        n.lower() for n in names if isinstance(n, str)}
+                elif isinstance(names, dict):
+                    _DENYLIST_RAW[eco] = {
+                        k.lower() for k in names if isinstance(k, str)}
+    cached = _DENYLIST_BY_ECO.get(ecosystem)
+    if cached is None:
+        cached = _DENYLIST_RAW.get(ecosystem, set())
+        _DENYLIST_BY_ECO[ecosystem] = cached
+    return cached
 
 
 def _popular_set(ecosystem: str) -> set:
