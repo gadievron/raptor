@@ -26,6 +26,13 @@ instructor==1.15.1
 # pip install openai        # OpenAI, Gemini (via shim), Mistral, Ollama
 # pip install anthropic     # Anthropic Claude (native structured output)
 # pip install google-genai  # Google Gemini (native SDK, accurate thinking token costs)
+# pip install botocore      # AWS Bedrock SigV4 signing — PARENT-ONLY: imported
+#                           # only by the credential-isolation dispatcher
+#                           # (core/llm/dispatcher) to sign Bedrock requests on
+#                           # the worker's behalf. NOT needed for Bedrock API-key
+#                           # (AWS_BEARER_TOKEN_BEDROCK) auth, only for SigV4.
+#                           # Workers use the stock anthropic SDK and never
+#                           # import boto3/botocore.
 
 # Optional: Rich inventory metadata (decorators, annotations, visibility, typed params)
 # pip install tree-sitter tree-sitter-python tree-sitter-java tree-sitter-javascript tree-sitter-c tree-sitter-go

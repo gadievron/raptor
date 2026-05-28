@@ -184,6 +184,36 @@ def make_anthropic_client(
     )
 
 
+def make_bedrock_client(
+    *,
+    socket_path: Optional[str] = None,
+    token: Optional[str] = None,
+    timeout: Optional[float] = None,
+):
+    """Return a stock ``anthropic.Anthropic`` client whose requests are
+    rewritten + SigV4-signed for AWS Bedrock by the dispatcher.
+
+    Identical to :func:`make_anthropic_client` except the base URL points
+    at the ``/bedrock`` prefix. The worker still speaks the plain
+    Anthropic Messages API (``client.messages.create(...)``) and holds no
+    AWS credentials — boto3/botocore never load in the worker's address
+    space. The dispatcher's bedrock rule moves ``model`` into the
+    ``/model/<id>/invoke`` path, adds ``anthropic_version`` to the body,
+    retargets the regional bedrock-runtime host, and signs with the
+    parent's AWS credentials. The Bedrock ``InvokeModel`` response is the
+    same Messages JSON the SDK already parses, so the round trip is
+    invisible at the call site (non-streaming only)."""
+    import anthropic
+
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
+    http = _make_httpx_client(socket_path, token, timeout=timeout)
+    return anthropic.Anthropic(
+        api_key="dummy-not-used",
+        base_url="http://_/bedrock",
+        http_client=http,
+    )
+
+
 def make_openai_client(
     *,
     socket_path: Optional[str] = None,
