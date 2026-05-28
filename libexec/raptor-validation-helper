@@ -1388,13 +1388,14 @@ def prepare_1(workdir, target=None, model=None):
     except Exception as e:
         print(f"Diagram error: {e}")
 
-    # Coverage summary
+    # Coverage summary (unified store-backed report; file-level tier when
+    # there's no function inventory).
     try:
-        from core.coverage.summary import compute_summary, format_summary
-        cov = compute_summary(workdir)
+        from core.coverage.store_summary import render_run_coverage
+        cov = render_run_coverage(workdir)
         if cov:
             print()
-            print(format_summary(cov))
+            print(cov)
     except Exception:
         pass
 

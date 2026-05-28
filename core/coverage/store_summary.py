@@ -21,6 +21,10 @@ from .registry import category_of
 from .store import CoverageStore, iter_inventory_functions
 
 _CATEGORIES = ("static", "llm", "runtime")
+# Kinds an LLM reviews unit-by-unit. The LLM-review gap is scoped to these:
+# globals/macros/typedefs/classes are whole-file-scanner territory and
+# interstitial is glue — listing them overstates "unreviewed".
+_REVIEWABLE_KINDS = ("function", "top_level")
 
 
 def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
@@ -81,27 +85,145 @@ def file_level_view(run_dirs: Iterable[Path]) -> Dict[str, Any]:
     }
 
 
-def render_run_coverage(run_dir) -> "str | None":
-    """Build and format a single run's coverage view on-demand, or None if
-    there's nothing to show. Store view (category/depth + verdicts) when the run
-    has an inventory (checklist.json — possibly a symlink to the project one);
-    the file-level tier otherwise. Used to print a coverage summary at the end
-    of a run (e.g. /agentic). Read-only — does not persist."""
-    from core.json import load_json
+def render_coverage(
+    run_dirs, checklist, store_path, annotations_base=None, detailed=False,
+) -> "str | None":
+    """The unified coverage report — the single rendering path for every
+    surface (/project coverage, standalone /scan, /agentic, raptor-coverage-summary).
 
+    When an inventory (checklist) is present: builds the store on-demand
+    (loads the durable ``coverage.json`` if any, re-imports current records +
+    /understand + annotations — idempotent, read-only) and renders the
+    store-backed coverage STATE (category/depth, verdicts, kinds, gaps,
+    provenance) followed by the per-run tool EXECUTION detail (rules/packs/
+    files_failed/policy validation) read from records. Coverage numbers are the
+    store's; execution detail is run-scoped diagnostics shown alongside.
+
+    With no inventory (a bare /scan or /codeql): degrades to the file-level
+    tier. Returns ``None`` when there's nothing to show.
+    """
+    from .summary import execution_detail, format_execution_detail
+
+    run_dirs = list(run_dirs)
+    if checklist:
+        store = _build_store(run_dirs, checklist, store_path, annotations_base)
+        parts = [format_store_view(store_view(store, checklist),
+                                   max_gap=200 if detailed else 15)]
+        if detailed:
+            table = format_file_breakdown(file_breakdown(store, checklist))
+            if table:
+                parts.append(table)
+        exec_section = format_execution_detail(execution_detail(run_dirs, checklist))
+        if exec_section:
+            parts.append(exec_section)
+        return "\n".join(parts)
+
+    fv = file_level_view(run_dirs)
+    if fv.get("tools") or fv.get("runs"):
+        return format_file_level_view(fv)
+    return None
+
+
+def _build_store(run_dirs, checklist, store_path, annotations_base=None):
+    """Construct the store on-demand: load the durable ``coverage.json`` (if
+    any) then re-import the current records + /understand + annotations.
+    Idempotent and read-only (never saves). The single store-construction path."""
     from .importer import backfill
     from .store import CoverageStore
 
+    store = CoverageStore(Path(store_path))
+    backfill(store, list(run_dirs), checklist, annotations_base=annotations_base)
+    return store
+
+
+def coverage_view(run_dirs, checklist, store_path, annotations_base=None):
+    """The store-backed :func:`store_view`, or None when there's no inventory.
+    Used for the rendered report and the ``--fail-under`` threshold check."""
+    if not checklist:
+        return None
+    return store_view(
+        _build_store(run_dirs, checklist, store_path, annotations_base), checklist)
+
+
+def file_breakdown(store: CoverageStore, checklist: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Per-file rollup for the ``--detailed`` view: item count, llm-reviewed
+    reviewable units, examined items, findings, and file coverage %. Sorted
+    worst-first by LLM-review ratio so files needing attention surface first."""
+    files: Dict[str, Dict[str, Any]] = {}
+    for f, _name, lo, hi, kind in iter_inventory_functions(checklist):
+        high = hi if hi is not None else lo
+        row = files.setdefault(f, {
+            "path": f, "items": 0, "reviewable": 0, "llm": 0, "examined": 0})
+        row["items"] += 1
+        cats = {category_of(t) for t in store.tool_coverage_of_range(f, lo, high)}
+        if store.function_verdict(f, lo, high) != "unexamined":
+            row["examined"] += 1
+        if kind in _REVIEWABLE_KINDS:
+            row["reviewable"] += 1
+            if "llm" in cats:
+                row["llm"] += 1
+    for f, row in files.items():
+        row["findings"] = len(store.finding_ids(f))
+        row["coverage"] = store.file_coverage(f)
+    return sorted(
+        files.values(),
+        key=lambda r: ((r["llm"] / r["reviewable"]) if r["reviewable"] else 1.0,
+                       r["path"]))
+
+
+def format_file_breakdown(rows: List[Dict[str, Any]], max_files: int = 40) -> str:
+    """Render :func:`file_breakdown` as a per-file table ('' if empty)."""
+    if not rows:
+        return ""
+    name_w = min(max(len(r["path"]) for r in rows), 60)
+    lines = [
+        "  Per-file (worst LLM-review first):",
+        f"    {'file':<{name_w}}  {'cov%':>5}  {'llm':>7}  {'exam':>7}  {'find':>4}",
+    ]
+    for r in rows[:max_files]:
+        llm = f"{r['llm']}/{r['reviewable']}" if r["reviewable"] else "—"
+        exam = f"{r['examined']}/{r['items']}"
+        find = str(r["findings"]) if r["findings"] else "-"
+        lines.append(
+            f"    {r['path'][:name_w]:<{name_w}}  {r['coverage']:>4.0f}%  "
+            f"{llm:>7}  {exam:>7}  {find:>4}")
+    if len(rows) > max_files:
+        lines.append(f"    … (+{len(rows) - max_files} more files)")
+    return "\n".join(lines)
+
+
+def render_run_coverage(run_dir) -> "str | None":
+    """Single-run convenience wrapper over :func:`render_coverage` (used by
+    /agentic and standalone /scan end-of-run printing). Read-only."""
+    from core.json import load_json
+
     run = Path(run_dir)
-    checklist = load_json(run / "checklist.json")
-    if checklist:
-        store = CoverageStore(run / "coverage.json")  # fresh; backfill fills it
-        backfill(store, [run], checklist)
-        return format_store_view(store_view(store, checklist))
-    view = file_level_view([run])
-    if view.get("tools") or view.get("runs"):
-        return format_file_level_view(view)
-    return None
+    return render_coverage(
+        [run], load_json(run / "checklist.json"), run / "coverage.json",
+        annotations_base=run / "annotations",
+    )
+
+
+def store_llm_coverage_percent(view: Dict[str, Any]) -> float:
+    """Percent of REVIEWABLE units (function/top_level) with LLM coverage."""
+    total = view.get("llm_reviewable", 0)
+    if not total:
+        return 100.0
+    reviewed = total - view.get("gap_no_llm", 0)
+    return max(0.0, min(100.0, reviewed / total * 100))
+
+
+def store_coverage_threshold_met(view: Dict[str, Any], fail_under: float) -> bool:
+    return store_llm_coverage_percent(view) >= fail_under
+
+
+def format_store_threshold_result(view: Dict[str, Any], fail_under: float) -> str:
+    pct = store_llm_coverage_percent(view)
+    status = "PASS" if pct >= fail_under else "FAIL"
+    return (
+        f"Coverage threshold: {pct:.1f}% LLM item coverage; "
+        f"required {fail_under:.1f}% — {status}"
+    )
 
 
 def format_file_level_view(view: Dict[str, Any], max_files: int = 20) -> str:
@@ -138,6 +260,7 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
     """
     total = 0
     covered_any = 0
+    reviewable_total = 0
     by_category = {c: 0 for c in _CATEGORIES}
     by_kind: Dict[str, int] = {}
     llm_gap: List[Dict[str, Any]] = []
@@ -166,17 +289,22 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         for c in _CATEGORIES:
             if c in cats:
                 by_category[c] += 1
-        # Interstitial counts toward completeness (total/by_kind/examined/
-        # verdicts) but is kept OUT of the actionable gap *listings*: it's
-        # non-function glue (includes, top-level lines) that whole-file scanners
-        # cover and that the LLM doesn't review unit-by-unit — listing every
-        # file's interstitial would drown the real function gaps.
         is_interstitial = kind == "interstitial"
-        if "llm" not in cats and not is_interstitial:
-            llm_gap.append({"file": file, "function": name, "line": lo})
+        # The LLM-review gap lists only REVIEWABLE units (function / top_level).
+        # Globals/macros/typedefs/classes are whole-file-scanner territory and
+        # interstitial is glue — none are units the LLM reviews one-by-one, so
+        # listing them overstates "unreviewed" and drowns the real gaps.
+        # (Completeness counts above — total/by_kind/examined/verdicts — still
+        # include every kind.)
+        if kind in _REVIEWABLE_KINDS:
+            reviewable_total += 1
+            if "llm" not in cats:
+                llm_gap.append({"file": file, "function": name, "line": lo})
 
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
-        # The re-review gap: never examined, or found-then-lost (functions only).
+        # The re-review gap: never examined (by ANY tool) or found-then-lost.
+        # Interstitial glue excluded; other kinds kept — a genuinely unexamined
+        # global (no scanner ran over it) is a real gap worth surfacing.
         if verdict in ("unexamined", "found_then_lost") and not is_interstitial:
             review_gap.append(
                 {"file": file, "function": name, "line": lo, "verdict": verdict}
@@ -189,6 +317,7 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         "items_by_kind": by_kind,
         "functions_covered": covered_any,
         "functions_by_category": by_category,
+        "llm_reviewable": reviewable_total,
         "gap_no_tool": total_gap,
         "gap_no_llm": len(llm_gap),
         "llm_gap_functions": llm_gap,

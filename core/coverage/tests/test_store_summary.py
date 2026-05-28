@@ -201,3 +201,132 @@ def test_format_store_view_renders(tmp_path):
     assert "a.c:f2" in out
     # No red/green indicators (output-style rule).
     assert "🔴" not in out and "🟢" not in out
+
+
+_MIXED_KINDS = {"files": [{"path": "a.c", "lines": 50, "items": [
+    {"name": "fn", "kind": "function", "line_start": 1, "line_end": 10},
+    {"name": "tl", "kind": "top_level", "line_start": 12, "line_end": 12},
+    {"name": "G", "kind": "global", "line_start": 20, "line_end": 20},
+    {"name": "M", "kind": "macro", "line_start": 25, "line_end": 25},
+    {"name": "T", "kind": "class", "line_start": 30, "line_end": 35},
+]}]}
+
+
+def test_llm_gap_lists_only_reviewable_kinds(tmp_path):
+    # No llm coverage anywhere: only function + top_level are the LLM-review
+    # gap; globals/macros/typedefs are excluded by kind.
+    s = _store(tmp_path)
+    s.import_inventory_meta(_MIXED_KINDS)
+    view = store_view(s, _MIXED_KINDS)
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl"}
+    assert view["llm_reviewable"] == 2
+    assert view["gap_no_llm"] == 2
+    # Completeness counts still include every kind.
+    assert view["total_functions"] == 5
+
+
+def test_llm_gap_excludes_reviewed_function(tmp_path):
+    s = _store(tmp_path)
+    s.import_inventory_meta(_MIXED_KINDS)
+    s.mark("a.c", 1, 10, "claude:audit")       # llm reviews fn
+    view = store_view(s, _MIXED_KINDS)
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"tl"}
+    assert view["llm_reviewable"] == 2
+
+
+def test_store_threshold_helpers(tmp_path):
+    from core.coverage.store_summary import (
+        format_store_threshold_result,
+        store_coverage_threshold_met,
+        store_llm_coverage_percent,
+    )
+    s = _store(tmp_path)
+    s.import_inventory_meta(_MIXED_KINDS)
+    s.mark("a.c", 1, 10, "claude:audit")       # 1 of 2 reviewable → 50%
+    view = store_view(s, _MIXED_KINDS)
+    assert store_llm_coverage_percent(view) == 50.0
+    assert store_coverage_threshold_met(view, 50.0)
+    assert not store_coverage_threshold_met(view, 75.0)
+    result = format_store_threshold_result(view, 75.0)
+    assert "50.0% LLM item coverage" in result
+    assert "FAIL" in result
+
+
+def test_store_threshold_no_reviewable_is_100(tmp_path):
+    from core.coverage.store_summary import store_llm_coverage_percent
+    s = _store(tmp_path)
+    only_global = {"files": [{"path": "a.c", "lines": 5, "items": [
+        {"name": "G", "kind": "global", "line_start": 1, "line_end": 1}]}]}
+    s.import_inventory_meta(only_global)
+    assert store_llm_coverage_percent(store_view(s, only_global)) == 100.0
+
+
+def test_render_coverage_combines_state_and_execution(tmp_path):
+    import json
+    from core.coverage.store_summary import render_coverage
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["a.c"],
+        "rules_applied": ["crypto"], "version": "1.5", "timestamp": "t"}))
+    report = render_coverage([run], _CHECKLIST, run / "coverage.json")
+    assert "Coverage (persistent store)" in report     # store-state section
+    assert "Tool execution" in report                  # execution-detail section
+    assert "semgrep" in report
+
+
+def test_render_coverage_file_level_without_checklist(tmp_path):
+    import json
+    from core.coverage.store_summary import render_coverage
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / ".raptor-run.json").write_text("{}")
+    (run / "coverage-semgrep.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["x.c"], "timestamp": "t"}))
+    report = render_coverage([run], None, run / "coverage.json")
+    assert report is not None and "file-level" in report
+
+
+def test_coverage_view_none_without_checklist(tmp_path):
+    from core.coverage.store_summary import coverage_view
+    assert coverage_view([tmp_path], None, tmp_path / "coverage.json") is None
+
+
+def test_file_breakdown_counts_and_worst_first(tmp_path):
+    from core.coverage.store_summary import file_breakdown
+    s = _store(tmp_path)
+    s.import_inventory_meta(_CHECKLIST)
+    s.mark("a.c", 0, 20, "claude:audit")       # f1 llm-reviewed
+    s.link_finding("a.c", "F1", line=40)       # finding in f2
+    rows = file_breakdown(s, _CHECKLIST)
+    by_path = {r["path"]: r for r in rows}
+    assert by_path["a.c"]["items"] == 2
+    assert by_path["a.c"]["reviewable"] == 2
+    assert by_path["a.c"]["llm"] == 1
+    assert by_path["a.c"]["findings"] == 1
+    # b.c has no llm coverage (ratio 0) → sorts before a.c (ratio 0.5).
+    assert rows[0]["path"] == "b.c"
+
+
+def test_format_file_breakdown_table(tmp_path):
+    from core.coverage.store_summary import file_breakdown, format_file_breakdown
+    s = _store(tmp_path)
+    s.import_inventory_meta(_CHECKLIST)
+    table = format_file_breakdown(file_breakdown(s, _CHECKLIST))
+    assert "Per-file" in table
+    assert "a.c" in table and "b.c" in table
+    assert format_file_breakdown([]) == ""
+
+
+def test_render_coverage_detailed_includes_per_file_table(tmp_path):
+    import json
+    from core.coverage.store_summary import render_coverage
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(json.dumps(
+        {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+    report = render_coverage([run], _CHECKLIST, run / "coverage.json", detailed=True)
+    assert "Per-file" in report
+    # Non-detailed omits the table.
+    plain = render_coverage([run], _CHECKLIST, run / "coverage.json")
+    assert "Per-file" not in plain
