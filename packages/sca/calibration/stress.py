@@ -15,18 +15,11 @@ pipeline is metric-driven (precision / ρ); the stress sweep is
 *invariant*-driven (these scans should produce ROUGHLY these
 counts).
 
-## Usage
-
-    libexec/raptor-sca-stress                # check current state vs baseline
-    libexec/raptor-sca-stress --update-baseline   # capture current state as new baseline
-    libexec/raptor-sca-stress --no-clone     # use existing project_samples/ output
-
-## Exit codes
+## Exit codes (when called from the GHA workflow or a script)
 
     0 — every project within tolerance
     1 — at least one warn (small drift; investigate)
     2 — at least one fail (large drift or new error)
-    3 — args / I/O error
 
 ## What's measured
 
@@ -74,6 +67,7 @@ but the corresponding sample no longer does, that's reported
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -129,9 +123,16 @@ def run_stress_sweep(
     out_root: Optional[Path] = None,
     git_clone_timeout: int = 300,
     sca_timeout: int = 600,
+    max_workers: int = 4,
     use_existing_clones: bool = False,
 ) -> List[StressResult]:
     """Walk samples, scan each, return per-sample diagnostics.
+
+    Scans run in parallel (``max_workers`` threads). Each scan is
+    bounded by ``sca_timeout`` — if ``run_sca`` hasn't returned by
+    then, the result is recorded as an error and the sweep continues.
+    The underlying thread may linger until process exit, but won't
+    block other scans.
 
     ``out_root`` defaults to a STABLE per-machine path under
     ``~/.raptor/cache/sca/stress/clones/``. Stable so that the
@@ -167,21 +168,60 @@ def run_stress_sweep(
             out_root = SCA_CACHE_ROOT / "stress" / "clones"
     out_root.mkdir(parents=True, exist_ok=True)
 
+    per_scan_budget = sca_timeout + git_clone_timeout
     results: List[StressResult] = []
     try:
-        for sample in samples:
-            result = _scan_one(
-                sample, out_root,
-                git_clone_timeout=git_clone_timeout,
-                sca_timeout=sca_timeout,
-            )
-            results.append(result)
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers,
+        ) as executor:
+            future_to_sample = {
+                executor.submit(
+                    _scan_one, sample, out_root,
+                    git_clone_timeout=git_clone_timeout,
+                ): sample
+                for sample in samples
+            }
+            completed: set = set()
+            try:
+                for future in concurrent.futures.as_completed(
+                    future_to_sample, timeout=per_scan_budget,
+                ):
+                    completed.add(future)
+                    sample = future_to_sample[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:  # noqa: BLE001
+                        result = StressResult(
+                            project=sample.name,
+                            ecosystem=sample.ecosystem,
+                            elapsed_seconds=0.0,
+                            deps_analysed=0, vuln_findings=0,
+                            eco_breakdown={},
+                            error=f"unexpected: {str(e)[:200]}",
+                        )
+                    results.append(result)
+                    logger.info(
+                        "[%d/%d] %s/%s%s",
+                        len(results), len(future_to_sample),
+                        sample.ecosystem, sample.name,
+                        " (error)" if result.error else "",
+                    )
+            except concurrent.futures.TimeoutError:
+                pass
+            for future, sample in future_to_sample.items():
+                if future not in completed:
+                    results.append(StressResult(
+                        project=sample.name,
+                        ecosystem=sample.ecosystem,
+                        elapsed_seconds=float(per_scan_budget),
+                        deps_analysed=0, vuln_findings=0,
+                        eco_breakdown={},
+                        error=(
+                            f"scan timed out (>{per_scan_budget}s budget)"
+                        ),
+                    ))
     finally:
         if cleanup_dir is not None:
-            # Best-effort cleanup. Errors here mustn't mask a real
-            # scan failure. Only the explicitly-ephemeral path runs
-            # this; the default stable-path mode keeps state for the
-            # next sweep.
             try:
                 _rmtree(cleanup_dir)
             except OSError:
@@ -194,7 +234,6 @@ def _scan_one(
     out_root: Path,
     *,
     git_clone_timeout: int,
-    sca_timeout: int,
 ) -> StressResult:
     proj_out = out_root / f"{sample.ecosystem}-{sample.name}"
     proj_out.mkdir(parents=True, exist_ok=True)
@@ -390,19 +429,20 @@ def _diff_one(
     # Vuln-finding count drift.
     bv = int(baseline.get("vuln_findings", 0) or 0)
     if bv > 0:
-        delta_pct = abs(current.vuln_findings - bv) / bv
-        if delta_pct >= vuln_fail_pct:
+        signed_pct = (current.vuln_findings - bv) / bv
+        abs_pct = abs(signed_pct)
+        if abs_pct >= vuln_fail_pct:
             severity = "fail"
             issues.append(
                 f"vuln_findings {bv} → {current.vuln_findings} "
-                f"({delta_pct*100:+.0f}%, ≥ {vuln_fail_pct*100:.0f}% fail)"
+                f"({signed_pct*100:+.0f}%, ≥ {vuln_fail_pct*100:.0f}% fail)"
             )
-        elif delta_pct >= vuln_warn_pct:
+        elif abs_pct >= vuln_warn_pct:
             if severity == "ok":
                 severity = "warn"
             issues.append(
                 f"vuln_findings {bv} → {current.vuln_findings} "
-                f"({delta_pct*100:+.0f}%, ≥ {vuln_warn_pct*100:.0f}% warn)"
+                f"({signed_pct*100:+.0f}%, ≥ {vuln_warn_pct*100:.0f}% warn)"
             )
     else:
         # Baseline was 0 vuln_findings; flag any non-zero current as
@@ -419,19 +459,20 @@ def _diff_one(
     # Deps-analysed drift (parser regressions).
     bd = int(baseline.get("deps_analysed", 0) or 0)
     if bd > 0:
-        delta_pct = abs(current.deps_analysed - bd) / bd
-        if delta_pct >= deps_fail_pct:
+        signed_pct = (current.deps_analysed - bd) / bd
+        abs_pct = abs(signed_pct)
+        if abs_pct >= deps_fail_pct:
             severity = "fail"
             issues.append(
                 f"deps_analysed {bd} → {current.deps_analysed} "
-                f"({delta_pct*100:+.0f}%, ≥ {deps_fail_pct*100:.0f}% fail)"
+                f"({signed_pct*100:+.0f}%, ≥ {deps_fail_pct*100:.0f}% fail)"
             )
-        elif delta_pct >= deps_warn_pct:
+        elif abs_pct >= deps_warn_pct:
             if severity == "ok":
                 severity = "warn"
             issues.append(
                 f"deps_analysed {bd} → {current.deps_analysed} "
-                f"({delta_pct*100:+.0f}%, ≥ {deps_warn_pct*100:.0f}% warn)"
+                f"({signed_pct*100:+.0f}%, ≥ {deps_warn_pct*100:.0f}% warn)"
             )
 
     # Eco-breakdown drift — flag NEW eco categories appearing
@@ -514,10 +555,10 @@ def write_baseline(
             "provenance": (
                 "Output of ``run_stress_sweep`` against "
                 "``project_samples`` in the calibration corpus. "
-                "Re-generated by an operator running "
-                "``raptor-sca-stress --update-baseline`` after "
-                "intentional changes to the samples list, parser "
-                "logic, or scoring formula."
+                "Re-generated by an operator calling "
+                "``write_baseline()`` after intentional changes "
+                "to the samples list, parser logic, or scoring "
+                "formula."
             ),
         },
         "projects": dict(sorted(projects.items())),
