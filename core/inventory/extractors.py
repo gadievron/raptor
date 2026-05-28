@@ -171,16 +171,35 @@ class PythonExtractor:
                 ))
         return out
 
+    @staticmethod
+    def _class_base_names(node: "ast.ClassDef") -> List[str]:
+        """Simple base-class names of a ``class`` (``class V(a.b.APIView,
+        Mixin)`` → ``["APIView", "Mixin"]``). Keyword bases (``metaclass=``)
+        are in ``node.keywords``, not ``node.bases``, so they're skipped.
+        Mirrors the tree-sitter extractor so the stdlib fallback records the
+        same ``class_attributes`` (framework-base detection needs it)."""
+        out: List[str] = []
+        for b in node.bases:
+            if isinstance(b, ast.Name):
+                out.append(b.id)
+            elif isinstance(b, ast.Attribute):
+                out.append(b.attr)
+        return out
+
     def _walk(self, node: ast.AST, functions: List[FunctionInfo],
-              class_name: Optional[str]) -> None:
+              class_name: Optional[str],
+              class_attributes: Sequence[str] = ()) -> None:
         """Walk AST collecting functions with metadata."""
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
-                self._walk(child, functions, class_name=child.name)
+                self._walk(child, functions, class_name=child.name,
+                           class_attributes=self._class_base_names(child))
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                functions.append(self._extract_function(child, class_name))
+                functions.append(
+                    self._extract_function(child, class_name, class_attributes))
                 # Walk into nested functions/classes
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             else:
                 # Descend into compound statements (if / try / with /
                 # for / while / match) so functions nested inside them
@@ -194,9 +213,11 @@ class PythonExtractor:
                 # don't open a class scope. Only FunctionDef nodes are
                 # collected, so recursing through expression children
                 # is harmless (lambdas are ast.Lambda, not FunctionDef).
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
 
-    def _extract_function(self, node: ast.AST, class_name: Optional[str]) -> FunctionInfo:
+    def _extract_function(self, node: ast.AST, class_name: Optional[str],
+                          class_attributes: Sequence[str] = ()) -> FunctionInfo:
         """Extract a single function with full metadata."""
         args = node.args.args
         # Build signature
@@ -236,6 +257,7 @@ class PythonExtractor:
                 attributes=attributes,
                 return_type=return_type,
                 parameters=parameters,
+                class_attributes=list(class_attributes),
             ),
         )
 

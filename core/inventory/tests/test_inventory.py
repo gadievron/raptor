@@ -1672,6 +1672,18 @@ class TestPythonFrameworkConvention:
         assert "ListView" in meta["get_queryset"]["class_attributes"]
         assert meta["dead"]["class_attributes"] == []
 
+    def test_python_class_bases_captured_stdlib_path(self):
+        # CI has no tree-sitter grammar → the stdlib ast PythonExtractor runs.
+        # Exercise it DIRECTLY (not build_inventory, which prefers tree-sitter
+        # where installed) so base capture is verified on the fallback path
+        # regardless of environment. See feedback-test-on-stdlib-extractor-path.
+        from core.inventory.extractors import PythonExtractor
+        meta = {fi.name: fi.metadata
+                for fi in PythonExtractor().extract("views.py", self._FILES["views.py"])}
+        assert "APIView" in meta["get"].class_attributes        # dotted base
+        assert "ListView" in meta["get_queryset"].class_attributes
+        assert meta["dead"].class_attributes == []
+
     def test_python_cbv_methods_are_entries(self, tmp_path):
         from core.inventory.reach_audit import classify_reachability
         (tmp_path / "views.py").write_text(self._FILES["views.py"])
