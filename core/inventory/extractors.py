@@ -824,6 +824,9 @@ def _ts_language(lang: str):
             import tree_sitter_c_sharp as ts
         elif lang == "ruby":
             import tree_sitter_ruby as ts
+        elif lang == "php":
+            import tree_sitter_php as ts
+            return Language(ts.language_php())
         else:
             return None
         return Language(ts.language())
@@ -869,6 +872,7 @@ class TreeSitterExtractor:
         "csharp": ("method_declaration", "constructor_declaration",
                    "local_function_statement"),
         "ruby": ("method", "singleton_method"),
+        "php": ("method_declaration", "function_definition"),
     }
 
     _CLASS_TYPES = {
@@ -883,6 +887,7 @@ class TreeSitterExtractor:
         "csharp": ("class_declaration", "interface_declaration",
                    "struct_declaration", "record_declaration"),
         "ruby": ("class", "module"),
+        "php": ("class_declaration", "interface_declaration", "trait_declaration"),
     }
 
     def __init__(self, language: str):
@@ -919,7 +924,18 @@ class TreeSitterExtractor:
                     if mod.type in ("marker_annotation", "annotation"):
                         out.append(mod.text.decode().lstrip("@"))
             elif child.type == "attribute_list":
-                out.extend(self._csharp_attr_names(child))
+                # C#: attribute_list → attribute. PHP: attribute_list →
+                # attribute_group → attribute (deeper nesting).
+                if self.language == "php":
+                    out.extend(self._php_attr_names(child))
+                else:
+                    out.extend(self._csharp_attr_names(child))
+            elif child.type in ("base_clause", "class_interface_clause"):
+                # PHP: ``extends Base`` / ``implements I1, I2`` — record the base
+                # type names so framework bases (Controller / AbstractController
+                # / Command / ShouldQueue …) can mark the class's methods entries.
+                out.extend(n.text.decode() for n in child.children
+                           if n.type in ("name", "qualified_name"))
             elif child.type == "superclass":
                 # Ruby: ``class X < ApplicationController`` — base is a
                 # ``constant`` / ``scope_resolution``. Java: ``extends Foo`` —
@@ -934,6 +950,16 @@ class TreeSitterExtractor:
                 # Spring Data, Validator → a framework-dispatched interface)
                 # can mark the class's methods as entries.
                 out.extend(self._java_base_names(child))
+            elif child.type == "argument_list" and self.language == "python":
+                # Python: ``class V(APIView, LoginRequiredMixin, metaclass=M)``
+                # — the base classes live in the argument_list. Record their
+                # simple tail names (``rest_framework.views.APIView`` →
+                # ``APIView``) so framework base classes (Django/DRF/Flask
+                # class-based views) can mark the class's methods as entries.
+                # Skip keyword args (``metaclass=…``).
+                for b in child.children:
+                    if b.type in ("identifier", "attribute"):
+                        out.append(b.text.decode().split(".")[-1].strip())
         return out
 
     @staticmethod
@@ -983,6 +1009,34 @@ class TreeSitterExtractor:
         for child in node.children:
             if child.type == "attribute_list":
                 out.extend(self._csharp_attr_names(child))
+        return out
+
+    @staticmethod
+    def _php_attr_names(attribute_list_node) -> List[str]:
+        """Attribute names in one PHP ``attribute_list`` — nests one level deeper
+        than C#: ``attribute_list → attribute_group → attribute → name``
+        (``#[Route('/x')]`` → ``["Route"]``)."""
+        out: List[str] = []
+        for grp in attribute_list_node.children:
+            if grp.type != "attribute_group":
+                continue
+            for a in grp.children:
+                if a.type != "attribute":
+                    continue
+                for c in a.children:
+                    if c.type in ("name", "qualified_name"):
+                        out.append(c.text.decode())
+                        break
+        return out
+
+    def _php_attributes(self, node) -> List[str]:
+        """PHP attributes on a method — its ``attribute_list`` children."""
+        if self.language != "php":
+            return []
+        out: List[str] = []
+        for child in node.children:
+            if child.type == "attribute_list":
+                out.extend(self._php_attr_names(child))
         return out
 
     # Sibling node types allowed between a TS/JS decorator and the
@@ -1083,7 +1137,8 @@ class TreeSitterExtractor:
                 # JS/TS: method/function decorators are preceding siblings
                 # (@Get() / @Cron() …). Python: a decorated_definition wrapper.
                 # C#: ``[HttpGet]`` attribute_list children (gathered here).
-                attrs = self._ts_decorators(child) + self._csharp_attributes(child)
+                attrs = (self._ts_decorators(child) + self._csharp_attributes(child)
+                         + self._php_attributes(child))
                 parent = child.parent
                 if parent and parent.type == "decorated_definition":
                     for sib in parent.children:
@@ -1159,6 +1214,15 @@ class TreeSitterExtractor:
         # TS/JS class members: accessibility_modifier (default public).
         if node.type == "method_definition":
             visibility = self._ts_member_visibility(node)
+
+        # PHP: a method_declaration carries a ``visibility_modifier`` child;
+        # methods default to public when none is present.
+        if self.language == "php" and node.type == "method_declaration":
+            visibility = "public"
+            for child in node.children:
+                if child.type == "visibility_modifier":
+                    visibility = child.text.decode().strip()
+                    break
 
         # C#: ``modifier`` children carry access keywords; members default to
         # ``private`` (the framework-entry rule keys on public action methods).
@@ -1441,6 +1505,7 @@ _REGEX_EXTRACTORS = {
     'tsx': JavaScriptExtractor(),
     'csharp': GenericExtractor(),
     'ruby': GenericExtractor(),
+    'php': GenericExtractor(),
     'c': CExtractor(),
     'cpp': CExtractor(),
     'java': JavaExtractor(),

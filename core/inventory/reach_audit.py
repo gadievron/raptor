@@ -90,6 +90,16 @@ def _stage_entry(ctx: "_ClassifyCtx", R) -> Optional[str]:
     if er == "reachable":
         return "reachable"
     if er == "no_path_from_entry":
+        # CHA: entry-reachability follows resolved call edges, not the
+        # over-inclusive method-dispatch index. A polymorphic-dispatch override
+        # (or any Go method — Go interfaces are structural) whose name is
+        # dispatched via an unresolved member call could be reached at runtime
+        # through interface/virtual dispatch even when no resolved path exists.
+        # Fall through to UNCERTAIN rather than claim no_path_from_entry — the
+        # same FN-safe rule the 1-hop stage applies to NOT_CALLED.
+        if R.is_virtual_dispatch_candidate(
+                ctx.inventory, ctx.class_name, ctx.name):
+            return None
         return "no_path_from_entry"
     return None
 

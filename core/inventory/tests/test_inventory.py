@@ -1086,6 +1086,54 @@ class TestGoReachability:
         assert verdict("live.go", "Exported") == "reachable"   # over-fire control
 
 
+class TestGoInterfaceDispatch:
+    """Go CHA-analog. Go has no inheritance and its call graph emits no
+    ClassDef, but the item extractor records each method's receiver type as
+    class_name, and Go interfaces are STRUCTURAL — any method can satisfy an
+    interface. So an unexported method dispatched via an interface-typed
+    receiver (``x.serve()``) could be reached at runtime even though entry-
+    reachability finds no resolved path; it must read UNCERTAIN, not
+    no_path_from_entry. A method whose name is never dispatched stays dead.
+    Type-free over-approximation (a same-named method on an unrelated type also
+    reads uncertain) — FN-safe. Needs tree-sitter-go."""
+
+    _SRC = (
+        "package main\n"
+        "type handler interface { serve() }\n"
+        "type A struct{}\n"
+        "func (a *A) serve() {}\n"      # unexported, iface-dispatched
+        "func (a *A) deadOne() {}\n"    # unexported, never dispatched
+        "type B struct{}\n"
+        "func (b *B) serve() {}\n"      # name collides with dispatched serve
+        "func Run(h handler) { h.serve() }\n")  # exported entry, dispatches
+
+    def test_go_interface_dispatched_method_is_uncertain(self, tmp_path):
+        pytest.importorskip("tree_sitter_go")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "go.mod").write_text("module x\ngo 1.21\n")
+        (tmp_path / "m.go").write_text(self._SRC)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name, cls):
+            for f in inv["files"]:
+                if not f["path"].endswith("m.go"):
+                    continue
+                for it in f["items"]:
+                    md = it.get("metadata") or {}
+                    if it.get("name") == name and md.get("class_name") == cls:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "m")
+            return None
+
+        # dispatched via h.serve() → reachable at runtime via the interface
+        assert verdict("serve", "A") == "uncertain"
+        # same-name method on an unrelated type → also uncertain (FN-safe)
+        assert verdict("serve", "B") == "uncertain"
+        # never dispatched → stays dead (gate prevents blanket promotion)
+        assert verdict("deadOne", "A") == "no_path_from_entry"
+
+
 class TestJavaFrameworkEntries:
     """End-to-end Java framework-dispatch entry coverage. Spring / Jakarta
     container-managed methods (routes, @EventListener / @Scheduled, @Bean
@@ -1593,3 +1641,120 @@ class TestRubyCoverage:
         assert verdict("fetch") == "reachable"           # helper in a controller
         assert verdict("perform") == "reachable"         # job entry
         assert verdict("lonely") == "not_called"         # plain class control
+
+
+class TestPythonFrameworkConvention:
+    """Python class-based views (Django/DRF/Flask). Decorator-dispatched views
+    are handled by is_framework_callable; this covers the CONVENTION — a method
+    of a class subclassing a framework CBV base (APIView/ListView/MethodView)
+    is dispatched by the framework with no in-project caller. Requires the
+    extractor to capture Python class bases into class_attributes."""
+
+    _FILES = {
+        "views.py": (
+            "import rest_framework.views\n"
+            "class UserView(rest_framework.views.APIView):\n"
+            "    def get(self, request): return self._fmt()\n"
+            "    def _fmt(self): return 'x'\n"
+            "class BlogList(ListView):\n"
+            "    def get_queryset(self): return []\n"
+            "class Plain:\n"
+            "    def dead(self): return 9\n"),
+    }
+
+    def test_python_class_bases_captured(self, tmp_path):
+        (tmp_path / "views.py").write_text(self._FILES["views.py"])
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        # dotted base recorded by simple tail name; plain class has none.
+        assert "APIView" in meta["get"]["class_attributes"]
+        assert "ListView" in meta["get_queryset"]["class_attributes"]
+        assert meta["dead"]["class_attributes"] == []
+
+    def test_python_cbv_methods_are_entries(self, tmp_path):
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "views.py").write_text(self._FILES["views.py"])
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "views")
+            return None
+
+        assert verdict("get") == "reachable"           # DRF APIView verb handler
+        assert verdict("get_queryset") == "reachable"   # Django ListView hook
+        assert verdict("dead") == "not_called"          # non-CBV control
+
+
+class TestPhpCoverage:
+    """End-to-end PHP / Laravel + Symfony coverage. PHP used the regex
+    extractor; now wired to tree-sitter-php (class/method names, visibility,
+    #[…] attributes, extends/implements). Framework dispatch is both
+    attribute-based (Symfony #[Route]) and base-class/interface convention
+    (Laravel/Symfony Controller/AbstractController/Command/ShouldQueue). Needs
+    tree-sitter-php; skips without it."""
+
+    _FILES = {
+        "UserController.php": (
+            "<?php\nclass UserController extends AbstractController {\n"
+            "  #[Route('/list')]\n"
+            "  public function list(): Response { return $this->fmt(); }\n"
+            "  private function fmt(): string { return 'x'; }\n}\n"),
+        "WidgetJob.php": (
+            "<?php\nclass WidgetJob implements ShouldQueue {\n"
+            "  public function handle() {}\n}\n"),
+        "Plain.php": "<?php\nclass Plain {\n  public function lonely() {}\n}\n",
+        # attribute-only Symfony command (no `extends Command`) — modern
+        # Symfony marks dispatch by class attribute, not base class.
+        "FooCommand.php": (
+            "<?php\n#[AsCommand(name: 'app:foo')]\nclass FooCommand {\n"
+            "  public function execute(): int { return 0; }\n}\n"),
+        # controller extending a PROJECT-custom base → caught by the
+        # *Controller naming convention, not an explicit framework base.
+        "BlogController.php": (
+            "<?php\nclass BlogController extends BaseController {\n"
+            "  public function index(): Response { return new Response(); }\n}\n"),
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_php_extracts_methods_attrs_bases(self, tmp_path):
+        pytest.importorskip("tree_sitter_php")
+        inv = self._build(tmp_path)
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        assert {"list", "fmt", "handle", "lonely"} <= set(meta)
+        assert "Route" in meta["list"]["attributes"]
+        assert "AbstractController" in meta["list"]["class_attributes"]
+        assert "ShouldQueue" in meta["handle"]["class_attributes"]
+        assert meta["fmt"]["visibility"] == "private"
+
+    def test_php_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_php")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0),
+                            f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("list") == "reachable"      # #[Route] + AbstractController
+        assert verdict("fmt") == "reachable"        # method of a controller class
+        assert verdict("handle") == "reachable"     # implements ShouldQueue
+        assert verdict("lonely") == "not_called"    # plain class control
+        assert verdict("execute") == "reachable"    # class #[AsCommand] attribute
+        assert verdict("index") == "reachable"      # *Controller naming convention

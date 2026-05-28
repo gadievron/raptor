@@ -2404,10 +2404,12 @@ def extract_call_graph_rust(content: str) -> FileCallGraph:
       * ``inst.method()`` -> chain ``["inst", "method"]``
         (instance-method limitation as in Java/Go)
 
-    Reflection-style indirection is uncommon in Rust; we don't flag
-    macros (compile-time expansion is genuinely transparent). Type
-    erasure (``Any::downcast_ref``) is rare in CVE-relevant code
-    and emits a normal call chain.
+    Type-erased dispatch (``Any::downcast{,_ref,_mut}``, ``transmute``)
+    hides the concrete target, so a file using it is flagged
+    ``INDIRECTION_REFLECT`` (its functions hedge to UNCERTAIN). Macros are
+    NOT flagged: macro invocations are ubiquitous in Rust and blanket-
+    masking every macro-using file would gut the not_called signal —
+    macro-generated call edges remain a documented limitation.
     """
     try:
         import tree_sitter_rust as ts_rust
@@ -2455,6 +2457,11 @@ class _RustCallGraph:
     _MOD_ITEM = "mod_item"
     _DECL_LIST = "declaration_list"
     _SELF = "self"
+    # Type-erased dispatch primitives — calls whose concrete target is hidden
+    # at runtime; their presence masks the file's functions to UNCERTAIN.
+    _REFLECT_TAILS = frozenset({
+        "downcast", "downcast_ref", "downcast_mut", "transmute",
+    })
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
@@ -2633,6 +2640,17 @@ class _RustCallGraph:
                         receiver_class=receiver_class,
                     )
                 )
+            # Type-erased dispatch hides which concrete function runs:
+            # ``Any::downcast{,_ref,_mut}`` (runtime downcast then call) and
+            # ``transmute`` (can fabricate fn pointers). Flag the file →
+            # its functions hedge to UNCERTAIN rather than NOT_CALLED (FN-safe).
+            # Checked off the call NODE (not the chain) so the common turbofish
+            # form ``downcast_ref::<T>()`` — whose ``generic_function`` callee
+            # emits no chain edge — is still caught. (Macros are NOT flagged:
+            # ubiquitous in Rust; blanket-masking would gut the signal — a
+            # documented limitation.)
+            if self._callee_tail(node) in self._REFLECT_TAILS:
+                self.graph.indirection.add(INDIRECTION_REFLECT)
             for c in node.children:
                 self.walk(c)
             return
@@ -2762,6 +2780,38 @@ class _RustCallGraph:
             return self._scoped_parts(callee) or None
         if callee.type == self._FIELD_EXPR:
             return self._field_chain(callee)
+        return None
+
+    def _callee_tail(self, node) -> Optional[str]:
+        """Trailing method/function name of a call, unwrapping a turbofish
+        ``generic_function`` (``x.downcast_ref::<T>()`` → ``downcast_ref``,
+        ``mem::transmute::<A,B>(x)`` → ``transmute``) — used for the reflect
+        masking flag, which must fire even when the generic callee emits no
+        normal chain edge."""
+        callee = None
+        for c in node.children:
+            if c.type == self._ARGS:
+                break
+            if c.is_named:
+                callee = c
+                break
+        if callee is None:
+            return None
+        if callee.type == "generic_function":
+            inner = next((c for c in callee.children
+                          if c.is_named and c.type != "type_arguments"), None)
+            callee = inner if inner is not None else callee
+        if callee.type == self._FIELD_EXPR:
+            fid = None
+            for c in callee.children:
+                if c.type == self._FIELD_IDENT:
+                    fid = c
+            return fid.text.decode() if fid is not None else None
+        if callee.type == self._SCOPED_IDENT:
+            parts = self._scoped_parts(callee)
+            return parts[-1] if parts else None
+        if callee.type == self._IDENT:
+            return callee.text.decode()
         return None
 
     def _field_chain(self, node) -> Optional[List[str]]:
