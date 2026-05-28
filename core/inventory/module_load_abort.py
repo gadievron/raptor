@@ -86,6 +86,10 @@ def detect_module_load_abort(
             return _detect_go(content)
         if language == "rust":
             return _detect_rust(content)
+        if language == "php":
+            return _detect_php(content)
+        if language == "ruby":
+            return _detect_ruby(content)
     except Exception:  # noqa: BLE001
         # Detection failures are non-fatal — the consumer treats
         # ``None`` as "no abort detected", which matches the
@@ -397,6 +401,120 @@ def _detect_rust(content: str) -> Optional[ModuleLoadAbort]:
         line=line_no,
         summary="compile_error!(...)",
     )
+
+
+# ---------------------------------------------------------------------------
+# PHP — ``<?php`` files execute top-level code on include/require. An
+# unconditional file-scope ``throw new <Class>``, ``die`` or ``exit``
+# aborts the load before any declaration below it binds. Brace-depth
+# tracking (mirrors the JS detector) + a statement-initial gate so a
+# CONDITIONAL abort (``if (x) die();`` — the abort follows ``)``) is
+# never flagged (a false positive would wrongly hard-suppress live code).
+# ---------------------------------------------------------------------------
+
+
+_PHP_LINE_COMMENT = re.compile(r"(//|#)[^\n]*")
+_PHP_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_PHP_TAG = re.compile(r"<\?php|<\?=|<\?|\?>")
+_PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
+# A statement-initial abort is preceded (ignoring whitespace) by one of
+# these — i.e. it begins a statement, so it is not a branch/modifier body.
+# (Open/close tags are stripped to whitespace first, so the first statement
+# after ``<?php`` sees ``last_significant is None`` and counts as initial.)
+_PHP_STMT_BOUNDARY = frozenset({";", "{", "}"})
+
+
+def _detect_php(content: str) -> Optional[ModuleLoadAbort]:
+    def _spaces(m: "re.Match[str]") -> str:
+        return re.sub(r"[^\n]", " ", m.group(0))
+    stripped = _PHP_BLOCK_COMMENT.sub(_spaces, content)
+    stripped = _PHP_LINE_COMMENT.sub(_spaces, stripped)
+    # Blank the PHP open/close tags so the first statement after ``<?php``
+    # is statement-initial and ``->`` / ``?>`` ``>`` chars never read as a
+    # boundary.
+    stripped = _PHP_TAG.sub(_spaces, stripped)
+    depth = 0
+    last_significant = None  # last non-whitespace char seen
+    i = 0
+    n = len(stripped)
+    while i < n:
+        c = stripped[i]
+        if c in "\"'":
+            j = _js_skip_string(stripped, i)
+            if j is None:
+                break
+            last_significant = stripped[j - 1] if j else c
+            i = j
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth = max(0, depth - 1)
+        elif depth == 0 and (c in "tde") and (
+                last_significant is None or last_significant in _PHP_STMT_BOUNDARY):
+            # Only attempt a match at a statement boundary at file scope.
+            m = _PHP_ABORT.match(stripped, i)
+            if m:
+                tok = m.group(0).split()[0]
+                summary = (f"throw new {m.group(1).split(chr(92))[-1]}"
+                           if m.group(1) else tok)
+                line_no = stripped.count("\n", 0, i) + 1
+                return ModuleLoadAbort(line=line_no, summary=summary)
+        if not c.isspace():
+            last_significant = c
+        i += 1
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Ruby — top-level code runs on require. An unconditional column-0
+# ``raise`` / ``abort`` / ``exit`` / ``fail`` aborts the load. Ruby has no
+# braces for blocks (def/class/module/if/… end), so nesting is tracked by
+# COLUMN-0 block openers vs ``end`` — Ruby bodies are indented by universal
+# convention, so a column-0 statement is top-level. We flag only an
+# unconditional (no trailing ``if``/``unless``/… modifier) column-0 abort at
+# nesting depth 0. Conservative by design: ambiguous cases under-detect
+# (FN-safe) rather than risk a false positive (which would hard-suppress).
+# ---------------------------------------------------------------------------
+
+
+_RB_OPENER = re.compile(
+    r"^(class|module|def|begin|if|unless|while|until|case|for)\b")
+_RB_END = re.compile(r"^end\b")
+# A one-liner (``def foo; end`` / ``class X; end``) opens AND closes on the
+# same line — net zero nesting. Detected by a trailing ``end`` word so it
+# doesn't leave depth stuck at 1 (which would hide a top-level abort below).
+_RB_ONELINER = re.compile(r"\bend\s*$")
+_RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit\b|exit!|fail\s+\S|Kernel\.(abort|exit))")
+_RB_MODIFIER = re.compile(r"\b(if|unless|while|until)\b")
+
+
+def _detect_ruby(content: str) -> Optional[ModuleLoadAbort]:
+    depth = 0
+    for idx, raw in enumerate(content.splitlines()):
+        # Strip trailing line comment (best-effort; a ``#`` inside a string
+        # is rare at module scope and only risks under-detection).
+        line = re.sub(r"#.*$", "", raw)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        is_col0 = line[:1] not in (" ", "\t")
+        if is_col0 and depth == 0:
+            abort = _RB_ABORT.match(stripped)
+            if abort and not _RB_MODIFIER.search(stripped[len(abort.group(0)):]):
+                # Exclude conditional modifier forms (``raise X if cond``).
+                return ModuleLoadAbort(
+                    line=idx + 1,
+                    summary=stripped.split()[0].split(".")[-1])
+        # Track nesting via COLUMN-0 openers / ends only (indented inner
+        # structure is irrelevant to whether a column-0 line is top-level).
+        if is_col0:
+            if _RB_END.match(stripped):
+                depth = max(0, depth - 1)
+            elif _RB_OPENER.match(stripped) and not _RB_ONELINER.search(stripped):
+                # one-liner (``def f; end``) is net-zero — don't increment.
+                depth += 1
+    return None
 
 
 __all__ = ["ModuleLoadAbort", "detect_module_load_abort"]
