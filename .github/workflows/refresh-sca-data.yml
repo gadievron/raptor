@@ -106,8 +106,14 @@ jobs:
           # --force-with-lease (not --force): refuses the push if the
           # remote branch moved since our fetch — e.g. an operator amended
           # the open auto-PR — rather than clobbering it. Fetch first to
-          # seed the lease baseline; || true for the first run (no branch).
-          git fetch origin "$BRANCH" || true
+          # seed the lease baseline, but only when the branch already exists
+          # remotely: a bare fetch of a missing ref prints a misleading
+          # ``fatal: couldn't find remote ref`` on the first run (or after
+          # the prior auto-PR branch was merged + deleted). When the guard
+          # skips the fetch, the push simply creates the branch.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH" || true   # tolerate a transient blip
+          fi
           git push --force-with-lease origin "$BRANCH"
 
       - name: Create or update PR

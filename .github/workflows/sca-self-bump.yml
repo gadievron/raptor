@@ -201,12 +201,18 @@ jobs:
           Every change passed the full raptor-sca signal set
           (vulns / KEV / EPSS / yanked / license / hygiene /
           supply-chain / capability-delta / reachability)."
-          # Fetch the remote branch (if any) so ``--force-with-lease`` has a
-          # baseline to compare against; best-effort since the first run has
-          # no such branch yet. ``--force-with-lease`` then refuses the push
-          # if the branch moved since this fetch (e.g. an operator amended
-          # the open PR), where a plain ``--force`` would clobber it.
-          git fetch origin sca-self-bump || true
+          # Fetch the remote branch so ``--force-with-lease`` has a baseline
+          # to compare against, but only when it already exists remotely: a
+          # bare fetch of a missing ref prints a misleading
+          # ``fatal: couldn't find remote ref`` on the first run (or after
+          # the prior PR branch was merged + deleted). ``--force-with-lease``
+          # then refuses the push if the branch moved since this fetch (e.g.
+          # an operator amended the open PR), where a plain ``--force`` would
+          # clobber it. When the guard skips the fetch, the push creates the
+          # branch.
+          if git ls-remote --exit-code --heads origin sca-self-bump >/dev/null 2>&1; then
+            git fetch origin sca-self-bump || true   # tolerate a transient blip
+          fi
           git push --force-with-lease origin sca-self-bump
 
       - name: Open or update PR
