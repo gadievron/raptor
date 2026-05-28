@@ -58,3 +58,24 @@ def test_store_refuses_without_trust_marker(tmp_path):
     r = _run(str(_run_dir(tmp_path)), "--store", marker=False)
     assert r.returncode == 2
     assert "internal dispatch" in r.stderr
+
+
+def test_import_gcov_persists_and_shows_runtime(tmp_path):
+    # Fixture-based (no gcc needed): a .gcov whose executed lines fall in f1's
+    # range. --import should parse, mark the durable store, and persist.
+    run = _run_dir(tmp_path)
+    gdir = tmp_path / "gcov"
+    gdir.mkdir()
+    (gdir / "a.c.gcov").write_text(
+        "        -:    0:Source:a.c\n"
+        "        9:    5:int f1(void){\n"
+        "    #####:   25:  dead();\n")
+    imp = _run(str(run), "--import", str(gdir))
+    assert imp.returncode == 0, imp.stderr
+    assert "Imported" in imp.stdout
+    assert (run / "coverage.json").exists()            # persisted
+    # The default report now shows runtime coverage non-zero.
+    rep = _run(str(run))
+    assert rep.returncode == 0, rep.stderr
+    assert "runtime" in rep.stdout
+    assert "runtime      0 (0.0%)" not in rep.stdout

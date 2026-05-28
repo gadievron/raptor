@@ -9,6 +9,9 @@ Usage:
   raptor-coverage-summary [<dir>] --mark <file:item>    Mark item(s) as reviewed
   raptor-coverage-summary [<dir>] --mark-file <json>    Mark functions from JSON file
   raptor-coverage-summary [<dir>] --unmark <file:item>  Remove item from reviewed
+  raptor-coverage-summary [<dir>] --import <path>       Ingest external runtime
+      [--format gcov|lcov|coverage.py] [--tool <label>] coverage (gcov/lcov/
+                                                        coverage.py) into the store
 
 If <dir> is omitted, uses the active project.
 Accepts: project output dir, run dir, target path, or project name.
@@ -247,8 +250,45 @@ def _cmd_unmark(unmark_targets, run_dir):
     print(f"Removed {removed} item{'s' if removed != 1 else ''} from reviewed in {run_dir.name}")
 
 
+def _cmd_import(import_path, fmt, tool, args):
+    """Ingest external runtime coverage (gcov/lcov/coverage.py) into the target's
+    durable store. The positional <dir> (if any) resolves the project/run store;
+    --import names the coverage artifact. Persists under the store lock."""
+    from core.coverage.importer import import_runtime
+    from core.coverage.store import CoverageStore, coverage_store_lock
+
+    if not Path(import_path).exists():
+        print(f"ERROR: coverage path not found: {import_path}", file=sys.stderr)
+        sys.exit(1)
+    checklist, _run_dirs, store_path, _ann = _store_inputs(args)
+    if not checklist or not store_path:
+        print("ERROR: no inventory (checklist.json) for the target — runtime "
+              "coverage needs a project/run with an inventory. Specify a project "
+              "or run dir.", file=sys.stderr)
+        sys.exit(1)
+    with coverage_store_lock(store_path):
+        store = CoverageStore(store_path)
+        n = import_runtime(store, import_path, checklist, fmt=fmt, tool=tool)
+        store.save()
+    print(f"Imported {n} runtime coverage range(s) from {import_path} -> {store_path}")
+
+
 def main():
     argv = sys.argv[1:]
+
+    # --import <path> [--format <fmt>] [--tool <label>]: ingest external runtime
+    # coverage. Extract the flag+value pairs up front so the path value isn't
+    # later mistaken for a positional <dir>.
+    def _take_opt(flag, av):
+        if flag in av:
+            i = av.index(flag)
+            if i + 1 < len(av):
+                return av[i + 1], av[:i] + av[i + 2:]
+        return None, av
+    import_path, argv = _take_opt("--import", argv)
+    import_fmt, argv = _take_opt("--format", argv)
+    import_tool, argv = _take_opt("--tool", argv)
+
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
     # `--store` is the default behaviour now; accepted (and stripped as a
@@ -339,6 +379,10 @@ def main():
             _cmd_mark(mark_targets, run_dir)
         if unmark_targets:
             _cmd_unmark(unmark_targets, run_dir)
+        return
+
+    if import_path:
+        _cmd_import(import_path, import_fmt, import_tool, args)
         return
 
     # All report views go through the unified store-backed renderer. `--store`

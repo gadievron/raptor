@@ -441,3 +441,43 @@ def backfill(
     if annotations_base is not None:
         total += import_annotations(store, annotations_base, checklist)
     return total
+
+
+def _runs(lines):
+    """Coalesce a set/iterable of line numbers into sorted contiguous
+    ``[lo, hi]`` runs (so executed lines mark as ranges, not one call each)."""
+    out = []
+    for ln in sorted(lines):
+        if out and ln == out[-1][1] + 1:
+            out[-1][1] = ln
+        else:
+            out.append([ln, ln])
+    return out
+
+
+def import_runtime(
+    store: CoverageStore, path, checklist: Dict[str, Any],
+    fmt: Optional[str] = None, tool: Optional[str] = None,
+) -> int:
+    """Import external runtime coverage (gcov / lcov / coverage.py) into the
+    store (Phase 4). Detects the format (unless ``fmt`` given), parses executed
+    source lines, normalises each source path to the inventory's key (gcov/lcov
+    report build-relative or absolute paths — reuse the tested matcher), and
+    marks contiguous runs under the runtime ``tool`` label. Returns marks made.
+    """
+    from .parsers import default_tool, detect_format, parse
+
+    fmt = fmt or detect_format(path)
+    if not fmt:
+        return 0
+    tool = tool or default_tool(fmt)
+    inv = _inventory_paths(checklist)
+    marked = 0
+    for src, lines in parse(path, fmt).items():
+        key = _to_inventory_path(src, inv)
+        if key not in inv:
+            continue          # not an inventory file (system header, non-target)
+        for lo, hi in _runs(lines):
+            store.mark(key, lo, hi, tool)
+            marked += 1
+    return marked

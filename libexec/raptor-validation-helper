@@ -442,7 +442,7 @@ def prepare_A(workdir, target=None):
         executables = _discover_executables(target)
         build_exes = _discover_executables(str(build_dir)) if build_dir.exists() else {}
         if executables or build_exes:
-            print(f"Source → binary mapping:")
+            print("Source → binary mapping:")
             for f in checklist.get("files", []):
                 src = f["path"]
                 stem = Path(src).stem

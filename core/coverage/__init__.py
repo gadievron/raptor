@@ -34,6 +34,7 @@ from .importer import (
     import_run_findings,
     import_annotations,
     import_understand,
+    import_runtime,
     run_provenance,
 )
 from .store_summary import (
@@ -77,6 +78,7 @@ __all__ = [
     "import_run_findings",
     "import_annotations",
     "import_understand",
+    "import_runtime",
     "run_provenance",
     "store_view",
     "format_store_view",
