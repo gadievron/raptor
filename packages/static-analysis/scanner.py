@@ -1286,13 +1286,14 @@ def main():
         duration = time.time() - start_time
         logger.info(f"Total scan duration: {duration:.2f}s")
 
-        # Print coverage summary if checklist exists
+        # Print coverage summary (unified store-backed report; file-level tier
+        # when there's no function inventory, e.g. a bare /scan).
         try:
-            from core.coverage.summary import compute_summary, format_summary
-            cov = compute_summary(out_dir)
+            from core.coverage.store_summary import render_run_coverage
+            cov = render_run_coverage(out_dir)
             if cov:
                 print()
-                print(format_summary(cov))
+                print(cov)
                 print()
         except (ImportError, FileNotFoundError) as exc:
             # Narrowed: ImportError if the optional summary module

@@ -116,43 +116,6 @@ def _resolve_active_project():
     return None
 
 
-def _get_summary(args):
-    """Resolve dir and compute summary. Returns (summary, run_dir_for_mark)."""
-    from core.coverage.summary import compute_summary, compute_project_summary
-
-    project = None
-    run_dir = None
-
-    if args:
-        project, run_dir = _resolve_dir(args[0])
-        if not project and not run_dir:
-            d = Path(args[0])
-            if d.exists():
-                run_dir = d
-            else:
-                print(f"ERROR: could not resolve '{args[0]}'.", file=sys.stderr)
-                sys.exit(1)
-    else:
-        project = _resolve_active_project()
-        if not project:
-            print("No directory specified and no active project.", file=sys.stderr)
-            sys.exit(1)
-
-    if project:
-        summary = compute_project_summary(project)
-        # For --mark, find the most recent run dir
-        mark_dir = None
-        try:
-            dirs = project.get_run_dirs(sweep=False)
-            if dirs:
-                mark_dir = dirs[0]
-        except Exception:
-            pass
-        return summary, mark_dir
-    else:
-        return compute_summary(run_dir), run_dir
-
-
 def _store_inputs(args):
     """Resolve (checklist, run_dirs, store_path, annotations_base)."""
     from core.json import load_json
@@ -181,52 +144,19 @@ def _store_inputs(args):
     return None, [], None, None
 
 
-def _cmd_store_view(args):
-    """Build the store on-demand (load persisted + import current records +
-    durable annotations) and print the category/depth + gap view. Read-only:
-    does not persist."""
-    from core.coverage.importer import backfill
-    from core.coverage.store import CoverageStore
-    from core.coverage.store_summary import (
-        file_level_view, format_file_level_view, format_store_view, store_view,
-    )
-
-    checklist, run_dirs, store_path, annotations_base = _store_inputs(args)
-    if not checklist:
-        # No function inventory (e.g. a standalone /scan or /codeql, which
-        # build none). The lifecycle still recorded what ran + which files each
-        # tool examined, so degrade to the file-level tier rather than erroring.
-        if run_dirs:
-            print(format_file_level_view(file_level_view(run_dirs)))
-            return
-        print("No coverage data (no checklist and no run records).", file=sys.stderr)
-        sys.exit(1)
-    # Loads an existing coverage.json if present (durable accumulation);
-    # re-importing current records is idempotent (interval coalesce).
-    store = CoverageStore(store_path)
-    backfill(store, run_dirs, checklist, annotations_base=annotations_base)
-    print(format_store_view(store_view(store, checklist)))
-
-
-def _cmd_gaps(summary):
-    """Print unreviewed items."""
-    if not summary:
+def _cmd_gaps(view):
+    """Print the LLM-review gap — reviewable units (function/top_level) with no
+    LLM review. Globals/macros/typedefs/glue are excluded by design."""
+    if not view:
         print("No coverage data.")
         return
-
-    per_file = summary.get("per_file", [])
-    gaps = []
-    for pf in per_file:
-        for func in pf.get("unreviewed_functions", []):
-            gaps.append((pf["path"], func))
-
+    gaps = view.get("llm_gap_functions", [])
     if not gaps:
-        print("All items reviewed.")
+        print("All reviewable items examined by an LLM.")
         return
-
-    print(f"{len(gaps)} unreviewed item{'s' if len(gaps) != 1 else ''}:")
-    for file_path, func in gaps:
-        print(f"  {file_path}:{func}")
+    print(f"{len(gaps)} item{'s' if len(gaps) != 1 else ''} with no LLM review:")
+    for g in gaps:
+        print(f"  {g['file']}:{g['function']}")
 
 
 def _cmd_mark(mark_targets, run_dir):
@@ -259,7 +189,6 @@ def _cmd_mark(mark_targets, run_dir):
         (fa.get("file"), fa.get("function"))
         for fa in llm_record.get("functions_analysed", [])
     }
-    existing_files = set(llm_record.get("files_examined", []))
 
     added = 0
     for target in mark_targets:
@@ -273,11 +202,9 @@ def _cmd_mark(mark_targets, run_dir):
             )
             existing_funcs.add((file_path, func_name))
             added += 1
-        if file_path not in existing_files:
-            llm_record.setdefault("files_examined", []).append(file_path)
-            existing_files.add(file_path)
-
-    llm_record["files_examined"] = sorted(set(llm_record.get("files_examined", [])))
+    # Marking a function records function-level review only — it must NOT add
+    # the file to files_examined (which is the whole-file "tool scanned this
+    # file" signal; the store would otherwise mark the entire file reviewed).
     write_record(run_dir, llm_record, tool_name="llm")
     print(f"Marked {added} item{'s' if added != 1 else ''} as reviewed in {run_dir.name}")
 
@@ -324,7 +251,8 @@ def main():
     argv = sys.argv[1:]
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
-    show_store = "--store" in argv
+    # `--store` is the default behaviour now; accepted (and stripped as a
+    # flag) for back-compat, no separate branch.
 
     # Extract --mark, --mark-file, --unmark targets
     mark_targets = []
@@ -390,8 +318,8 @@ def main():
     args = [a for a in argv if not a.startswith("--")]
 
     if mark_targets or unmark_targets:
-        _, run_dir = _get_summary(args) if not args else (None, None)
-        if not run_dir and args:
+        run_dir = None
+        if args:
             _, run_dir = _resolve_dir(args[0])
             if not run_dir:
                 d = Path(args[0])
@@ -413,24 +341,22 @@ def main():
             _cmd_unmark(unmark_targets, run_dir)
         return
 
-    if show_store:
-        _cmd_store_view(args)
-        return
+    # All report views go through the unified store-backed renderer. `--store`
+    # is now the default behaviour; the flag is accepted for back-compat.
+    from core.coverage.store_summary import coverage_view, render_coverage
 
-    summary, _ = _get_summary(args)
-
-    if not summary:
-        print("No coverage data (missing checklist.json or coverage records).")
-        return
+    checklist, run_dirs, store_path, annotations_base = _store_inputs(args)
 
     if show_gaps:
-        _cmd_gaps(summary)
-    elif detailed:
-        from core.coverage.summary import format_detailed
-        print(format_detailed(summary))
-    else:
-        from core.coverage.summary import format_summary
-        print(format_summary(summary))
+        _cmd_gaps(coverage_view(run_dirs, checklist, store_path, annotations_base))
+        return
+
+    report = render_coverage(
+        run_dirs, checklist, store_path, annotations_base, detailed=detailed)
+    if not report:
+        print("No coverage data (missing checklist.json or coverage records).")
+        return
+    print(report)
 
 
 if __name__ == "__main__":

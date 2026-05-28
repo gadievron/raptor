@@ -909,26 +909,45 @@ def _print_run_provenance(project, run_query):
 
 
 def _print_coverage(project, detailed=False, fail_under=None):
-    """Print project coverage summary or detailed view."""
-    from core.coverage.summary import (
-        compute_project_summary,
-        coverage_threshold_met,
-        format_detailed,
-        format_summary,
-        format_threshold_result,
+    """Print project coverage — the unified store-backed report (coverage
+    state + per-run execution detail), plus the ``--fail-under`` check."""
+    from core.json import load_json
+    from core.coverage.store_summary import (
+        coverage_view,
+        format_store_threshold_result,
+        render_coverage,
+        store_coverage_threshold_met,
     )
-    summary = compute_project_summary(project)
-    if not summary:
+
+    base = Path(project.output_dir)
+    try:
+        run_dirs = list(project.get_run_dirs(sweep=False))
+    except Exception:
+        run_dirs = []
+    checklist = load_json(base / "checklist.json")
+    if not checklist:
+        for d in run_dirs:
+            cl = load_json(d / "checklist.json")
+            if cl:
+                checklist = cl
+                break
+    store_path = base / "coverage.json"
+    ann = base / "annotations"
+
+    report = render_coverage(run_dirs, checklist, store_path, ann, detailed=detailed)
+    if not report:
         print("No coverage data (no checklist or coverage records found).")
         return False if fail_under is not None else None
-    if detailed:
-        print(format_detailed(summary))
-    else:
-        print(format_summary(summary))
+    print(report)
+
     if fail_under is not None:
+        view = coverage_view(run_dirs, checklist, store_path, ann)
+        if view is None:
+            print("\nNo function inventory — coverage threshold N/A.")
+            return False
         print()
-        print(format_threshold_result(summary, fail_under))
-        return coverage_threshold_met(summary, fail_under)
+        print(format_store_threshold_result(view, fail_under))
+        return store_coverage_threshold_met(view, fail_under)
     return None
 
 

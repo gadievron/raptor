@@ -1,7 +1,9 @@
 """Coverage tracking and reporting.
 
-Provides coverage record building (from hook manifests and tool output),
-file read tracking, and Phase 2 coverage summary reporting.
+Provides coverage record building (from hook manifests and tool output), file
+read tracking, the persistent verdict-bearing store, and the unified
+store-backed coverage report (coverage state from the store + per-run tool
+execution detail from records).
 """
 
 from .record import (
@@ -31,10 +33,14 @@ from .importer import (
     import_findings,
     import_run_findings,
     import_annotations,
+    import_understand,
     run_provenance,
 )
 from .store_summary import (
     store_view, format_store_view, file_level_view, format_file_level_view,
+    render_coverage, coverage_view, render_run_coverage,
+    store_coverage_threshold_met, format_store_threshold_result,
+    store_llm_coverage_percent,
 )
 from .clean import (
     clean_run,
@@ -70,11 +76,18 @@ __all__ = [
     "import_findings",
     "import_run_findings",
     "import_annotations",
+    "import_understand",
     "run_provenance",
     "store_view",
     "format_store_view",
     "file_level_view",
     "format_file_level_view",
+    "render_coverage",
+    "coverage_view",
+    "render_run_coverage",
+    "store_coverage_threshold_met",
+    "format_store_threshold_result",
+    "store_llm_coverage_percent",
     "clean_run",
     "classify_removal",
     "apply_removal",
