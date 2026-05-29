@@ -213,6 +213,61 @@ def test_rust_cfg_on_mod_ranges_module_body():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# PHP — if (false) {…} blocks (brace-based, like JS).
+# ---------------------------------------------------------------------------
+
+
+def test_php_if_false_block_detected():
+    src = "<?php\nif (false) {\n  function dead() {}\n}\n"
+    assert (2, 4) in detect_dead_scopes("php", src)
+
+
+def test_php_if_zero_and_null_detected():
+    assert detect_dead_scopes("php", "<?php\nif (0) {\n  x();\n}\n") == [(2, 4)]
+    assert detect_dead_scopes("php", "<?php\nif (null) {\n  x();\n}\n") == [(2, 4)]
+
+
+def test_php_runtime_and_true_not_detected():
+    assert detect_dead_scopes("php", "<?php\nif ($flag) {\n  x();\n}\n") == []
+    assert detect_dead_scopes("php", "<?php\nif (true) {\n  x();\n}\n") == []
+
+
+def test_php_commented_if_false_not_detected():
+    assert detect_dead_scopes("php", "<?php\n# if (false) {\n$x=1;\n") == []
+
+
+# ---------------------------------------------------------------------------
+# Ruby — if false / unless true / while false (indentation-anchored end).
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_if_false_block_detected():
+    src = "class C\n  if false\n    def dead; end\n  end\nend\n"
+    assert (3, 3) in detect_dead_scopes("ruby", src)
+
+
+def test_ruby_unless_true_detected():
+    assert detect_dead_scopes("ruby", "  unless true\n    x\n  end\n") == [(2, 2)]
+
+
+def test_ruby_if_false_else_branch_live():
+    # only the if-false branch is dead; the else body stays live.
+    src = "  if false\n    dead\n  else\n    live\n  end\n"
+    assert detect_dead_scopes("ruby", src) == [(2, 2)]
+
+
+def test_ruby_runtime_and_modifier_not_detected():
+    assert detect_dead_scopes("ruby", "  if cond\n    x\n  end\n") == []
+    assert detect_dead_scopes("ruby", "  x = 1 if false\n") == []  # modifier
+    assert detect_dead_scopes("ruby", "  if false || x\n    y\n  end\n") == []
+
+
+def test_ruby_malformed_dedent_bails():
+    # body dedented past the opener → ambiguous → report nothing (sound).
+    assert detect_dead_scopes("ruby", "  if false\nx\n  end\n") == []
+
+
 def test_empty_content_returns_empty():
     assert detect_dead_scopes("python", "") == []
 
