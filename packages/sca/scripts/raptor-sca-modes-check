@@ -45,7 +45,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 # parents[3] climbs:
 #   [0] scripts/   (this script's directory)
@@ -118,9 +118,20 @@ def _env_with_trust() -> Dict[str, str]:
 
 def _copy_to_tempdir(fixture: Path, work_dir: Path) -> Path:
     """Copy the fixture into ``work_dir`` and return the scan-target
-    path. Keeps the source corpus pristine across mode invocations."""
+    path. Keeps the source corpus pristine across mode invocations.
+
+    Corpus manifests are committed with a ``.fixture`` defang suffix
+    (``package.json.fixture``, ``pom.xml.fixture``, ...) so GitHub's
+    dependency graph never parses the corpus as real manifests — that
+    scan produced spurious Dependabot alerts / security-update PRs on
+    the deliberately-pinned fixtures. We strip the suffix here in the
+    throwaway tempdir, so the scanner sees the real names and detection
+    is unchanged."""
     scan_target = work_dir / "fixture"
     shutil.copytree(fixture, scan_target)
+    for path in sorted(scan_target.rglob("*.fixture")):
+        if path.is_file():
+            path.rename(path.with_name(path.name[: -len(".fixture")]))
     return scan_target
 
 

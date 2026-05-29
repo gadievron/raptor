@@ -295,6 +295,10 @@ def _fixture_safety_check(fixture_root: Path) -> Optional[str]:
             # Symlinks / sockets / devices — refuse unconditionally
             return f"fixture contains non-regular file {path.relative_to(fixture_root)!s}"
         name = path.name
+        # Corpus manifests are committed with a ``.fixture`` defang
+        # suffix (see _stage_fixture); validate against the real name.
+        if name.endswith(".fixture"):
+            name = name[: -len(".fixture")]
         if name in _FIXTURE_ALLOWED_FILENAMES:
             continue
         if any(name.endswith(suffix) for suffix in _FIXTURE_ALLOWED_SUFFIXES):
@@ -318,6 +322,23 @@ class _ScanArtifacts:
     report_md: str = ""
 
 
+def _stage_fixture(src: Path, dst: Path) -> None:
+    """Copy a fixture tree into ``dst``, restoring real manifest names
+    by stripping the ``.fixture`` defang suffix.
+
+    Corpus manifests are committed as ``package.json.fixture`` /
+    ``pom.xml.fixture`` / ``requirements.txt.fixture`` etc. so GitHub's
+    dependency graph never parses this deliberately-vulnerable corpus
+    as real manifests — that scan is what produced the spurious axios
+    Dependabot alerts and the security-update PR (#722). The scanner
+    only ever sees the real names here, in the throwaway tempdir, so
+    detection fidelity is identical to scanning a real project."""
+    shutil.copytree(src, dst)
+    for path in sorted(dst.rglob("*.fixture")):
+        if path.is_file():
+            path.rename(path.with_name(path.name[: -len(".fixture")]))
+
+
 def _run_sca(
     fixture_path: Path, *, offline: bool,
 ) -> Tuple[Optional["_ScanArtifacts"], str]:
@@ -338,7 +359,7 @@ def _run_sca(
     with tempfile.TemporaryDirectory(prefix="sca-compromise-") as work_dir:
         scan_target = Path(work_dir) / "fixture"
         out_dir = Path(work_dir) / "out"
-        shutil.copytree(fixture_path, scan_target)
+        _stage_fixture(fixture_path, scan_target)
         cmd: List[str] = [
             sys.executable, "-m", "packages.sca.cli",
             str(scan_target),
@@ -454,7 +475,7 @@ def _run_gate(
     with tempfile.TemporaryDirectory(prefix="sca-gate-check-") as work_dir:
         scan_target = Path(work_dir) / "fixture"
         out_dir = Path(work_dir) / "out"
-        shutil.copytree(fixture_path, scan_target)
+        _stage_fixture(fixture_path, scan_target)
         cmd: List[str] = [
             sys.executable, "-m", "packages.sca.cli",
             str(scan_target),
