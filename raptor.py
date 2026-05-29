@@ -370,6 +370,11 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     return rc
 
 
+# Set True by main() when --trust-repo is seen (and stripped from argv).
+# Read by the subprocess mode handlers (codeql/agentic) to re-inject the
+# flag into their child args — see the note in main().
+_TRUST_REPO_SEEN = False
+
 _active_dispatcher = None
 
 
@@ -659,6 +664,11 @@ def mode_agentic(args: list) -> int:
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:
         args = ['--codeql'] + args
 
+    # Re-inject --trust-repo stripped by main(): the agentic child parses it
+    # to set the cc_trust + codeql_trust overrides in its own process.
+    if _TRUST_REPO_SEEN and '--trust-repo' not in args:
+        args = ['--trust-repo'] + args
+
     return _run_with_lifecycle("agentic", agentic_script, args,
                               "Starting full autonomous workflow (Semgrep + CodeQL)...")
 
@@ -675,6 +685,11 @@ def mode_codeql(args: list) -> int:
     # Default to scan-only; autonomous analysis requires explicit --analyze
     if '--scan-only' not in args and '--analyze' not in args:
         args = ['--scan-only'] + args
+
+    # Re-inject --trust-repo stripped by main(): the codeql child parses it
+    # to set the cc_trust + codeql_trust overrides in its own process.
+    if _TRUST_REPO_SEEN and '--trust-repo' not in args:
+        args = ['--trust-repo'] + args
 
     return _run_with_lifecycle("codeql", codeql_script, args,
                               "Running CodeQL analysis...")
@@ -828,11 +843,18 @@ def main():
     """Main entry point for unified RAPTOR launcher."""
     # Pre-process --trust-repo at the top level so it works in any position
     # (`raptor --trust-repo scan /x` or `raptor scan /x --trust-repo`).
-    # Sets the module-level flag in core.security.cc_trust; mode handlers
-    # don't need to know about it.
+    # Sets the cc_trust module flag for in-process / parent-side checks.
+    # SUBPROCESS mode handlers (codeql/agentic) can't rely on that flag —
+    # module-level trust state doesn't cross the subprocess boundary, and
+    # we strip the flag from argv here — so they re-inject --trust-repo into
+    # their child args via _TRUST_REPO_SEEN. Without that, `raptor.py codeql
+    # --trust-repo` silently fails to lift the child's target-repo trust
+    # checks (fail-closed: it over-blocks, but the documented override breaks).
     if "--trust-repo" in sys.argv:
         from core.security.cc_trust import set_trust_override
+        global _TRUST_REPO_SEEN
         set_trust_override(True)
+        _TRUST_REPO_SEEN = True
         sys.argv = [a for a in sys.argv if a != "--trust-repo"]
 
     # If no arguments provided, show help
