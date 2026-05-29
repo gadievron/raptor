@@ -59,10 +59,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # gh is first-party + pre-installed. Find an open re-audit issue and
-        # comment on it (avoids a monthly pile-up); else open one. Label is
-        # best-effort — a missing label must never fail the run (see
-        # sca-self-bump / refresh-sca-data); without it dedup falls back to
-        # always-create.
+        # comment on it (avoids a monthly pile-up); else open one. Dedup is by
+        # TITLE (a stable title) — no bespoke label, so this stays on the
+        # standardised SCA bot-label scheme (#681): the only labels applied are
+        # the canonical ``automated`` + ``sca`` pair (as refit-sca-calibration
+        # does). Labels are best-effort — a missing label must never fail the
+        # run (see sca-self-bump / refresh-sca-data).
         run: |
           set -euo pipefail
           REPORT="$RUNNER_TEMP/reaudit.md"
@@ -70,17 +72,20 @@ jobs:
             echo "No reviewed-legit entries flagged this month."
             exit 0
           fi
-          existing=$(gh issue list --state open --label typosquat-reaudit \
-            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          TITLE="chore(sca): typosquat reviewed-legit re-audit flags"
+          existing=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty" \
+            2>/dev/null || true)
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body-file "$REPORT"
             echo "Updated re-audit issue #$existing"
           else
-            num=$(gh issue create \
-              --title "chore(sca): typosquat reviewed-legit re-audit flags" \
-              --body-file "$REPORT")
+            num=$(gh issue create --title "$TITLE" --body-file "$REPORT")
             echo "Opened re-audit issue $num"
-            # best-effort label (create it under Settings → Labels to enable dedup)
-            gh issue edit "$num" --add-label typosquat-reaudit 2>/dev/null \
-              || echo "label 'typosquat-reaudit' not in repo; skipping"
+            # Standardised SCA bot labels only (best-effort).
+            for lbl in automated sca; do
+              gh issue edit "$num" --add-label "$lbl" 2>/dev/null \
+                || echo "label '$lbl' not in repo; skipping"
+            done
           fi
