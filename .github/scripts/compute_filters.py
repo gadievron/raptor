@@ -115,8 +115,6 @@ FILTERS: dict[str, list[str]] = {
         "packages/exploit_feasibility/**",
         "packages/exploitability_validation/**",
         "packages/fuzzing/**",
-        "core/hash/**",
-        "core/witness/**",
         "packages/hypothesis_validation/**",
         "packages/source_intel/**",
         "core/annotations/**",
@@ -238,15 +236,15 @@ FILTERS: dict[str, list[str]] = {
     # under packages/zkpox. The regression job builds the SP1 guest +
     # host prover and runs the witness corpus in execute mode.
     "zkpox": [
-        "core/zkpox/**",
         "packages/zkpox/**",
+        "packages/llm_analysis/exploit_verify.py",
         "core/config.py",
         "core/config/**",
         "core/hash/**",
         "core/http/**",
         "core/sandbox/**",
         "core/witness/**",
-        "packages/llm_analysis/exploit_verify.py",
+        "core/zkpox/**",
         ".github/workflows/tests.yml",
     ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
