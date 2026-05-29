@@ -141,6 +141,7 @@ FILTERS: dict[str, list[str]] = {
         "core/zip/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
+        "core/verified_outcome/**",
     ],
     "cve_diff": [
         "packages/cve_diff/**",
