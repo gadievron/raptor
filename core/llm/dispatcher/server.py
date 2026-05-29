@@ -242,6 +242,17 @@ class LLMDispatcher:
         self._audit_path = audit_path
         self._audit_lock = threading.Lock()
 
+        # Shutdown is wired to BOTH the context-manager exit / explicit
+        # ``shutdown()`` call AND an ``atexit`` hook (see lifecycle.py).
+        # The atexit hook fires at interpreter teardown — under pytest,
+        # after the capture streams are already closed — so a second
+        # ``shutdown()`` that did real work (rmdir on the already-removed
+        # dir, plus an audit log line) raised FileNotFoundError and then
+        # cascaded into "I/O operation on closed file" logging errors.
+        # Guard makes shutdown idempotent: the second call is a no-op.
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = False
+
         # Init may fail past this point (bind error, thread start
         # failure). On failure the tempdir would otherwise leak.
         try:
@@ -395,7 +406,17 @@ class LLMDispatcher:
         Each step's failure now logs at WARNING with the traceback,
         and the audit event records ``status="partial"`` with a
         reason summary when anything went wrong.
+
+        Idempotent: a second call (e.g. the ``atexit`` hook firing after
+        an explicit ``shutdown()`` / context-manager exit already ran) is
+        a no-op. This avoids a spurious ``FileNotFoundError`` on the
+        already-removed socket dir and the closed-stream logging cascade
+        it triggers during interpreter teardown.
         """
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
         errors: List[str] = []
         try:
             self._server.shutdown()
@@ -422,6 +443,11 @@ class LLMDispatcher:
             errors.append("socket_unlink")
         try:
             self._sock_dir.rmdir()
+        except FileNotFoundError:
+            # Dir already gone — that IS the goal state, not a leak.
+            # (e.g. a prior shutdown removed it, or the tmp area was
+            # cleaned out from under us.) No warning, no error record.
+            pass
         except Exception:
             _logger.warning(
                 "llm-dispatcher: sock_dir rmdir failed for %s "

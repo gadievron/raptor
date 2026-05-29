@@ -43,6 +43,7 @@ SUBSYSTEMS: list[tuple[str, str]] = [
     ("sage", "core/sage"),
     ("orchestration", "core/orchestration"),
     ("sca", "packages/sca"),
+    ("source_intel", "packages/source_intel"),
 ]
 
 

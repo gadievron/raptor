@@ -212,7 +212,8 @@ jobs:
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.python == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
-       needs.changes.outputs.exploit_feasibility == 'true')
+       needs.changes.outputs.exploit_feasibility == 'true' ||
+       needs.changes.outputs.source_intel == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -339,6 +340,7 @@ jobs:
             --ignore=packages/cve_diff/tests \
             --ignore=packages/fuzzing/tests \
             --ignore=packages/oss_forensics/tests \
+            --ignore=packages/source_intel/tests \
             --ignore=packages/sca \
             --ignore=core/sage/tests \
             --ignore=core/orchestration/tests \
@@ -485,6 +487,56 @@ jobs:
           # See sandbox tests above for why `python -m pytest` is needed
           # rather than bare `pytest`.
           python -m pytest packages/exploit_feasibility/tests
+
+  # source_intel tier: Coccinelle-driven memory-corruption evidence.
+  # The real-spatch E2E (test_e2e_real_spatch_* etc.) are
+  # `skipif(not shutil.which("spatch"))`, and the broad ``python`` fast
+  # tier installs no spatch — so before this job they NEVER ran in CI;
+  # source_intel's detection correctness was only ever verified on dev
+  # boxes that happen to have coccinelle. This job apt-installs
+  # coccinelle (ships /usr/bin/spatch) so those E2E actually execute.
+  # Gated on the ``source_intel`` filter (its real import surface,
+  # validated by .github/tests/test_filter_coverage.py).
+  python-unit-tests-source-intel:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.source_intel == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install coccinelle (spatch) for the real-spatch E2E
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends coccinelle
+          spatch --version
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+
+      - name: Run source_intel tests (real spatch present)
+        run: |
+          source $VENV_PATH/bin/activate
+          # See sandbox tests above for why `python -m pytest` is needed
+          # rather than bare `pytest`.
+          python -m pytest packages/source_intel/tests
 
   # Prompt-envelope audit: AST-based heuristic over the registered
   # prompt-construction files. The test only needs stdlib + pytest
