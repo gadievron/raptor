@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -34,9 +34,54 @@ logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "popular"
 
+# Hand-vetted typosquat / confusable names to subtract from the popular feeds
+# before they become a trusted exact-match. The popularity feeds occasionally
+# carry a name that is one edit from a far-more-popular package (npm ``loadash``
+# vs ``lodash``); once it sits in the trusted list an exact match short-circuits
+# the scan and it can never be flagged. This denylist is the *sound* fix:
+# automated rank/edit-distance heuristics were validated at ~10:1 false-positive
+# (``preact``/``enquirer``/``jslint``/``boto``/``pipx`` are all legitimate
+# near-names — lower rank does NOT mean "typosquat"), and OSV ``MAL-`` records
+# cover legit packages with compromised *versions* (``litellm``, ``node-ipc``),
+# so neither is safe to auto-apply. Only hand-confirmed names go here → zero
+# false positives by construction.
+_DENYLIST_PATH = _DATA_DIR.parent / "typosquat_denylist.json"
+
 # Distances above this are not interesting; below it we always flag
 # (with severity scaled by distance).
 _MAX_DISTANCE = 2
+
+# Sound prefilter cutoff for the character-set bitmask check in
+# ``_check_one``. A single edit (insert / delete / substitute /
+# transpose) changes a name's *set* of characters by at most two
+# elements, so ``distance >= popcount(set_a △ set_b) / 2``. A pair
+# within ``_MAX_DISTANCE`` therefore has a symmetric-set-difference of
+# at most ``2 * _MAX_DISTANCE`` bits — anything larger is certain to
+# exceed the cutoff and can skip the O(L²) Damerau-Levenshtein DP. This
+# is exact (never skips a pair the DP would have flagged), unlike a
+# heuristic n-gram filter; the lists grew ~40× in #686 and the DP cost
+# is quadratic per pair, so pruning the ~99% of certain-fails up front
+# is what keeps the 10k-dep monorepo scan inside its perf budget.
+_SYMDIFF_CUTOFF = 2 * _MAX_DISTANCE
+
+# Character → bit position for that set-membership mask. Package names
+# are [a-z0-9] plus a handful of separators; any other character folds
+# onto a single shared "other" bit. Folding only ever *shrinks* the
+# measured symmetric difference, which can make us run the DP on a pair
+# we could have skipped — never the reverse — so the prefilter stays
+# sound regardless of the input alphabet.
+_BIT_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789-_.@/+~"
+_CHAR_BIT: Dict[str, int] = {c: i for i, c in enumerate(_BIT_ALPHABET)}
+_OTHER_BIT = 63
+
+
+def _char_mask(name: str) -> int:
+    """Bitmask of the distinct characters present in ``name``."""
+    mask = 0
+    get = _CHAR_BIT.get
+    for c in name:
+        mask |= 1 << get(c, _OTHER_BIT)
+    return mask
 
 # Per-ecosystem popular-name caches. Loaded lazily and re-used.
 _POPULAR_BY_ECO: Dict[str, List[str]] = {}
@@ -51,10 +96,14 @@ _POPULAR_BY_ECO: Dict[str, List[str]] = {}
 # from the first ``abs(la-lb) >= cutoff`` early-out anyway, so the
 # bucket index is purely a faster way to enforce a check the inner
 # function was already doing — output is byte-identical.
-_POPULAR_BY_LEN: Dict[str, Dict[int, List[str]]] = {}
+_POPULAR_BY_LEN: Dict[str, Dict[int, List[Tuple[str, int]]]] = {}
 # Set view of the popular list for the O(1) "is it popular" test
 # in ``_check_one`` (was a list ``in`` linear scan pre-fix).
 _POPULAR_SET: Dict[str, set] = {}
+# Per-ecosystem denylist sets, loaded once from ``_DENYLIST_PATH``.
+_DENYLIST_BY_ECO: Dict[str, set] = {}
+# Sentinel so a missing/!exists denylist file is loaded (and logged) once.
+_DENYLIST_RAW: Optional[Dict[str, set]] = None
 
 
 @dataclass(frozen=True)
@@ -67,14 +116,31 @@ class TyposquatFinding:
 
 
 def scan_deps(deps: Iterable[Dependency]) -> List[TyposquatFinding]:
-    """Run the candidate check on every direct dep."""
+    """Run the candidate check on every direct dep.
+
+    The verdict depends only on ``(ecosystem, name)`` — the popular
+    list is the sole other input — so it is computed once per unique
+    name and fanned back out to every dep object that declares it.
+    A monorepo repeating the same dep across N workspace manifests
+    pays one ``_check_one`` rather than N. Each surviving dep still
+    emits its own finding (the downstream id keys on ``declared_in``),
+    so the output is unchanged.
+    """
     out: List[TyposquatFinding] = []
+    memo: Dict[Tuple[str, str], Optional[TyposquatFinding]] = {}
     for d in deps:
         if not d.direct:
             continue
-        finding = _check_one(d)
-        if finding is not None:
-            out.append(finding)
+        key = (d.ecosystem, d.name)
+        if key in memo:
+            verdict = memo[key]
+            if verdict is not None:
+                out.append(replace(verdict, dependency=d))
+            continue
+        verdict = _check_one(d)
+        memo[key] = verdict
+        if verdict is not None:
+            out.append(verdict)
     return out
 
 
@@ -109,18 +175,25 @@ def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
         # skipped. Walking the buckets directly avoids the function-
         # call overhead for those certain-fails.
         cand_len = len(cand)
+        cand_mask = _char_mask(cand)
         lo, hi = cand_len - _MAX_DISTANCE, cand_len + _MAX_DISTANCE
         for length in range(lo, hi + 1):
             shortlist = by_len.get(length)
             if not shortlist:
                 continue
-            for pop in shortlist:
+            for pop, pop_mask in shortlist:
                 if cand == pop:
                     # Bare-form exact match inside a non-popular scope.
                     # ``@evil/lodash`` shape — scoped-namespace squat
                     # rather than a typo.
                     if best is None or 0 < best[0]:
                         best = (0, pop)
+                    continue
+                # Sound prefilter: ``distance >= popcount(symdiff)/2``.
+                # If the character sets already differ by more than
+                # ``2*_MAX_DISTANCE`` bits the DP is certain to return
+                # ``cutoff`` — skip it. Exact, so no match is ever lost.
+                if (cand_mask ^ pop_mask).bit_count() > _SYMDIFF_CUTOFF:
                     continue
                 d = _damerau_levenshtein(cand, pop, _MAX_DISTANCE + 1)
                 if d > _MAX_DISTANCE:
@@ -180,9 +253,50 @@ def _load_popular(ecosystem: str) -> List[str]:
     if not isinstance(data, list):
         _POPULAR_BY_ECO[ecosystem] = []
         return []
-    cleaned = [n.lower() for n in data if isinstance(n, str)]
+    # Subtract the hand-vetted denylist so a confusable name that rode the
+    # popularity feed into the list (npm ``loadash``) is no longer a trusted
+    # exact-match — the detector then evaluates it as distance-1 from its
+    # near-twin. See ``_DENYLIST_PATH``.
+    denied = _load_denylist(ecosystem)
+    cleaned = [n.lower() for n in data
+               if isinstance(n, str) and n.lower() not in denied]
     _POPULAR_BY_ECO[ecosystem] = cleaned
     return cleaned
+
+
+def _load_denylist(ecosystem: str) -> set:
+    """Return the lowercased denylist name-set for ``ecosystem`` (empty if the
+    file is absent, malformed, or has no entry for it). Loaded once and cached;
+    a missing/malformed file degrades to "no denylist" (never raises)."""
+    global _DENYLIST_RAW
+    if _DENYLIST_RAW is None:
+        _DENYLIST_RAW = {}
+        try:
+            raw = _json.loads(_DENYLIST_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, _json.JSONDecodeError) as e:
+            logger.warning("sca.supply_chain.typosquat: failed to load "
+                           "denylist %s: %s", _DENYLIST_PATH, e)
+            raw = {}
+        if isinstance(raw, dict):
+            for eco, names in raw.items():
+                # Two accepted shapes per ecosystem: a bare ``[name, ...]``
+                # list, or an enriched ``{name: {provenance...}}`` map (the
+                # curation pipeline records who/when/why). Either way we only
+                # need the name set here. A ``_comment`` string key is neither
+                # and is skipped.
+                if isinstance(names, list):
+                    _DENYLIST_RAW[eco] = {
+                        n.lower() for n in names if isinstance(n, str)}
+                elif isinstance(names, dict):
+                    _DENYLIST_RAW[eco] = {
+                        k.lower() for k in names if isinstance(k, str)}
+    cached = _DENYLIST_BY_ECO.get(ecosystem)
+    if cached is None:
+        cached = _DENYLIST_RAW.get(ecosystem, set())
+        _DENYLIST_BY_ECO[ecosystem] = cached
+    return cached
 
 
 def _popular_set(ecosystem: str) -> set:
@@ -196,8 +310,12 @@ def _popular_set(ecosystem: str) -> set:
     return s
 
 
-def _popular_by_len(ecosystem: str) -> Dict[int, List[str]]:
+def _popular_by_len(ecosystem: str) -> Dict[int, List[Tuple[str, int]]]:
     """Return the popular list indexed by name length.
+
+    Each bucket holds ``(name, char_mask)`` pairs — the mask is
+    precomputed once here so the per-dep ``_check_one`` prefilter is a
+    bare XOR + popcount rather than re-scanning each popular name.
 
     Walking only the buckets at lengths within ``_MAX_DISTANCE`` of
     the query length cuts the inner ``_damerau_levenshtein`` calls
@@ -208,9 +326,9 @@ def _popular_by_len(ecosystem: str) -> Dict[int, List[str]]:
     cached = _POPULAR_BY_LEN.get(ecosystem)
     if cached is not None:
         return cached
-    by_len: Dict[int, List[str]] = {}
+    by_len: Dict[int, List[Tuple[str, int]]] = {}
     for name in _load_popular(ecosystem):
-        by_len.setdefault(len(name), []).append(name)
+        by_len.setdefault(len(name), []).append((name, _char_mask(name)))
     _POPULAR_BY_LEN[ecosystem] = by_len
     return by_len
 

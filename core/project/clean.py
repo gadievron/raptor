@@ -29,10 +29,15 @@ def _run_dir_size(d: Path) -> int:
 def plan_clean(project, keep=1) -> Dict[str, Any]:
     """Plan which runs to delete. Returns stats with directory paths.
 
+    ``keep=0`` is valid: delete as aggressively as possible, bounded by the
+    clean-safety invariant that the last (newest) run of each command type is
+    never deleted (design: project.md). The durable coverage store retains the
+    verdicts of deleted runs (clean/examined coverage is snapshotted before
+    deletion; sole-source findings flip to ``found_then_lost``).
     Does not modify the filesystem.
     """
-    if keep < 1:
-        raise ValueError(f"keep must be >= 1, got {keep}")
+    if keep < 0:
+        raise ValueError(f"keep must be >= 0, got {keep}")
     groups = project.get_run_dirs_by_type()
     stats: Dict[str, Any] = {
         "delete_dirs": [], "deleted": [], "kept": [], "freed_bytes": 0,
@@ -42,6 +47,11 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
     for cmd_type, dirs in groups.items():
         to_keep = dirs[:keep]
         to_delete = dirs[keep:]
+        # Clean-safety invariant (project.md): never delete the last run of a
+        # command type, even with --keep 0. Preserve the newest (dirs are
+        # newest-first) when the keep slice would otherwise empty the type.
+        if not to_keep and dirs:
+            to_keep, to_delete = dirs[:1], dirs[1:]
         type_freed = 0
 
         for d in to_keep:

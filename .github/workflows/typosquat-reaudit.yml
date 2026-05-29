@@ -1,0 +1,91 @@
+name: Typosquat reviewed-legit re-audit
+
+# Step 3 of the typosquat-denylist curation loop (design/typosquat-denylist-
+# curation.md): monthly MECHANICAL re-audit of the auto-/hand-filed
+# reviewed-legit list. Auto-filed 'legit' names are suppressed from the
+# candidate queue forever, so this re-checks each one's CURRENT registry state
+# and flags any contradiction — removed, now deprecated, or now carrying a
+# confirmed-malicious (MAL-) OSV advisory (the litellm/node-ipc "trusted name
+# turned bad" class). All ground-truth signal, NO LLM (CI has none), so it runs
+# here and opens an issue. The deeper LLM re-examination is operator-side
+# (`raptor-sca triage`).
+
+on:
+  schedule:
+    # 07:00 UTC on the 1st of each month.
+    - cron: '0 7 1 * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write          # to open / comment the re-audit issue
+
+concurrency:
+  group: typosquat-reaudit
+  cancel-in-progress: false
+
+jobs:
+  reaudit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        # Hash-pinned per design/sca.md §1045 (re-run raptor-sca fix
+        # --cve-only --hash-pin after a minor bump).
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip==26.1.1
+          # The re-audit hits registries + OSV through the SCA egress client,
+          # so it needs the runtime deps (not the dev set).
+          pip install -r requirements.txt
+
+      - name: Re-audit reviewed-legit (mechanical, no LLM)
+        # Writes a markdown report to RUNNER_TEMP (never the repo); empty when
+        # nothing is flagged. Routes through the SCA egress-controlled client
+        # (registries + api.osv.dev are on SCA_ALLOWED_HOSTS).
+        run: |
+          set -euo pipefail
+          python -m packages.sca.supply_chain.typosquat_audit --reaudit \
+            --out "$RUNNER_TEMP/reaudit.md"
+
+      - name: Open / update issue when entries are flagged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # gh is first-party + pre-installed. Find an open re-audit issue and
+        # comment on it (avoids a monthly pile-up); else open one. Dedup is by
+        # TITLE (a stable title) — no bespoke label, so this stays on the
+        # standardised SCA bot-label scheme (#681): the only labels applied are
+        # the canonical ``automated`` + ``sca`` pair (as refit-sca-calibration
+        # does). Labels are best-effort — a missing label must never fail the
+        # run (see sca-self-bump / refresh-sca-data).
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/reaudit.md"
+          if [ ! -s "$REPORT" ]; then
+            echo "No reviewed-legit entries flagged this month."
+            exit 0
+          fi
+          TITLE="chore(sca): typosquat reviewed-legit re-audit flags"
+          existing=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty" \
+            2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$REPORT"
+            echo "Updated re-audit issue #$existing"
+          else
+            num=$(gh issue create --title "$TITLE" --body-file "$REPORT")
+            echo "Opened re-audit issue $num"
+            # Standardised SCA bot labels only (best-effort).
+            for lbl in automated sca; do
+              gh issue edit "$num" --add-label "$lbl" 2>/dev/null \
+                || echo "label '$lbl' not in repo; skipping"
+            done
+          fi

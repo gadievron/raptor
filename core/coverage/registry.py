@@ -44,8 +44,13 @@ _REGISTRY = {
     "agentic": (CATEGORY_LLM, DEPTH_ANALYSED),
     "annotations": (CATEGORY_LLM, DEPTH_ANALYSED),
     "gcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "lcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "afl": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "fuzz": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    # Python-test runtime (coverage.py / pytest-cov).
+    "coverage.py": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "coverage": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "pytest": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
 }
 _DEFAULT: Tuple[str, str] = (CATEGORY_UNKNOWN, DEPTH_SCANNED)
 

@@ -171,16 +171,35 @@ class PythonExtractor:
                 ))
         return out
 
+    @staticmethod
+    def _class_base_names(node: "ast.ClassDef") -> List[str]:
+        """Simple base-class names of a ``class`` (``class V(a.b.APIView,
+        Mixin)`` → ``["APIView", "Mixin"]``). Keyword bases (``metaclass=``)
+        are in ``node.keywords``, not ``node.bases``, so they're skipped.
+        Mirrors the tree-sitter extractor so the stdlib fallback records the
+        same ``class_attributes`` (framework-base detection needs it)."""
+        out: List[str] = []
+        for b in node.bases:
+            if isinstance(b, ast.Name):
+                out.append(b.id)
+            elif isinstance(b, ast.Attribute):
+                out.append(b.attr)
+        return out
+
     def _walk(self, node: ast.AST, functions: List[FunctionInfo],
-              class_name: Optional[str]) -> None:
+              class_name: Optional[str],
+              class_attributes: Sequence[str] = ()) -> None:
         """Walk AST collecting functions with metadata."""
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
-                self._walk(child, functions, class_name=child.name)
+                self._walk(child, functions, class_name=child.name,
+                           class_attributes=self._class_base_names(child))
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                functions.append(self._extract_function(child, class_name))
+                functions.append(
+                    self._extract_function(child, class_name, class_attributes))
                 # Walk into nested functions/classes
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
             else:
                 # Descend into compound statements (if / try / with /
                 # for / while / match) so functions nested inside them
@@ -194,9 +213,11 @@ class PythonExtractor:
                 # don't open a class scope. Only FunctionDef nodes are
                 # collected, so recursing through expression children
                 # is harmless (lambdas are ast.Lambda, not FunctionDef).
-                self._walk(child, functions, class_name=class_name)
+                self._walk(child, functions, class_name=class_name,
+                           class_attributes=class_attributes)
 
-    def _extract_function(self, node: ast.AST, class_name: Optional[str]) -> FunctionInfo:
+    def _extract_function(self, node: ast.AST, class_name: Optional[str],
+                          class_attributes: Sequence[str] = ()) -> FunctionInfo:
         """Extract a single function with full metadata."""
         args = node.args.args
         # Build signature
@@ -236,6 +257,7 @@ class PythonExtractor:
                 attributes=attributes,
                 return_type=return_type,
                 parameters=parameters,
+                class_attributes=list(class_attributes),
             ),
         )
 
@@ -824,6 +846,9 @@ def _ts_language(lang: str):
             import tree_sitter_c_sharp as ts
         elif lang == "ruby":
             import tree_sitter_ruby as ts
+        elif lang == "php":
+            import tree_sitter_php as ts
+            return Language(ts.language_php())
         else:
             return None
         return Language(ts.language())
@@ -869,6 +894,7 @@ class TreeSitterExtractor:
         "csharp": ("method_declaration", "constructor_declaration",
                    "local_function_statement"),
         "ruby": ("method", "singleton_method"),
+        "php": ("method_declaration", "function_definition"),
     }
 
     _CLASS_TYPES = {
@@ -883,6 +909,7 @@ class TreeSitterExtractor:
         "csharp": ("class_declaration", "interface_declaration",
                    "struct_declaration", "record_declaration"),
         "ruby": ("class", "module"),
+        "php": ("class_declaration", "interface_declaration", "trait_declaration"),
     }
 
     def __init__(self, language: str):
@@ -919,7 +946,18 @@ class TreeSitterExtractor:
                     if mod.type in ("marker_annotation", "annotation"):
                         out.append(mod.text.decode().lstrip("@"))
             elif child.type == "attribute_list":
-                out.extend(self._csharp_attr_names(child))
+                # C#: attribute_list → attribute. PHP: attribute_list →
+                # attribute_group → attribute (deeper nesting).
+                if self.language == "php":
+                    out.extend(self._php_attr_names(child))
+                else:
+                    out.extend(self._csharp_attr_names(child))
+            elif child.type in ("base_clause", "class_interface_clause"):
+                # PHP: ``extends Base`` / ``implements I1, I2`` — record the base
+                # type names so framework bases (Controller / AbstractController
+                # / Command / ShouldQueue …) can mark the class's methods entries.
+                out.extend(n.text.decode() for n in child.children
+                           if n.type in ("name", "qualified_name"))
             elif child.type == "superclass":
                 # Ruby: ``class X < ApplicationController`` — base is a
                 # ``constant`` / ``scope_resolution``. Java: ``extends Foo`` —
@@ -934,6 +972,29 @@ class TreeSitterExtractor:
                 # Spring Data, Validator → a framework-dispatched interface)
                 # can mark the class's methods as entries.
                 out.extend(self._java_base_names(child))
+            elif child.type == "argument_list" and self.language == "python":
+                # Python: ``class V(APIView, LoginRequiredMixin, metaclass=M)``
+                # — the base classes live in the argument_list. Record their
+                # simple tail names (``rest_framework.views.APIView`` →
+                # ``APIView``) so framework base classes (Django/DRF/Flask
+                # class-based views) can mark the class's methods as entries.
+                # Skip keyword args (``metaclass=…``).
+                for b in child.children:
+                    if b.type in ("identifier", "attribute"):
+                        out.append(b.text.decode().split(".")[-1].strip())
+            elif child.type == "base_list":
+                # C#: ``: ControllerBase, IFoo<int>`` — record base/interface
+                # tail names so framework base classes (ControllerBase / Hub /
+                # BackgroundService) mark the class's methods as entries. Bases
+                # are identifier / qualified_name / generic_name children.
+                for b in child.children:
+                    if b.type in ("identifier", "qualified_name"):
+                        out.append(b.text.decode().split(".")[-1].strip())
+                    elif b.type == "generic_name":
+                        ident = next((g for g in b.children
+                                      if g.type == "identifier"), None)
+                        if ident is not None:
+                            out.append(ident.text.decode())
         return out
 
     @staticmethod
@@ -983,6 +1044,34 @@ class TreeSitterExtractor:
         for child in node.children:
             if child.type == "attribute_list":
                 out.extend(self._csharp_attr_names(child))
+        return out
+
+    @staticmethod
+    def _php_attr_names(attribute_list_node) -> List[str]:
+        """Attribute names in one PHP ``attribute_list`` — nests one level deeper
+        than C#: ``attribute_list → attribute_group → attribute → name``
+        (``#[Route('/x')]`` → ``["Route"]``)."""
+        out: List[str] = []
+        for grp in attribute_list_node.children:
+            if grp.type != "attribute_group":
+                continue
+            for a in grp.children:
+                if a.type != "attribute":
+                    continue
+                for c in a.children:
+                    if c.type in ("name", "qualified_name"):
+                        out.append(c.text.decode())
+                        break
+        return out
+
+    def _php_attributes(self, node) -> List[str]:
+        """PHP attributes on a method — its ``attribute_list`` children."""
+        if self.language != "php":
+            return []
+        out: List[str] = []
+        for child in node.children:
+            if child.type == "attribute_list":
+                out.extend(self._php_attr_names(child))
         return out
 
     # Sibling node types allowed between a TS/JS decorator and the
@@ -1083,7 +1172,8 @@ class TreeSitterExtractor:
                 # JS/TS: method/function decorators are preceding siblings
                 # (@Get() / @Cron() …). Python: a decorated_definition wrapper.
                 # C#: ``[HttpGet]`` attribute_list children (gathered here).
-                attrs = self._ts_decorators(child) + self._csharp_attributes(child)
+                attrs = (self._ts_decorators(child) + self._csharp_attributes(child)
+                         + self._php_attributes(child))
                 parent = child.parent
                 if parent and parent.type == "decorated_definition":
                     for sib in parent.children:
@@ -1159,6 +1249,15 @@ class TreeSitterExtractor:
         # TS/JS class members: accessibility_modifier (default public).
         if node.type == "method_definition":
             visibility = self._ts_member_visibility(node)
+
+        # PHP: a method_declaration carries a ``visibility_modifier`` child;
+        # methods default to public when none is present.
+        if self.language == "php" and node.type == "method_declaration":
+            visibility = "public"
+            for child in node.children:
+                if child.type == "visibility_modifier":
+                    visibility = child.text.decode().strip()
+                    break
 
         # C#: ``modifier`` children carry access keywords; members default to
         # ``private`` (the framework-entry rule keys on public action methods).
@@ -1441,6 +1540,7 @@ _REGEX_EXTRACTORS = {
     'tsx': JavaScriptExtractor(),
     'csharp': GenericExtractor(),
     'ruby': GenericExtractor(),
+    'php': GenericExtractor(),
     'c': CExtractor(),
     'cpp': CExtractor(),
     'java': JavaExtractor(),
@@ -1559,6 +1659,10 @@ def extract_items(filepath: str, language: str, content: str,
             pass
         try:
             items.extend(_extract_top_level_ts(tree.root_node, language))
+        except Exception:
+            pass
+        try:
+            items.extend(_extract_c_types_ts(tree.root_node, language))
         except Exception:
             pass
 
@@ -1687,6 +1791,76 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
     return globals_found
 
 
+_RECORD_BODY_TYPES = ("field_declaration_list", "enumerator_list")
+
+
+def _specifier_tag_name(spec) -> Optional[str]:
+    """Tag name of a struct/union/enum/class specifier that *defines* a type
+    (has a body). Returns None for a forward declaration / use of an existing
+    type (no body) or an anonymous specifier (no tag — a typedef names it
+    instead, handled via ``_typedef_name``)."""
+    if not any(b.type in _RECORD_BODY_TYPES for b in spec.children):
+        return None
+    for b in spec.children:
+        if b.type == "type_identifier":
+            return b.text.decode()
+    return None
+
+
+def _typedef_name(node) -> Optional[str]:
+    """The new type name introduced by a C/C++ ``type_definition`` (typedef).
+    ``typedef struct {…} Foo;`` -> ``Foo``; ``typedef int (*cb)(int);`` -> ``cb``.
+    """
+    decl = node.child_by_field_name("declarator")
+    if decl is not None:
+        if decl.type in ("type_identifier", "identifier"):
+            return decl.text.decode()
+        inner = _c_declarator_name(decl)
+        if inner:
+            return inner
+    # Fallback: a direct type_identifier child (not nested in a specifier).
+    for c in node.children:
+        if c.type in ("type_identifier", "identifier"):
+            return c.text.decode()
+    return None
+
+
+def _extract_c_types_ts(root_node, language: str) -> List[CodeItem]:
+    """File-scope C/C++ type definitions as ``class``-kind items: ``typedef``s
+    and named struct/union/enum (and C++ class) *definitions*. Without these a
+    header of type declarations collapses to anonymous interstitial. Forward
+    declarations and uses of existing types (no body) are not definitions and
+    are skipped; the type's tag is the item name (the typedef name for an
+    anonymous record). A ``struct Foo {…} g;`` yields BOTH the type ``Foo``
+    here and the global ``g`` via ``_extract_globals_ts`` — both are real."""
+    if language not in ("c", "cpp"):
+        return []
+    specifiers = ("struct_specifier", "union_specifier", "enum_specifier")
+    if language == "cpp":
+        specifiers = specifiers + ("class_specifier",)
+    out: List[CodeItem] = []
+    for child in root_node.children:
+        name = None
+        if child.type == "type_definition":
+            name = _typedef_name(child)
+        elif child.type == "declaration":
+            name = next(
+                (_specifier_tag_name(c) for c in child.children
+                 if c.type in specifiers and _specifier_tag_name(c)),
+                None,
+            )
+        elif child.type in specifiers:
+            name = _specifier_tag_name(child)
+        if name:
+            out.append(CodeItem(
+                name=name,
+                kind=KIND_CLASS,
+                line_start=child.start_point[0] + 1,
+                line_end=child.end_point[0] + 1,
+            ))
+    return out
+
+
 def _global_names(node, language: str):
     """Yield every global name in a declaration node.
 
@@ -1750,10 +1924,46 @@ def _global_names(node, language: str):
                 current = next_assignment
             return
 
+    if language in ("c", "cpp"):
+        yield from _c_global_names(node)
+        return
+
+    if language in ("javascript", "typescript", "tsx"):
+        # `const a = 1, b = 2;` is one declaration with multiple
+        # variable_declarators — yield every name, not just the first.
+        # Pre-fix `_global_name` returned only the first, dropping `b`.
+        for child in node.children:
+            if child.type == "variable_declarator":
+                for sub in child.children:
+                    if sub.type in ("identifier", "name"):
+                        yield sub.text.decode()
+                        break
+        return
+
     # Other languages: defer to the single-name function.
     name = _global_name(node, language)
     if name:
         yield name
+
+
+def _c_global_names(node):
+    """Yield every declared name in a C/C++ ``declaration`` node.
+
+    Handles multi-declarator declarations (``int a, b, c;``) where only the
+    first name was captured before (``_c_declarator_name`` on the whole node
+    stops at the first identifier). A bare function prototype (``int foo(int);``
+    — a ``function_declarator`` child) declares no variable, so it yields
+    nothing; its definition is captured as a function elsewhere.
+    """
+    _DECLARATORS = ("identifier", "init_declarator", "array_declarator",
+                    "pointer_declarator", "parenthesized_declarator")
+    if any(c.type == "function_declarator" for c in node.children):
+        return
+    for child in node.children:
+        if child.type in _DECLARATORS:
+            name = _c_declarator_name(child)
+            if name:
+                yield name
 
 
 def _c_declarator_name(node, depth: int = 0) -> Optional[str]:

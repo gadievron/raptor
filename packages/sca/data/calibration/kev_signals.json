@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T17:00:21Z",
+    "fetched_at": "2026-05-28T17:39:22Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -11193,12 +11193,33 @@
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
+    "CVE-2026-45321": {
+      "date_added": "2026-05-27",
+      "kev": true,
+      "product": "TanStack",
+      "ransomware_use": true,
+      "vendor": "TanStack"
+    },
     "CVE-2026-45498": {
       "date_added": "2026-05-20",
       "kev": true,
       "product": "Defender",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-48027": {
+      "date_added": "2026-05-27",
+      "kev": true,
+      "product": "Nx Console",
+      "ransomware_use": true,
+      "vendor": "Nx"
+    },
+    "CVE-2026-48172": {
+      "date_added": "2026-05-26",
+      "kev": true,
+      "product": "cPanel Plugin",
+      "ransomware_use": false,
+      "vendor": "LiteSpeed"
     },
     "CVE-2026-5281": {
       "date_added": "2026-04-01",
@@ -11213,6 +11234,13 @@
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-8398": {
+      "date_added": "2026-05-27",
+      "kev": true,
+      "product": "Daemon Tools Lite",
+      "ransomware_use": false,
+      "vendor": "Daemon"
     },
     "CVE-2026-9082": {
       "date_added": "2026-05-22",

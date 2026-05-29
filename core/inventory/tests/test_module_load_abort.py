@@ -248,6 +248,89 @@ def test_rust_cfg_gated_compile_error_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
+# PHP — file-scope die / exit / throw new aborts include/require.
+# ---------------------------------------------------------------------------
+
+
+def test_php_top_level_die_fires():
+    r = detect_module_load_abort("php", "<?php\ndie('disabled');\nfunction f(){}\n")
+    assert r is not None and r.line == 2 and r.summary == "die"
+
+
+def test_php_top_level_throw_new_fires():
+    r = detect_module_load_abort(
+        "php", "<?php\nthrow new \\App\\DisabledException();\nclass C{}\n")
+    assert r is not None and r.summary == "throw new DisabledException"
+
+
+def test_php_exit_after_function_fires():
+    # The function binds, then an unconditional exit aborts the rest.
+    r = detect_module_load_abort("php", "<?php\nfunction g(){}\nexit;\n")
+    assert r is not None and r.line == 3
+
+
+def test_php_die_inside_function_does_not_fire():
+    assert detect_module_load_abort("php", "<?php\nfunction f(){ die('x'); }\n") is None
+
+
+def test_php_throw_inside_method_does_not_fire():
+    assert detect_module_load_abort(
+        "php", "<?php\nclass C{ function m(){ throw new E(); } }\n") is None
+
+
+def test_php_conditional_die_does_not_fire():
+    # ``if ($x) die();`` — the die follows ``)`` so it is not statement-initial.
+    assert detect_module_load_abort("php", "<?php\nif ($x) die('x');\n") is None
+
+
+def test_php_die_in_string_does_not_fire():
+    assert detect_module_load_abort("php", "<?php\n$s = 'die()';\nfunction f(){}\n") is None
+
+
+def test_php_exit_method_call_does_not_fire():
+    # ``$o->exit()`` is a method call, not the language construct.
+    assert detect_module_load_abort("php", "<?php\n$o->exit();\nfunction f(){}\n") is None
+
+
+# ---------------------------------------------------------------------------
+# Ruby — column-0 unconditional raise / abort / exit / fail aborts require.
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_top_level_raise_fires():
+    r = detect_module_load_abort("ruby", "raise 'disabled'\nclass C\n  def m; end\nend\n")
+    assert r is not None and r.line == 1 and r.summary == "raise"
+
+
+def test_ruby_abort_after_oneliner_def_fires():
+    # A one-liner ``def`` before the abort must not leave nesting stuck at 1.
+    r = detect_module_load_abort("ruby", "def early; 1; end\nabort 'no'\ndef late; end\n")
+    assert r is not None and r.line == 2 and r.summary == "abort"
+
+
+def test_ruby_raise_inside_def_does_not_fire():
+    assert detect_module_load_abort("ruby", "def f\n  raise 'x'\nend\n") is None
+
+
+def test_ruby_raise_inside_class_method_does_not_fire():
+    assert detect_module_load_abort(
+        "ruby", "class C\n  def m\n    raise 'x'\n  end\nend\n") is None
+
+
+def test_ruby_conditional_raise_modifier_does_not_fire():
+    assert detect_module_load_abort("ruby", "raise 'x' if broken?\n") is None
+
+
+def test_ruby_raise_inside_if_block_does_not_fire():
+    assert detect_module_load_abort("ruby", "if cond\n  raise 'x'\nend\n") is None
+
+
+def test_ruby_bare_raise_does_not_fire():
+    # Bare ``raise`` (re-raise) has no argument — not a module-abort signal.
+    assert detect_module_load_abort("ruby", "raise\n") is None
+
+
+# ---------------------------------------------------------------------------
 # Cross-cutting
 # ---------------------------------------------------------------------------
 
@@ -257,9 +340,10 @@ def test_empty_content_returns_none():
 
 
 def test_unwired_language_returns_none():
-    # Ruby has a call-graph extractor but no abort detector — must
-    # degrade gracefully (no false "loadable" claim, just no signal).
-    assert detect_module_load_abort("ruby", "raise 'x'\n") is None
+    # Java has a call-graph extractor but no abort detector (no top-level
+    # execution model) — must degrade gracefully (no signal, not a crash).
+    assert detect_module_load_abort(
+        "java", "class X { static { throw new RuntimeException(); } }\n") is None
 
 
 def test_clean_python_file_returns_none():

@@ -54,6 +54,23 @@ def test_rust_use_wildcard_flagged():
     assert INDIRECTION_WILDCARD_IMPORT in g.indirection
 
 
+def test_rust_reflect_masking():
+    # Type-erased dispatch (Any::downcast family, transmute) hides the
+    # concrete target → flag the file REFLECT so its functions hedge to
+    # uncertain. Caught through the turbofish ``generic_function`` wrapper
+    # (the common ``downcast_ref::<T>()`` form emits no normal chain edge).
+    assert INDIRECTION_REFLECT in extract_call_graph_rust(
+        "fn f(x: &dyn Any) { x.downcast_ref::<Foo>(); }\n").indirection
+    assert INDIRECTION_REFLECT in extract_call_graph_rust(
+        "fn f(b: Box<dyn Any>) { b.downcast::<Foo>(); }\n").indirection
+    assert INDIRECTION_REFLECT in extract_call_graph_rust(
+        "fn f() { let p: fn() = unsafe { std::mem::transmute(a) }; p(); }\n"
+    ).indirection
+    # plain calls must NOT be flagged.
+    assert INDIRECTION_REFLECT not in extract_call_graph_rust(
+        "fn f() { helper(); other.method(); }\n").indirection
+
+
 def test_rust_scoped_call():
     g = extract_call_graph_rust(
         "fn main() { Baz::new(); }\n"

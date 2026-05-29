@@ -1,7 +1,6 @@
 """
 Live NVD integration tests. Hit services.nvd.nist.gov for a well-known CVE
-and assert `NvdDiscoverer.fetch` + `fetch_context` extract the signals the
-cascade depends on.
+and assert `NvdDiscoverer.fetch` extracts the signals the cascade depends on.
 
 Skipped by default (addopts `-m 'not integration'`). Run explicitly with
 `.venv/bin/pytest tests/integration -m integration -q`.
@@ -12,24 +11,6 @@ from __future__ import annotations
 import pytest
 
 from cve_diff.discovery.nvd import NvdDiscoverer
-
-
-@pytest.mark.integration
-def test_nvd_live_fetch_context_returns_cpe_products_for_log4shell() -> None:
-    """CVE-2021-44228 (log4shell) has stable NVD CPE entries naming
-    `log4j` as the product. `fetch_context` must surface that via
-    `cpe_products` so the runtime scorer's CPE boost can fire.
-
-    `published` is not asserted — `AdvisoryContext.from_nvd` only populates
-    the CPE-derived fields (vendor/product), deliberately leaving the
-    advisory-publish date to `from_osv`.
-    """
-    ctx = NvdDiscoverer().fetch_context("CVE-2021-44228")
-    assert ctx is not None, "NVD returned None — network or rate-limit?"
-    assert ctx.cve_id == "CVE-2021-44228"
-    assert ctx.cpe_products, "NVD context had no cpe_products"
-    assert any("log4j" in p.lower() for p in ctx.cpe_products)
-    assert ctx.cpe_vendors, "NVD context had no cpe_vendors"
 
 
 @pytest.mark.integration

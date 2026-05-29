@@ -10,6 +10,7 @@ from core.coverage.importer import (
     import_findings,
     import_record,
     import_run_dir,
+    import_understand,
 )
 from core.coverage.store import CoverageStore
 
@@ -20,16 +21,126 @@ def _store(tmp_path):
 
 _CHECKLIST = {
     "files": [
-        {"path": "a.c", "total_lines": 100, "items": [
+        {"path": "a.c", "lines": 100, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20},
             {"name": "f2", "line_start": 30, "line_end": 60,
              "checked_by": ["validate:stage-a"]},
         ]},
-        {"path": "b.c", "total_lines": 50, "functions": [
+        {"path": "b.c", "lines": 50, "functions": [
             {"name": "g1", "line_start": 0, "line_end": 10},
         ]},
     ],
 }
+
+
+def test_import_understand_marks_context_map_and_traces(tmp_path):
+    s = _store(tmp_path)
+    s.import_inventory_meta(_CHECKLIST)
+    run = tmp_path / "understand-1"
+    run.mkdir()
+    (run / "context-map.json").write_text(json.dumps({
+        "entry_points": [{"file": "a.c", "line": 5, "name": "f1"}],
+        "sink_details": [{"file": "a.c", "line_start": 35}],   # line_start fallback
+        "boundary_details": [{"file": "b.c", "line": 3}],
+    }))
+    (run / "flow-trace-001.json").write_text(json.dumps({
+        "steps": [{"file": "a.c", "line": 40}, {"file": "b.c", "line": 7}],
+    }))
+    n = import_understand(s, run, _CHECKLIST)
+    assert n == 5
+    # Marked under the `understand` tool (llm category via the registry).
+    assert s.who_checked("a.c", 5) == ["understand"]
+    assert s.who_checked("a.c", 35) == ["understand"]   # line_start used
+    # Function-level rollup: the containing function reads as llm-examined.
+    assert s.function_covered("a.c", 0, 20, category="llm") is True
+    assert s.function_covered("a.c", 30, 60, category="llm") is True
+    assert s.function_covered("b.c", 0, 10, category="llm") is True
+
+
+def test_import_understand_no_files_is_noop(tmp_path):
+    s = _store(tmp_path)
+    empty = tmp_path / "run-empty"
+    empty.mkdir()
+    assert import_understand(s, empty, _CHECKLIST) == 0
+
+
+def test_import_understand_tolerates_malformed(tmp_path):
+    s = _store(tmp_path)
+    run = tmp_path / "u"
+    run.mkdir()
+    (run / "context-map.json").write_text(json.dumps({
+        "entry_points": "not-a-list",
+        "sink_details": [{"file": "a.c"}, {"line": 5}, "junk", {"file": "a.c", "line": 9}],
+    }))
+    (run / "flow-trace-x.json").write_text(json.dumps({"steps": [{"nofile": 1}]}))
+    n = import_understand(s, run, _CHECKLIST)
+    assert n == 1                                  # only the well-formed sink
+    assert s.who_checked("a.c", 9) == ["understand"]
+
+
+def test_backfill_includes_understand(tmp_path):
+    s = _store(tmp_path)
+    run = tmp_path / "run-1"
+    run.mkdir()
+    (run / "context-map.json").write_text(json.dumps({
+        "entry_points": [{"file": "a.c", "line": 5}],
+    }))
+    backfill(s, [run], _CHECKLIST)
+    assert "understand" in s.who_checked("a.c", 5)
+
+
+def test_functions_analysed_marks_function_not_whole_file(tmp_path):
+    # An llm record as --mark now writes it: functions_analysed only (no
+    # files_examined). Only that function is marked — NOT the whole file.
+    s = _store(tmp_path)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "coverage-llm.json").write_text(json.dumps({
+        "tool": "llm",
+        "functions_analysed": [{"file": "a.c", "function": "f1"}],
+    }))
+    # Local checklist with NO checked_by — so f2's only llm-coverage path would
+    # be functions_analysed (which doesn't include it), isolating the behaviour.
+    cl = {"files": [{"path": "a.c", "lines": 100, "items": [
+        {"name": "f1", "line_start": 0, "line_end": 20},
+        {"name": "f2", "line_start": 30, "line_end": 60}]}]}
+    backfill(s, [run], cl)
+    assert s.function_covered("a.c", 0, 20, category="llm") is True      # f1
+    assert s.function_covered("a.c", 30, 60, category="llm") is False    # f2 not
+    assert "llm" not in s.who_checked("a.c", 25)                         # gap line
+
+
+def test_files_examined_still_marks_whole_file(tmp_path):
+    # A reads-manifest-style llm record (files_examined, no functions_analysed)
+    # still marks the whole file — "the LLM read it".
+    s = _store(tmp_path)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "coverage-llm.json").write_text(json.dumps({
+        "tool": "llm", "files_examined": ["a.c"],
+    }))
+    backfill(s, [run], _CHECKLIST)
+    assert s.function_covered("a.c", 0, 20, category="llm") is True
+    assert s.function_covered("a.c", 30, 60, category="llm") is True     # whole file
+
+
+def test_functions_analysed_resolves_abs_and_skips_unknown(tmp_path):
+    s = _store(tmp_path)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "coverage-llm.json").write_text(json.dumps({
+        "tool": "llm",
+        "functions_analysed": [
+            {"file": "/abs/root/a.c", "function": "f1"},     # abs → resolves
+            {"file": "a.c", "function": "nonexistent"},      # skipped
+        ],
+    }))
+    cl = {"files": [{"path": "a.c", "lines": 100, "items": [
+        {"name": "f1", "line_start": 0, "line_end": 20},
+        {"name": "f2", "line_start": 30, "line_end": 60}]}]}
+    backfill(s, [run], cl)
+    assert s.function_covered("a.c", 0, 20, category="llm") is True
+    assert s.function_covered("a.c", 30, 60, category="llm") is False
 
 
 def test_import_checked_by_is_function_level_and_llm(tmp_path):
@@ -92,19 +203,24 @@ def test_absolute_scanner_paths_join_to_relative_inventory(tmp_path):
 
 
 def test_file_level_coverage_uses_real_inventory_lines_field(tmp_path):
-    # Regression: the inventory emits per-file `lines`, not `total_lines`
-    # (the latter only appears in hand-built test checklists). Reading the
-    # wrong key silently drops ALL file-level scanner coverage — caught only
-    # against a real checklist. backfill must place whole-file marks here.
+    # Regression: file-level marks read the inventory's `lines` key — what
+    # builder.py actually emits. `total_lines` is NOT a recognised inventory
+    # key (the line-count read was standardised on `lines`, dropping the old
+    # dual-key shim); a `total_lines`-only entry has unknown extent and is
+    # skipped. Reading the wrong key silently drops ALL file-level scanner
+    # coverage, so both halves are asserted here.
     s = _store(tmp_path)
     checklist = {"files": [
         {"path": "a.c", "lines": 40, "sloc": 30, "items": [
             {"name": "f1", "line_start": 0, "line_end": 20}]},
+        {"path": "legacy.c", "total_lines": 40, "items": [
+            {"name": "g1", "line_start": 0, "line_end": 20}]},
     ]}
     run = tmp_path / "scan-1"
     run.mkdir()
     (run / "coverage-semgrep.json").write_text(json.dumps(
-        {"tool": "semgrep", "files_examined": ["a.c"], "timestamp": "t"}))
+        {"tool": "semgrep", "files_examined": ["a.c", "legacy.c"],
+         "timestamp": "t"}))
     (run / "findings.json").write_text("[]")
     backfill(s, [run], checklist)
     assert s.who_checked("a.c", 10) == ["semgrep"]    # whole file marked
@@ -112,6 +228,8 @@ def test_file_level_coverage_uses_real_inventory_lines_field(tmp_path):
     assert s.who_checked("a.c", 40) == ["semgrep"]
     assert s.who_checked("a.c", 0) == []
     assert s.function_covered("a.c", 1, 20, category="static") is True
+    # `total_lines`-only entry: extent unknown -> no whole-file mark.
+    assert s.who_checked("legacy.c", 10) == []
 
 
 def test_import_run_dir_reads_per_tool_records(tmp_path):

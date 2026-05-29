@@ -52,7 +52,12 @@ import httpx
 
 from core.security.log_sanitisation import escape_nonprintable
 
-from .auth import CredentialStore, ProviderRule, build_rules
+from .auth import (
+    BedrockTransformError,
+    CredentialStore,
+    ProviderRule,
+    build_rules,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -552,6 +557,10 @@ _PROVIDER_FROM_PATH_PREFIX = {
     "/cohere/":       "cohere",
     "/replicate/":    "replicate",
     "/azure_openai/": "azure_openai",
+    # AWS Bedrock — routed by prefix like the others, but the rule
+    # carries a ``prepare_request`` hook that rewrites + SigV4-signs the
+    # request rather than injecting a static header.
+    "/bedrock/":      "bedrock",
 }
 
 
@@ -608,7 +617,17 @@ def _make_request_handler(dispatcher: LLMDispatcher) -> type:
                 self._send_simple(404, "unknown provider path")
                 return
             rule = dispatcher._provider(provider_name)
-            if rule is None or not rule.inject_headers():
+            # "Configured?" defaults to "has an injectable header", but a
+            # rule may override it (Bedrock needs botocore + AWS creds +
+            # region, not a single header).
+            configured = (
+                rule is not None
+                and (
+                    rule.is_configured() if rule.is_configured is not None
+                    else bool(rule.inject_headers())
+                )
+            )
+            if not configured:
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="provider.unconfigured",
                     peer_pid=None, peer_uid=None,
@@ -622,19 +641,62 @@ def _make_request_handler(dispatcher: LLMDispatcher) -> type:
             content_length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(content_length) if content_length else b""
 
-            # ---- header rewrite ----
-            forwarded: dict[str, str] = {}
-            for k, v in self.headers.items():
-                if k.lower() in rule.strip_request_headers:
-                    continue
-                if k.lower() in ("host", "content-length", _TOKEN_HEADER.lower()):
-                    continue
-                forwarded[k] = v
-            forwarded.update(rule.inject_headers())
+            method = self.command
+            if rule.prepare_request is not None:
+                # Provider with a non-static auth scheme (Bedrock SigV4):
+                # the rule rewrites + signs the request and we forward
+                # exactly what it returns. No further header rewriting —
+                # any edit would invalidate the signature.
+                try:
+                    prepared = rule.prepare_request(
+                        method, upstream_path, self.headers, body,
+                    )
+                except BedrockTransformError as exc:
+                    dispatcher._audit(AuditEvent(
+                        ts=time.time(), event="provider.transform_reject",
+                        peer_pid=None, peer_uid=None,
+                        token_id=_short(rec.value), worker_label=rec.worker_label,
+                        status="reject", reason=f"{provider_name}: {exc.message}",
+                    ))
+                    self._send_simple(exc.status, exc.message)
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    # Any OTHER exception from request preparation is an
+                    # upstream-signing failure we can't turn into a request —
+                    # most importantly a botocore credential refresh
+                    # (SSO/IMDS token expiry mid-run) raising inside
+                    # SigV4Auth.add_auth. Without this catch the exception
+                    # escapes the handler thread: the worker sees a dropped
+                    # connection with no HTTP status and no audit row. Map it
+                    # to a 502 + audit so the failure is visible and the
+                    # worker SDK surfaces a clean error. Log only the
+                    # exception TYPE (botocore messages can embed request
+                    # context) — never its rendered message.
+                    dispatcher._audit(AuditEvent(
+                        ts=time.time(), event="provider.transform_error",
+                        peer_pid=None, peer_uid=None,
+                        token_id=_short(rec.value), worker_label=rec.worker_label,
+                        status="error", reason=f"{provider_name}: {type(exc).__name__}",
+                    ))
+                    self._send_simple(502, f"request signing failed: {type(exc).__name__}")
+                    return
+                method = prepared.method
+                url = prepared.url
+                body = prepared.body
+                forwarded = dict(prepared.headers)
+            else:
+                # ---- header rewrite (static strip + inject) ----
+                forwarded = {}
+                for k, v in self.headers.items():
+                    if k.lower() in rule.strip_request_headers:
+                        continue
+                    if k.lower() in ("host", "content-length", _TOKEN_HEADER.lower()):
+                        continue
+                    forwarded[k] = v
+                forwarded.update(rule.inject_headers())
+                url = rule.upstream_base_url + upstream_path
 
             # ---- forward to upstream + stream response back ----
-            url = rule.upstream_base_url + upstream_path
-            method = self.command
             try:
                 with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
                     with client.stream(method, url, content=body, headers=forwarded) as up:

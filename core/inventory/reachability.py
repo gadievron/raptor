@@ -1108,6 +1108,22 @@ def _get_or_build_index(
                         idx.class_of_method[fn] = cls_name
                         break
 
+        # Go has no inheritance and its call graph emits no ClassDef, but the
+        # item extractor records each method's receiver type as ``class_name``.
+        # Go interfaces are STRUCTURAL — any method can satisfy an interface and
+        # be reached via interface dispatch — so every method is a virtual-
+        # dispatch candidate (the analog of override_methods for nominal langs).
+        # Seed from item metadata. Additive → FN-safe.
+        if file_record.get("language") == "go":
+            for it in file_record.get("items") or []:
+                if not isinstance(it, dict) \
+                        or it.get("kind", "function") != "function":
+                    continue
+                cls = (it.get("metadata") or {}).get("class_name")
+                nm = it.get("name")
+                if cls and nm:
+                    idx.override_methods.add((cls, nm))
+
     # Pass 1.5: build a qualified-name → InternalFunction map so that
     # external edges resolving to project-defined physical functions
     # get rewritten into internal edges in pass 2.
@@ -2354,6 +2370,8 @@ class ReachabilityProfile:
     has_ts_framework: bool = False
     has_csharp_framework: bool = False
     has_ruby_framework: bool = False
+    has_python_framework: bool = False
+    has_php_framework: bool = False
 
 
 PROFILES: Dict[str, ReachabilityProfile] = {
@@ -2362,13 +2380,13 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "go":   ReachabilityProfile("go", "sound", "go_exported", has_go_init=True),
     "rust": ReachabilityProfile("rust", "sound", "rust_pub"),
     "java": ReachabilityProfile("java", "none", has_java_web=True),
-    "python":     ReachabilityProfile("python", "none"),
+    "python":     ReachabilityProfile("python", "none", has_python_framework=True),
     "javascript": ReachabilityProfile("javascript", "none"),
     "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
     "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
     "ruby":       ReachabilityProfile("ruby", "none", has_ruby_framework=True),
     "csharp":     ReachabilityProfile("csharp", "none", has_csharp_framework=True),
-    "php":        ReachabilityProfile("php", "none"),
+    "php":        ReachabilityProfile("php", "none", has_php_framework=True),
 }
 
 _DEFAULT_PROFILE = ReachabilityProfile("")
@@ -2552,6 +2570,11 @@ _CSHARP_METHOD_DISPATCH_ATTRS = frozenset({
 # caller.
 _CSHARP_CLASS_STEREOTYPE_ATTRS = frozenset({
     "ApiController", "Controller", "Route",
+    # Base CLASSES the runtime dispatches into (class_attributes captures
+    # both [Attributes] and `: Base` types): MVC/API controllers without an
+    # explicit attribute, SignalR hubs, and hosted/background services whose
+    # ExecuteAsync/StartAsync the host invokes with no in-project caller.
+    "ControllerBase", "Hub", "BackgroundService", "IHostedService",
 })
 
 
@@ -2598,6 +2621,97 @@ def _ruby_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     return False
 
 
+# Method-level PHP attribute tail-names (Symfony route attributes on a method).
+_PHP_METHOD_DISPATCH_ATTRS = frozenset({"Route", "AsController"})
+# PHP framework class signals captured in class_attributes (extends/implements
+# base types AND class-level #[…] attributes) — Laravel + Symfony dispatch the
+# class's methods with no in-project caller (router → controller actions, queue
+# → job ``handle``, console → command ``execute``/``handle``, event lifecycle).
+_PHP_FRAMEWORK_BASES = frozenset({
+    # Laravel
+    "Controller", "BaseController", "FormRequest", "Command", "Job",
+    "Mailable", "Notification", "Middleware",
+    # Symfony base classes
+    "AbstractController", "Route",
+    # Symfony attribute-driven dispatch (class-level #[...] attributes, which
+    # the extractor records in class_attributes alongside bases) — modern
+    # Symfony marks dispatched services by attribute rather than base class.
+    "AsCommand", "AsMessageHandler", "AsEventListener", "AsController",
+    # dispatched interfaces
+    "ShouldQueue", "EventSubscriberInterface", "MessageHandlerInterface",
+    "MiddlewareInterface", "EventListenerInterface", "SubscriberInterface",
+})
+
+
+def _php_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A PHP method dispatched by Laravel / Symfony with no in-project caller —
+    a Symfony ``#[Route]`` method attribute, or a method of a class whose
+    ``class_attributes`` (extends/implements bases + class-level attributes)
+    names a framework base (controller / job / command / event subscriber).
+    Promote regardless of visibility — controller actions and queued handlers
+    are public, the convention is conventional. FN/FP-safe add-entries lever."""
+    meta = item.get("metadata") or {}
+    for a in meta.get("attributes") or []:
+        if _annotation_tail(a) in _PHP_METHOD_DISPATCH_ATTRS:
+            return True
+    for a in meta.get("class_attributes") or []:
+        tail = _annotation_tail(a)
+        # Explicit framework base/attribute, OR the *Controller naming
+        # convention (catches a controller extending a project-custom base,
+        # e.g. ``class UserController extends BaseController``). Convention is
+        # FN-safe: worst case is failing to demote a non-framework class that
+        # merely ends in "Controller".
+        if tail in _PHP_FRAMEWORK_BASES or tail.endswith("Controller"):
+            return True
+    return False
+
+
+# Python class-based-view base classes: the framework (Django URL dispatcher /
+# DRF router / Flask) instantiates the view and dispatches HTTP verbs into its
+# methods (get/post/…) and DRF actions (list/retrieve/…) with no in-project
+# caller. Decorator-based views are already handled by is_framework_callable;
+# this covers the CONVENTION (subclass a CBV base) that decorators miss.
+_PYTHON_FRAMEWORK_BASES = frozenset({
+    # Django generic class-based views
+    "View", "TemplateView", "RedirectView", "ListView", "DetailView",
+    "CreateView", "UpdateView", "DeleteView", "FormView", "ArchiveIndexView",
+    # Django REST Framework views
+    "APIView", "GenericAPIView", "ViewSet", "ViewSetMixin", "GenericViewSet",
+    "ModelViewSet", "ReadOnlyModelViewSet", "ListAPIView", "RetrieveAPIView",
+    "CreateAPIView", "UpdateAPIView", "DestroyAPIView", "ListCreateAPIView",
+    "RetrieveUpdateAPIView", "RetrieveDestroyAPIView",
+    "RetrieveUpdateDestroyAPIView",
+    # DRF serializers / permissions / auth (validate_*/create/update,
+    # has_permission, authenticate are framework-dispatched by convention)
+    "Serializer", "ModelSerializer", "ListSerializer",
+    "HyperlinkedModelSerializer", "BasePermission", "BaseAuthentication",
+    # Django management commands (the runner invokes handle()/add_arguments)
+    "BaseCommand", "AppCommand", "LabelCommand",
+    # Django forms (clean_*/clean dispatched on validation)
+    "Form", "ModelForm", "BaseForm",
+    # Django admin (action / display callables) + middleware
+    "ModelAdmin", "TabularInline", "StackedInline", "MiddlewareMixin",
+    # Celery class-based tasks (run() invoked by the worker)
+    "Task",
+    # Flask / Flask-RESTful
+    "MethodView", "Resource",
+})
+
+
+def _python_framework_entry(name: str, item: Dict[str, Any]) -> bool:
+    """A Python method dispatched by a web framework with no in-project caller —
+    a method of a class-based view (Django ``View``/generic CBVs, DRF
+    ``APIView``/``ViewSet``, Flask ``MethodView``). The framework routes HTTP
+    verbs / DRF actions into these methods by convention. The signal is the
+    base class captured in ``class_attributes``; decorator-dispatched views are
+    handled separately. Add-entries lever — FN/FP-safe (worst case: failing to
+    demote a genuinely-dead method of a CBV subclass)."""
+    for base in (item.get("metadata") or {}).get("class_attributes") or []:
+        if _annotation_tail(base) in _PYTHON_FRAMEWORK_BASES:
+            return True
+    return False
+
+
 def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
@@ -2640,6 +2754,14 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # Ruby/Rails convention: methods of a class inheriting a framework base
     # (*Controller / job / mailer / channel) are framework-dispatched entries.
     if p.has_ruby_framework and _ruby_framework_entry(name, item):
+        return True
+    # PHP/Laravel+Symfony dispatched entries: #[Route] methods and methods of
+    # controller/job/command/subscriber classes (by base type or class attr).
+    if p.has_php_framework and _php_framework_entry(name, item):
+        return True
+    # Python class-based views: methods of a Django/DRF/Flask CBV subclass are
+    # dispatched by the framework (verbs/actions by convention).
+    if p.has_python_framework and _python_framework_entry(name, item):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those

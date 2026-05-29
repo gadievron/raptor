@@ -8,7 +8,7 @@ from core.coverage.store import CoverageStore, content_identity
 
 def _checklist(files):
     """files: list of (path, sha256)."""
-    return {"files": [{"path": p, "sha256": s, "total_lines": 10} for p, s in files]}
+    return {"files": [{"path": p, "sha256": s, "lines": 10} for p, s in files]}
 
 
 def test_same_content_same_id_regardless_of_order():

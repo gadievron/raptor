@@ -194,6 +194,7 @@ class TestMaliciousTraceContent:
         ann = read_annotation(out / "annotations", "src/app.py", "login")
         assert "line two" in ann.body
 
+    @pytest.mark.slow  # ~10s: 1000-step trace → 1000 real annotation writes; the scale is the assertion, so it can't be mocked
     def test_huge_step_count(self, fixture):
         """LLM emits a 1000-step trace. Synth must complete and not
         explode the annotation file."""

@@ -903,3 +903,30 @@ def test_ruby_non_framework_class_not_entry():
     assert not _ruby_framework_entry("lonely", _java_item("lonely", class_attrs=["SomeBase"]))
     assert not _ruby_framework_entry("lonely", _java_item("lonely"))
     assert _ruby_framework_entry("x", {"name": "x", "kind": "function"}) is False
+
+
+# ---------------------------------------------------------------------------
+# PHP / Laravel + Symfony framework entries (_php_framework_entry). Both a
+# method #[Route] attribute and a framework base/interface (in class_attributes)
+# mark methods as dispatched.
+# ---------------------------------------------------------------------------
+
+
+def test_php_method_route_attr_is_entry():
+    from core.inventory.reachability import _php_framework_entry
+    assert _php_framework_entry("list", _java_item("list", attrs=["Route"]))
+
+
+def test_php_framework_base_promotes_methods():
+    from core.inventory.reachability import _php_framework_entry
+    # extends/implements a Laravel/Symfony base or class #[…] → methods entries.
+    for base in ("AbstractController", "Controller", "Command",
+                 "ShouldQueue", "EventSubscriberInterface", "Route"):
+        assert _php_framework_entry("m", _java_item("m", class_attrs=[base])), base
+
+
+def test_php_plain_class_not_entry():
+    from core.inventory.reachability import _php_framework_entry
+    assert not _php_framework_entry("lonely", _java_item("lonely", class_attrs=["SomeBase"]))
+    assert not _php_framework_entry("lonely", _java_item("lonely"))
+    assert _php_framework_entry("x", {"name": "x", "kind": "function"}) is False

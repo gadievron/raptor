@@ -7,7 +7,7 @@ Producers keep emitting per-run ``coverage-record.json`` (file-level
 ``/project clean``; this module is the bridge that imports both. Call
 :func:`import_run_dir` per run, or :func:`backfill` over all run dirs once.
 
-File-level marks need each file's ``total_lines`` (from the inventory) to
+File-level marks need each file's line count (the inventory's ``lines``) to
 place the whole-file interval; files absent from the inventory are skipped
 (their extent is unknown). Granularity is therefore: whole-file from the
 records, function-level from ``checked_by``. True line-level coverage
@@ -31,7 +31,7 @@ from core.run.provenance import (
 
 from .record import load_records
 from .registry import category_of
-from .store import CoverageStore, file_line_count
+from .store import CoverageStore
 from .summary import _match_to_inventory
 
 
@@ -98,7 +98,7 @@ def _total_lines_by_file(checklist: Dict[str, Any]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for fe in checklist.get("files", []):
         path = fe.get("path")
-        tl = file_line_count(fe)
+        tl = fe.get("lines")
         if path and tl:
             out[path] = tl
     return out
@@ -295,17 +295,127 @@ def import_annotations(
     return imported
 
 
+# /understand --map writes context-map.json (location-bearing sections below);
+# /understand --trace writes flow-trace-*.json with a steps[] call chain. Each
+# carries (file, line) points the LLM identified/traced — real examination
+# evidence. Mapped to the `understand` tool label (llm category via the
+# registry). _UNDERSTAND_SECTIONS mirrors the bridge's _LOCATION_BEARING_SECTIONS.
+_UNDERSTAND_SECTIONS = ("entry_points", "sink_details", "boundary_details")
+
+
+def _understand_points(run_dir: Path):
+    """Yield (file, line) pairs from a run's /understand outputs: context-map
+    entry points / sinks / trust boundaries, and every flow-trace step."""
+    run = Path(run_dir)
+    cm = load_json(run / "context-map.json")
+    if isinstance(cm, dict):
+        for section in _UNDERSTAND_SECTIONS:
+            for entry in cm.get(section) or []:
+                if not isinstance(entry, dict):
+                    continue
+                f = entry.get("file")
+                ln = entry.get("line")
+                if ln is None:
+                    ln = entry.get("line_start")
+                if isinstance(f, str) and f and isinstance(ln, int):
+                    yield f, ln
+    for tf in sorted(run.glob("flow-trace-*.json")):
+        trace = load_json(tf)
+        if not isinstance(trace, dict):
+            continue
+        for step in trace.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            f = step.get("file")
+            ln = step.get("line")
+            if isinstance(f, str) and f and isinstance(ln, int):
+                yield f, ln
+
+
+def import_understand(
+    store: CoverageStore, run_dir: Path, checklist: Dict[str, Any],
+    tool: str = "understand",
+) -> int:
+    """Fold a run's /understand outputs into the store as llm-category coverage.
+
+    Lines are marked individually — honest about exactly what /understand
+    identified/traced — and the function-level rollup then counts the containing
+    function as examined. Paths are normalised to the inventory's keys (the
+    on-disk context-map may carry absolute / ``./`` paths). Returns marks made.
+    """
+    inv = _inventory_paths(checklist)
+    marks = 0
+    for f, ln in _understand_points(run_dir):
+        store.mark(_to_inventory_path(f, inv), ln, ln, tool)
+        marks += 1
+    return marks
+
+
+def _function_ranges(checklist: Dict[str, Any]) -> Dict[tuple, tuple]:
+    """``{(path, name): (line_start, line_end)}`` over every inventory item."""
+    out: Dict[tuple, tuple] = {}
+    for fe in checklist.get("files", []):
+        path = fe.get("path")
+        if not path:
+            continue
+        for it in fe.get("items", fe.get("functions", [])):
+            name = it.get("name")
+            if name:
+                out[(path, name)] = (it.get("line_start", 0), it.get("line_end"))
+    return out
+
+
+def import_functions_analysed(
+    store: CoverageStore,
+    record: Dict[str, Any],
+    ranges: Dict[tuple, tuple],
+    inventory_paths: set,
+    provenance: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Function-level marks from a record's ``functions_analysed`` — the precise
+    "this function was reviewed" signal (an operator ``--mark``, or a
+    multi-stage analyser recording the sinks it examined). Distinct from
+    ``files_examined`` (whole-file "the tool looked at this file"): marking one
+    function must NOT mark the whole file. Each (file, function) is resolved to
+    its inventory line range and marked with the record's tool; entries that
+    don't resolve to an inventory function are skipped. Returns the count."""
+    tool = record.get("tool")
+    fa_list = record.get("functions_analysed")
+    if not tool or not fa_list:
+        return 0
+    stamp = _tool_stamp(tool, provenance) if provenance else None
+    marked = 0
+    for fa in fa_list:
+        if not isinstance(fa, dict):
+            continue
+        f = _to_inventory_path(fa.get("file") or "", inventory_paths)
+        rng = ranges.get((f, fa.get("function")))
+        if rng is None:
+            continue
+        lo, hi = rng
+        store.mark(f, lo, hi if hi is not None else lo, tool)
+        if stamp:
+            store.stamp_coverage(f, tool, **stamp)
+        marked += 1
+    return marked
+
+
 def import_run_dir(
     store: CoverageStore, run_dir: Path, checklist: Dict[str, Any],
 ) -> int:
-    """Import all coverage records in ``run_dir`` (file-level), stamping each
-    contribution with the run's manifest provenance."""
+    """Import all coverage records in ``run_dir``: whole-file marks from
+    ``files_examined`` (a tool examined the file) AND function-level marks from
+    ``functions_analysed`` (specific functions reviewed), each stamped with the
+    run's manifest provenance."""
     total_lines = _total_lines_by_file(checklist)
+    ranges = _function_ranges(checklist)
+    inv_paths = _inventory_paths(checklist)
     prov = run_provenance(run_dir)
-    return sum(
-        import_record(store, rec, total_lines, prov)
-        for rec in load_records(Path(run_dir))
-    )
+    total = 0
+    for rec in load_records(Path(run_dir)):
+        total += import_record(store, rec, total_lines, prov)
+        total += import_functions_analysed(store, rec, ranges, inv_paths, prov)
+    return total
 
 
 def backfill(
@@ -326,7 +436,48 @@ def backfill(
     total = import_checked_by(store, checklist)
     for run_dir in run_dirs:
         total += import_run_dir(store, run_dir, checklist)
+        total += import_understand(store, run_dir, checklist)   # /understand fold-in
         import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
     if annotations_base is not None:
         total += import_annotations(store, annotations_base, checklist)
     return total
+
+
+def _runs(lines):
+    """Coalesce a set/iterable of line numbers into sorted contiguous
+    ``[lo, hi]`` runs (so executed lines mark as ranges, not one call each)."""
+    out = []
+    for ln in sorted(lines):
+        if out and ln == out[-1][1] + 1:
+            out[-1][1] = ln
+        else:
+            out.append([ln, ln])
+    return out
+
+
+def import_runtime(
+    store: CoverageStore, path, checklist: Dict[str, Any],
+    fmt: Optional[str] = None, tool: Optional[str] = None,
+) -> int:
+    """Import external runtime coverage (gcov / lcov / coverage.py) into the
+    store (Phase 4). Detects the format (unless ``fmt`` given), parses executed
+    source lines, normalises each source path to the inventory's key (gcov/lcov
+    report build-relative or absolute paths — reuse the tested matcher), and
+    marks contiguous runs under the runtime ``tool`` label. Returns marks made.
+    """
+    from .parsers import default_tool, detect_format, parse
+
+    fmt = fmt or detect_format(path)
+    if not fmt:
+        return 0
+    tool = tool or default_tool(fmt)
+    inv = _inventory_paths(checklist)
+    marked = 0
+    for src, lines in parse(path, fmt).items():
+        key = _to_inventory_path(src, inv)
+        if key not in inv:
+            continue          # not an inventory file (system header, non-target)
+        for lo, hi in _runs(lines):
+            store.mark(key, lo, hi, tool)
+            marked += 1
+    return marked

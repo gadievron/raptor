@@ -50,6 +50,7 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: '3.13'
+          cache: pip
 
       - name: Install runtime deps
         # ``raptor-sca`` needs the full runtime requirements; the
@@ -65,7 +66,7 @@ jobs:
         # of the operator's CLI.
         env:
           _RAPTOR_TRUSTED: '1'
-        # Drives the full sweep (43 samples) and prints per-project
+        # Drives the full sweep and prints per-project
         # results + the diff vs the committed baseline. Exit 0 = ok,
         # 1 = warn (small drift), 2 = fail (large drift or scan
         # error). The non-zero exit fails the workflow check, which
@@ -82,11 +83,16 @@ jobs:
               run_stress_sweep,
           )
 
+          import logging
+          logging.basicConfig(
+              level=logging.INFO, format="%(message)s",
+          )
           print(f"running {len(PROJECT_SAMPLES)} samples...", flush=True)
           results = run_stress_sweep(
               samples=PROJECT_SAMPLES,
               git_clone_timeout=300,
               sca_timeout=600,
+              max_workers=4,
           )
           baseline = Path(
               "packages/sca/data/calibration/stress_baseline.json"
@@ -94,10 +100,13 @@ jobs:
           diffs = compare_to_baseline(results, baseline)
           print(render_diffs(diffs))
           rc = diffs_to_exit_code(diffs)
-          # Post-merge of feat/sca, the cron run becomes more about
-          # "did external state drift" than "did our code regress".
-          # Both surface as the same exit code; the GH UI shows
-          # the run's status accordingly.
+          import os
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a") as f:
+                  f.write("## SCA Stress Sweep\n\n```\n")
+                  f.write(render_diffs(diffs))
+                  f.write("\n```\n")
           sys.exit(rc)
           PY
 
@@ -107,7 +116,7 @@ jobs:
         # live under the stress-clones cache root and are too big
         # for an artefact; just the per-sample summary table goes.
         if: always()
-        uses: actions/upload-artifact@d320a2db9bff8c1c63b65a45a44e53de2bcc2b3a  # was v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: sca-stress-sweep-${{ github.run_id }}
           path: |

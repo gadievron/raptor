@@ -37,7 +37,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from core.logging import get_logger as _get_logger
+
 from .registry import category_of
+from .schema import check_version, normalise_loaded_files
 
 try:
     import fcntl
@@ -113,6 +116,50 @@ def _overlap_count(intervals: List[Interval], lo: int, hi: int) -> int:
     return total
 
 
+# --- bitmap fallback --------------------------------------------------------
+#
+# A (file, tool) contribution is normally a coalesced interval list. For
+# sparse runtime/gcov data — many small disjoint executed-line ranges — that
+# list grows large and every incremental mark re-coalesces it (O(K log K) per
+# mark → O(K^2 log K) to build). Above ``_BITMAP_THRESHOLD`` intervals the
+# in-memory representation switches to a line-number ``set`` ("bitmap"): mark
+# becomes O(range) with no re-sort. The public API is identical regardless of
+# backend, and the ON-DISK form is always intervals (``to_dict`` normalises),
+# so the persisted schema and its validation (schema.py) are unchanged.
+
+_BITMAP_THRESHOLD = 50
+
+
+def _set_to_intervals(lines: set) -> List[Interval]:
+    """Coalesce a line-number set into sorted inclusive intervals."""
+    out: List[Interval] = []
+    for ln in sorted(lines):
+        if out and ln <= out[-1][1] + 1:
+            out[-1][1] = ln
+        else:
+            out.append([ln, ln])
+    return out
+
+
+def _cov_to_intervals(value) -> List[Interval]:
+    """Normalise a coverage value (interval list or line set) to intervals."""
+    if isinstance(value, set):
+        return _set_to_intervals(value)
+    return value
+
+
+def _cov_covers_line(value, line: int) -> bool:
+    if isinstance(value, set):
+        return line in value
+    return any(lo <= line <= hi for lo, hi in value)
+
+
+def _cov_overlap(value, lo: int, hi: int) -> int:
+    if isinstance(value, set):
+        return sum(1 for ln in range(lo, hi + 1) if ln in value)
+    return _overlap_count(value, lo, hi)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -137,14 +184,6 @@ def content_identity(checklist: Dict[str, Any]) -> Optional[str]:
         return None
     digest = hashlib.sha256("\n".join(sorted(entries)).encode("utf-8")).hexdigest()
     return f"content:{digest[:16]}"
-
-
-def file_line_count(fe: Dict[str, Any]) -> Optional[int]:
-    """Total line count from an inventory file entry. The inventory emits
-    ``lines``; hand-built / legacy checklists may use ``total_lines``. This is
-    what whole-file scanner coverage (``files_examined``) is placed against, so
-    reading the wrong key silently drops all file-level coverage."""
-    return fe.get("lines") or fe.get("total_lines")
 
 
 def iter_inventory_functions(
@@ -186,12 +225,27 @@ class CoverageStore:
         self.version = SCHEMA_VERSION
         self._files: Dict[str, Dict[str, Any]] = {}
         if self.path.exists():
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            # A corrupt / unreadable store must not crash every coverage
+            # consumer — degrade to empty (the store is largely reconstructible
+            # via backfill from per-run records). A successfully-parsed payload
+            # is normalised tolerantly (see schema.py) so a single malformed
+            # entry doesn't poison queries.
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except (ValueError, OSError) as exc:
+                _get_logger(__name__).warning(
+                    "coverage store %s: unreadable (%s); starting empty",
+                    self.path, exc)
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
             self.version = data.get("version", SCHEMA_VERSION)
+            check_version(self.version, SCHEMA_VERSION, str(self.path))
             # Constructor-supplied target wins only when the store is new.
             self.target = data.get("target") or target
             self.content_id = data.get("content_id")
-            self._files = data.get("files", {}) or {}
+            self._files = normalise_loaded_files(
+                data.get("files", {}) or {}, str(self.path))
 
     # --- mutation ---------------------------------------------------------
 
@@ -214,8 +268,20 @@ class CoverageStore:
             start, end = end, start
         entry = self._entry(file)
         existing = entry["tools"].get(tool, [])
-        newly = (end - start + 1) - _overlap_count(existing, start, end)
-        entry["tools"][tool] = _coalesce(existing + [[start, end]])
+        newly = (end - start + 1) - _cov_overlap(existing, start, end)
+        if isinstance(existing, set):
+            existing.update(range(start, end + 1))   # already a bitmap
+        else:
+            merged = _coalesce(existing + [[start, end]])
+            if len(merged) > _BITMAP_THRESHOLD:
+                # Sparse/heavy contribution — switch to a line set so further
+                # marks don't keep re-coalescing a long list.
+                bits: set = set()
+                for lo, hi in merged:
+                    bits.update(range(lo, hi + 1))
+                entry["tools"][tool] = bits
+            else:
+                entry["tools"][tool] = merged
         return newly
 
     def set_file_meta(
@@ -304,8 +370,8 @@ class CoverageStore:
         if not entry:
             return []
         return sorted(
-            tool for tool, ivs in entry["tools"].items()
-            if any(lo <= line <= hi for lo, hi in ivs)
+            tool for tool, value in entry["tools"].items()
+            if _cov_covers_line(value, line)
         )
 
     def covered_lines(self, file: str) -> List[Interval]:
@@ -314,7 +380,8 @@ class CoverageStore:
         if not entry:
             return []
         return _coalesce(
-            [iv for ivs in entry["tools"].values() for iv in ivs]
+            [iv for value in entry["tools"].values()
+             for iv in _cov_to_intervals(value)]
         )
 
     def file_coverage(self, file: str) -> float:
@@ -350,8 +417,8 @@ class CoverageStore:
         if not entry:
             return {}
         out: Dict[str, int] = {}
-        for tool, ivs in entry["tools"].items():
-            n = _overlap_count(ivs, lo, hi)
+        for tool, value in entry["tools"].items():
+            n = _cov_overlap(value, lo, hi)
             if n:
                 out[tool] = n
         return out
@@ -400,7 +467,7 @@ class CoverageStore:
         for fe in checklist.get("files", []):
             path = fe.get("path")
             if path:
-                self.set_file_meta(path, file_line_count(fe), fe.get("sloc"))
+                self.set_file_meta(path, fe.get("lines"), fe.get("sloc"))
 
     def set_content_id(self, checklist: Dict[str, Any]) -> Optional[str]:
         """Set the store's content-equivalence id from the inventory (see
@@ -472,12 +539,24 @@ class CoverageStore:
     # --- persistence ------------------------------------------------------
 
     def to_dict(self) -> Dict[str, Any]:
+        # Normalise any in-memory line-set ("bitmap") back to intervals so the
+        # on-disk form is always intervals (stable schema; JSON-serialisable;
+        # validated by schema.py). Does not mutate the live store.
+        files_out: Dict[str, Any] = {}
+        for path, entry in self._files.items():
+            tools = entry.get("tools", {})
+            if any(isinstance(v, set) for v in tools.values()):
+                entry = dict(entry)
+                entry["tools"] = {
+                    t: _cov_to_intervals(v) for t, v in tools.items()
+                }
+            files_out[path] = entry
         return {
             "version": self.version,
             "generated_at": _now_iso(),
             "target": self.target,
             "content_id": self.content_id,
-            "files": self._files,
+            "files": files_out,
         }
 
     def save(self) -> Path:

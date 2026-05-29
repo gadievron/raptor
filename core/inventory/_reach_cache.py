@@ -80,7 +80,10 @@ logger = logging.getLogger(__name__)
 # new attribute — AttributeError on access by is_registered_via_call.
 # V7 (2026-05-26): _AdjacencyIndex grew `override_methods` (CHA virtual-
 # dispatch candidates). Same hazard: an old pickle lacks the attribute.
-_CACHE_VERSION = 7
+# V8 (2026-05-28): override_methods now seeded for Go methods (every
+# Go method is a structural-interface virtual-dispatch candidate). Changed
+# index contents; a V7 pickle would serve stale verdicts.
+_CACHE_VERSION = 8
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 

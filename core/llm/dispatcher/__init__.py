@@ -25,6 +25,7 @@ each LLM-calling subprocess and switches it to ``spawn_worker`` +
 
 from .client import (
     make_anthropic_client,
+    make_bedrock_client,
     make_gemini_base_url,
     make_openai_client,
     relay_for_grandchild,
@@ -39,6 +40,7 @@ __all__ = [
     "dispatcher_for_run",
     "llm_dispatcher_in_run",
     "make_anthropic_client",
+    "make_bedrock_client",
     "make_gemini_base_url",
     "make_openai_client",
     "relay_for_grandchild",

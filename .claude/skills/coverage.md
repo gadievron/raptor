@@ -74,60 +74,58 @@ libexec/raptor-project-manager coverage --detailed
 
 ## Python API
 
+Coverage reporting is store-backed and unified: one `render_coverage()` shows
+coverage **state** (from the persistent store) plus per-run tool **execution**
+detail (from the records).
+
 ```python
-from core.coverage.summary import compute_summary, compute_project_summary
-from core.coverage.summary import format_summary, format_detailed
+from pathlib import Path
+from core.coverage.store_summary import (
+    render_coverage,        # unified report string (state + execution detail)
+    render_run_coverage,    # single-run convenience wrapper
+    coverage_view,          # the store-backed view dict (for --fail-under etc.)
+)
 
-# Single run
-summary = compute_summary(Path("out/projects/vulns/validate-20260411/"))
-print(format_summary(summary))
+# Single run (resolves checklist/coverage.json/annotations under the dir):
+print(render_run_coverage(Path("out/projects/vulns/validate-20260411/")))
 
-# Project-wide (aggregated)
-from core.project.project import Project, ProjectManager
-p = ProjectManager().load("vulns")
-summary = compute_project_summary(p)
-print(format_detailed(summary))
+# Explicit inputs (a run dir, or a project's output dir + its run dirs):
+report = render_coverage(run_dirs, checklist, store_path, annotations_base)
+print(report)
+
+# Programmatic view (e.g. to apply a threshold):
+view = coverage_view(run_dirs, checklist, store_path, annotations_base)
 ```
 
-### Summary dict structure
+### View dict structure (store-backed coverage state)
 
 ```python
 {
-    "inventory": {"files": 10, "sloc": 103, "items": 11},
-    "tools": {
-        "semgrep": {
-            "files_examined": 10, "files_total": 10,
-            "rules_applied": ["crypto"], "files_failed": [],
-        },
-        "codeql": {
-            "files_examined": 10, "files_total": 10,
-            "packs": ["codeql/cpp-queries"], "rules_applied": [...],
-        },
-        "llm": {
-            "files_examined": 10, "files_total": 10,
-            "functions_analysed": 10, "functions_total": 11,
-            "sloc_analysed": 95,
-        },
-    },
-    "unreviewed_functions": 1,
-    "unreviewed_sloc": 8,
-    "missing_groups": ["injection", "auth", ...],
-    "per_file": [
-        {
-            "path": "09_stack_overread.c",
-            "sloc": 12,
-            "reviewed": 1,
-            "total": 2,
-            "pct": 50.0,
-            "findings": 1,
-            "unreviewed_functions": ["record"],
-            "scanned_semgrep": True,
-            "scanned_codeql": True,
-            "scanned_llm": True,
-        },
-        ...
-    ],
+    "target": "...", "content_id": "content:...",
+    "total_functions": 11,                 # all items, any kind
+    "items_by_kind": {"function": 8, "global": 2, "interstitial": 1},
+    "functions_covered": 10,               # examined by any tool (verdict-based)
+    "functions_by_category": {"static": 10, "llm": 7, "runtime": 0},
+    "llm_reviewable": 8,                    # function + top_level items only
+    "gap_no_tool": 1, "gap_no_llm": 1,     # gap_no_llm counts reviewable kinds
+    "llm_gap_functions": [{"file": ..., "function": ..., "line": ...}],
+    "verdicts": {"clean": 9, "open": 1, "found_then_lost": 0, "unexamined": 1},
+    "review_gap": [...],
+    "provenance": {...},
 }
+```
+
+Per-run tool **execution** detail (files examined, rules/packs, files failed,
+Semgrep policy-group validation) is separate, read from the records:
+
+```python
+from core.coverage.summary import execution_detail, format_execution_detail
+detail = execution_detail(run_dirs, checklist)
+# {"tools": {"semgrep": {"files_examined": 10, "files_total": 10,
+#                        "rules_applied": ["crypto"], "packs": [],
+#                        "files_failed": [], "version": "1.55"}, ...},
+#  "missing_groups": ["injection", "auth", ...]}
+print(format_execution_detail(detail))
 ```
 
 ### Reading/writing records directly

@@ -57,6 +57,85 @@ def test_assemble_wires_guard_and_stock_source_sink():
     assert "proposedGuard" in q
 
 
+def test_assemble_supports_python_xss():
+    q = assemble_barrier_query(_GUARD, sink_class="xss", query_id="raptor/xss")
+    assert "ReflectedXSSCustomizations" in q      # the customizations module import
+    assert "ReflectedXss::Source" in q
+    assert "ReflectedXss::Sink" in q
+    assert "BarrierGuard<proposedGuard/3>" in q
+
+
+_JS_GUARD = (
+    "class ProposedGuard extends TaintTracking::SanitizerGuardNode {\n"
+    "  ProposedGuard() { this = this }\n"
+    "  override predicate sanitizes(boolean outcome, Expr e) { none() }\n"
+    "}"
+)
+
+
+def test_assemble_javascript_uses_legacy_config_and_guard_class():
+    q = assemble_barrier_query(_JS_GUARD, sink_class="xss", query_id="raptor/js",
+                               language="javascript")
+    assert "import javascript" in q
+    assert "ReflectedXssCustomizations::ReflectedXss" in q
+    assert "extends TaintTracking::Configuration" in q
+    assert "isSanitizerGuard" in q and "g instanceof ProposedGuard" in q
+    assert "cfg.hasFlow(source, sink)" in q
+
+
+def test_assemble_javascript_requires_proposedguard_class():
+    with pytest.raises(ValueError):
+        assemble_barrier_query("predicate proposedGuard() { any() }",
+                               sink_class="xss", query_id="x", language="javascript")
+
+
+_RB_GUARD = (
+    "predicate proposedGuard(CfgNodes::AstCfgNode g, CfgNode node, boolean branch) "
+    "{ none() }"
+)
+
+
+def test_assemble_ruby_mirrors_python_configsig_with_ruby_imports():
+    q = assemble_barrier_query(_RB_GUARD, sink_class="sqli", query_id="raptor/rb",
+                               language="ruby")
+    assert "import codeql.ruby.DataFlow" in q
+    assert "SqlInjectionCustomizations::SqlInjection" in q
+    assert "implements DataFlow::ConfigSig" in q                 # python-style, not legacy
+    assert "BarrierGuard<proposedGuard/3>" in q
+    assert "Flow::flow(source, sink)" in q
+
+
+def test_assemble_ruby_xss_uses_xss_module():
+    q = assemble_barrier_query(_RB_GUARD, sink_class="xss", query_id="raptor/rbx",
+                               language="ruby")
+    assert "codeql.ruby.security.XSS::ReflectedXss" in q
+
+
+_JAVA_GUARD = "predicate proposedGuard(Guard g, Expr e, boolean branch) { none() }"
+
+
+def test_assemble_java_configsig_remoteflowsource_per_cwe_sink():
+    q = assemble_barrier_query(_JAVA_GUARD, sink_class="sqli", query_id="raptor/jv",
+                               language="java")
+    assert "import java" in q
+    assert "n instanceof RemoteFlowSource" in q           # uniform source
+    assert "n instanceof QueryInjectionSink" in q          # per-CWE sink
+    assert "BarrierGuard<proposedGuard/3>" in q
+    assert "Flow::flow(source, sink)" in q
+
+
+def test_assemble_java_path_uses_sinknode_predicate():
+    q = assemble_barrier_query(_JAVA_GUARD, sink_class="pathtrav", query_id="raptor/jvp",
+                               language="java")
+    assert 'sinkNode(n, "path-injection")' in q            # not an instanceof sink
+    assert "semmle.code.java.dataflow.ExternalFlow" in q
+
+
+def test_assemble_rejects_unknown_language():
+    with pytest.raises(ValueError):
+        assemble_barrier_query(_GUARD, sink_class="cmdi", query_id="x", language="go")
+
+
 def test_assemble_rejects_unknown_sink_class():
     with pytest.raises(ValueError):
         assemble_barrier_query(_GUARD, sink_class="nosuch", query_id="x")

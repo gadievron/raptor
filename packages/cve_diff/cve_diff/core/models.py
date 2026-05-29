@@ -70,9 +70,9 @@ class DiscoveryResult:
     What a single discoverer returns. `tuples` may be empty (miss).
 
     `raw` carries the full upstream payload (currently only populated by the
-    OSV discoverer). The cascade extracts `AdvisoryContext` from it and passes
-    the context to later discoverers' scoring so wrong-repo matches get
-    rejected without a hand-curated slug map.
+    OSV discoverer) and is surfaced to the agent's `osv_raw` / `nvd_raw`
+    tools, which read the CPE vendor/product to disambiguate wrong-repo
+    matches without a hand-curated slug map.
     """
 
     source: str

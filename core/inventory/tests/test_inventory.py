@@ -30,6 +30,7 @@ from core.inventory import (
     KIND_FUNCTION,
     KIND_GLOBAL,
     KIND_MACRO,
+    KIND_CLASS,
     PythonExtractor,
     JavaScriptExtractor,
     CExtractor,
@@ -669,6 +670,59 @@ class TestExtractItems:
         assert "BUF_SIZE" in names
         assert "MAX" in names
 
+    def test_c_multi_declarator_globals(self):
+        # `int a, b, c;` declares three globals — pre-fix only `a` was kept,
+        # the rest fell to interstitial. Pointer/array declarators too.
+        code = "int a, b, c;\nchar *p, q[8];\nvoid f(void) {}\n"
+        items = extract_items("test.c", "c", code)
+        names = {g.name for g in items if g.kind == KIND_GLOBAL}
+        if not names:
+            import pytest
+            pytest.skip("tree-sitter not available — C globals are TS-only")
+        assert {"a", "b", "c", "p", "q"} <= names
+
+    def test_c_typedef_and_record_defs_are_class_kind(self):
+        code = (
+            "typedef struct { int x; } Foo;\n"
+            "struct Bar { int y; };\n"
+            "enum Color { RED, GREEN };\n"
+            "typedef int myint;\n"
+        )
+        items = extract_items("test.c", "c", code)
+        types = {t.name for t in items if t.kind == KIND_CLASS}
+        if not types:
+            import pytest
+            pytest.skip("tree-sitter not available — C type defs are TS-only")
+        assert {"Foo", "Bar", "Color", "myint"} <= types
+
+    def test_c_forward_decl_and_prototype_not_captured(self):
+        # A forward declaration / use-of-existing-type is not a type
+        # definition; a prototype is not a global. Neither should be emitted.
+        code = (
+            "struct FwdDecl;\n"
+            "struct FwdDecl use_it;\n"   # global of an existing type
+            "int proto(int x);\n"        # prototype, not a global
+            "void real(void) {}\n"
+        )
+        items = extract_items("test.c", "c", code)
+        if not any(i.kind in (KIND_GLOBAL, KIND_CLASS) for i in items):
+            import pytest
+            pytest.skip("tree-sitter not available — C globals/types are TS-only")
+        types = {t.name for t in items if t.kind == KIND_CLASS}
+        globals_ = {g.name for g in items if g.kind == KIND_GLOBAL}
+        assert "FwdDecl" not in types       # no body -> not a definition
+        assert "proto" not in globals_      # prototype is not a global
+        assert "use_it" in globals_         # the global IS captured
+
+    def test_js_multi_declarator_globals(self):
+        code = "const a = 1, b = 2;\nlet x = 3;\n"
+        items = extract_items("test.js", "javascript", code)
+        names = {g.name for g in items if g.kind == KIND_GLOBAL}
+        if not names:
+            import pytest
+            pytest.skip("tree-sitter not available — JS globals are TS-only")
+        assert {"a", "b", "x"} <= names
+
     def test_returns_code_items(self):
         code = "def foo(): pass\n"
         items = extract_items("test.py", "python", code)
@@ -1084,6 +1138,54 @@ class TestGoReachability:
         assert verdict("ig.go", "orphan") == "build_excluded"
         assert verdict("island.go", "islA") == "no_path_from_entry"
         assert verdict("live.go", "Exported") == "reachable"   # over-fire control
+
+
+class TestGoInterfaceDispatch:
+    """Go CHA-analog. Go has no inheritance and its call graph emits no
+    ClassDef, but the item extractor records each method's receiver type as
+    class_name, and Go interfaces are STRUCTURAL — any method can satisfy an
+    interface. So an unexported method dispatched via an interface-typed
+    receiver (``x.serve()``) could be reached at runtime even though entry-
+    reachability finds no resolved path; it must read UNCERTAIN, not
+    no_path_from_entry. A method whose name is never dispatched stays dead.
+    Type-free over-approximation (a same-named method on an unrelated type also
+    reads uncertain) — FN-safe. Needs tree-sitter-go."""
+
+    _SRC = (
+        "package main\n"
+        "type handler interface { serve() }\n"
+        "type A struct{}\n"
+        "func (a *A) serve() {}\n"      # unexported, iface-dispatched
+        "func (a *A) deadOne() {}\n"    # unexported, never dispatched
+        "type B struct{}\n"
+        "func (b *B) serve() {}\n"      # name collides with dispatched serve
+        "func Run(h handler) { h.serve() }\n")  # exported entry, dispatches
+
+    def test_go_interface_dispatched_method_is_uncertain(self, tmp_path):
+        pytest.importorskip("tree_sitter_go")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "go.mod").write_text("module x\ngo 1.21\n")
+        (tmp_path / "m.go").write_text(self._SRC)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name, cls):
+            for f in inv["files"]:
+                if not f["path"].endswith("m.go"):
+                    continue
+                for it in f["items"]:
+                    md = it.get("metadata") or {}
+                    if it.get("name") == name and md.get("class_name") == cls:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "m")
+            return None
+
+        # dispatched via h.serve() → reachable at runtime via the interface
+        assert verdict("serve", "A") == "uncertain"
+        # same-name method on an unrelated type → also uncertain (FN-safe)
+        assert verdict("serve", "B") == "uncertain"
+        # never dispatched → stays dead (gate prevents blanket promotion)
+        assert verdict("deadOne", "A") == "no_path_from_entry"
 
 
 class TestJavaFrameworkEntries:
@@ -1536,6 +1638,31 @@ class TestCSharpCoverage:
         assert verdict("DeadHelper") == "not_called"  # private uncalled
         assert verdict("Lonely") == "not_called"    # public, non-stereotype class
 
+    def test_csharp_base_class_stereotypes(self, tmp_path):
+        # Base CLASSES (no attribute) the runtime dispatches into — captured
+        # from the C# base_list into class_attributes.
+        pytest.importorskip("tree_sitter_c_sharp")
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "f.cs").write_text(
+            "public class BlogController : ControllerBase {\n"
+            "  public IActionResult Index() { return Ok(); }\n}\n"
+            "public class ChatHub : Hub {\n  public void Send(string m) {} }\n"
+            "public class Plain {\n  public void Dead() {} }\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("Index") == "reachable"   # : ControllerBase (no [attr])
+        assert verdict("Send") == "reachable"     # : Hub (SignalR)
+        assert verdict("Dead") == "not_called"    # plain class control
+
 
 class TestRubyCoverage:
     """End-to-end Ruby / Rails coverage. Ruby used the regex extractor; now
@@ -1593,3 +1720,165 @@ class TestRubyCoverage:
         assert verdict("fetch") == "reachable"           # helper in a controller
         assert verdict("perform") == "reachable"         # job entry
         assert verdict("lonely") == "not_called"         # plain class control
+
+
+class TestPythonFrameworkConvention:
+    """Python class-based views (Django/DRF/Flask). Decorator-dispatched views
+    are handled by is_framework_callable; this covers the CONVENTION — a method
+    of a class subclassing a framework CBV base (APIView/ListView/MethodView)
+    is dispatched by the framework with no in-project caller. Requires the
+    extractor to capture Python class bases into class_attributes."""
+
+    _FILES = {
+        "views.py": (
+            "import rest_framework.views\n"
+            "class UserView(rest_framework.views.APIView):\n"
+            "    def get(self, request): return self._fmt()\n"
+            "    def _fmt(self): return 'x'\n"
+            "class BlogList(ListView):\n"
+            "    def get_queryset(self): return []\n"
+            "class Plain:\n"
+            "    def dead(self): return 9\n"),
+    }
+
+    def test_python_class_bases_captured(self, tmp_path):
+        (tmp_path / "views.py").write_text(self._FILES["views.py"])
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        # dotted base recorded by simple tail name; plain class has none.
+        assert "APIView" in meta["get"]["class_attributes"]
+        assert "ListView" in meta["get_queryset"]["class_attributes"]
+        assert meta["dead"]["class_attributes"] == []
+
+    def test_python_class_bases_captured_stdlib_path(self):
+        # CI has no tree-sitter grammar → the stdlib ast PythonExtractor runs.
+        # Exercise it DIRECTLY (not build_inventory, which prefers tree-sitter
+        # where installed) so base capture is verified on the fallback path
+        # regardless of environment. See feedback-test-on-stdlib-extractor-path.
+        from core.inventory.extractors import PythonExtractor
+        meta = {fi.name: fi.metadata
+                for fi in PythonExtractor().extract("views.py", self._FILES["views.py"])}
+        assert "APIView" in meta["get"].class_attributes        # dotted base
+        assert "ListView" in meta["get_queryset"].class_attributes
+        assert meta["dead"].class_attributes == []
+
+    def test_python_cbv_methods_are_entries(self, tmp_path):
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "views.py").write_text(self._FILES["views.py"])
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "views")
+            return None
+
+        assert verdict("get") == "reachable"           # DRF APIView verb handler
+        assert verdict("get_queryset") == "reachable"   # Django ListView hook
+        assert verdict("dead") == "not_called"          # non-CBV control
+
+    def test_python_convention_breadth(self, tmp_path):
+        # Beyond web CBVs: Django management commands, DRF serializers, forms,
+        # admin — methods dispatched by the framework with no in-project caller.
+        from core.inventory.reach_audit import classify_reachability
+        (tmp_path / "fw.py").write_text(
+            "from django.core.management.base import BaseCommand\n"
+            "class Command(BaseCommand):\n"
+            "    def handle(self, *a, **k): return self._work()\n"
+            "    def _work(self): return 1\n"
+            "from rest_framework import serializers\n"
+            "class UserSer(serializers.ModelSerializer):\n"
+            "    def validate_email(self, v): return v\n"
+            "class ContactForm(forms.Form):\n"
+            "    def clean_email(self): return 1\n"
+            "class Plain:\n"
+            "    def dead(self): return 9\n")
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "fw")
+            return None
+
+        assert verdict("handle") == "reachable"          # Django mgmt command
+        assert verdict("_work") == "reachable"            # transitively via this
+        assert verdict("validate_email") == "reachable"   # DRF serializer hook
+        assert verdict("clean_email") == "reachable"      # Django form hook
+        assert verdict("dead") == "not_called"            # control
+
+
+class TestPhpCoverage:
+    """End-to-end PHP / Laravel + Symfony coverage. PHP used the regex
+    extractor; now wired to tree-sitter-php (class/method names, visibility,
+    #[…] attributes, extends/implements). Framework dispatch is both
+    attribute-based (Symfony #[Route]) and base-class/interface convention
+    (Laravel/Symfony Controller/AbstractController/Command/ShouldQueue). Needs
+    tree-sitter-php; skips without it."""
+
+    _FILES = {
+        "UserController.php": (
+            "<?php\nclass UserController extends AbstractController {\n"
+            "  #[Route('/list')]\n"
+            "  public function list(): Response { return $this->fmt(); }\n"
+            "  private function fmt(): string { return 'x'; }\n}\n"),
+        "WidgetJob.php": (
+            "<?php\nclass WidgetJob implements ShouldQueue {\n"
+            "  public function handle() {}\n}\n"),
+        "Plain.php": "<?php\nclass Plain {\n  public function lonely() {}\n}\n",
+        # attribute-only Symfony command (no `extends Command`) — modern
+        # Symfony marks dispatch by class attribute, not base class.
+        "FooCommand.php": (
+            "<?php\n#[AsCommand(name: 'app:foo')]\nclass FooCommand {\n"
+            "  public function execute(): int { return 0; }\n}\n"),
+        # controller extending a PROJECT-custom base → caught by the
+        # *Controller naming convention, not an explicit framework base.
+        "BlogController.php": (
+            "<?php\nclass BlogController extends BaseController {\n"
+            "  public function index(): Response { return new Response(); }\n}\n"),
+    }
+
+    def _build(self, tmp_path):
+        for rel, c in self._FILES.items():
+            (tmp_path / rel).write_text(c)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_php_extracts_methods_attrs_bases(self, tmp_path):
+        pytest.importorskip("tree_sitter_php")
+        inv = self._build(tmp_path)
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]}
+        assert {"list", "fmt", "handle", "lonely"} <= set(meta)
+        assert "Route" in meta["list"]["attributes"]
+        assert "AbstractController" in meta["list"]["class_attributes"]
+        assert "ShouldQueue" in meta["handle"]["class_attributes"]
+        assert meta["fmt"]["visibility"] == "private"
+
+    def test_php_framework_entry_verdicts(self, tmp_path):
+        pytest.importorskip("tree_sitter_php")
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0),
+                            f["path"].rsplit(".", 1)[0])
+            return None
+
+        assert verdict("list") == "reachable"      # #[Route] + AbstractController
+        assert verdict("fmt") == "reachable"        # method of a controller class
+        assert verdict("handle") == "reachable"     # implements ShouldQueue
+        assert verdict("lonely") == "not_called"    # plain class control
+        assert verdict("execute") == "reachable"    # class #[AsCommand] attribute
+        assert verdict("index") == "reachable"      # *Controller naming convention
