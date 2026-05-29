@@ -45,8 +45,14 @@ _REGISTRY = {
     "annotations": (CATEGORY_LLM, DEPTH_ANALYSED),
     "gcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "lcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "llvm-cov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "llvm": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "afl": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "fuzz": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    # binary-coverage tracers, addr2line/DWARF-resolved to source.
+    "bincov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "drcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "sancov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     # Python-test runtime (coverage.py / pytest-cov).
     "coverage.py": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "coverage": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
