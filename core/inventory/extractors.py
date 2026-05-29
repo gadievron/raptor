@@ -842,6 +842,8 @@ def _ts_language(lang: str):
             import tree_sitter_cpp as ts
         elif lang == "go":
             import tree_sitter_go as ts
+        elif lang == "rust":
+            import tree_sitter_rust as ts
         elif lang == "csharp":
             import tree_sitter_c_sharp as ts
         elif lang == "ruby":
@@ -892,14 +894,23 @@ class TreeSitterExtractor:
         "cpp": ("function_definition",),
         "go": ("function_declaration", "method_declaration"),
         "csharp": ("method_declaration", "constructor_declaration",
-                   "local_function_statement"),
+                   "local_function_statement",
+                   # operator overloads / conversions / indexers carry method
+                   # bodies (logic) — previously dropped from the inventory.
+                   "operator_declaration", "conversion_operator_declaration",
+                   "indexer_declaration"),
         "ruby": ("method", "singleton_method"),
         "php": ("method_declaration", "function_definition"),
+        # Rust: ``fn`` with a body (free fns, impl methods, trait default
+        # methods). Trait method SIGNATURES (no body) are
+        # ``function_signature_item`` — intentionally excluded (no code).
+        "rust": ("function_item",),
     }
 
     _CLASS_TYPES = {
         "python": ("class_definition",),
-        "java": ("class_declaration", "interface_declaration"),
+        "java": ("class_declaration", "interface_declaration",
+                 "enum_declaration"),
         "javascript": ("class_declaration",),
         "typescript": ("class_declaration", "abstract_class_declaration"),
         "tsx": ("class_declaration", "abstract_class_declaration"),
@@ -910,6 +921,10 @@ class TreeSitterExtractor:
                    "struct_declaration", "record_declaration"),
         "ruby": ("class", "module"),
         "php": ("class_declaration", "interface_declaration", "trait_declaration"),
+        # Rust: ``impl`` / ``trait`` bodies host the methods (struct/enum hold
+        # no fns). ``impl Trait for Foo`` associates its methods with ``Foo``;
+        # ``trait T`` with ``T`` (for default methods).
+        "rust": ("impl_item", "trait_item"),
     }
 
     def __init__(self, language: str):
@@ -1259,6 +1274,15 @@ class TreeSitterExtractor:
                     visibility = child.text.decode().strip()
                     break
 
+        # Rust: a ``visibility_modifier`` child (``pub`` / ``pub(crate)`` /
+        # ``pub(super)``) marks external visibility — the reachability entry
+        # signal (``rust_pub``). Default (no modifier) is private-to-module.
+        if self.language == "rust" and node.type == "function_item":
+            for child in node.children:
+                if child.type == "visibility_modifier":
+                    visibility = child.text.decode().split("(")[0].strip()
+                    break
+
         # C#: ``modifier`` children carry access keywords; members default to
         # ``private`` (the framework-entry rule keys on public action methods).
         if self.language == "csharp" and node.type in (
@@ -1326,6 +1350,25 @@ class TreeSitterExtractor:
         return visibility, class_name
 
     def _get_name(self, node) -> Optional[str]:
+        # Rust: an ``impl`` block associates its methods with the TARGET type
+        # — ``impl Foo`` / ``impl Trait for Foo`` / ``impl<T> Box<T>``. The
+        # target is the last type node before the body (after ``for`` in a
+        # trait impl). Return its simple name so methods read class_name=Foo.
+        if self.language == "rust" and node.type == "impl_item":
+            target = None
+            for c in node.children:
+                if c.type == "declaration_list":
+                    break  # body — stop before method return types etc.
+                if c.type == "type_identifier":
+                    target = c.text.decode()
+                elif c.type == "generic_type":
+                    ti = next((g for g in c.children
+                               if g.type == "type_identifier"), None)
+                    if ti is not None:
+                        target = ti.text.decode()
+                elif c.type == "scoped_type_identifier":
+                    target = c.text.decode().split("::")[-1].strip()
+            return target
         # C#: a method/ctor name is the identifier immediately BEFORE the
         # ``parameter_list`` — the identifiers before THAT are the return type
         # (``IActionResult GetAll()`` → ``GetAll``, not ``IActionResult``).
@@ -1340,13 +1383,36 @@ class TreeSitterExtractor:
                 if sib.type in ("identifier", "name"):
                     return sib.text.decode()
                 sib = sib.prev_sibling
+        # C#: operator overloads / conversions / indexers have no plain name
+        # identifier — synthesise one ("operator+", "operator int", "this[]").
+        if self.language == "csharp" and node.type == "indexer_declaration":
+            return "this[]"
+        if self.language == "csharp" and node.type in (
+            "operator_declaration", "conversion_operator_declaration",
+        ):
+            kids = list(node.children)
+            op_i = next((i for i, c in enumerate(kids)
+                         if c.type == "operator"), None)
+            tail = kids[op_i + 1] if op_i is not None and op_i + 1 < len(kids) \
+                else None
+            if tail is not None:
+                # operator_declaration → "operator+"; conversion → "operator int"
+                sep = " " if node.type == "conversion_operator_declaration" else ""
+                return "operator" + sep + tail.text.decode()
+            return "operator"
         # ``type_identifier`` names a TS class/interface — but in a Java/TS
         # method it's the RETURN TYPE (``public String handle()``), which
         # precedes the method name, so only accept it on a class declaration.
         is_class_decl = node.type in (
             "class_declaration", "abstract_class_declaration",
             "interface_declaration",
+            "enum_declaration",         # Java enum (methods/constructors inside)
             "class", "module",          # Ruby
+            "trait_item",               # Rust: name is the trait type_identifier
+            # C++: the class/struct NAME is a type_identifier child; without
+            # this the name didn't resolve and inline methods read
+            # class_name=None (no CHA / framework / qualname association).
+            "class_specifier", "struct_specifier",
         )
         for child in node.children:
             if child.type in ("identifier", "name"):
@@ -1355,23 +1421,42 @@ class TreeSitterExtractor:
             # superclass constant is nested inside the ``superclass`` node).
             if child.type == "constant" and is_class_decl:
                 return child.text.decode()
+            # Ruby operator method: ``def []=`` / ``def <=>`` / ``def +`` — the
+            # name is an ``operator`` node, not an identifier. Without this,
+            # every Ruby operator method was dropped from the inventory.
+            if child.type == "operator":
+                return child.text.decode()
             # JS/TS class method names are ``property_identifier`` (safe in any
             # node — no language puts a return type there). Without this, every
             # JS/TS class METHOD was silently dropped from the inventory.
-            if child.type == "property_identifier":
+            # ``private_property_identifier`` covers ``#privateMethod()`` —
+            # otherwise ES private methods were dropped entirely.
+            if child.type in ("property_identifier",
+                              "private_property_identifier"):
                 return child.text.decode()
             if child.type == "type_identifier" and is_class_decl:
                 return child.text.decode()
             # C/C++: name is inside function_declarator
             if child.type == "function_declarator":
                 return self._get_name(child)
-            # C/C++: pointer-return functions wrap the
-            # function_declarator inside a pointer_declarator. Without
-            # this case, every `static char *foo(...)`-style decl is
-            # silently dropped from the inventory — surfaced by
-            # source_intel E2E on linux net/ (rc80211_minstrel_ht_debugfs.c
-            # `minstrel_ht_stats_csv_dump`).
-            if child.type == "pointer_declarator":
+            # C++: ``operator+`` / ``operator==`` / ``operator[]`` etc. — the
+            # name is an ``operator_name`` node. Without this, every operator
+            # overload was dropped from the inventory entirely (a vuln in
+            # operator[] bounds / operator= would be invisible).
+            if child.type == "operator_name":
+                return child.text.decode()
+            # C++ conversion operator: ``operator int()`` / ``operator bool()``
+            # — an ``operator_cast`` node. Strip the ``()`` declarator to name
+            # it "operator int". Also previously dropped.
+            if child.type == "operator_cast":
+                return child.text.decode().split("(")[0].strip()
+            # C/C++: pointer- or reference-return functions wrap the
+            # function_declarator inside a pointer_declarator /
+            # reference_declarator. Without these, every `static char
+            # *foo(...)`-style decl (surfaced by source_intel E2E on linux
+            # net/ rc80211_minstrel_ht_debugfs.c) and every `Foo&
+            # operator+(...)` is silently dropped from the inventory.
+            if child.type in ("pointer_declarator", "reference_declarator"):
                 return self._get_name(child)
             # Go: name is inside field_identifier for methods.
             # C++: same node type covers in-class method declarations

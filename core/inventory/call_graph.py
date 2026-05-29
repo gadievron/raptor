@@ -2596,6 +2596,17 @@ class _RustCallGraph:
                     self.walk(c)
                 return
             target = target_names[-1]
+            # ``impl Trait for Foo`` (a ``for`` keyword + >=2 type names) is a
+            # TRAIT impl — record the trait as a base of the target so its
+            # methods become virtual-dispatch candidates (a trait method is
+            # reachable via ``&dyn Trait`` / a generic bound even with no
+            # resolved caller). ``impl Foo`` (inherent) records no base.
+            trait_base = (
+                target_names[0]
+                if (len(target_names) >= 2
+                    and any(c.type == "for" for c in node.children))
+                else None
+            )
             # Try to bind to the already-recorded ClassDef
             # (same-file struct/enum) so methods accumulate on a
             # single ClassDef rather than per-impl. If the impl
@@ -2610,10 +2621,13 @@ class _RustCallGraph:
                 target_cls = ClassDef(
                     name=target,
                     line=node.start_point[0] + 1,
-                    bases=[],
+                    bases=[trait_base] if trait_base else [],
                     nested=self._mod_depth > 0,
                 )
                 self.graph.classes.append(target_cls)
+            elif trait_base and trait_base not in target_cls.bases:
+                # Accumulate trait bases across multiple impl blocks.
+                target_cls.bases.append(trait_base)
             self._class_stack.append(target_cls)
             try:
                 for c in node.children:

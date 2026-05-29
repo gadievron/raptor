@@ -83,7 +83,10 @@ logger = logging.getLogger(__name__)
 # V8 (2026-05-28): override_methods now seeded for Go methods (every
 # Go method is a structural-interface virtual-dispatch candidate). Changed
 # index contents; a V7 pickle would serve stale verdicts.
-_CACHE_VERSION = 8
+# V9 (2026-05-28): Rust now uses tree-sitter item extraction (impl→
+# class assoc) + trait impls record the trait as a base → override_methods
+# gains Rust trait-impl methods. Changed index contents; bump to rebuild.
+_CACHE_VERSION = 9
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
