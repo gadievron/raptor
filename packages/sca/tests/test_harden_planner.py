@@ -1052,6 +1052,7 @@ def test_library_mode_inline_install_is_unsupported_not_pinned() -> None:
     ("requirements.txt", True), ("requirements-dev.txt", True),
     ("pyproject.toml", True), ("package.json", True),
     ("App.csproj", True), ("Directory.Packages.props", True),
+    ("Directory.Build.targets", True),   # pre-CPM central-version table
     ("libs.versions.toml", True), ("pom.xml", True),
     ("Dockerfile", False), ("install.sh", False), ("setup.cfg", False),
 ])
@@ -1059,6 +1060,24 @@ def test_supports_library_floor_raise_matrix(manifest, supported) -> None:
     from packages.sca.harden import _supports_library_floor_raise
     dep = replace(_dep(), declared_in=Path("/x") / manifest)
     assert _supports_library_floor_raise(dep) is supported
+
+
+def test_library_mode_directory_build_targets_no_longer_unsupported() -> None:
+    """Directory.Build.targets was rejected as unsupported_manifest by the
+    pre-follow-up harden._has_rewriter. With the new rewriter + dispatch +
+    gate entries, deps attributed to that file flow through the planner
+    cleanly (status driven by the registry/OSV result, not by the gate)."""
+    dep = replace(_dep(ecosystem="NuGet", name="IdentityServer4",
+                       version="3.1.0", pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/Directory.Build.targets"))
+    osv = _FakeOsv({"3.1.0": [_adv("C")]})
+    cand = _plan_one(
+        dep, registries={"NuGet": _FakeRegistry(["4.2.0", "4.1.2", "3.1.0"],
+                                                ecosystem="NuGet")},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status != "unsupported_manifest"
+    assert cand.status != "library_floor_raise_unsupported"
 
 
 def test_library_mode_no_clean_version_refuses_to_pin() -> None:

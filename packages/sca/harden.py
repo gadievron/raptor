@@ -440,7 +440,7 @@ def _supports_library_floor_raise(dep: Dependency) -> bool:
         floor/preferred and are fine for libraries."""
     n = dep.declared_in.name
     if n in ("pyproject.toml", "package.json", "Directory.Packages.props",
-             "libs.versions.toml", "pom.xml"):
+             "Directory.Build.targets", "libs.versions.toml", "pom.xml"):
         return True
     if n.startswith("requirements") and n.endswith(".txt"):
         return True
@@ -795,7 +795,8 @@ def _has_rewriter(manifest: Path) -> bool:
     """
     name = manifest.name
     if name in ("pom.xml", "package.json", "pyproject.toml",
-                "Directory.Packages.props", "libs.versions.toml"):
+                "Directory.Packages.props", "Directory.Build.targets",
+                "libs.versions.toml"):
         return True
     if name.startswith("requirements") and name.endswith(".txt"):
         return True

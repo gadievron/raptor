@@ -813,6 +813,12 @@ def _rewrite_one(
     # match the dep's source-origin field).
     if name == "Directory.Packages.props":
         return _rewrite_via_registry(manifest, text, plan)
+    # Pre-CPM central-version table: <PackageReference Update="X" Version="Y"/>
+    # in Directory.Build.targets. Same registry dispatch — the dedicated
+    # rewriter (rewriters/directory_build_targets.py) matches Update= rather
+    # than Include=.
+    if name == "Directory.Build.targets":
+        return _rewrite_via_registry(manifest, text, plan)
     if suffix in (".csproj", ".fsproj", ".vbproj"):
         return _rewrite_via_registry(manifest, text, plan)
     # Gradle write surface — libs.versions.toml. Inline
