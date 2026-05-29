@@ -2740,6 +2740,7 @@
   "load-grunt-tasks",
   "load-json-file",
   "load-script",
+  "loadash",
   "loader-fs-cache",
   "loader-utils",
   "loadjs",
