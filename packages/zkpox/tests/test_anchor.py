@@ -21,7 +21,7 @@ pytest.importorskip("cbor2")
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from packages.zkpox import (
-    Bundle,
+    DisclosureBundle,
     BUNDLE_VERSION,
     Envelope,
     HarnessRef,
@@ -37,13 +37,13 @@ from packages.zkpox import (
 )
 
 
-def _fresh_bundle() -> Bundle:
+def _fresh_bundle() -> DisclosureBundle:
     env = Envelope(
         aes_blob=secrets.token_bytes(60),
         ct_K_age=secrets.token_bytes(232),
         ct_K_tlock=secrets.token_bytes(391),
     )
-    return Bundle(
+    return DisclosureBundle(
         version=BUNDLE_VERSION,
         target=Target(kind="elf", hash=sha256_bytes(b"binary"), metadata={}),
         vulnerability=Vulnerability(
