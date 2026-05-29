@@ -35,42 +35,31 @@ def test_run_rejects_unknown_mode():
         prove.run(witness=Path("/nonexistent"), mode="schedule-it")
 
 
-def test_parse_full_record_via_fake_binary(tmp_path, monkeypatch):
-    """Smoke-test that a JSON record with the full schema parses back
-    into a ProveResult without losing precision. Avoids spinning up
-    SP1; uses a stub script that prints a fixed record."""
+def test_parse_full_record_preserves_precision(tmp_path):
+    """Full-schema record → ProveResult, no precision loss. Pure parser,
+    no subprocess; the real prove path is covered by run-tests.sh."""
     record = {
-        "tag": "smoke",
-        "witness": str(tmp_path / "w.bin"),
-        "witness_bytes": 32,
+        "tag": "smoke", "witness": str(tmp_path / "w.bin"), "witness_bytes": 32,
         "mode": "execute",
-        "verdicts": {
-            "target_id": 1,
-            "crash_only_crashed": True,
-            "oob_detected": True,
-            "oob_count": 16,
-            "oob_first_offset": 16,
-        },
-        "cycles": 9807,
-        "wall_secs": 0.014,
-        "proof_bytes": None,
-        "verified": None,
+        "verdicts": {"target_id": 1, "crash_only_crashed": True, "oob_detected": True,
+                     "oob_count": 16, "oob_first_offset": 16},
+        "cycles": 9807, "wall_secs": 0.014, "proof_bytes": None, "verified": None,
     }
-    fake = tmp_path / "fake-prove"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        f"print(json.dumps({record!r}))\n"
-    )
-    fake.chmod(0o755)
+    result = prove._record_to_result(record)
+    assert (result.tag, result.witness_bytes, result.mode) == ("smoke", 32, "execute")
+    assert result.verdicts.target_id == 1
+    assert result.verdicts.oob_count == result.verdicts.oob_first_offset == 16
+    assert result.cycles == 9807 and result.wall_secs == 0.014
+    assert result.proof_bytes is None and result.verified is None
 
-    witness_path = tmp_path / "w.bin"
-    witness_path.write_bytes(b"x" * 32)
 
-    result = prove.run(witness=witness_path, mode="execute", binary=fake, tag="smoke")
-    assert result.tag == "smoke"
-    assert result.mode == "execute"
-    assert result.verdicts.crash_only_crashed is True
-    assert result.verdicts.oob_count == 16
-    assert result.cycles == 9807
-    assert result.proof_bytes is None
+def test_parse_record_defaults_target_id_for_pre_1_6(tmp_path):
+    """Pre-1.6 record with no target_id defaults to 0x01."""
+    record = {
+        "tag": "old", "witness": str(tmp_path / "w.bin"), "witness_bytes": 8,
+        "mode": "execute",
+        "verdicts": {"crash_only_crashed": False, "oob_detected": False,
+                     "oob_count": 0, "oob_first_offset": 0},
+        "wall_secs": 0.001,
+    }
+    assert prove._record_to_result(record).verdicts.target_id == 0x01

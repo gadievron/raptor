@@ -147,6 +147,12 @@ def run(
             f"stdout:\n{completed.stdout}"
         )
 
+    return _record_to_result(record)
+
+
+def _record_to_result(record: dict) -> ProveResult:
+    """Pure schema-mapping half of :func:`run`, split out so it can be
+    unit-tested without spinning up the prover or the sandbox."""
     v = record.get("verdicts") or {}
     return ProveResult(
         tag=record["tag"],
