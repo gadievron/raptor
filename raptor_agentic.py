@@ -743,6 +743,24 @@ Examples:
             "text → informational only)."
         ),
     )
+    parser.add_argument(
+        "--target-kind",
+        choices=("auto", "library", "hybrid", "application"),
+        default="auto",
+        help=(
+            "Classify the target so reachability treats a library's "
+            "exported/public symbols as entry points (its API is reachable by "
+            "external consumers). 'auto' (default) classifies from package "
+            "manifests; force it when auto is wrong. 'library' and 'hybrid' "
+            "both enable export-as-entry (a hybrid = lib + CLI, e.g. seer, so "
+            "BOTH its API and its CLI/main are entries); 'application' "
+            "disables it. Only affects the dynamic/JVM languages "
+            "(Python/JS/TS/Java/C#/PHP) — native code (C/C++/Rust/Go) uses "
+            "sound linkage regardless. Sets RAPTOR_TARGET_KIND so the "
+            "inventory honours it across subprocess boundaries (e.g. the "
+            "/validate helper)."
+        ),
+    )
 
     # Mitigation analysis options (NEW)
     parser.add_argument("--binary", help="Target binary for mitigation analysis (enables pre-exploit checks)")
@@ -925,6 +943,15 @@ Examples:
         set_trust_override(True)
         from core.security.codeql_trust import set_trust_override as _ql_set
         _ql_set(True)
+
+    # --target-kind: translate the operator's choice into RAPTOR_TARGET_KIND
+    # (the env override consulted by inventory's library-mode resolver). 'auto'
+    # leaves it unset → per-target manifest detection. Setting the env var is
+    # how the intent reaches build_inventory both in-process and across the
+    # /validate libexec subprocess boundary.
+    _target_kind = getattr(args, "target_kind", "auto")
+    if _target_kind != "auto":
+        os.environ[RaptorConfig.ENV_TARGET_KIND] = _target_kind
 
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")

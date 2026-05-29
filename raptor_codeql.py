@@ -17,6 +17,7 @@ Workflow:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -311,6 +312,18 @@ Examples:
             "regardless of this flag."
         ),
     )
+    parser.add_argument(
+        "--target-kind",
+        choices=("auto", "library", "hybrid", "application"),
+        default="auto",
+        help=(
+            "Classify the target: 'library'/'hybrid' treat exported/public "
+            "symbols as reachable entry points (a library's API is reachable "
+            "by external consumers), 'application' does not. 'auto' (default) "
+            "classifies from package manifests. Sets RAPTOR_TARGET_KIND. See "
+            "raptor_agentic.py for detail."
+        ),
+    )
     # ``--max-findings`` default 20 is intentionally HIGHER than
     # ``raptor_agentic.py``'s default 10: codeql-only mode does one
     # pass per finding (filter + summarise), while agentic does the
@@ -348,6 +361,10 @@ Examples:
     # RaptorConfig constant once at startup.
     if args.phase_timeout != RaptorConfig.CODEQL_TIMEOUT:
         RaptorConfig.CODEQL_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
+    # --target-kind → RAPTOR_TARGET_KIND (inventory's library-mode override).
+    # 'auto' leaves it unset (per-target detection). See raptor_agentic.py.
+    if getattr(args, "target_kind", "auto") != "auto":
+        os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
     # caller-supplied paths against project trust state). Pre-fix

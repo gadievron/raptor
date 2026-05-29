@@ -13,7 +13,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from core.hash import sha256_bytes
 from core.json import load_json
@@ -134,7 +134,7 @@ def build_inventory(
     skip_generated: bool = True,
     parallel: bool = True,
     allow_unreachable: bool = False,
-    treat_exports_as_entries: bool = False,
+    treat_exports_as_entries: Union[bool, str] = "auto",
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -161,6 +161,15 @@ def build_inventory(
         extensions: File extensions to include (defaults to LANGUAGE_MAP keys).
         skip_generated: Skip auto-generated files.
         parallel: Use parallel processing for large codebases.
+        treat_exports_as_entries: target classification driving library mode
+            (reachability treats exported/public symbols as entry points).
+            ``True``/``"library"``/``"hybrid"``/``"on"`` enable it, ``False``/
+            ``"application"``/``"off"`` disable it, and ``"auto"`` (default)
+            classifies the target via
+            :func:`core.inventory.library_detection.detect_target_kind`
+            (library/hybrid → enabled). The classification is recorded in
+            ``inventory['target_kind']`` (+ ``_reason``/``_source``);
+            ``RAPTOR_TARGET_KIND`` is the operator env override.
 
     Returns:
         Inventory dict (also saved to ``<output_dir>/checklist.json``).
@@ -317,11 +326,20 @@ def build_inventory(
         'excluded_files': excluded_files,
         'files': files_info,
     }
-    if treat_exports_as_entries:
-        # Library mode: reachability treats exported/public symbols as entry
-        # points (the API surface is reachable by consumers). Read by
-        # core.inventory.reachability._entry_functions.
-        inventory['treat_exports_as_entries'] = True
+    # Target classification (library | hybrid | application | unknown) — a
+    # first-class, neutral signal for downstream consumers (reachability,
+    # attack-surface mapping, taint sources, SCA pinning posture). Setting is
+    # auto|library|hybrid|application (auto = sniff package manifests;
+    # RAPTOR_TARGET_KIND env is the operator override). ``treat_exports_as_
+    # entries`` is the derived bool read by reachability._entry_functions:
+    # library mode is on for library/hybrid kinds (public API consumed
+    # externally).
+    from .library_detection import resolve_library_mode
+    _lib = resolve_library_mode(treat_exports_as_entries, target_path, files_info)
+    inventory['treat_exports_as_entries'] = _lib['enabled']
+    inventory['target_kind'] = _lib['kind']
+    inventory['target_kind_reason'] = _lib['reason']
+    inventory['target_kind_source'] = _lib['source']
     if limitations:
         inventory['limitations'] = limitations
 

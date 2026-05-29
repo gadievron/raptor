@@ -211,6 +211,13 @@ class RaptorConfig:
     ENV_OUT_DIR = "RAPTOR_OUT_DIR"
     ENV_JOB_ID = "RAPTOR_JOB_ID"
     ENV_LLM_CMD = "RAPTOR_LLM_CMD"
+    # Operator override for target classification
+    # (auto|library|hybrid|application) consulted by
+    # core.inventory.library_detection.resolve_library_mode when the
+    # programmatic setting is "auto". The escape hatch for when
+    # auto-detection misclassifies a target (e.g. asserting 'hybrid' on a
+    # lib+CLI whose manifest only exposes the library side).
+    ENV_TARGET_KIND = "RAPTOR_TARGET_KIND"
 
     # LLM Provider Configuration.
     #
@@ -314,6 +321,13 @@ class RaptorConfig:
         # so an attacker setting them gains nothing beyond what they
         # already had with same-UID write access to ~/raptor-out.
         "RAPTOR_OUT_DIR", "RAPTOR_DIR",
+        #   RAPTOR_TARGET_KIND  operator's target-classification override
+        #                    (auto|library|hybrid|application). Must survive
+        #                    the subprocess boundary so an inventory rebuilt in
+        #                    a child honours the operator's intent. Only ever
+        #                    read as an enum (any other value → auto); no
+        #                    injection surface.
+        "RAPTOR_TARGET_KIND",
     })
 
     # Name prefixes — any variable whose name starts with one of these is
