@@ -477,7 +477,7 @@ def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any]
     """Mechanically fix up an LLM-produced context-map using the checklist
     as ground truth.
 
-    Mutates ``context_map`` in place; returns it for chaining. Does five
+    Mutates ``context_map`` in place; returns it for chaining. Does six
     deterministic passes that are safe to run multiple times (idempotent):
 
     1. **Path normalisation** on every ``file:`` field across entry_points,
@@ -502,6 +502,12 @@ def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any]
        references entry_point or sink IDs that don't exist in the
        respective lists.
 
+    6. **Library-surface augmentation** (``_augment_library_surface``): the
+       first consumer of ``checklist['target_kind']``. For a library/hybrid
+       target, stamps the kind, records the public API as a trust boundary +
+       attacker-controlled source, and backfills the exported functions as
+       entry points the LLM missed. No-op for application/unknown.
+
     Returns the (mutated) context_map for caller convenience. Bails as a
     no-op if either input is missing or wrong-typed.
     """
@@ -524,7 +530,117 @@ def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any]
         if isinstance(fi, dict) and fi.get("path")
     }
     _backfill_and_validate_locations(context_map, files_by_path)
+    _augment_library_surface(context_map, checklist)
     return context_map
+
+
+def _augment_library_surface(context_map: Dict[str, Any],
+                             checklist: Dict[str, Any]) -> None:
+    """6th normalise pass — the first consumer of ``checklist['target_kind']``.
+
+    For a ``library``/``hybrid`` target the public/exported API *is* the attack
+    surface: a consumer passes attacker-controlled data into the exported
+    functions, so their parameters are untrusted sources. The LLM, looking for
+    HTTP routes / a ``main``, often reports a pure library as having "no entry
+    points"; this pass closes that gap deterministically from the inventory.
+
+    Three additions (idempotent — safe to re-run, tagged with stable
+    ``origin`` markers so a second pass adds nothing):
+      1. Stamp ``context_map['target_kind']`` (+ reason) for any kind.
+      2. A single ``library-api`` trust-boundary record and a matching
+         attacker-controlled ``sources`` record.
+      3. Backfill *every* exported function as an entry point (no cap —
+         truncating attack surface is a false negative, and reachability
+         already treats all exports as entries), deduped against entries the
+         LLM already enumerated.
+
+    No-op for ``application``/``unknown`` (and for pre-#719 checklists with no
+    ``target_kind``), beyond the stamp.
+    """
+    kind = checklist.get("target_kind")
+    if not kind:
+        return
+    context_map["target_kind"] = kind
+    reason = checklist.get("target_kind_reason")
+    if reason:
+        context_map["target_kind_reason"] = reason
+    if kind not in ("library", "hybrid"):
+        return
+
+    boundaries = context_map.setdefault("trust_boundaries", [])
+    if isinstance(boundaries, list) and not any(
+        isinstance(b, dict) and b.get("origin") == "library-surface"
+        for b in boundaries
+    ):
+        boundaries.append({
+            "boundary": "Public API surface (library/hybrid target): exported "
+                        "functions are invoked by external consumers, so their "
+                        "parameters are caller-controlled (untrusted).",
+            "check": "",
+            "origin": "library-surface",
+        })
+
+    sources = context_map.setdefault("sources", [])
+    if isinstance(sources, list) and not any(
+        isinstance(s, dict) and s.get("origin") == "library-surface"
+        for s in sources
+    ):
+        sources.append({
+            "type": "library_api",
+            "entry": "exported public API parameters",
+            "trust_level": "attacker_controlled",
+            "origin": "library-surface",
+        })
+
+    eps = context_map.setdefault("entry_points", [])
+    if not isinstance(eps, list):
+        return
+    # Dedup against entries the LLM already found (names are backfilled by the
+    # prior pass) and against ones we add.
+    seen: Set[Tuple[str, str]] = set()
+    for ep in eps:
+        if isinstance(ep, dict):
+            f, n = ep.get("file"), ep.get("name")
+            if isinstance(f, str) and isinstance(n, str):
+                seen.add((f, n))
+
+    # Use the same per-item entry predicate reachability uses, in library
+    # mode: covers the dynamic/JVM EXPORTS *and* native LINKAGE entries (C
+    # non-static, Go-exported, Rust-pub) — so a C/Rust/Go library's public API
+    # surfaces too, not just the dynamic langs. library_mode=True is correct
+    # here because we only reach this for a library/hybrid target.
+    from core.inventory.reachability import _item_is_entry
+    added = 0
+    for fi in _list_at(checklist, "files"):
+        if not isinstance(fi, dict):
+            continue
+        lang = fi.get("language")
+        path = fi.get("path")
+        if not isinstance(path, str):
+            continue
+        for item in fi.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind", "function") != "function":
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            if (path, name) in seen or not _item_is_entry(item, lang, library_mode=True):
+                continue
+            seen.add((path, name))
+            added += 1
+            eps.append({
+                "id": f"EP-LIB-{added:03d}",
+                "type": "library_api",
+                "name": name,
+                "file": path,
+                "line": item.get("line_start"),
+                "auth_required": False,
+                "origin": "inventory-entry",
+                "notes": "Library API entry point (export/linkage) — "
+                         "reachable by external consumers.",
+            })
 
 
 # Top-level keys whose entries carry a (file, line) pair worth normalising.

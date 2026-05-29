@@ -1155,6 +1155,112 @@ class TestNormalizeContextMap:
 
 
 # ---------------------------------------------------------------------------
+# library-surface augmentation (target_kind consumer)
+# ---------------------------------------------------------------------------
+
+class TestAugmentLibrarySurface:
+    """Pass 6 of normalize_context_map: the first consumer of target_kind.
+    For library/hybrid, the public API is surfaced as attack surface (trust
+    boundary + sources + backfilled entry points). Python items use name
+    convention so no metadata is needed (grammar-independent)."""
+
+    def _checklist(self, kind, items):
+        return {
+            "target_path": "/repo",
+            "target_kind": kind,
+            "target_kind_reason": "test",
+            "files": [{"path": "lib.py", "language": "python", "items": items}],
+        }
+
+    _ITEMS = [
+        {"name": "public_api", "kind": "function", "line_start": 1, "line_end": 3},
+        {"name": "another_pub", "kind": "function", "line_start": 5, "line_end": 7},
+        {"name": "_private", "kind": "function", "line_start": 9, "line_end": 11},
+    ]
+
+    def _origins(self, lst, origin):
+        return [x for x in lst if isinstance(x, dict) and x.get("origin") == origin]
+
+    def test_library_surfaces_exports_as_entry_points(self):
+        ctx = {}
+        normalize_context_map(ctx, self._checklist("library", self._ITEMS))
+        assert ctx["target_kind"] == "library"
+        eps = self._origins(ctx["entry_points"], "inventory-entry")
+        names = {e["name"] for e in eps}
+        assert names == {"public_api", "another_pub"}   # _private excluded
+        assert all(e["type"] == "library_api" for e in eps)
+        # boundary + source records
+        assert len(self._origins(ctx["trust_boundaries"], "library-surface")) == 1
+        assert len(self._origins(ctx["sources"], "library-surface")) == 1
+        assert ctx["sources"][-1]["trust_level"] == "attacker_controlled"
+
+    def test_no_cap_surfaces_all_exports(self):
+        items = [{"name": f"api_{i}", "kind": "function", "line_start": i}
+                 for i in range(200)]
+        ctx = {}
+        normalize_context_map(ctx, self._checklist("library", items))
+        assert len(self._origins(ctx["entry_points"], "inventory-entry")) == 200
+
+    def test_hybrid_also_enables(self):
+        ctx = {}
+        normalize_context_map(ctx, self._checklist("hybrid", self._ITEMS))
+        assert ctx["target_kind"] == "hybrid"
+        assert len(self._origins(ctx["entry_points"], "inventory-entry")) == 2
+
+    def test_dedups_against_llm_found_entry(self):
+        # The LLM already listed public_api; we must not double-list it.
+        ctx = {"entry_points": [{"id": "EP-001", "name": "public_api",
+                                 "file": "lib.py", "line": 1}]}
+        normalize_context_map(ctx, self._checklist("library", self._ITEMS))
+        names = [e["name"] for e in ctx["entry_points"]]
+        assert names.count("public_api") == 1
+        # the other export still gets added
+        assert "another_pub" in names
+
+    def test_idempotent(self):
+        ctx = {}
+        cl = self._checklist("library", self._ITEMS)
+        normalize_context_map(ctx, cl)
+        first = copy.deepcopy(ctx)
+        normalize_context_map(ctx, cl)   # second pass adds nothing
+        assert ctx == first
+
+    def test_application_is_stamped_only(self):
+        ctx = {}
+        normalize_context_map(ctx, self._checklist("application", self._ITEMS))
+        assert ctx["target_kind"] == "application"
+        assert "entry_points" not in ctx or not self._origins(
+            ctx.get("entry_points", []), "inventory-entry")
+        assert not self._origins(ctx.get("trust_boundaries", []), "library-surface")
+
+    def test_no_target_kind_is_noop(self):
+        # Pre-#719 checklist with no target_kind → nothing added/stamped.
+        ctx = {}
+        normalize_context_map(ctx, {"target_path": "/repo", "files": []})
+        assert "target_kind" not in ctx
+
+    def test_native_c_library_surfaces_non_static_linkage(self):
+        # A C library's attack surface is its non-static (external-linkage)
+        # functions, which the dynamic-langs-only export predicate would miss.
+        # _item_is_entry's linkage branch surfaces them; static stays internal.
+        ctx = {}
+        checklist = {
+            "target_path": "/repo", "target_kind": "library",
+            "files": [{"path": "lib.c", "language": "c", "items": [
+                {"name": "lib_encode", "kind": "function", "line_start": 10,
+                 "metadata": {"visibility": "extern"}},
+                {"name": "lib_decode", "kind": "function", "line_start": 20,
+                 "metadata": {"visibility": "extern"}},
+                {"name": "internal_helper", "kind": "function", "line_start": 30,
+                 "metadata": {"visibility": "static"}},
+            ]}],
+        }
+        normalize_context_map(ctx, checklist)
+        names = {e["name"] for e in self._origins(ctx["entry_points"], "inventory-entry")}
+        assert names == {"lib_encode", "lib_decode"}   # static excluded
+
+
+# ---------------------------------------------------------------------------
 # enrich_checklist
 # ---------------------------------------------------------------------------
 
