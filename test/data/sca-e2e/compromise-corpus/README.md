@@ -19,6 +19,21 @@ tests/sca-e2e/compromise-corpus/
 └── README.md
 ```
 
+## Manifest defang (`.fixture` suffix)
+
+Manifests inside `fixture/` are committed with a **`.fixture`
+suffix** — `package.json.fixture`, `pom.xml.fixture`,
+`requirements.txt.fixture`, `Dockerfile.fixture`, … This corpus pins
+*deliberately-vulnerable* dependency versions, so if the files were
+named `package.json` etc. GitHub's dependency graph would parse them
+and raise spurious Dependabot alerts + security-update PRs against the
+fixtures. The suffix means the dependency graph never recognizes them
+as manifests. The harness strips the suffix when it stages each
+fixture into its scan tempdir, so `raptor-sca` sees the real names and
+detection is unchanged. Consumer source we author (`*.py`, `*.js`) is
+**not** suffixed — only the package-manager manifests the dependency
+graph would parse.
+
 ## Safety properties (load-bearing)
 
 This corpus is the question "can we detect the compromise
@@ -84,7 +99,10 @@ otherwise — suitable as a CI gate.
 ## Adding fixtures
 
 1. Create ``<incident-slug>/fixture/`` with the minimal manifest +
-   lockfile that depends on the malicious version.
+   lockfile that depends on the malicious version. **Name each
+   manifest with the ``.fixture`` suffix** (``package.json.fixture``,
+   ``pom.xml.fixture``, …) — see "Manifest defang" above. The harness
+   strips it at scan time.
 2. Write ``expected.yaml`` listing the signal class(es) and floors.
 3. Write ``metadata.yaml`` with incident name, date, and public refs
    (advisory IDs, post-mortem URLs, OSSF MAL-YYYY-NNNN identifiers).
