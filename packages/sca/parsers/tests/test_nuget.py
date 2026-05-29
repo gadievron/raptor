@@ -59,6 +59,95 @@ def test_csproj_child_element_version(tmp_path: Path) -> None:
     assert deps[0].version == "1.2.3"
 
 
+def test_versionless_ref_resolved_via_directory_build_targets(
+    tmp_path: Path,
+) -> None:
+    """IdentityServer4 pattern: the csproj has version-less
+    ``<PackageReference Include="X"/>`` and the version lives in an ancestor
+    ``Directory.Build.targets`` as ``<PackageReference Update="X" Version="Y"/>``.
+    The resolver must walk ``.targets`` (not just ``.props``) and honour
+    ``Update=`` rows — otherwise the dep is dropped as unversionable."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Build.targets").write_text(
+        "<Project>\n"
+        "  <ItemGroup>\n"
+        '    <PackageReference Update="IdentityModel" Version="4.1.1" />\n'
+        '    <PackageReference Update="Newtonsoft.Json" Version="12.0.2" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        "  <ItemGroup>\n"
+        '    <PackageReference Include="IdentityModel" />\n'
+        '    <PackageReference Include="Newtonsoft.Json" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    by = {d.name: d for d in parse_msbuild_project(csproj)}
+    assert by["IdentityModel"].version == "4.1.1"
+    assert by["Newtonsoft.Json"].version == "12.0.2"
+
+
+def test_central_version_via_msbuild_property(tmp_path: Path) -> None:
+    """A central ``Update=`` version given as an MSBuild property defined in the
+    SAME file resolves; a floating-wildcard property stays unresolved (a
+    ``3.1.0-*`` self-ref isn't a pinnable version)."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Build.targets").write_text(
+        "<Project>\n"
+        "  <PropertyGroup>\n"
+        "    <FooVersion>2.3.4</FooVersion>\n"
+        "    <SelfVersion>9.9.9-*</SelfVersion>\n"
+        "  </PropertyGroup>\n"
+        "  <ItemGroup>\n"
+        '    <PackageReference Update="Foo" Version="$(FooVersion)" />\n'
+        '    <PackageReference Update="SelfPkg" Version="$(SelfVersion)" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    proj = tmp_path / "src"
+    proj.mkdir()
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n  <ItemGroup>\n'
+        '    <PackageReference Include="Foo" />\n'
+        '    <PackageReference Include="SelfPkg" />\n'
+        "  </ItemGroup>\n</Project>\n",
+        encoding="utf-8",
+    )
+    by = {d.name: d for d in parse_msbuild_project(csproj)}
+    assert by["Foo"].version == "2.3.4"
+    assert "SelfPkg" not in by   # floating $(SelfVersion)=9.9.9-* → unresolved
+
+
+def test_shared_framework_ref_skipped_silently(tmp_path: Path, caplog) -> None:
+    """A version-less ``Microsoft.AspNetCore.*`` ref is framework-provided, so
+    it's skipped silently (no parser warning); a real version-less ref still
+    surfaces a warning."""
+    import logging
+    csproj = tmp_path / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n  <ItemGroup>\n'
+        '    <PackageReference Include="Microsoft.AspNetCore.Authentication.'
+        'OpenIdConnect" />\n'
+        '    <PackageReference Include="Some.Real.Package" />\n'
+        "  </ItemGroup>\n</Project>\n",
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.WARNING, logger="sca.parsers.nuget")
+    parse_msbuild_project(csproj)
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "Some.Real.Package" in msgs
+    assert "Microsoft.AspNetCore" not in msgs
+
+
 def test_csproj_namespaced(tmp_path: Path) -> None:
     """Legacy projects with the MSBuild XML namespace."""
     body = """\
