@@ -1947,6 +1947,65 @@ class TestPythonFrameworkConvention:
         assert verdict("dead") == "not_called"            # control
 
 
+class TestLibraryEntryMode:
+    """Opt-in library mode (build_inventory(treat_exports_as_entries=True)):
+    for the dynamic/JVM langs (entry_model='none'), a library's exported/public
+    symbols are entry points — the API surface is reachable by consumers. OFF
+    by default so an application's dead public functions are still surfaced.
+    Private/internal symbols stay dead even in library mode; functions reachable
+    FROM the public API become reachable via the closure."""
+
+    def _verds(self, tmp_path, files, library):
+        for fn, src in files.items():
+            (tmp_path / fn).write_text(src)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"),
+                              treat_exports_as_entries=library)
+        from core.inventory.reach_audit import classify_reachability
+        out = {}
+        for f in inv["files"]:
+            mod = ".".join(f["path"].rsplit(".", 1)[0].split("/"))
+            for it in f["items"]:
+                if it.get("kind", "function") == "function":
+                    out[it.get("name")] = classify_reachability(
+                        inv, f["path"], it.get("name"),
+                        int(it.get("line_start") or 0), mod)
+        return out
+
+    def test_default_app_mode_public_not_entry(self, tmp_path):
+        v = self._verds(tmp_path, {"x.py": "def public_api(): pass\n"}, False)
+        assert v["public_api"] == "not_called"   # default: public != entry
+
+    def test_python_library_mode(self, tmp_path):
+        files = {"x.py": (
+            "def public_api():\n    return _helper()\n"
+            "def _helper():\n    return 1\n"
+            "def _orphan():\n    return 2\n"
+            "class C:\n  def method(self): pass\n  def _priv(self): pass\n")}
+        v = self._verds(tmp_path, files, True)
+        assert v["public_api"] == "reachable"     # public top-level
+        assert v["_helper"] == "reachable"         # reachable FROM the API
+        assert v["_orphan"] == "not_called"        # private + unreachable -> dead
+        assert v["method"] == "reachable"          # public method
+        assert v["_priv"] == "not_called"          # private method stays dead
+
+    def test_ts_export_and_java_php_public(self, tmp_path):
+        for grammar in ("tree_sitter_typescript", "tree_sitter_java",
+                        "tree_sitter_php"):
+            pytest.importorskip(grammar)
+        files = {
+            "x.ts": "export function expApi(){}\nfunction internalFn(){}\n",
+            "x.java": "public class C { public void pubApi(){} private void prv(){} }\n",
+            "x.php": "<?php\nclass D { public function phpApi(){} private function phpPrv(){} }\n",
+        }
+        v = self._verds(tmp_path, files, True)
+        assert v["expApi"] == "reachable"          # TS export
+        assert v["internalFn"] == "not_called"     # non-export -> dead
+        assert v["pubApi"] == "reachable"          # Java public
+        assert v["prv"] == "not_called"            # Java private stays dead
+        assert v["phpApi"] == "reachable"          # PHP public
+        assert v["phpPrv"] == "not_called"         # PHP private stays dead
+
+
 class TestPhpCoverage:
     """End-to-end PHP / Laravel + Symfony coverage. PHP used the regex
     extractor; now wired to tree-sitter-php (class/method names, visibility,

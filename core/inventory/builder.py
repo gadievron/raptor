@@ -134,6 +134,7 @@ def build_inventory(
     skip_generated: bool = True,
     parallel: bool = True,
     allow_unreachable: bool = False,
+    treat_exports_as_entries: bool = False,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -316,6 +317,11 @@ def build_inventory(
         'excluded_files': excluded_files,
         'files': files_info,
     }
+    if treat_exports_as_entries:
+        # Library mode: reachability treats exported/public symbols as entry
+        # points (the API surface is reachable by consumers). Read by
+        # core.inventory.reachability._entry_functions.
+        inventory['treat_exports_as_entries'] = True
     if limitations:
         inventory['limitations'] = limitations
 

@@ -2712,7 +2712,33 @@ def _python_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     return False
 
 
-def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
+def _is_library_export(item: Dict[str, Any], language: str) -> bool:
+    """In LIBRARY mode, an exported / public symbol is an entry point — a
+    library's public API is reachable by consumers even with no in-project
+    caller. Opt-in (off by default): treating exports as entries would mask
+    genuinely-dead public functions in an APPLICATION (FP toward reachable),
+    so it's only correct when the target is a library. Per-language public
+    signal: Python name convention (leading single ``_`` is private; dunders
+    are public protocol), JS/TS ``export``, Java/C#/PHP ``public``. Ruby is
+    unsupported here (its method visibility isn't captured, so every method
+    would over-qualify)."""
+    name = item.get("name") or ""
+    if not name:
+        return False
+    vis = (item.get("metadata") or {}).get("visibility") or ""
+    if language == "python":
+        if name.startswith("__") and name.endswith("__"):
+            return True  # dunder = public protocol (__init__, __call__, …)
+        return not name.startswith("_")
+    if language in ("javascript", "typescript", "tsx"):
+        return vis == "exported"
+    if language in ("java", "csharp", "php"):
+        return "public" in vis.split()
+    return False
+
+
+def _item_is_entry(item: Dict[str, Any], language: str,
+                   library_mode: bool = False) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
     separately off the adjacency index.)
@@ -2763,6 +2789,11 @@ def _item_is_entry(item: Dict[str, Any], language: str) -> bool:
     # dispatched by the framework (verbs/actions by convention).
     if p.has_python_framework and _python_framework_entry(name, item):
         return True
+    # Library mode (opt-in): a public/exported symbol is an entry — the
+    # library's API surface is reachable by consumers. Off by default so an
+    # application's dead public functions are still surfaced.
+    if library_mode and _is_library_export(item, language):
+        return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
     # fall through to UNCERTAIN + 1-hop NOT_CALLED, behaviour unchanged).
@@ -2795,6 +2826,10 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
     cached = _ENTRY_SET_CACHE.get(inv_id)
     if cached is not None and cached[0] is inventory:
         return cached[1]
+    # Library mode (opt-in, set by build_inventory): treat exported/public
+    # symbols as entry points — for scanning a library whose API is reachable
+    # by consumers. Off by default (an app's dead public fns stay surfaced).
+    library_mode = bool(inventory.get("treat_exports_as_entries"))
     entries: Set[InternalFunction] = set()
     for fr in inventory.get("files", []):
         if not isinstance(fr, dict):
@@ -2806,7 +2841,7 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
                 continue
             if item.get("kind", "function") != "function":
                 continue
-            if _item_is_entry(item, lang):
+            if _item_is_entry(item, lang, library_mode=library_mode):
                 entries.add(InternalFunction(
                     file_path=path, name=item.get("name") or "",
                     line=int(item.get("line_start") or 0),
