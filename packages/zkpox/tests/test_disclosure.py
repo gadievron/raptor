@@ -10,8 +10,6 @@ reconciliation helper rejects a mismatched artifact.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 pytest.importorskip("cbor2")
