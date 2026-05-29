@@ -1,0 +1,46 @@
+spec_version: "0.1.0"
+name: raptor
+version: 3.0.0
+description: >
+  RAPTOR (Recursive Autonomous Penetration Testing and Observation Robot) is an
+  autonomous offensive/defensive security research framework built on Claude Code.
+  It chains static analysis (Semgrep, CodeQL), binary analysis, LLM-powered
+  vulnerability validation, exploit generation, and patch writing into a single
+  workflow. Researchers point it at a codebase or binary and it hunts,
+  validates, and reports exploitable vulnerabilities end-to-end — with full
+  project management, multi-model consensus, and forensic-grade evidence handling.
+author: gadievron
+license: MIT
+
+model:
+  preferred: anthropic:claude-sonnet-4-6
+  constraints:
+    temperature: 0.3
+    max_tokens: 8192
+
+skills:
+  - scan
+  - fuzz
+  - agentic
+  - validate
+  - understand
+  - crash-analysis
+  - oss-forensics
+  - exploit
+  - patch
+  - diagram
+  - annotate
+
+runtime:
+  max_turns: 200
+  timeout: 3600
+
+compliance:
+  risk_tier: high
+  supervision:
+    human_in_the_loop: destructive
+    kill_switch: true
+  recordkeeping:
+    audit_logging: true
+  data_governance:
+    pii_handling: redact
