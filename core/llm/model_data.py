@@ -6,7 +6,13 @@ Pure data, no logic. Updated during development from provider
 documentation. Changes at a different rate than code — when
 providers update pricing or release new models, edit this file.
 
-Last verified: 2026-05-03.
+Last verified: 2026-05-29.
+
+2026-05-29 — added ``claude-opus-4-8`` (Anthropic pricing page: $5 / $25 per
+MTok base input/output, same Opus tier as 4.5/4.6/4.7; full 1M-token context
+at standard pricing). NOTE: Opus 4.7 and later use a new tokenizer that can
+emit up to ~35% more tokens for the same text — that affects token *counts*
+(and thus realised cost), not the per-token rates tabulated here.
 
 Verification provenance for the 2026-05-03 refresh:
 
@@ -38,9 +44,10 @@ PROVIDER_ENDPOINTS = {
 # Default model per provider (used when user specifies provider without model)
 # Defaults to the most capable model — quality over cost for security analysis.
 # ``claude-opus-4-6`` deliberately retained as the Anthropic default — Opus 4.7
-# has a measurably higher refusal rate on cve-diff-class workloads, so
-# 4.6 stays the conservative default. Switch to 4.7 when refusal-rate
-# evidence improves.
+# showed a measurably higher refusal rate on cve-diff-class workloads, and 4.8
+# (newer still) hasn't been evidence-tested on those workloads yet, so 4.6
+# stays the conservative default. Revisit when refusal-rate evidence on
+# 4.7 / 4.8 improves.
 PROVIDER_DEFAULT_MODELS = {
     "anthropic": "claude-opus-4-6",
     "openai":    "gpt-5.4",
@@ -81,6 +88,7 @@ PROVIDER_FAST_MODELS = {
 # Thinking/reasoning tokens are billed at the output rate on all providers.
 MODEL_COSTS = {
     # Anthropic — current
+    "claude-opus-4-8":         {"input": 0.005,   "output": 0.025},
     "claude-opus-4-7":         {"input": 0.005,   "output": 0.025},
     "claude-sonnet-4-6":       {"input": 0.003,   "output": 0.015},
     "claude-haiku-4-5":        {"input": 0.001,   "output": 0.005},
@@ -140,6 +148,7 @@ MODEL_COSTS = {
 # the verification date in the module docstring above.
 MODEL_LIMITS = {
     # Anthropic — current
+    "claude-opus-4-8":         {"max_context": 1000000, "max_output": 128000},
     "claude-opus-4-7":         {"max_context": 1000000, "max_output": 128000},
     "claude-sonnet-4-6":       {"max_context": 1000000, "max_output": 64000},
     "claude-haiku-4-5":        {"max_context": 200000,  "max_output": 64000},
