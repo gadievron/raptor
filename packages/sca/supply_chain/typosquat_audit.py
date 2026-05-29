@@ -147,6 +147,25 @@ def _load_name_set(path: Path, ecosystem: str) -> set:
     return set()
 
 
+def _load_name_meta(path: Path, ecosystem: str) -> Dict[str, dict]:
+    """``{name: metadict}`` for ``ecosystem`` — like :func:`_load_name_set` but
+    keeps the per-name provenance (e.g. ``near_twin``). Bare-list entries map to
+    ``{}``."""
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, _json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    entry = raw.get(ecosystem)
+    if isinstance(entry, list):
+        return {n.lower(): {} for n in entry if isinstance(n, str)}
+    if isinstance(entry, dict):
+        return {k.lower(): (v if isinstance(v, dict) else {})
+                for k, v in entry.items() if isinstance(k, str)}
+    return {}
+
+
 def pending_candidates(
     ranked: Sequence[str],
     ecosystem: str,
@@ -232,6 +251,178 @@ def render_text(results: Dict[str, List[Candidate]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _registry_clients(http, cache) -> Dict[str, object]:
+    """Registry clients for the evidence fetch (Stage 3), built the SAME way as
+    the scan pipeline: through the SCA egress-controlled client (``default_client``
+    routes via the in-process proxy with ``SCA_ALLOWED_HOSTS`` enforced — the
+    registry-metadata hosts are on that allowlist) and the shared SCA cache. This
+    keeps triage inside the same egress boundary + cache as ``run_sca`` rather
+    than a bare client. (The popularity-FEED fetch in ``audit()`` stays on a
+    plain client — those feed hosts are deliberately NOT on the SCA allowlist;
+    see ``refresh_typosquat_lists``.)"""
+    from ..registries.crates import CratesClient
+    from ..registries.npm import NpmClient
+    from ..registries.packagist import PackagistClient
+    from ..registries.pypi import PyPIClient
+    return {
+        "npm": NpmClient(http, cache),
+        "PyPI": PyPIClient(http, cache),
+        "Cargo": CratesClient(http, cache),
+        "Packagist": PackagistClient(http, cache),
+    }
+
+
+def run_llm_triage(
+    results: Dict[str, List[Candidate]],
+    *,
+    reviewed_legit_path,
+) -> str:
+    """Stage 3→A→4 over the pending candidates (operator-side, needs an LLM).
+    Auto-files legit verdicts to reviewed-legit; renders the squat-confirm +
+    review queues for the human. Falls back to the list when no LLM is set."""
+    from core.json import JsonCache
+
+    from .. import SCA_CACHE_ROOT, default_client
+    from ..llm import get_llm_client
+    from .typosquat_triage import (
+        Disposition, collect_evidence_rich, make_llm_verdict_fn,
+        triage_ecosystem,
+    )
+    llm = get_llm_client()
+    if llm is None:
+        return ("No LLM model configured — cannot triage; listing candidates "
+                "only.\n\n" + render_text(results))
+    model_label = "llm"
+    try:                                          # best-effort provenance
+        model_label = str(llm.config.primary_model.model_id) or "llm"
+    except Exception:                             # noqa: BLE001
+        pass
+    http = default_client()
+    cache = JsonCache(root=SCA_CACHE_ROOT)
+    clients = _registry_clients(http, cache)
+    auto: List[str] = []
+    confirm: List[str] = []
+    review: List[str] = []
+    for eco, cands in sorted(results.items()):
+        client = clients.get(eco)
+        if not cands or client is None:
+            continue
+        # Rich evidence (description/README) for npm/PyPI via raw fetch through
+        # the same egress-controlled client; crates/Packagist via get_metadata.
+        def _ev(c, eco=eco, cl=client):
+            return collect_evidence_rich(c, eco, http, cl.get_metadata)
+        outcomes = triage_ecosystem(
+            cands, eco, evidence_fn=_ev,
+            verdict_fn=make_llm_verdict_fn(llm, eco),
+            reviewed_legit_path=reviewed_legit_path, model=model_label,
+        )
+        for o in outcomes:
+            line = (f"[{eco}] {o.candidate.name} ~ {o.candidate.near_twin} "
+                    f"— {o.gate_result.reason}")
+            if o.gate_result.disposition is Disposition.AUTO_LEGIT:
+                auto.append(line)
+            elif o.gate_result.disposition is Disposition.CONFIRM_SQUAT:
+                confirm.append(line)
+            else:
+                review.append(line)
+    lines = [f"Auto-filed legit → reviewed_legit.json ({len(auto)}):"]
+    lines += [f"  {x}" for x in auto] or ["  (none)"]
+    lines += ["", f"CONFIRM before denylisting ({len(confirm)}) — "
+              "add to typosquat_denylist.json if a squat:"]
+    lines += [f"  {x}" for x in confirm] or ["  (none)"]
+    lines += ["", f"Review ({len(review)}):"]
+    lines += [f"  {x}" for x in review] or ["  (none)"]
+    return "\n".join(lines) + "\n"
+
+
+def _render_reaudit(flagged: Dict[str, list]) -> str:
+    total = sum(len(v) for v in flagged.values())
+    if total == 0:
+        return ""        # nothing flagged → workflow's [ -s ] skips the issue
+    lines = [f"### ⚠️ {total} reviewed-legit entr(ies) flagged for re-review", "",
+             "Names previously filed as legitimate whose CURRENT registry state "
+             "contradicts that (removed / now deprecated / now carrying a "
+             "malicious advisory). Re-review each: move to "
+             "`typosquat_denylist.json` if it should now be flagged, or drop "
+             "from `typosquat_reviewed_legit.json` to re-surface it as a "
+             "candidate.", ""]
+    for eco in sorted(flagged):
+        lines.append(f"**{eco}:**")
+        lines += [f"- `{n}` — {reason}" for n, reason in flagged[eco]]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_reaudit_llm(enriched: Dict[str, list]) -> str:
+    total = sum(len(v) for v in enriched.values())
+    if total == 0:
+        return "No reviewed-legit entries flagged.\n"
+    lines = [f"### {total} reviewed-legit entr(ies) flagged + LLM re-examined",
+             ""]
+    for eco in sorted(enriched):
+        lines.append(f"**{eco}:**")
+        for name, reason, verdict, rec in enriched[eco]:
+            lines.append(f"- `{name}` — flag: {reason}")
+            lines.append(f"    LLM: {verdict.verdict} ({verdict.confidence})"
+                         + (f" — {verdict.rationale}" if verdict.rationale else ""))
+            lines.append(f"    → {rec}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_reaudit(reviewed_legit_path, *, use_llm: bool = False) -> str:
+    """Step-3 re-audit. Tier 1 (mechanical, no LLM): re-check every
+    reviewed-legit entry's current registry state and flag contradictions.
+    Tier 2 (``use_llm``, operator-side): re-examine the flagged entries with the
+    LLM and attach a suggested action. Returns markdown (empty/none when
+    nothing is flagged)."""
+    from core.json import JsonCache
+
+    from .. import SCA_CACHE_ROOT, default_client
+    from .typosquat_triage import (
+        collect_evidence_rich, make_llm_verdict_fn, osv_malicious,
+        reaudit_recommendation, reaudit_reviewed_legit,
+    )
+    http = default_client()
+    cache = JsonCache(root=SCA_CACHE_ROOT)
+    clients = _registry_clients(http, cache)
+
+    def _gm(eco, name):
+        cl = clients.get(eco)
+        return cl.get_metadata(name) if cl is not None else None
+
+    flagged = reaudit_reviewed_legit(
+        reviewed_legit_path, list(clients),
+        get_metadata=_gm, osv_malicious_fn=lambda e, n: osv_malicious(http, e, n))
+
+    if not use_llm:
+        return _render_reaudit(flagged)
+
+    # Tier 2 — LLM re-examination of just the flagged entries (cheap; usually 0).
+    from ..llm import get_llm_client
+    llm = get_llm_client()
+    if llm is None:
+        return (_render_reaudit(flagged)
+                + "\n(no LLM configured — Tier-1 mechanical flags only)\n")
+    enriched: Dict[str, list] = {}
+    for eco, items in flagged.items():
+        meta = _load_name_meta(reviewed_legit_path, eco)
+        verdict_fn = make_llm_verdict_fn(llm, eco)
+        client = clients.get(eco)
+        rows = []
+        for name, reason in items:
+            twin = (meta.get(name) or {}).get("near_twin", "")
+            cand = Candidate(name=name, near_twin=twin, rank=0, twin_rank=0,
+                             distance=1)
+            ev = collect_evidence_rich(cand, eco, http,
+                                       client.get_metadata if client else None)
+            verdict = verdict_fn(cand, ev)
+            rows.append((name, reason, verdict,
+                         reaudit_recommendation(reason, verdict)))
+        enriched[eco] = rows
+    return _render_reaudit_llm(enriched)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="raptor-sca triage",
@@ -250,6 +441,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                    help=f"never flag names above this rank (default {_MIN_POS})")
     p.add_argument("--min-len", type=int, default=_MIN_LEN,
                    help=f"skip names shorter than this (default {_MIN_LEN})")
+    p.add_argument("--reaudit", action="store_true",
+                   help="step-3 re-audit (mechanical, no LLM): re-check every "
+                        "reviewed-legit entry's current registry state and flag "
+                        "any now removed / deprecated / carrying a MAL- advisory. "
+                        "Ignores the candidate feeds.")
+    p.add_argument("--llm", action="store_true",
+                   help="triage each candidate with an LLM (Stage A): fetch "
+                        "registry evidence, propose a verdict, auto-file legit "
+                        "near-names to reviewed-legit, and surface suspected "
+                        "squats for confirmation. Needs a configured LLM; "
+                        "without --llm this just lists the candidates.")
     p.add_argument("--format", choices=("text", "markdown"), default="text")
     p.add_argument("--out", type=Path,
                    help="write the report here instead of stdout "
@@ -261,12 +463,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         level=logging.WARNING - 10 * min(args.verbose, 2),
         format="%(levelname)s %(name)s: %(message)s")
 
-    http = UrllibClient()
-    results = audit(http, args.only, top_n=args.top_n, ratio=args.ratio,
-                    min_pos=args.min_pos, min_len=args.min_len)
-
-    report = (render_markdown if args.format == "markdown"
-              else render_text)(results)
+    if args.reaudit:
+        # Re-audit re-checks the reviewed-legit list, not the candidate feeds,
+        # so it skips the feed fetch entirely. ``--llm`` adds the Tier-2
+        # re-examination of flagged entries.
+        report = run_reaudit(_REVIEWED_LEGIT_PATH, use_llm=args.llm)
+    else:
+        http = UrllibClient()
+        results = audit(http, args.only, top_n=args.top_n, ratio=args.ratio,
+                        min_pos=args.min_pos, min_len=args.min_len)
+        if args.llm:
+            report = run_llm_triage(results,
+                                    reviewed_legit_path=_REVIEWED_LEGIT_PATH)
+        else:
+            report = (render_markdown if args.format == "markdown"
+                      else render_text)(results)
     if args.out is not None:
         # Empty markdown (no candidates) → write nothing so the workflow's
         # ``[ -s file ]`` check skips the PR-body nudge.

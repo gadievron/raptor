@@ -134,6 +134,39 @@ class SlopsquatVerdict(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Typosquat-denylist triage (curation step 2)
+# ------------------------------------------------------------------
+
+class TyposquatTriageVerdict(BaseModel):
+    """LLM assessment of a candidate one edit from a much-more-popular package:
+    a confusable name to flag, or a legitimate independent project to keep
+    trusted?
+
+    ``verdict`` semantics:
+      * ``typosquat`` — confusable near-name with no independent identity
+        (thin / deprecated / no distinct purpose; includes deprecation-holders).
+      * ``legit`` — a real independent project that merely has a similar name
+        (distinct purpose, real repo, sustained adoption + release history).
+      * ``unsure`` — signals mixed or insufficient.
+    """
+
+    verdict: Literal["typosquat", "legit", "unsure"]
+    confidence: Literal["low", "medium", "high"]
+    evidence_cited: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Concrete signals behind the verdict (e.g. 'deprecated, points to "
+            "lodash', '276 releases since 2015', 'distinct purpose'). Max 5."
+        ),
+    )
+    rationale: str = Field(
+        default="",
+        max_length=500,
+        description="2-3 sentence verdict aimed at the operator.",
+    )
+
+
+# ------------------------------------------------------------------
 # Binary-in-tests review (design §973)
 # ------------------------------------------------------------------
 

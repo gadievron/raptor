@@ -184,3 +184,31 @@ def test_bundled_reviewed_legit_valid_and_seeded():
 def test_triage_subcommand_registered():
     from packages.sca.cli import SUBCOMMANDS
     assert "triage" in SUBCOMMANDS
+
+
+def test_run_llm_triage_falls_back_without_llm(monkeypatch):
+    # No configured LLM → the --llm path degrades to listing the candidates
+    # (never blocks), and fetches no registry evidence.
+    import packages.sca.llm as llm
+    monkeypatch.setattr(llm, "get_llm_client", lambda: None)
+    out = A.run_llm_triage(
+        {"npm": [Candidate("through3", "through", 1858, 74, 1)]},
+        reviewed_legit_path=A._REVIEWED_LEGIT_PATH)
+    assert "No LLM" in out and "through3" in out
+
+
+def test_render_reaudit_empty_and_flagged():
+    assert A._render_reaudit({}) == ""        # nothing flagged → workflow skips
+    out = A._render_reaudit(
+        {"npm": [("evil", "now carries a malicious (MAL-) advisory")]})
+    assert "evil" in out and "flagged" in out
+
+
+def test_render_reaudit_llm():
+    from packages.sca.supply_chain.typosquat_triage import Verdict
+    enriched = {"npm": [("evil", "now deprecated",
+                         Verdict("evil", "typosquat", "high", "looks like a squat"),
+                         "MOVE TO DENYLIST (confirm)")]}
+    out = A._render_reaudit_llm(enriched)
+    assert "evil" in out and "typosquat" in out and "DENYLIST" in out
+    assert A._render_reaudit_llm({}) == "No reviewed-legit entries flagged.\n"
