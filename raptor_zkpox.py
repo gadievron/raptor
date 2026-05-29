@@ -347,7 +347,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    zkpox.require()
+    # No blanket dependency gate here: the old ``zkpox.require()`` global
+    # was removed when the package was split into dependency-free tiers,
+    # and a blanket check would wrongly gate ``verify`` (which needs only
+    # the built verifier binary + cbor2, not the SP1 proving toolchain).
+    # The operator surface ``libexec/raptor-zkpox`` gates ``prove`` on
+    # ``require_proving_stack()`` before delegating here; missing cbor2 /
+    # age / tle / the Rust binaries surface as clear point-of-use errors.
     parser = _build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

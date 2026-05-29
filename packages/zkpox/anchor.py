@@ -47,7 +47,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from core.http import HttpClient, HttpError, default_client
 
-from .bundle import Bundle, Timestamp, bundle_hash_pre_timestamp, with_timestamp
+from .disclosure import (
+    Bundle,
+    Timestamp,
+    bundle_hash_pre_timestamp,
+    with_timestamp,
+)
 
 
 # The public Rekor log. Overridable so private/self-hosted instances
