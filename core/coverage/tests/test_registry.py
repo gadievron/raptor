@@ -27,6 +27,18 @@ def test_command_source_labels_are_llm():
     assert category_of("annotations") == "llm"
 
 
+def test_read_and_understand_are_llm_but_not_reviewed():
+    # read (whole-file read) and understand (structural attack-surface map) are
+    # llm-EXTENT but only scanned depth -- NOT a per-function vuln review. The
+    # review axis is depth >= analysed, so neither counts as reviewed.
+    assert classify("read") == ("llm", "scanned")
+    assert classify("understand") == ("llm", "scanned")
+    # Actual review tools stay at analysed depth (= reviewed).
+    for tool in ("claude", "audit", "validate:stage-a", "annotations", "agentic"):
+        assert category_of(tool) == "llm"
+        assert depth_of(tool) == "analysed"
+
+
 def test_unknown_tool_is_conservative():
     # Unknown producers are never credited as deep coverage.
     assert classify("mystery-tool") == ("unknown", "scanned")

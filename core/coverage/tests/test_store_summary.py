@@ -228,10 +228,25 @@ def test_llm_gap_lists_only_reviewable_kinds(tmp_path):
 def test_llm_gap_excludes_reviewed_function(tmp_path):
     s = _store(tmp_path)
     s.import_inventory_meta(_MIXED_KINDS)
-    s.mark("a.c", 1, 10, "claude:audit")       # llm reviews fn
+    s.mark("a.c", 1, 10, "claude:audit")       # llm reviews fn (analysed depth)
     view = store_view(s, _MIXED_KINDS)
     assert {g["function"] for g in view["llm_gap_functions"]} == {"tl"}
     assert view["llm_reviewable"] == 2
+    assert view["functions_reviewed"] == 1
+
+
+def test_whole_file_read_is_not_reviewed(tmp_path):
+    # A whole-file `read` mark (llm category, scanned depth) is NOT a review —
+    # the functions stay in the LLM-review gap. This is the read-vs-reviewed
+    # distinction /audit depends on.
+    s = _store(tmp_path)
+    s.import_inventory_meta(_MIXED_KINDS)
+    s.mark("a.c", 1, 50, "read")               # the LLM only READ the file
+    view = store_view(s, _MIXED_KINDS)
+    assert view["functions_reviewed"] == 0
+    assert {g["function"] for g in view["llm_gap_functions"]} == {"fn", "tl"}
+    # ...but it does count as llm *extent* (the LLM did touch it).
+    assert view["functions_by_category"]["llm"] >= 1
 
 
 def test_store_threshold_helpers(tmp_path):

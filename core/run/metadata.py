@@ -560,18 +560,22 @@ def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
 def _convert_reads_manifest(output_dir: Path) -> None:
     """Turn the coverage plugin's ``.reads-manifest`` (the files the LLM read
     this run, captured by the PostToolUse-on-Read hook) into a
-    ``coverage-llm.json`` record so LLM examined-extent reaches the store.
+    ``coverage-read.json`` record so LLM read-extent reaches the store.
 
-    The plugin captures the reads but nothing converted them — this wires that
-    conversion at run completion. Best-effort: a missing/empty manifest is a
-    no-op, and a failure must never break the lifecycle.
+    Labelled ``read`` (not ``llm``): a whole-file *read* is shallow coverage —
+    it is NOT a function-level review. The store distinguishes read from
+    reviewed by depth, so a file the LLM merely read still surfaces in the
+    LLM-review gap (the gap /audit fills). The plugin captures the reads but
+    nothing converted them — this wires that conversion at run completion.
+    Best-effort: a missing/empty manifest is a no-op, and a failure must never
+    break the lifecycle.
     """
     import logging
     try:
         from core.coverage.record import build_from_manifest, write_record
-        record = build_from_manifest(Path(output_dir), "llm")
+        record = build_from_manifest(Path(output_dir), "read")
         if record:
-            write_record(Path(output_dir), record, tool_name="llm")
+            write_record(Path(output_dir), record, tool_name="read")
     except Exception:  # noqa: BLE001 — never fail lifecycle on a coverage write
         logging.getLogger(__name__).debug(
             "_convert_reads_manifest failed for %s", output_dir, exc_info=True
