@@ -816,6 +816,7 @@ def show_mode_help(mode: str) -> None:
 _HELP_EPILOG = """
 Available Modes:
   scan                  - Static code analysis with Semgrep
+  sca                   - Software Composition Analysis (deps + advisories + SBOM)
   fuzz                  - Binary fuzzing with AFL++
   web                   - Web application security testing
   agentic               - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
