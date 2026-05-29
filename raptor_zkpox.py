@@ -91,12 +91,89 @@ def _emit_experimental_banner() -> None:
     print(_EXPERIMENTAL_BANNER, file=sys.stderr)
 
 
+def _load_manifest(bundle_dir: Path):
+    """Reconstruct the Tier 0/1 ``ZKPoXBundle`` from
+    ``<bundle_dir>/manifest.json``.
+
+    The manifest is exactly ``ZKPoXBundle.as_dict()``; rebuilding via
+    the dataclass makes a corrupt / incomplete / schema-drifted manifest
+    fail loudly here, rather than producing a half-populated disclosure
+    bundle downstream.
+    """
+    manifest_path = bundle_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise SystemExit(
+            f"[zkpox] no manifest.json in {bundle_dir} — assemble it "
+            f"first with: python3 raptor.py zkpox bundle <store> <hash> "
+            f"--out <dir>"
+        )
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"[zkpox] manifest.json is not valid JSON: {e}")
+    if not isinstance(data, dict):
+        raise SystemExit("[zkpox] manifest.json is not a JSON object")
+    try:
+        return zkpox.ZKPoXBundle(**data)
+    except TypeError as e:
+        raise SystemExit(
+            f"[zkpox] manifest.json does not match the ZKPoXBundle "
+            f"schema: {e}"
+        )
+
+
 def cmd_prove(args: argparse.Namespace) -> int:
-    """End-to-end prove → wrap → envelope → bundle → anchor."""
+    """End-to-end: read a Tier 0/1 bundle dir → prove → wrap → envelope
+    → project to a CBOR DisclosureBundle → anchor.
+
+    The bundle dir (produced by ``zkpox bundle`` and enriched by
+    ``zkpox reproduce``) is the single source of truth for the witness,
+    the target artefact hash, the observed outcome, the Tier-1 claim,
+    and the Tier 1.5 reproduction evidence. Tier 2/3 flags
+    (``--vendor-pubkey`` / ``--gadget-id`` / ``--harness-*`` / ``--wrap``
+    …) supply only the genuinely-new proving material; nothing the
+    manifest already carries is re-derived from flags.
+    """
     _emit_experimental_banner()
 
-    out_dir = Path(args.out).resolve()
+    bundle_dir = Path(args.bundle_dir).resolve()
+    if not bundle_dir.is_dir():
+        raise SystemExit(f"[zkpox] bundle dir not found: {bundle_dir}")
+    manifest = _load_manifest(bundle_dir)
+
+    witness_path = bundle_dir / "witness.bin"
+    if not witness_path.is_file():
+        raise SystemExit(
+            f"[zkpox] no witness.bin in {bundle_dir} — bundle is "
+            f"incomplete (re-run `zkpox bundle`)"
+        )
+
+    # Output defaults to the bundle dir itself, so proof.bin /
+    # prove-record.json / bundle.cbor land alongside manifest.json (the
+    # /zkpox tier-ladder layout). --out overrides.
+    out_dir = Path(args.out).resolve() if args.out else bundle_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Target reconciliation ----------------------------------------
+    # The manifest's target hash is authoritative — it is what was
+    # triaged and reproduced. If --target is also supplied, hash it and
+    # confirm it matches, so the disclosure proof can never silently
+    # bind to a different artifact than the manifest attests to.
+    if args.target:
+        from core.hash import sha256_file as _bare_sha256_file
+
+        supplied = _bare_sha256_file(Path(args.target))
+        if not zkpox.target_hash_matches(manifest, supplied):
+            recorded_bare = zkpox.manifest_target_bare_hex(manifest)
+            raise SystemExit(
+                "[zkpox] --target hash does not match the manifest:\n"
+                f"    --target  sha256 {supplied}\n"
+                f"    manifest  sha256 {recorded_bare}\n"
+                "Refusing to prove: the disclosure bundle would bind to "
+                "a different artifact than the one triaged/reproduced. "
+                "Pass the target that produced this witness, or omit "
+                "--target to use the manifest's recorded hash."
+            )
 
     if not args.allow_placeholder_hashes:
         raise SystemExit(
@@ -110,14 +187,14 @@ def cmd_prove(args: argparse.Namespace) -> int:
         )
     logger.warning(_PLACEHOLDER_WARNING)
 
-    # ---- 1. Drive the Rust prover --------------------------------------
+    # ---- 1. Drive the Rust prover on the bundle's witness -------------
     prover = _resolve_prover_binary()
     proof_artifact = out_dir / "proof.bin"
     record_path = out_dir / "prove-record.json"
 
     cmd = [
         str(prover),
-        "--witness", str(args.witness),
+        "--witness", str(witness_path),
         "--prove",
         f"--wrap={args.wrap}",
         "--proof-out", str(proof_artifact),
@@ -125,17 +202,16 @@ def cmd_prove(args: argparse.Namespace) -> int:
         "--tag", args.tag or f"zkpox-{args.wrap}",
     ]
     logger.info(f"[zkpox] proving via {prover.name} (--wrap={args.wrap})")
-    # Sandboxed: witness dir read-only via target=, out_dir writable
-    # via output= (proof.bin + prove-record.json land there), tool_paths
-    # to make the workspace-local prover binary visible inside mount-ns.
-    # No network — Rekor anchoring happens later in step 4 via the
-    # HTTPS client, not this subprocess.
-    witness_dir = Path(args.witness).resolve().parent
+    # Sandboxed: bundle dir read-only via target=, out_dir writable via
+    # output= (proof.bin + prove-record.json land there), tool_paths to
+    # make the workspace-local prover binary visible inside mount-ns. No
+    # network — Rekor anchoring happens later in step 4 via the HTTPS
+    # client, not this subprocess.
     rc = run_untrusted(
         cmd,
-        target=str(witness_dir),
+        target=str(bundle_dir),
         output=str(out_dir),
-        readable_paths=[str(witness_dir)],
+        readable_paths=[str(bundle_dir)],
         tool_paths=[str(prover.parent)],
         caller_label="zkpox-prove",
     ).returncode
@@ -149,7 +225,7 @@ def cmd_prove(args: argparse.Namespace) -> int:
     # ---- 2. Build envelope (optional) ----------------------------------
     envelope_blobs = None
     if args.vendor_pubkey:
-        witness_bytes = Path(args.witness).read_bytes()
+        witness_bytes = witness_path.read_bytes()
         logger.info("[zkpox] sealing vendor envelope")
         envelope_blobs = zkpox.seal(
             witness_bytes,
@@ -157,57 +233,52 @@ def cmd_prove(args: argparse.Namespace) -> int:
             duration=args.tlock_duration,
         )
 
-    # ---- 3. Assemble bundle --------------------------------------------
+    # ---- 3. Project manifest → DisclosureBundle ------------------------
+    # The projection derives target-hash / outcome / claim / reproduction
+    # from the manifest and carries the full Tier 0/1 + 1.5 evidence into
+    # the bundle's ``provenance``. We supply only the new Tier 2/3 parts.
     proof_bytes = proof_artifact.read_bytes()
-    bundle = zkpox.Bundle(
-        version=zkpox.BUNDLE_VERSION,
-        target=zkpox.Target(
-            kind=args.target_kind,
-            hash=zkpox.sha256_file(Path(args.target)) if args.target else "sha256:" + "00" * 32,
-            url=args.target_url,
-            metadata={"witness_bytes": record["witness_bytes"]},
-        ),
-        vulnerability=zkpox.Vulnerability(
-            cls=args.vuln_class,
-            gadget_id=args.gadget_id,
-            # Hashes the gadget IDENTIFIER, not its source. The field name
-            # was `gadget_hash` pre-Phase-1.5; renamed to make the binding
-            # honest (see docs/zkpox-scope.md). Phase 1.5.x will add a
-            # separate `gadget_code_hash` over the gadget implementation
-            # files.
-            gadget_id_hash=zkpox.sha256_bytes(args.gadget_id.encode()),
-            leaked_fields=[f.strip() for f in (args.leaked or "").split(",") if f.strip()],
-        ),
+    vendor_envelope = (
+        zkpox.vendor_envelope_from(
+            envelope_blobs,
+            vendor_pubkey=args.vendor_pubkey,
+            drand_round_min=None,
+        )
+        if envelope_blobs is not None
+        else zkpox.VendorEnvelope(
+            scheme="zkpox-none/v1",
+            aes_blob=b"",
+            ct_K_age=b"",
+            ct_K_tlock=b"",
+            drand_round_min=None,
+            vendor_pubkey="",
+            vendor_pubkey_fingerprint=zkpox.sha256_bytes(b""),
+        )
+    )
+    bundle = zkpox.disclosure_from_manifest(
+        manifest,
         proof=zkpox.Proof(
             system=f"sp1-{args.wrap}/v6.1.0",
             bytes=proof_bytes,
             # Placeholder until Phase 1.5.x wires sp1-sdk's real vk digest.
             # cmd_prove refuses to reach this branch without the explicit
-            # --allow-placeholder-hashes opt-in (see top of this function).
+            # --allow-placeholder-hashes opt-in (see above).
             verifier_key_hash=zkpox.sha256_bytes(_PLACEHOLDER_VK_DIGEST.encode()),
         ),
+        vendor_envelope=vendor_envelope,
         harness=zkpox.HarnessRef(
             git_url=args.harness_git_url,
             rev=args.harness_rev,
             hash=zkpox.sha256_bytes(_PLACEHOLDER_HARNESS_DIGEST.encode()),
         ),
-        vendor_envelope=(
-            zkpox.vendor_envelope_from(
-                envelope_blobs,
-                vendor_pubkey=args.vendor_pubkey,
-                drand_round_min=None,
-            )
-            if envelope_blobs is not None
-            else zkpox.VendorEnvelope(
-                scheme="zkpox-none/v1",
-                aes_blob=b"",
-                ct_K_age=b"",
-                ct_K_tlock=b"",
-                drand_round_min=None,
-                vendor_pubkey="",
-                vendor_pubkey_fingerprint=zkpox.sha256_bytes(b""),
-            )
-        ),
+        vuln_class=args.vuln_class,
+        gadget_id=args.gadget_id,
+        # Hashes the gadget IDENTIFIER, not its source (renamed from
+        # `gadget_hash` in Phase 1.5; see docs/zkpox-scope.md).
+        gadget_id_hash=zkpox.sha256_bytes(args.gadget_id.encode()),
+        leaked_fields=[f.strip() for f in (args.leaked or "").split(",") if f.strip()],
+        target_kind=args.target_kind,
+        target_url=args.target_url,
     )
 
     # ---- 4. Anchor (optional) ------------------------------------------
@@ -228,6 +299,10 @@ def cmd_prove(args: argparse.Namespace) -> int:
     summary = {
         "bundle": str(bundle_path),
         "proof_artifact": str(proof_artifact),
+        "source_manifest": str(bundle_dir / "manifest.json"),
+        "manifest_tier": manifest.tier,
+        "reproduction_carried": manifest.reproduction is not None,
+        "target_hash": bundle.target.hash,
         "wrap": args.wrap,
         "proof_bytes": len(proof_bytes),
         "verified_in_process": record.get("verified"),
@@ -293,9 +368,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="subcommand", required=True)
 
-    pp = sub.add_parser("prove", help="Generate a ZKPoX disclosure bundle")
-    pp.add_argument("--witness", required=True, help="Path to the exploit witness (raw bytes)")
-    pp.add_argument("--target", help="Path to the vulnerable target binary (for hashing)")
+    pp = sub.add_parser(
+        "prove",
+        help="Generate a ZKPoX disclosure bundle from a Tier 0/1 bundle dir",
+    )
+    pp.add_argument(
+        "bundle_dir",
+        help=(
+            "Tier 0/1 bundle directory (contains manifest.json + "
+            "witness.bin), as produced by `zkpox bundle` and optionally "
+            "enriched by `zkpox reproduce`. The witness, target hash, "
+            "outcome, claim, and reproduction evidence are read from it."
+        ),
+    )
+    pp.add_argument(
+        "--target",
+        help=(
+            "Optional path to the vulnerable target binary. When given, "
+            "its sha256 is reconciled against the manifest's recorded "
+            "hash (mismatch is a hard error); the manifest hash is "
+            "authoritative either way."
+        ),
+    )
     pp.add_argument("--target-kind", default="elf",
                     choices=["elf", "wasm", "evm", "llvm-ir"])
     pp.add_argument("--target-url", help="Optional URL the target can be retrieved from")
@@ -333,8 +427,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "disclosure."
         ),
     )
-    pp.add_argument("--out", required=True,
-                    help="Output directory (bundle.cbor + proof.bin + prove-record.json)")
+    pp.add_argument(
+        "--out",
+        help=(
+            "Output directory for bundle.cbor + proof.bin + "
+            "prove-record.json. Defaults to the bundle dir itself, "
+            "landing the artefacts alongside manifest.json."
+        ),
+    )
     pp.set_defaults(func=cmd_prove)
 
     vp = sub.add_parser("verify", help="Verify a ZKPoX disclosure bundle")

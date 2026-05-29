@@ -57,17 +57,23 @@ python3 raptor.py zkpox bundle out/run-2026-05-26/witnesses <hash> \
 python3 raptor.py zkpox reproduce out/disclosure-001/zkpox/<hash>/ --n 5
 
 # 4. Produce the real ZK proof (Tier 2/3 — heavy, ~17 min on CPU).
-python3 raptor.py zkpox prove \
-    --witness out/disclosure-001/zkpox/<hash>/witness.bin \
+#    prove takes the BUNDLE DIR — it reads witness.bin, the target
+#    hash, the outcome, and the Tier 1.5 reproduction evidence straight
+#    from manifest.json. proof.bin / bundle.cbor land in the bundle dir.
+python3 raptor.py zkpox prove out/disclosure-001/zkpox/<hash>/ \
     --target ./vulnerable-binary \
     --vendor-pubkey "$(cat vendor.age.pub)" \
     --gadget-id "memory-safety::oob-write@0.1.0" \
-    --allow-placeholder-hashes \
-    --out out/disclosure-001/
+    --allow-placeholder-hashes
 
 # 5. Verify the produced bundle (structural in 1.5; full STARK in 1.5.x).
-python3 raptor.py zkpox verify out/disclosure-001/bundle.cbor
+python3 raptor.py zkpox verify out/disclosure-001/zkpox/<hash>/bundle.cbor
 ```
+
+`--target` is optional: when supplied, its sha256 is reconciled against
+the manifest's recorded target hash (a mismatch is a hard error — the
+proof can't silently bind to a different artifact than the one
+triaged/reproduced). Omit it to trust the manifest's hash.
 
 For the full `prove` / `verify` flag list, run:
 

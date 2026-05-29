@@ -64,9 +64,19 @@ tier that answers the operator's question.
    `core/zkpox/guest/build.rs`. EVM, embedded, and binary-only modes
    are future phases.
 7. **Run the prover (Tier 2/3).** `python3 raptor.py zkpox prove
-   --witness PATH --out DIR [...]`. Stream progress; the Groth16
-   wrap can take 15+ minutes on CPU. Gated by
-   `packages.zkpox.require_proving_stack` — fires
+   <bundle_dir> [...]`. prove reads the witness, target hash,
+   outcome, claim, and Tier 1.5 reproduction evidence straight from
+   the bundle dir's `manifest.json`/`witness.bin` (it does NOT
+   rebuild them from flags), and projects them into the CBOR
+   disclosure bundle via `disclosure_from_manifest` — the
+   reproduction evidence is carried into the bundle's `provenance`.
+   Tier 2/3 flags (`--vendor-pubkey`, `--gadget-id`, `--harness-*`,
+   `--wrap`) add the new proving material; `--target` is optional and
+   only reconciles against the manifest's recorded hash (mismatch =
+   hard error, preventing a proof that binds to the wrong artifact).
+   Output lands in the bundle dir by default (`--out` overrides).
+   Stream progress; the Groth16 wrap can take 15+ minutes on CPU.
+   Gated by `packages.zkpox.require_proving_stack` — fires
    `ProvingStackUnavailable` with an actionable message if the
    SP1 / RISC-V toolchain isn't installed.
 8. **Vendor envelope (default).** Pass `--vendor-pubkey AGE_PUBKEY` to
@@ -97,8 +107,10 @@ core/zkpox/                     Rust workspace
 
 packages/zkpox/                 Python orchestration
 ├── eligibility.py              Tier 0 — free witness classification
-├── bundle.py                   Tier 0/1 — bundle assembly + persistence
+├── bundle.py                   Tier 0/1 — ZKPoXBundle (manifest) assembly
 ├── reproduce.py                Tier 1.5 — N× sandbox reproduction
+├── disclosure.py               Tier 2/3 — DisclosureBundle CBOR schema +
+│                               ZKPoXBundle→CBOR projection (cbor2)
 ├── envelope.py                 AES + age + tle layered crypto
 ├── anchor.py                   Sigstore Rekor anchoring
 ├── prove.py                    Wrapper around zkpox-prove (Tier 2/3)

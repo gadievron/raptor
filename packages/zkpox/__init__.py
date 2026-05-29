@@ -107,7 +107,10 @@ from packages.zkpox.surfacing import render_run_eligibility
 # top-level access pattern that ``raptor_zkpox.py`` and the tests use.
 _LAZY_EXPORTS: dict[str, str] = {
     # CBOR disclosure schema — packages.zkpox.disclosure
-    "Bundle": "disclosure",
+    "DisclosureBundle": "disclosure",
+    "disclosure_from_manifest": "disclosure",
+    "manifest_target_bare_hex": "disclosure",
+    "target_hash_matches": "disclosure",
     "BUNDLE_VERSION": "disclosure",
     "ENVELOPE_SCHEME": "disclosure",
     "Target": "disclosure",

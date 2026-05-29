@@ -215,8 +215,13 @@ def _delegate_to_driver(verb: str, passthrough: list[str]) -> int:
     to exist on disk (e.g. a stale build from a partial install).
     ``verify`` is NOT gated: the verifier binary, once built,
     needs no part of the proving toolchain to run.
+
+    A bare ``--help`` / ``-h`` request bypasses the gate so the
+    driver's help text is always readable, even on a host without the
+    proving stack installed.
     """
-    if verb == "prove":
+    is_help = any(a in ("--help", "-h") for a in passthrough)
+    if verb == "prove" and not is_help:
         from packages.zkpox import require_proving_stack
         require_proving_stack()  # raises ProvingStackUnavailable on bare boxes
     driver = REPO_ROOT / "raptor_zkpox.py"

@@ -9,7 +9,7 @@ timestamp, or another transparency log of their choice — we make the
 log URL overridable via ZKPOX_REKOR_URL so private instances drop in.
 
 Flow:
-    1. Producer builds a Bundle (without a timestamp).
+    1. Producer builds a DisclosureBundle (without a timestamp).
     2. Producer generates (or supplies) an ed25519 keypair.
     3. Producer signs `bundle_hash_pre_timestamp(bundle)`.
     4. Producer POSTs a `hashedrekord/0.0.1` entry to Rekor with the
@@ -48,7 +48,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from core.http import HttpClient, HttpError, default_client
 
 from .disclosure import (
-    Bundle,
+    DisclosureBundle,
     Timestamp,
     bundle_hash_pre_timestamp,
     with_timestamp,
@@ -203,13 +203,13 @@ def _parse_rekor_response(entry_response: dict) -> Timestamp:
 # ---------------------------------------------------------------------------
 
 def anchor_bundle(
-    bundle: Bundle,
+    bundle: DisclosureBundle,
     *,
     keypair: Ed25519Keypair | None = None,
     rekor: str | None = None,
     timeout_s: float = 30.0,
     http: HttpClient | None = None,
-) -> tuple[Bundle, Ed25519Keypair]:
+) -> tuple[DisclosureBundle, Ed25519Keypair]:
     """Anchor `bundle` to Sigstore Rekor; return (bundle-with-timestamp,
     keypair-used).
 
@@ -281,7 +281,7 @@ def fetch_log_entry(
 
 
 def confirm_anchor_matches(
-    bundle: Bundle,
+    bundle: DisclosureBundle,
     *,
     rekor: str | None = None,
     timeout_s: float = 15.0,

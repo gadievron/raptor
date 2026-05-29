@@ -37,6 +37,7 @@ from typing import Any
 
 import cbor2  # type: ignore[import-untyped]
 
+from .bundle import ZKPoXBundle
 from .envelope import Envelope
 
 
@@ -108,7 +109,7 @@ class Researcher:
 
 
 @dataclass(frozen=True)
-class Bundle:
+class DisclosureBundle:
     version: str
     target: Target
     vulnerability: Vulnerability
@@ -117,6 +118,17 @@ class Bundle:
     vendor_envelope: VendorEnvelope
     researcher: Researcher | None = None
     timestamp: "Timestamp | None" = None
+    # Tier 0/1 + 1.5 provenance carried over from the source
+    # ``ZKPoXBundle`` manifest (witness hash/len, source, observed
+    # outcome, the Tier-1 attestation claim, and the Tier 1.5
+    # reproduction block). Optional + omitted-when-None in CBOR, like
+    # ``researcher`` / ``timestamp`` — a bundle built without going
+    # through ``disclosure_from_manifest`` simply has none. The Rust
+    # verifier reads the bundle as a generic CBOR map and ignores keys
+    # it doesn't recognise, so this stays wire-compatible. Populated by
+    # :func:`disclosure_from_manifest` so the reproduction evidence
+    # reaches the disclosure bundle instead of being dropped.
+    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -188,19 +200,139 @@ def vendor_envelope_from(
     )
 
 
+def manifest_target_bare_hex(manifest: ZKPoXBundle) -> str | None:
+    """The manifest's authoritative target hash as bare hex (no
+    ``sha256:`` prefix), binary preferred over source. ``None`` when the
+    manifest records neither — caller decides whether that's fatal."""
+    recorded = manifest.target_binary_hash or manifest.target_source_hash
+    if recorded is None:
+        return None
+    return recorded.split(":", 1)[-1]
+
+
+def target_hash_matches(manifest: ZKPoXBundle, supplied_bare_hex: str) -> bool:
+    """Does an operator-supplied target's bare-hex sha256 match the
+    manifest's recorded target hash?
+
+    Used to reject the "re-keying" failure: proving against a different
+    artifact than the one the manifest was triaged/reproduced against.
+    A manifest with no recorded target hash matches anything (nothing to
+    reconcile against) — the caller treats a missing hash as its own
+    error in the projection.
+    """
+    recorded_bare = manifest_target_bare_hex(manifest)
+    return recorded_bare is None or supplied_bare_hex == recorded_bare
+
+
+def _normalize_sha256(h: str | None) -> str | None:
+    """Normalise a hash to the proposal's ``sha256:HEX`` form.
+
+    Manifest hashes come from ``core.hash.sha256_file``, which returns
+    bare hex; the CBOR schema uses the ``sha256:HEX`` convention. Tolerate
+    an already-prefixed value so the projection is idempotent.
+    """
+    if h is None:
+        return None
+    return h if h.startswith("sha256:") else f"sha256:{h}"
+
+
+def disclosure_from_manifest(
+    manifest: ZKPoXBundle,
+    *,
+    proof: Proof,
+    vendor_envelope: VendorEnvelope,
+    harness: HarnessRef,
+    vuln_class: str,
+    gadget_id: str,
+    gadget_id_hash: str,
+    leaked_fields: list[str] | None = None,
+    target_kind: str = "elf",
+    target_url: str | None = None,
+    researcher: Researcher | None = None,
+) -> DisclosureBundle:
+    """Project a Tier 0/1 ``ZKPoXBundle`` manifest into a Tier 2/3 CBOR
+    :class:`DisclosureBundle`.
+
+    The manifest is authoritative for everything it already carries: the
+    target artefact hash (the binary/source that was triaged and
+    reproduced), the observed outcome, the Tier-1 attestation claim, and
+    the Tier 1.5 reproduction block. Those are derived here, NOT
+    re-supplied by the caller — so the disclosure proof can never
+    silently bind to a different artifact than the one the manifest
+    attests to. The caller supplies only the genuinely-new Tier 2/3
+    material: the SP1 ``proof``, the (optional) ``vendor_envelope``, the
+    ``harness`` reference, and the vulnerability classification.
+
+    The manifest's full Tier 0/1 + 1.5 evidence — including the
+    reproduction block — is carried into the bundle's ``provenance``
+    field rather than discarded.
+
+    ``target_binary_hash`` / ``target_source_hash`` are normalised from
+    the manifest's bare-hex form to ``sha256:HEX``; a binary hash wins
+    when both are present (the stronger commitment).
+    """
+    target_hash = _normalize_sha256(
+        manifest.target_binary_hash or manifest.target_source_hash
+    )
+    if target_hash is None:
+        raise ValueError(
+            "manifest has neither target_binary_hash nor "
+            "target_source_hash; cannot bind a disclosure proof to an "
+            "artifact"
+        )
+
+    provenance: dict[str, Any] = {
+        "witness_hash": manifest.witness_hash,
+        "witness_len": manifest.witness_len,
+        "source": manifest.source,
+        "observed_outcome": manifest.observed_outcome,
+        "outcome_detail": dict(manifest.outcome_detail),
+        "attestation": dict(manifest.attestation),
+        "tier": manifest.tier,
+    }
+    if manifest.reproduction is not None:
+        provenance["reproduction"] = dict(manifest.reproduction)
+
+    return DisclosureBundle(
+        version=BUNDLE_VERSION,
+        target=Target(
+            kind=target_kind,
+            hash=target_hash,
+            url=target_url,
+            metadata={
+                "witness_bytes": manifest.witness_len,
+                "target_artefact_kind": (
+                    "binary" if manifest.target_binary_hash else "source"
+                ),
+            },
+        ),
+        vulnerability=Vulnerability(
+            cls=vuln_class,
+            gadget_id=gadget_id,
+            gadget_id_hash=gadget_id_hash,
+            leaked_fields=list(leaked_fields or []),
+        ),
+        proof=proof,
+        harness=harness,
+        vendor_envelope=vendor_envelope,
+        researcher=researcher,
+        provenance=provenance,
+    )
+
+
 # ---------------------------------------------------------------------------
 # CBOR encode / decode
 # ---------------------------------------------------------------------------
 
-def to_cbor(bundle: Bundle) -> bytes:
+def to_cbor(bundle: DisclosureBundle) -> bytes:
     return cbor2.dumps(_to_dict(bundle))
 
 
-def from_cbor(blob: bytes) -> Bundle:
+def from_cbor(blob: bytes) -> DisclosureBundle:
     return _from_dict(cbor2.loads(blob))
 
 
-def bundle_hash_pre_timestamp(bundle: Bundle) -> bytes:
+def bundle_hash_pre_timestamp(bundle: DisclosureBundle) -> bytes:
     """Canonical-CBOR sha256 of the bundle with timestamp set to None.
 
     This is the hash a Sigstore Rekor anchor binds: anchoring happens
@@ -218,10 +350,10 @@ def bundle_hash_pre_timestamp(bundle: Bundle) -> bytes:
     return hashlib.sha256(cbor2.dumps(_to_dict(pre), canonical=True)).digest()
 
 
-def _replace_timestamp(bundle: Bundle, ts: "Timestamp | None") -> Bundle:
+def _replace_timestamp(bundle: DisclosureBundle, ts: "Timestamp | None") -> DisclosureBundle:
     """Functional update — `dataclasses.replace` would also work, but
-    Bundle is frozen so we go the long way for clarity."""
-    return Bundle(
+    DisclosureBundle is frozen so we go the long way for clarity."""
+    return DisclosureBundle(
         version=bundle.version,
         target=bundle.target,
         vulnerability=bundle.vulnerability,
@@ -230,16 +362,17 @@ def _replace_timestamp(bundle: Bundle, ts: "Timestamp | None") -> Bundle:
         vendor_envelope=bundle.vendor_envelope,
         researcher=bundle.researcher,
         timestamp=ts,
+        provenance=bundle.provenance,
     )
 
 
-def with_timestamp(bundle: Bundle, ts: "Timestamp") -> Bundle:
+def with_timestamp(bundle: DisclosureBundle, ts: "Timestamp") -> DisclosureBundle:
     """Return a copy of `bundle` with its timestamp field set. Useful
     after anchor.anchor_bundle(...) returns a Timestamp."""
     return _replace_timestamp(bundle, ts)
 
 
-def _to_dict(bundle: Bundle) -> dict[str, Any]:
+def _to_dict(bundle: DisclosureBundle) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "version": bundle.version,
         "target": {
@@ -292,10 +425,15 @@ def _to_dict(bundle: Bundle) -> dict[str, Any]:
             "inclusion_proof_tree_size": ts.inclusion_proof_tree_size,
             "inclusion_proof_hashes": list(ts.inclusion_proof_hashes),
         }
+    # Provenance is bundle CONTENT (not post-hoc like the timestamp), so
+    # it stays inside ``bundle_hash_pre_timestamp`` — the proof's anchor
+    # binds the Tier 0/1 + 1.5 evidence too, not just the proof bytes.
+    if bundle.provenance is not None:
+        payload["provenance"] = dict(bundle.provenance)
     return payload
 
 
-def _from_dict(d: dict[str, Any]) -> Bundle:
+def _from_dict(d: dict[str, Any]) -> DisclosureBundle:
     target_d = d["target"]
     vuln_d = d["vulnerability"]
     proof_d = d["proof"]
@@ -303,7 +441,8 @@ def _from_dict(d: dict[str, Any]) -> Bundle:
     env_d = d["vendor_envelope"]
     researcher_d = d.get("researcher")
     timestamp_d = d.get("timestamp")
-    return Bundle(
+    provenance_d = d.get("provenance")
+    return DisclosureBundle(
         version=d["version"],
         target=Target(
             kind=target_d["kind"],
@@ -358,4 +497,5 @@ def _from_dict(d: dict[str, Any]) -> Bundle:
                 inclusion_proof_hashes=list(timestamp_d.get("inclusion_proof_hashes", [])),
             )
         ),
+        provenance=(None if provenance_d is None else dict(provenance_d)),
     )
