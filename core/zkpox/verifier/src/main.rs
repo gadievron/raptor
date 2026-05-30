@@ -39,6 +39,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+mod rekor;
+
 /// Bundle versions this verifier accepts. ``zkpox-1.0`` is the
 /// Phase 1.5 (placeholder-hashes) shape; ``zkpox-1.1`` adds the
 /// ``vulnerability.gadget_code_hash`` field from Phase 1.5.1. The
