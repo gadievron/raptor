@@ -124,6 +124,24 @@ def build_shared_state(si: "SourceIntelResult") -> List[Dict[str, Any]]:
     return out
 
 
+def build_crypto_inventory(si: "SourceIntelResult") -> List[Dict[str, Any]]:
+    """Cryptographic primitive call + RNG-source sites.
+
+    Site `kind` is the call kind directly (`primitive_call` or
+    `rng_source`); the originating library (`api`: openssl/kernel/
+    libsodium/libc) and the concrete function (`fn`) ride alongside so
+    consumers can filter without re-parsing the kind string.
+    """
+    out: List[Dict[str, Any]] = []
+    for cc in getattr(si, "crypto_calls", ()) or ():
+        out.append(_site(
+            getattr(cc, "kind", "crypto"), cc,
+            api=getattr(cc, "api", None),
+            fn=getattr(cc, "fn", None),
+        ))
+    return out
+
+
 def enrich_context_map_with_sites(
     cmap: Dict[str, Any], si: "SourceIntelResult",
     *, repo_root: Optional[Union[str, Path]] = None,
@@ -147,7 +165,10 @@ def enrich_context_map_with_sites(
     merge-vs-replace decision — resolve it then, against that layer's design
     (the intended flow is mechanical-sites-first, LLM-enriches-on-top).
     """
-    counts = {"ownership_model": 0, "privilege_model": 0, "shared_state": 0}
+    counts = {
+        "ownership_model": 0, "privilege_model": 0,
+        "shared_state": 0, "crypto_inventory": 0,
+    }
     if not isinstance(cmap, dict):
         return counts
     root = Path(repo_root) if repo_root is not None else None
@@ -155,6 +176,7 @@ def enrich_context_map_with_sites(
         ("ownership_model", build_ownership_model),
         ("privilege_model", build_privilege_model),
         ("shared_state", build_shared_state),
+        ("crypto_inventory", build_crypto_inventory),
     ):
         try:
             sites = builder(si)

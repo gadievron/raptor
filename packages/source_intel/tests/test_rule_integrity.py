@@ -52,6 +52,9 @@ EXPECTED_RULES = {
     "concurrency": {
         "lock_sites.cocci",
     },
+    "crypto": {
+        "crypto_calls.cocci",
+    },
     "hazards": {
         "deprecated_functions.cocci",
         "signed_alloc.cocci",

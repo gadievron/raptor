@@ -248,10 +248,10 @@ the function *is*) alongside the LLM's narrative (what the function
 this without re-parsing source. Idempotent. Skip if
 `$WORKDIR/checklist.json` doesn't exist or doesn't carry `target_path`.
 
-**[MAP-5d] Enrich with ownership / privilege / shared-state sites (C/C++)**
+**[MAP-5d] Enrich with ownership / privilege / shared-state / crypto sites (C/C++)**
 
 After normalisation, run the site enricher. Uses `source_intel` (cocci) to
-attach three Phase B sections, each entry carrying `kind`, `file`, `line`,
+attach four Phase B sections, each entry carrying `kind`, `file`, `line`,
 and `function`:
 
 * `ownership_model` — alloc / checked-alloc / paired-free / double-free sites
@@ -267,6 +267,21 @@ and `function`:
   whitespace-normalised). Atomics, RCU, and C++ scope-based locks
   (`std::lock_guard`) are intentionally out of scope here — each has
   semantics worth its own evidence shape and is deferred.
+* `crypto_inventory` — cryptographic primitive calls + RNG sources. Entry
+  `kind` is the call kind (`primitive_call` or `rng_source`); extras:
+  `api` (`openssl` / `kernel` / `libsodium` / `libc`) and `fn` (concrete
+  function matched, e.g. `EVP_EncryptInit_ex`). Covers OpenSSL modern EVP
+  + legacy primitives (AES_/SHA_/HMAC_/DES_/RC4_/MD5_/BF_), Linux kernel
+  crypto API (`crypto_alloc_*`, `crypto_skcipher_*`, `crypto_shash_*`,
+  `crypto_ahash_*`, `crypto_aead_*`), libsodium (`crypto_secretbox_*`,
+  `crypto_box_*`, `crypto_sign_*`, `crypto_aead_*`, `crypto_pwhash_*`),
+  and RNG sources (`RAND_bytes`, `randombytes_buf`, `getrandom`,
+  `get_random_bytes`, libc `rand`/`random`). MbedTLS, Windows BCrypt,
+  Bouncy Castle / Java crypto, and C++ wrappers (Botan, Crypto++) are
+  intentionally out of scope here — add as separate rules when target
+  corpus shows demand. **Soundness**: identifier matching is name-only;
+  a non-crypto project that defines its own `SHA256_Update` will fire.
+  Short names (`rand`, `random`) have highest collision risk.
 
 ```bash
 libexec/raptor-enrich-context-map-sites "$WORKDIR"
