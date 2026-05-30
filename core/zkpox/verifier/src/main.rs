@@ -164,7 +164,7 @@ mod full_verify {
     use sha2::{Digest, Sha256};
     use sp1_sdk::{
         blocking::{Prover, ProverClient},
-        include_elf, Elf, HashableKey, SP1ProofWithPublicValues,
+        include_elf, Elf, HashableKey, ProvingKey, SP1ProofWithPublicValues,
     };
 
     /// Same artefact the prover embeds, resolved by build.rs +

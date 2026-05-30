@@ -1,3 +1,15 @@
+// The Phase 1.5.3 primitives below are exercised by the inline
+// ``#[cfg(test)]`` block — they're correct and pinned by tests — but
+// not yet called from the verifier's main flow. That integration
+// is the Phase 1.5.3.x follow-up (waiting on the bundle schema
+// extension to carry the Rekor entry body bytes; without those, the
+// standalone verifier can't reconstruct the leaf hash on its own).
+// Until that lands, suppress the dead-code lint at the module level
+// so the structural / full-verify builds stay clean. The lint will
+// silently start firing again once 1.5.3.x wires these in and the
+// allow becomes vestigial — at which point delete this attribute.
+#![allow(dead_code)]
+
 //! Phase 1.5.3 — Rekor Merkle inclusion-proof verification (RFC 6962).
 //!
 //! Mirrors ``packages/zkpox/anchor.verify_inclusion_proof``: pure
