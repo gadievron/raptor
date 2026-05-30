@@ -93,8 +93,15 @@ def _install_mock_sdk(client_mod):
     client_mod._SAGE_SDK_AVAILABLE = True
     client_mod._SyncSageClient = mock_cls
     client_mod._AgentIdentity = mock_identity_cls
+    # Mirror the SAGE 8.4.2 MemoryType enum: fact | observation |
+    # inference | task (docs/reference/python-sdk.md). client.propose's
+    # allowlist references all four members directly, so the mock must
+    # expose them all or the allowlist build raises AttributeError.
     client_mod._MemoryType = SimpleNamespace(
-        observation="observation", fact="fact", inference="inference"
+        observation="observation",
+        fact="fact",
+        inference="inference",
+        task="task",
     )
     return mock_cls, mock_instance
 

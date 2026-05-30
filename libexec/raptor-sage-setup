@@ -254,10 +254,13 @@ wait_health() {
         # then failed in confusing ways (404 from the wrong
         # backend, JSON parse error on HTML response).
         # SAGE's /health endpoint returns a JSON `{"status":
-        # "ok", ...}` body; confirm the "ok" sentinel is
-        # present before trusting the response.
+        # "healthy", "version": ...}` body (SAGE 8.4.x; earlier
+        # 6.6.x returned `{"status": "ok", ...}`). Match on the
+        # `"status"` key — present in every SAGE version's health
+        # body and absent from the proxy/ingress default-backend
+        # responses we are guarding against — before trusting it.
         if response=$(curl -sf "$SAGE_URL/health" 2>/dev/null); then
-            if printf '%s' "$response" | grep -q '"ok"'; then
+            if printf '%s' "$response" | grep -q '"status"'; then
                 printf " — ready.\n"
                 return 0
             fi

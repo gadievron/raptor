@@ -198,12 +198,28 @@ class SageClient:
             # Dict-keyed by the canonical lower-case name so a typo
             # surfaces as an explicit "unknown memory_type ..." log
             # and the call falls back deliberately, not by accident.
+            #
+            # SAGE 8.4.2 MemoryType enum = {fact, observation,
+            # inference, task} (docs/reference/python-sdk.md). The
+            # 6.6.x extras RAPTOR used to reference (hypothesis,
+            # evidence, decision, lesson) no longer exist on the
+            # enum. We keep accepting those legacy names as inputs
+            # and fold them onto the nearest surviving member so any
+            # caller still passing them degrades sensibly instead of
+            # silently collapsing to "observation":
+            #   hypothesis -> inference (a drawn conclusion)
+            #   evidence/decision/lesson -> observation (recorded fact
+            #     about what happened)
             allowed = {
+                "fact": _MemoryType.fact,
                 "observation": _MemoryType.observation,
-                "hypothesis": getattr(_MemoryType, "hypothesis", None),
-                "evidence": getattr(_MemoryType, "evidence", None),
-                "decision": getattr(_MemoryType, "decision", None),
-                "lesson": getattr(_MemoryType, "lesson", None),
+                "inference": _MemoryType.inference,
+                "task": _MemoryType.task,
+                # Legacy 6.6.x aliases, mapped onto the 8.4.2 enum.
+                "hypothesis": _MemoryType.inference,
+                "evidence": _MemoryType.observation,
+                "decision": _MemoryType.observation,
+                "lesson": _MemoryType.observation,
             }
             mt = allowed.get(memory_type)
             if mt is None:

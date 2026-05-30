@@ -392,6 +392,8 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
         # AgentRegistration.on_chain_height (int64) was renamed from
         # `registered_at` in SAGE 6.6.0 to fix a 3-way type mismatch
         # (Go int64 vs OpenAPI date-time string vs SDK `str | None`).
+        # Still the field name as of SAGE 8.4.2 (AgentRegistration
+        # exposes on_chain_height — docs/reference/python-sdk.md).
         # Surface it so a grep for "raptor-registrar" in debug logs
         # confirms the registration actually landed on-chain.
         reg = await client.register_agent("raptor-registrar")

@@ -429,7 +429,8 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     # Register as raptor-seed agent
     try:
         # See register_agents.py for on_chain_height rationale — same
-        # SAGE 6.6.0 type-mismatch fix.
+        # SAGE 6.6.0 type-mismatch fix; on_chain_height still present
+        # on AgentRegistration as of SAGE 8.4.2.
         reg = await client.register_agent("raptor-seed")
         height = getattr(reg, "on_chain_height", None)
         print(f"Registered as raptor-seed (on-chain height {height})")
