@@ -168,3 +168,269 @@ def test_anchor_and_confirm_round_trip():
 
     # And Rekor's record matches what we sent.
     assert confirm_anchor_matches(anchored) is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5.3 — Merkle inclusion + SET signature primitives.
+# ---------------------------------------------------------------------------
+#
+# Offline. Builds synthetic RFC 6962 trees (the reference recursive
+# implementation a verifier can be checked against) and round-trips
+# SET signatures across both algorithm families (Ed25519 + ECDSA
+# P-256) Sigstore Rekor v1 uses.
+
+import hashlib
+
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+
+from packages.zkpox import (
+    InclusionProofError,
+    SignatureError,
+    canonical_set_payload,
+    verify_inclusion_proof,
+    verify_set,
+)
+from packages.zkpox.anchor import (
+    _rfc6962_leaf_hash,
+    _rfc6962_node_hash,
+)
+
+
+def _build_tree(leaves: list[bytes], idx: int) -> tuple[str, list[str]]:
+    """RFC 6962 reference tree + audit path. Same shape the Rust mirror
+    in ``core/zkpox/verifier/src/rekor.rs`` builds; both crash if they
+    disagree on a single bit (pinning algorithmic parity across the
+    Python and Rust sides)."""
+
+    def recurse(level: list[bytes], local: int) -> tuple[bytes, list[bytes]]:
+        if len(level) == 1:
+            return level[0], []
+        k = 1
+        while k * 2 < len(level):
+            k *= 2
+        left, right = level[:k], level[k:]
+        if local < k:
+            l_h, l_path = recurse(left, local)
+            r_h, _ = recurse(right, 0)
+            return _rfc6962_node_hash(l_h, r_h), l_path + [r_h]
+        l_h, _ = recurse(left, 0)
+        r_h, r_path = recurse(right, local - k)
+        return _rfc6962_node_hash(l_h, r_h), r_path + [l_h]
+
+    level = [_rfc6962_leaf_hash(d) for d in leaves]
+    root, path = recurse(level, idx)
+    return root.hex(), [h.hex() for h in path]
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 7, 8, 11, 23])
+def test_merkle_every_leaf_verifies(n):
+    """Across the full 1-23 range the Rust mirror also tests, every
+    leaf in a synthetic tree must verify against the reference root."""
+    leaves = [f"leaf-{i}".encode() for i in range(n)]
+    for i in range(n):
+        root_hex, path = _build_tree(leaves, i)
+        assert (
+            verify_inclusion_proof(
+                leaves[i], log_index=i, tree_size=n,
+                audit_path_hex=path, expected_root_hex=root_hex,
+            )
+            is True
+        )
+
+
+def test_merkle_rejects_tampered_path():
+    leaves = [f"leaf-{i}".encode() for i in range(7)]
+    root_hex, path = _build_tree(leaves, 3)
+    tampered = list(path)
+    tampered[0] = "00" * 32
+    assert (
+        verify_inclusion_proof(
+            leaves[3], log_index=3, tree_size=7,
+            audit_path_hex=tampered, expected_root_hex=root_hex,
+        )
+        is False
+    )
+
+
+def test_merkle_rejects_tampered_leaf():
+    leaves = [f"leaf-{i}".encode() for i in range(7)]
+    root_hex, path = _build_tree(leaves, 3)
+    assert (
+        verify_inclusion_proof(
+            b"different-leaf-bytes", log_index=3, tree_size=7,
+            audit_path_hex=path, expected_root_hex=root_hex,
+        )
+        is False
+    )
+
+
+def test_merkle_rejects_wrong_root():
+    leaves = [f"leaf-{i}".encode() for i in range(7)]
+    _, path = _build_tree(leaves, 0)
+    assert (
+        verify_inclusion_proof(
+            leaves[0], log_index=0, tree_size=7,
+            audit_path_hex=path,
+            expected_root_hex="ff" * 32,
+        )
+        is False
+    )
+
+
+def test_merkle_out_of_range_index_raises():
+    leaves = [b"a", b"b"]
+    root_hex, path = _build_tree(leaves, 0)
+    with pytest.raises(InclusionProofError, match="out of range"):
+        verify_inclusion_proof(
+            leaves[0], log_index=2, tree_size=2,
+            audit_path_hex=path, expected_root_hex=root_hex,
+        )
+
+
+def test_merkle_malformed_audit_entry_raises():
+    leaves = [b"a", b"b"]
+    root_hex, path = _build_tree(leaves, 0)
+    bad_path = ["zz" * 32]  # non-hex
+    with pytest.raises(InclusionProofError, match="non-hex"):
+        verify_inclusion_proof(
+            leaves[0], log_index=0, tree_size=2,
+            audit_path_hex=bad_path, expected_root_hex=root_hex,
+        )
+
+
+# ---------------------------------------------------------------------------
+# SET (Signed Entry Timestamp) verification
+# ---------------------------------------------------------------------------
+
+def _ed25519_pem_pair():
+    sk = Ed25519PrivateKey.generate()
+    pk_pem = sk.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return sk, pk_pem
+
+
+def _ecdsa_p256_pem_pair():
+    sk = ec.generate_private_key(ec.SECP256R1())
+    pk_pem = sk.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return sk, pk_pem
+
+
+def test_canonical_set_payload_is_sorted_compact():
+    """Pin the canonical-JSON layout Rekor v1's Go side produces.
+    A drift in the serializer (e.g. extra whitespace, key reorder)
+    breaks SET verification across the wire — guard at the source."""
+    payload = canonical_set_payload(
+        entry_body_b64="ZHVtbXk=",
+        integrated_time=1_700_000_000,
+        log_index=42,
+        log_id="abc123",
+    )
+    # Expected: keys alphabetised (body < integratedTime < logID <
+    # logIndex), compact separators, no whitespace.
+    assert payload == (
+        b'{"body":"ZHVtbXk=","integratedTime":1700000000,'
+        b'"logID":"abc123","logIndex":42}'
+    )
+
+
+def test_set_ed25519_round_trip():
+    sk, pk_pem = _ed25519_pem_pair()
+    payload = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=1, log_index=0, log_id="x",
+    )
+    sig = sk.sign(payload)
+    assert (
+        verify_set(
+            canonical_payload=payload,
+            signature=sig,
+            log_pubkey_pem=pk_pem,
+        )
+        is True
+    )
+
+
+def test_set_ecdsa_p256_round_trip():
+    sk, pk_pem = _ecdsa_p256_pem_pair()
+    payload = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=1, log_index=0, log_id="x",
+    )
+    from cryptography.hazmat.primitives import hashes
+    sig = sk.sign(payload, ec.ECDSA(hashes.SHA256()))
+    assert (
+        verify_set(
+            canonical_payload=payload,
+            signature=sig,
+            log_pubkey_pem=pk_pem,
+        )
+        is True
+    )
+
+
+def test_set_rejects_wrong_pubkey():
+    sk_a, _ = _ed25519_pem_pair()
+    _, pk_b_pem = _ed25519_pem_pair()
+    payload = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=1, log_index=0, log_id="x",
+    )
+    sig = sk_a.sign(payload)
+    assert (
+        verify_set(
+            canonical_payload=payload,
+            signature=sig,
+            log_pubkey_pem=pk_b_pem,
+        )
+        is False
+    )
+
+
+def test_set_rejects_tampered_payload():
+    sk, pk_pem = _ed25519_pem_pair()
+    original = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=1, log_index=0, log_id="x",
+    )
+    sig = sk.sign(original)
+    tampered = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=2, log_index=0, log_id="x",
+    )
+    assert (
+        verify_set(
+            canonical_payload=tampered,
+            signature=sig,
+            log_pubkey_pem=pk_pem,
+        )
+        is False
+    )
+
+
+def test_set_unsupported_key_type_raises():
+    """RSA keys aren't in Rekor v1's algorithm set — caller gets a
+    structurally-distinct error rather than False (which would conflate
+    "wrong algorithm" with "wrong signer")."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    rsa_sk = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rsa_pem = rsa_sk.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    payload = canonical_set_payload(
+        entry_body_b64="QQ==",
+        integrated_time=1, log_index=0, log_id="x",
+    )
+    with pytest.raises(SignatureError, match="unsupported"):
+        verify_set(
+            canonical_payload=payload,
+            signature=b"\x00" * 64,
+            log_pubkey_pem=rsa_pem,
+        )

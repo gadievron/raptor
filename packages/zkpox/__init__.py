@@ -135,6 +135,13 @@ _LAZY_EXPORTS: dict[str, str] = {
     "confirm_anchor_matches": "anchor",
     "gen_ed25519_keypair": "anchor",
     "load_ed25519_secret_pem": "anchor",
+    # Phase 1.5.3 Rekor verification primitives
+    "verify_inclusion_proof": "anchor",
+    "verify_set": "anchor",
+    "canonical_set_payload": "anchor",
+    "InclusionProofError": "anchor",
+    "SignatureError": "anchor",
+    "LEGACY_V1_REKOR_URL": "anchor",
     # Layered envelope — packages.zkpox.envelope
     "Envelope": "envelope",
     "AgeKeypair": "envelope",
