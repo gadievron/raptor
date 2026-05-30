@@ -179,8 +179,6 @@ def test_anchor_and_confirm_round_trip():
 # SET signatures across both algorithm families (Ed25519 + ECDSA
 # P-256) Sigstore Rekor v1 uses.
 
-import hashlib
-
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
