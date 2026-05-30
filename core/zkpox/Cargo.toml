@@ -1,0 +1,25 @@
+[workspace]
+members = ["guest", "prover", "verifier"]
+# Plain `cargo build` builds only the host-native binaries. The `guest`
+# crate is exclusively cross-compiled to SP1's custom RISC-V triple via
+# `cargo prove build` (its build.rs cross-links a RISC-V64 C archive
+# that the host linker would reject), so we keep it out of the default
+# build set.
+default-members = ["prover", "verifier"]
+resolver = "2"
+
+# Self-contained Cargo workspace under core/zkpox/. RAPTOR's repo root is
+# Python-based and not a Cargo workspace; this stays self-contained so a
+# `cargo build --manifest-path core/zkpox/Cargo.toml` is the only build
+# command operators or CI need to know.
+#
+# Three workspace members:
+#   - guest    — the SP1 guest program (runs inside the zkVM)
+#   - prover   — native CLI that drives prove/execute against a witness
+#   - verifier — standalone CLI that verifies a disclosure bundle, with
+#                no dependency on RAPTOR's Python orchestration
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"

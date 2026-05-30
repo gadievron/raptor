@@ -253,6 +253,21 @@ FILTERS: dict[str, list[str]] = {
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
+    # ZKPoX: Rust workspace under core/zkpox + Python orchestration
+    # under packages/zkpox. The regression job builds the SP1 guest +
+    # host prover and runs the witness corpus in execute mode.
+    "zkpox": [
+        "packages/zkpox/**",
+        "packages/llm_analysis/exploit_verify.py",
+        "core/config.py",
+        "core/config/**",
+        "core/hash/**",
+        "core/http/**",
+        "core/sandbox/**",
+        "core/witness/**",
+        "core/zkpox/**",
+        ".github/workflows/tests.yml",
+    ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
     # gates on the corresponding filter, so a python-only PR skips the
     # c-cpp and actions matrix entries (and vice versa).

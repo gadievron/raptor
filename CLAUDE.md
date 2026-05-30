@@ -29,6 +29,7 @@ Exception: when the skill itself shows the modification (e.g. a documented `| te
 /project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
+/zkpox - ZKPoX disclosure bundles + proofs (beta; subcommands: eligible / bundle / reproduce / prove / verify — see ZKPOX below)
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
@@ -291,6 +292,46 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
+**When running /zkpox:** Load `.claude/skills/zkpox/SKILL.md` (workflow, trust model) plus the relevant entry from `.claude/skills/zkpox/violation-gadgets/`. For advisory drafting, load `tiers/personas/disclosure_engineer.md`.
+
+---
+
+## ZKPOX
+
+The `/zkpox` command is a single dispatcher for every tier of the zero-knowledge proof-of-exploit pipeline. The witness stays private; the proof is public; the vendor gets full details immediately (via age envelope); the public-witness-decrypt-time is enforced cryptographically (via Drand tlock).
+
+**Subcommands (free → heavy):**
+
+```
+/zkpox eligible      Tier 0       free pre-flight signal (which witnesses qualify)
+/zkpox bundle <w>    Tier 0/1     assemble prover-ready bundle (shipped)
+/zkpox reproduce <b> Tier 1.5     N× sandbox reproduction      (shipped)
+/zkpox prove <b>     Tier 2/3     SP1 STARK proof              (beta; #470)
+/zkpox verify <p>    Tier 2/3     check a CBOR disclosure bundle (beta; #470)
+```
+
+**Usage:**
+- `python3 raptor.py zkpox eligible --run-dir <dir>`
+- `python3 raptor.py zkpox bundle <witness_store> <witness_hash> --out <dir>`
+- `python3 raptor.py zkpox reproduce <bundle_dir> [--binary <path>] [--n N]`
+- `python3 raptor.py zkpox prove --witness <path> --out <dir> [--vendor-pubkey AGE_PUBKEY] [--wrap groth16|core] [--no-anchor]`
+- `python3 raptor.py zkpox verify <bundle.cbor>`
+
+`bundle` / `reproduce` / `prove` are lifecycle-wrapped (project-scoped output dirs); `eligible` and `verify` are read-only and bypass it. `prove` is gated by `packages.zkpox.require_proving_stack` — bare boxes get an actionable `ProvingStackUnavailable` error rather than a generic binary-not-found.
+
+**Skills** (`.claude/skills/zkpox/`):
+- `SKILL.md` — when to use, when not to use, full workflow.
+- `violation-gadgets/crash-only.md` — simplest gadget; baseline.
+- `violation-gadgets/memory-safety-oob-write.md` — position-varying redzone with structured outputs.
+
+**Persona:** `tiers/personas/disclosure_engineer.md` — CVD framework selection, advisory drafting, safe-harbor citations.
+
+**Substrate:**
+- `core/zkpox/` — Rust workspace (`guest/` SP1 program, `prover/` native CLI, `verifier/` standalone CLI).
+- `packages/zkpox/` — Python orchestration (`envelope.py`, `bundle.py`, `anchor.py`, `prove.py`).
+
+**Design proposal:** `docs/proposals/raptor-zkpox-design.md`
+**Phase 0 findings + Phase 1 bench numbers:** `docs/research/zkpox-phase0-findings.md`
 
 ---
 

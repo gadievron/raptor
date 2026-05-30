@@ -73,6 +73,15 @@ packaging==25.0
 # SAGE persistent memory (consensus-validated knowledge)
 # pip install sage-agent-sdk==8.4.2 httpx==0.28.1
 
+# Zero Knowledge Proof of Exploit (ZKPoX)
+# packages/zkpox: AES-256-GCM (envelope.py) and CBOR encoding for the
+# disclosure bundle (bundle.py). Both are imported eagerly by
+# packages/zkpox/__init__.py; the package degrades to ImportError if
+# either is missing. /prove-exploit and /verify-exploit-proof commands
+# require these.
+# cryptography==45.0.4
+# cbor2==6.0.1
+
 # SCA hard deps (defusedxml, packaging, pyyaml) are pinned above. The
 # only remaining optional one:
 #   - tomli      : TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+)
