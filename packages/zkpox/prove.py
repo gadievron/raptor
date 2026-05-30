@@ -70,6 +70,12 @@ class ProveResult:
     wall_secs: float
     proof_bytes: int | None
     verified: bool | None
+    # Phase 1.5.1: real hashes emitted by the Rust prover. Both bare
+    # hex (the `sha256:` form is applied at bundle-projection time).
+    # ``guest_elf_hash`` is always present; ``vkey_digest`` is None in
+    # execute mode (no proving key was set up).
+    guest_elf_hash: str | None = None
+    vkey_digest: str | None = None
 
 
 class ProverError(Exception):
@@ -170,4 +176,9 @@ def _record_to_result(record: dict) -> ProveResult:
         wall_secs=float(record["wall_secs"]),
         proof_bytes=record.get("proof_bytes"),
         verified=record.get("verified"),
+        # Phase 1.5.1: both fields are absent in pre-1.5.1 records (the
+        # Python parser stays compatible), but cmd_prove refuses to
+        # write a bundle without them.
+        guest_elf_hash=record.get("guest_elf_hash"),
+        vkey_digest=record.get("vkey_digest"),
     )

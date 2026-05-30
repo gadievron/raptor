@@ -58,25 +58,24 @@ def _resolve_prover_binary() -> Path:
     return candidate
 
 
-_PLACEHOLDER_VK_DIGEST = "placeholder-vk-1.5"
-_PLACEHOLDER_HARNESS_DIGEST = "harness-1.5"
-_PLACEHOLDER_WARNING = (
-    "[zkpox] WARNING: bundle's verifier_key_hash and harness.hash are "
-    "Phase 1.5 PLACEHOLDERS. They do NOT bind to the real SP1 verifying "
-    "key or the harness binary. Do NOT use this bundle for a real "
-    "disclosure until Phase 1.5.x replaces them. See docs/zkpox-scope.md."
-)
+# Phase 1.5.1 removed the placeholder constants (`_PLACEHOLDER_VK_DIGEST`,
+# `_PLACEHOLDER_HARNESS_DIGEST`) and the matching `_PLACEHOLDER_WARNING`:
+# the bundle's ``proof.verifier_key_hash`` and ``harness.hash`` now bind
+# to the real SP1 vkey + guest ELF, read out of ``prove-record.json``
+# (which the Rust prover emits per Phase 1.5.1 §1). A producer running
+# against a pre-1.5.1 prover that omits ``vkey_digest`` /
+# ``guest_elf_hash`` fails loudly in ``cmd_prove`` rather than falling
+# back to a placeholder.
 
-# Loud always-on banner. Distinct from the placeholder-hash warning
-# (which fires only when --allow-placeholder-hashes flips the gate);
-# this banner is the meta-level "the whole feature is beta" message so
-# an operator who skipped the slash-command help still sees it. Printed
-# to stderr so it doesn't pollute stdout JSON output.
+# Loud always-on banner. This is the meta-level "the whole feature is
+# beta" message so an operator who skipped the slash-command help still
+# sees it. Printed to stderr so it doesn't pollute stdout JSON output.
 _EXPERIMENTAL_BANNER = (
     "[zkpox] ============================================================\n"
-    "[zkpox] EXPERIMENTAL (beta) — Phase 1.5. Subject to change; the\n"
+    "[zkpox] EXPERIMENTAL (beta) — Phase 1.5.x. Subject to change; the\n"
     "[zkpox] proof system, bundle format, and verifier are NOT stable.\n"
-    "[zkpox] Bundles produced here are NOT for real CVE disclosure.\n"
+    "[zkpox] Standalone STARK + Rekor verification land in Phase 1.5.2 /\n"
+    "[zkpox] 1.5.3; ``--strict`` becomes the default in 1.5.4.\n"
     "[zkpox] Scope statement: docs/zkpox-scope.md\n"
     "[zkpox] ============================================================"
 )
@@ -175,17 +174,16 @@ def cmd_prove(args: argparse.Namespace) -> int:
                 "--target to use the manifest's recorded hash."
             )
 
-    if not args.allow_placeholder_hashes:
-        raise SystemExit(
-            "[zkpox] refusing to write a bundle: Phase 1.5 produces "
-            "placeholder verifier_key_hash and harness.hash, which do "
-            "not bind to the real SP1 verifying key or the harness. "
-            "Re-run with --allow-placeholder-hashes to acknowledge and "
-            "proceed; the bundle will print a loud warning on every "
-            "verify. Real-disclosure use should wait for Phase 1.5.x. "
-            "Background: docs/zkpox-scope.md."
+    # Phase 1.5.1: the placeholder gate (``--allow-placeholder-hashes``)
+    # is gone — bundles now bind to the real SP1 vkey + guest ELF, read
+    # from the prove record below. The flag stays as a deprecation
+    # no-op for one release cycle so existing operator scripts don't
+    # break; remove entirely in Phase 1.5.4.
+    if getattr(args, "allow_placeholder_hashes", False):
+        logger.warning(
+            "[zkpox] --allow-placeholder-hashes is a Phase 1.5.1 no-op "
+            "(the placeholders are gone). It will be removed in 1.5.4."
         )
-    logger.warning(_PLACEHOLDER_WARNING)
 
     # ---- 1. Drive the Rust prover on the bundle's witness -------------
     prover = _resolve_prover_binary()
@@ -220,6 +218,37 @@ def cmd_prove(args: argparse.Namespace) -> int:
     record = json.loads(record_path.read_text())
     if record.get("verified") is False:
         logger.error("[zkpox] in-process verify failed; refusing to build bundle")
+        return 1
+
+    # Phase 1.5.1: the prover now emits ``vkey_digest`` and
+    # ``guest_elf_hash`` (bare hex) in the record. A producer running
+    # against a pre-1.5.1 prover that omits either field is refused
+    # here, before any bundle gets written, so a placeholder can't
+    # silently leak into a disclosure artifact.
+    vkey_digest_bare = record.get("vkey_digest")
+    guest_elf_hash_bare = record.get("guest_elf_hash")
+    if not vkey_digest_bare or not guest_elf_hash_bare:
+        logger.error(
+            "[zkpox] prove-record.json is missing vkey_digest / "
+            "guest_elf_hash — the prover is older than Phase 1.5.1. "
+            "Rebuild the prover (core/zkpox/) and retry. Refusing to "
+            "write a bundle with placeholder hashes."
+        )
+        return 1
+    verifier_key_hash = f"sha256:{vkey_digest_bare}"
+    harness_hash = f"sha256:{guest_elf_hash_bare}"
+
+    # Phase 1.5.1: bind to the gadget's declared file manifest
+    # (markdown spec + guest impl files). Refuse the bundle on an
+    # unknown gadget_id so a typo never produces an under-bound proof.
+    from packages.zkpox.gadget import (
+        GadgetCodeHashError,
+        compute_gadget_code_hash,
+    )
+    try:
+        gadget_code_hash = compute_gadget_code_hash(args.gadget_id)
+    except GadgetCodeHashError as exc:
+        logger.error(f"[zkpox] {exc}")
         return 1
 
     # ---- 2. Build envelope (optional) ----------------------------------
@@ -260,22 +289,26 @@ def cmd_prove(args: argparse.Namespace) -> int:
         proof=zkpox.Proof(
             system=f"sp1-{args.wrap}/v6.1.0",
             bytes=proof_bytes,
-            # Placeholder until Phase 1.5.x wires sp1-sdk's real vk digest.
-            # cmd_prove refuses to reach this branch without the explicit
-            # --allow-placeholder-hashes opt-in (see above).
-            verifier_key_hash=zkpox.sha256_bytes(_PLACEHOLDER_VK_DIGEST.encode()),
+            # Phase 1.5.1: real SP1 verifying-key digest from the prove
+            # record (the prover computes it via ``HashableKey::bytes32``).
+            verifier_key_hash=verifier_key_hash,
         ),
         vendor_envelope=vendor_envelope,
         harness=zkpox.HarnessRef(
             git_url=args.harness_git_url,
             rev=args.harness_rev,
-            hash=zkpox.sha256_bytes(_PLACEHOLDER_HARNESS_DIGEST.encode()),
+            # Phase 1.5.1: real sha256 of the embedded SP1 guest ELF.
+            hash=harness_hash,
         ),
         vuln_class=args.vuln_class,
         gadget_id=args.gadget_id,
-        # Hashes the gadget IDENTIFIER, not its source (renamed from
-        # `gadget_hash` in Phase 1.5; see docs/zkpox-scope.md).
+        # Hashes the gadget IDENTIFIER string (independent of the code
+        # binding, which lives in ``gadget_code_hash`` below).
         gadget_id_hash=zkpox.sha256_bytes(args.gadget_id.encode()),
+        # Phase 1.5.1: binds the bundle to the gadget's declared file
+        # manifest (markdown spec + guest impl files). See
+        # ``packages/zkpox/gadget.py``.
+        gadget_code_hash=gadget_code_hash,
         leaked_fields=[f.strip() for f in (args.leaked or "").split(",") if f.strip()],
         target_kind=args.target_kind,
         target_url=args.target_url,
@@ -420,11 +453,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-placeholder-hashes",
         action="store_true",
         help=(
-            "Acknowledge that Phase 1.5 produces a bundle with placeholder "
-            "verifier_key_hash and harness.hash that do NOT bind to real "
-            "SP1 / harness state. Required until Phase 1.5.x replaces "
-            "them. Bundle will print a loud warning; do not use for real "
-            "disclosure."
+            "DEPRECATED — no-op since Phase 1.5.1. The placeholder "
+            "verifier_key_hash and harness.hash are gone; bundles now "
+            "bind to the real SP1 vkey + guest ELF via the prove "
+            "record. Flag is preserved for one release cycle for script "
+            "compatibility; removed in Phase 1.5.4."
         ),
     )
     pp.add_argument(

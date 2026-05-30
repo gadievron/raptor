@@ -41,7 +41,7 @@ from .bundle import ZKPoXBundle
 from .envelope import Envelope
 
 
-BUNDLE_VERSION = "zkpox-1.0"
+BUNDLE_VERSION = "zkpox-1.1"
 ENVELOPE_SCHEME = "zkpox-aes256gcm+age+tlock-drand-quicknet/v1"
 
 
@@ -62,11 +62,17 @@ class Vulnerability:
     cls: str            # "memory-safety" | "cfi" | "info-leak" | "evm-*"
     gadget_id: str      # e.g. "memory-safety::oob-write@1.0.0"
     gadget_id_hash: str # "sha256:HEX" — commits to the gadget IDENTIFIER
-                        # string (not yet the source). Phase 1.5.x will
-                        # add a separate `gadget_code_hash` that commits
-                        # to the gadget implementation; see
-                        # docs/zkpox-scope.md.
+                        # (string). Independent of the implementation
+                        # binding below.
     leaked_fields: list[str] = field(default_factory=list)
+    # Phase 1.5.1: ``sha256:HEX`` over the gadget's declared file
+    # manifest (markdown spec + guest implementation files). Optional
+    # for wire-format compatibility — Phase 1.5 / ``zkpox-1.0`` bundles
+    # omit it and the verifier accepts that in non-strict mode. Phase
+    # 1.5.4 makes ``--strict`` the default, at which point a None here
+    # is a hard fail. New bundles produced by ``cmd_prove`` always
+    # populate this via :func:`packages.zkpox.gadget.compute_gadget_code_hash`.
+    gadget_code_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -245,6 +251,7 @@ def disclosure_from_manifest(
     vuln_class: str,
     gadget_id: str,
     gadget_id_hash: str,
+    gadget_code_hash: str | None = None,
     leaked_fields: list[str] | None = None,
     target_kind: str = "elf",
     target_url: str | None = None,
@@ -310,6 +317,7 @@ def disclosure_from_manifest(
             cls=vuln_class,
             gadget_id=gadget_id,
             gadget_id_hash=gadget_id_hash,
+            gadget_code_hash=gadget_code_hash,
             leaked_fields=list(leaked_fields or []),
         ),
         proof=proof,
@@ -372,6 +380,21 @@ def with_timestamp(bundle: DisclosureBundle, ts: "Timestamp") -> DisclosureBundl
     return _replace_timestamp(bundle, ts)
 
 
+def _vulnerability_to_dict(v: Vulnerability) -> dict[str, Any]:
+    """Per-field serializer for Vulnerability — keeps ``gadget_code_hash``
+    omitted when None (1.0-style bundle) so the encoded shape stays
+    minimal. New 1.1 bundles always carry a real value."""
+    payload: dict[str, Any] = {
+        "class": v.cls,
+        "gadget_id": v.gadget_id,
+        "gadget_id_hash": v.gadget_id_hash,
+        "leaked_fields": list(v.leaked_fields),
+    }
+    if v.gadget_code_hash is not None:
+        payload["gadget_code_hash"] = v.gadget_code_hash
+    return payload
+
+
 def _to_dict(bundle: DisclosureBundle) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "version": bundle.version,
@@ -380,12 +403,7 @@ def _to_dict(bundle: DisclosureBundle) -> dict[str, Any]:
             "hash": bundle.target.hash,
             "metadata": dict(bundle.target.metadata),
         },
-        "vulnerability": {
-            "class": bundle.vulnerability.cls,
-            "gadget_id": bundle.vulnerability.gadget_id,
-            "gadget_id_hash": bundle.vulnerability.gadget_id_hash,
-            "leaked_fields": list(bundle.vulnerability.leaked_fields),
-        },
+        "vulnerability": _vulnerability_to_dict(bundle.vulnerability),
         "proof": {
             "system": bundle.proof.system,
             "bytes": bundle.proof.bytes,
@@ -454,6 +472,7 @@ def _from_dict(d: dict[str, Any]) -> DisclosureBundle:
             cls=vuln_d["class"],
             gadget_id=vuln_d["gadget_id"],
             gadget_id_hash=vuln_d["gadget_id_hash"],
+            gadget_code_hash=vuln_d.get("gadget_code_hash"),
             leaked_fields=list(vuln_d.get("leaked_fields", [])),
         ),
         proof=Proof(
