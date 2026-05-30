@@ -188,6 +188,14 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     most progressed status (e.g. "confirmed" beats "not_disproven"). Among equal
     statuses, the latest run wins.
 
+    **Provenance preservation:** the winning representation's
+    ``provenance_refs`` becomes the UNION (deduped by ``run_id``, insertion-
+    order preserved) of every losing source's ``provenance_refs``. So a
+    finding seen in runs A → B → D where B "won" the status race still
+    surfaces the A and D refs on the merged record — the cross-run trail
+    survives the deduplication. Pre-stamping findings (no ``provenance_refs``
+    field) merge cleanly; they just don't contribute to the union.
+
     Args:
         run_dirs: Ordered list of run directories (later entries override earlier).
 
@@ -195,16 +203,41 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
         Deduplicated list of findings.
     """
     merged: Dict[tuple, Dict[str, Any]] = {}
+    # Parallel structure tracking the provenance union per key. Kept in
+    # insertion order via a dict-of-dicts indexed by run_id so re-additions
+    # of the same run (e.g. a /project clean + rerun on the same dir) don't
+    # multiply the refs.
+    refs_by_key: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
 
     for run_dir in run_dirs:
         findings = _load_findings_from_dir(Path(run_dir))
         for finding in findings:
             key = _finding_key(finding)
+            # Accumulate this finding's refs (if any) into the union for the
+            # key — independent of who wins the status race.
+            ref_acc = refs_by_key.setdefault(key, {})
+            for r in finding.get("provenance_refs", []) or ():
+                if isinstance(r, dict):
+                    run_id = r.get("run_id")
+                    if isinstance(run_id, str) and run_id not in ref_acc:
+                        ref_acc[run_id] = r
             existing = merged.get(key)
             if existing is None or _status_rank(finding) >= _status_rank(existing):
                 merged[key] = finding
 
-    return list(merged.values())
+    # Inject the union back onto each winning representation. If the key has
+    # no refs at all (all sources were pre-stamping), leave the field absent
+    # rather than synthesising an empty list — preserves the "no provenance
+    # available" signal.
+    out: List[Dict[str, Any]] = []
+    for key, winner in merged.items():
+        union = list(refs_by_key.get(key, {}).values())
+        if union:
+            # Shallow-copy so we don't mutate the source-run finding dict.
+            winner = dict(winner)
+            winner["provenance_refs"] = union
+        out.append(winner)
+    return out
 
 
 def verify_merge(merged_findings: List, source_findings_count: int,
