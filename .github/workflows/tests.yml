@@ -820,3 +820,20 @@ jobs:
             bash core/zkpox/test/run-tests.sh --ci-subset
           fi
 
+      - name: zkpox-verify feature-gate smoke (Phase 1.5.2 §6/§7)
+        # Build the verifier under both feature configurations:
+        #   --features structural             — no sp1-sdk; fast tier shape.
+        #   --features full-verify (default)  — embeds the guest ELF,
+        #                                       links sp1-sdk verify path.
+        # Most of the dependency surface is already warm from the
+        # zkpox-prove build above (same workspace), so adding both
+        # builds here costs roughly the link step. ``--help`` smoke-
+        # tests the CLI entry point in each shape; a real prove →
+        # verify E2E lives in test_full_verify_e2e.py (slow tier).
+        #
+        # Same awk filter as the prover build to suppress the
+        # sp1-build cargo:warning info-notices.
+        run: |
+          bash core/zkpox/test/build-verifier-both-features.sh 2>&1 \
+            | awk '!/^warning: zkpox-(prover|verify)@[0-9.]+: (rustc \+succinct --version:|zkpox-guest built at )/'
+
