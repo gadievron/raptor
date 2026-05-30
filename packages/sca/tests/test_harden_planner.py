@@ -1062,6 +1062,68 @@ def test_supports_library_floor_raise_matrix(manifest, supported) -> None:
     assert _supports_library_floor_raise(dep) is supported
 
 
+def test_two_csprojs_sharing_central_dep_collapse_to_one_patch(tmp_path) -> None:
+    """Two csprojs both inheriting one central PackageVersion must produce
+    a SINGLE patch on the central file, not one per csproj. The dedup key in
+    _apply uses the write-path (cand.resolved_in) for exactly this."""
+    from packages.sca.harden import _apply
+    props = tmp_path / "Directory.Packages.props"
+    props.write_text(
+        '<Project><ItemGroup>'
+        '<PackageVersion Include="X" Version="1.0.0"/></ItemGroup></Project>')
+    cands = []
+    for sub in ("A", "B"):
+        (tmp_path / sub).mkdir()
+        csp = tmp_path / sub / f"{sub}.csproj"
+        csp.write_text('<Project/>')
+        cands.append(HardenCandidate(
+            ecosystem="NuGet", name="X", manifest=str(csp),
+            pin_style="exact", from_version="1.0.0", to_version="1.0.1",
+            crosses_major=False, status="promoted",
+            resolved_in=str(props),
+        ))
+    out = tmp_path / "out"
+    _apply(cands, target=tmp_path, out_dir=out,
+           allow_major_without_review=False, allow_degraded=False,
+           ecosystem_allowlist=None)
+    patched = list((out / "proposed").rglob("*"))
+    csproj_patches = [p for p in patched if p.is_file() and p.suffix == ".csproj"]
+    props_patches = [p for p in patched if p.is_file() and p.name == "Directory.Packages.props"]
+    assert len(props_patches) == 1, f"expected ONE .props patch, got {len(props_patches)}"
+    assert csproj_patches == [], f"no csproj should be patched, got {csproj_patches}"
+
+
+def test_central_version_dep_routes_apply_to_resolved_in(tmp_path) -> None:
+    """A dep whose version is owned by a central file (CPM Directory.Packages
+    .props or pre-CPM Directory.Build.targets) must have its PATCH routed to
+    THAT file by _apply — not to the csproj where the PackageReference is
+    declared (the csproj holds no Version attribute to update). Carried via
+    HardenCandidate.resolved_in, set from dep.source_extra['resolved_in']."""
+    from packages.sca.harden import _apply
+    csproj = tmp_path / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">'
+        '<ItemGroup><PackageReference Include="X"/></ItemGroup></Project>')
+    props = tmp_path / "Directory.Packages.props"
+    props.write_text(
+        '<Project><ItemGroup>'
+        '<PackageVersion Include="X" Version="1.0.0"/></ItemGroup></Project>')
+    cand = HardenCandidate(
+        ecosystem="NuGet", name="X", manifest=str(csproj),
+        pin_style="exact", from_version="1.0.0", to_version="1.0.1",
+        crosses_major=False, status="promoted",
+        resolved_in=str(props),         # parser-set: version lives in props
+    )
+    out = tmp_path / "out"
+    _apply([cand], target=tmp_path, out_dir=out,
+           allow_major_without_review=False, allow_degraded=False,
+           ecosystem_allowlist=None)
+    proposed_props = out / "proposed" / "Directory.Packages.props"
+    proposed_csproj = out / "proposed" / "App.csproj"
+    assert proposed_props.exists() and 'Version="1.0.1"' in proposed_props.read_text()
+    assert not proposed_csproj.exists()
+
+
 def test_library_mode_directory_build_targets_no_longer_unsupported() -> None:
     """Directory.Build.targets was rejected as unsupported_manifest by the
     pre-follow-up harden._has_rewriter. With the new rewriter + dispatch +

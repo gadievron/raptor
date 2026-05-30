@@ -145,6 +145,14 @@ class HardenCandidate:
     selection: str = "highest_safe"
     # Reserved: the LLM impact analysis (Follow-up #7) populates this.
     impact_analysis: Optional[Dict[str, Any]] = None
+    # When the dep's version is owned by a *central* file (CPM
+    # Directory.Packages.props or pre-CPM Directory.Build.targets/props),
+    # ``manifest`` points at the csproj where the PackageReference is
+    # *declared* but the patch must go to the file that owns the version.
+    # Set from ``dep.source_extra['resolved_in']`` by the parser; consumed
+    # by ``_apply`` when building the ``_PlanEntry`` so the rewrite is
+    # routed to the right file. ``None`` for inline / non-central deps.
+    resolved_in: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +488,13 @@ def _plan_one(
     platform_matrix=None,
     library_mode: bool = False,
 ) -> HardenCandidate:
+    # The parser annotates a dep whose version is owned by a *central* file
+    # (CPM Directory.Packages.props, pre-CPM Directory.Build.targets/props)
+    # with ``source_extra['resolved_in']`` pointing at that file. Carry it on
+    # the candidate so ``_apply`` routes the rewrite there — without it the
+    # patch would target the csproj where the PackageReference is *declared*,
+    # which holds no Version to update.
+    resolved_in = (dep.source_extra or {}).get("resolved_in")
     cand = HardenCandidate(
         ecosystem=dep.ecosystem,
         name=dep.name,
@@ -488,6 +503,7 @@ def _plan_one(
         from_version=dep.version,
         to_version=None,
         crosses_major=False,
+        resolved_in=resolved_in,
     )
 
     # ``--pin-only``: skip loose pins entirely (don't convert ``>=X`` to
@@ -1374,13 +1390,21 @@ def _apply(
         # inline-install) still work; the ones that do (pom.xml,
         # package.json) refuse with a clear reason.
         installed = cand.from_version or ""
-        key = (cand.ecosystem, cand.name, cand.manifest)
+        # Route the rewrite to the file that OWNS the version. For CPM /
+        # pre-CPM central-version deps the parser set ``resolved_in`` to the
+        # central file (Directory.Packages.props / Directory.Build.targets /
+        # Directory.Build.props); fall back to ``manifest`` (the csproj where
+        # the dep is declared) for inline / non-central deps.
+        write_path = Path(cand.resolved_in) if cand.resolved_in else Path(cand.manifest)
+        # Dedup key by (eco, name, write_path) — two csprojs both inheriting
+        # the same central version collapse to one patch on the central file.
+        key = (cand.ecosystem, cand.name, str(write_path))
         plans[key] = _PlanEntry(
             ecosystem=cand.ecosystem,
             name=cand.name,
             installed=installed,
             target=cand.to_version,
-            manifest=Path(cand.manifest),
+            manifest=write_path,
             advisory_ids=[],
             # Library posture: the rewriter raises the floor to a range
             # (``>=target``) instead of corridor-pinning ``==target``.
