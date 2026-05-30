@@ -157,55 +157,48 @@ def test_import_sancov_wiring(tmp_path, monkeypatch):
     assert s.who_checked("prog.c", 2) == ["sancov"]
 
 
-@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
-def test_collect_sancov_live(tmp_path):
-    src = tmp_path / "prog.c"
-    src.write_text("int helper(int n){ return n+1; }\n"
-                   "int main(void){ return helper(2); }\n")
+@pytest.fixture(scope="session")
+def _a2l_prog(tmp_path_factory):
+    # Compile a tiny non-PIE C program ONCE per session — the three _live
+    # tests below all need the same ELF + main's PC. Cold-CI gcc dominates
+    # this test class; sharing the compile cuts ~2/3 of wall.
+    d = tmp_path_factory.mktemp("a2l_prog")
+    (d / "prog.c").write_text("int helper(int n){ return n+1; }\n"
+                              "int main(void){ return helper(2); }\n")
     subprocess.run(["gcc", "-g", "-O0", "-no-pie", "-o", "prog", "prog.c"],
-                   cwd=tmp_path, check=True, capture_output=True)
-    nm = subprocess.run(["nm", "prog"], cwd=tmp_path, check=True,
-                        capture_output=True, text=True)
-    main_v = next(int(ln.split()[0], 16) for ln in nm.stdout.splitlines()
-                  if ln.split()[-1] == "main" and ln.split()[1] in ("T", "t"))
-    sc = tmp_path / "cov.sancov"
-    _make_sancov(sc, [main_v])                 # non-PIE → PC == file vaddr
-    data = collect_mod.collect_sancov(sc, tmp_path / "prog")
-    assert any(p.endswith("prog.c") for p in data)
-    assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
-
-
-@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
-def test_collect_drcov_live(tmp_path):
-    src = tmp_path / "prog.c"
-    src.write_text("int helper(int n){ return n+1; }\n"
-                   "int main(void){ return helper(2); }\n")
-    subprocess.run(["gcc", "-g", "-O0", "-no-pie", "-o", "prog", "prog.c"],
-                   cwd=tmp_path, check=True, capture_output=True)
-    nm = subprocess.run(["nm", "prog"], cwd=tmp_path, check=True,
-                        capture_output=True, text=True)
-    main_v = next(int(ln.split()[0], 16) for ln in nm.stdout.splitlines()
-                  if ln.split()[-1] == "main" and ln.split()[1] in ("T", "t"))
-    dr = tmp_path / "cov.drcov"
-    # base 0 → the offset itself is the file vaddr (try-both also yields it).
-    _make_drcov(dr, str(tmp_path / "prog"), 0, [(main_v, 8)])
-    data = collect_mod.collect_drcov(dr, tmp_path / "prog")
-    assert any(p.endswith("prog.c") for p in data)
-    assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
-
-
-@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
-def test_collect_addr2line_live(tmp_path):
-    src = tmp_path / "prog.c"
-    src.write_text("int helper(int n){ return n+1; }\n"
-                   "int main(void){ return helper(2); }\n")
-    subprocess.run(["gcc", "-g", "-O0", "-no-pie", "-o", "prog", "prog.c"],
-                   cwd=tmp_path, check=True, capture_output=True)
-    nm = subprocess.run(["nm", "prog"], cwd=tmp_path, check=True,
+                   cwd=d, check=True, capture_output=True)
+    nm = subprocess.run(["nm", "prog"], cwd=d, check=True,
                         capture_output=True, text=True)
     main_addr = next(int(ln.split()[0], 16) for ln in nm.stdout.splitlines()
-                     if ln.split()[-1] == "main" and " T " in f" {ln.split()[1]} ")
-    data = collect_mod.collect_addr2line(tmp_path / "prog", [main_addr])
+                     if ln.split()[-1] == "main" and ln.split()[1] in ("T", "t"))
+    return d / "prog", main_addr
+
+
+@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
+def test_collect_sancov_live(_a2l_prog, tmp_path):
+    prog, main_v = _a2l_prog
+    sc = tmp_path / "cov.sancov"
+    _make_sancov(sc, [main_v])                 # non-PIE → PC == file vaddr
+    data = collect_mod.collect_sancov(sc, prog)
+    assert any(p.endswith("prog.c") for p in data)
+    assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
+
+
+@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
+def test_collect_drcov_live(_a2l_prog, tmp_path):
+    prog, main_v = _a2l_prog
+    dr = tmp_path / "cov.drcov"
+    # base 0 → the offset itself is the file vaddr (try-both also yields it).
+    _make_drcov(dr, str(prog), 0, [(main_v, 8)])
+    data = collect_mod.collect_drcov(dr, prog)
+    assert any(p.endswith("prog.c") for p in data)
+    assert 2 in next(v for p, v in data.items() if p.endswith("prog.c"))
+
+
+@pytest.mark.skipif(not _HAVE_A2L, reason="gcc/addr2line/nm not available")
+def test_collect_addr2line_live(_a2l_prog):
+    prog, main_addr = _a2l_prog
+    data = collect_mod.collect_addr2line(prog, [main_addr])
     # Resolves to prog.c at main's line (line 2).
     assert any(p.endswith("prog.c") for p in data)
     lines = next(v for p, v in data.items() if p.endswith("prog.c"))
