@@ -292,11 +292,73 @@ def _ollama_check_url() -> str:
     return f"{base}/api/tags"
 
 
+def _pinned_llm_config(model_name: str) -> 'LLMConfig':
+    """Build a minimal :class:`LLMConfig` for a caller-pinned model.
+
+    Bypasses the auto-resolution path entirely — no thinking-model
+    scoring, no fallback chain.  Calls the inferred provider's builder
+    directly via ``_PROVIDER_BUILDERS``, so the resolver's lenient
+    "fall through to whatever provider IS configured" behaviour can't
+    substitute a different provider for the one the caller pinned.
+
+    Provider inference: explicit ``provider/model`` syntax beats inference;
+    otherwise infer from the model-name prefix (``claude*`` -> anthropic,
+    ``gpt*`` -> openai, anything containing ``gemini`` -> gemini; default
+    anthropic).  When the inferred provider has no credentials configured,
+    returns a bare uncredentialed ``ModelConfig`` — callers that
+    authenticate by other means (e.g. Bedrock with AWS env credentials)
+    can still construct a working request; pure-key-auth callers will
+    hit the same auth error they would have at call time anyway.
+    """
+    from dataclasses import replace
+    from core.llm.config import ModelConfig, _PROVIDER_BUILDERS
+
+    if "/" in model_name:
+        provider, model_name = model_name.split("/", 1)
+    elif model_name.startswith("claude"):
+        provider = "anthropic"
+    elif "gemini" in model_name:
+        provider = "gemini"
+    elif model_name.startswith("gpt"):
+        provider = "openai"
+    else:
+        provider = "anthropic"
+
+    builder = _PROVIDER_BUILDERS.get(provider)
+    base = builder() if builder is not None else None
+    if base is None:
+        primary = ModelConfig(provider=provider, model_name=model_name, role="code")
+    else:
+        primary = replace(base, model_name=model_name, role="code")
+    return LLMConfig(primary_model=primary, fallback_models=[])
+
+
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
-    def __init__(self, config: Optional[LLMConfig] = None):
-        self.config = config or LLMConfig()
+    def __init__(self, config: Optional[LLMConfig] = None,
+                 *, pinned_model: Optional[str] = None):
+        """Construct the LLM client.
+
+        When ``pinned_model`` is set the caller commits to overriding the
+        model on every call.  We then BUILD a minimal :class:`LLMConfig`
+        targeted at the inferred provider — short-circuiting Step 1 of
+        ``_get_default_primary_model`` (env-var probe for that provider)
+        and skipping the thinking-model scoring path AND the fallback
+        chain entirely.  The previous behaviour resolved both, then
+        ignored them and logged a misleading "Primary model:
+        gemini-2.5-pro" banner; this skips the resolution at the source.
+
+        ``config`` takes precedence over ``pinned_model`` when both are
+        passed (caller knows what they want).
+        """
+        if config is not None:
+            self.config = config
+        elif pinned_model is not None:
+            self.config = _pinned_llm_config(pinned_model)
+        else:
+            self.config = LLMConfig()
+        self._pinned_model = pinned_model
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0
@@ -380,12 +442,22 @@ class LLMClient:
         self._cache_write_failures = 0
 
         logger.info("LLM Client initialized")
-        if self.config.primary_model:
+        if self._pinned_model:
+            # Caller has signalled it will override the model on every call.
+            # Suppress the misleading "Primary: <auto-selected>" and
+            # "Fallback models: N" lines — those reflect the operator's
+            # default config, but none of them will actually fire in this
+            # run.  Log what WILL fire instead.
+            logger.info(
+                f"Pinned model: {self._pinned_model} "
+                f"(caller override; RAPTOR config defaults bypassed)"
+            )
+        elif self.config.primary_model:
             logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
+            if self.config.enable_fallback:
+                logger.info(f"Fallback models: {len(self.config.fallback_models)}")
         else:
             logger.warning("LLM Client initialized with no primary model — all calls will fail")
-        if self.config.enable_fallback:
-            logger.info(f"Fallback models: {len(self.config.fallback_models)}")
 
         # Warn if using Ollama for exploit generation
         if self.config.primary_model and self.config.primary_model.provider.lower() == "ollama":
