@@ -49,6 +49,9 @@ EXPECTED_RULES = {
     "compile_time": {
         "no_sanitize_attr.cocci",
     },
+    "concurrency": {
+        "lock_sites.cocci",
+    },
     "hazards": {
         "deprecated_functions.cocci",
         "signed_alloc.cocci",

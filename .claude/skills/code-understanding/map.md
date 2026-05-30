@@ -248,12 +248,25 @@ the function *is*) alongside the LLM's narrative (what the function
 this without re-parsing source. Idempotent. Skip if
 `$WORKDIR/checklist.json` doesn't exist or doesn't carry `target_path`.
 
-**[MAP-5d] Enrich with ownership / privilege sites (C/C++)**
+**[MAP-5d] Enrich with ownership / privilege / shared-state sites (C/C++)**
 
 After normalisation, run the site enricher. Uses `source_intel` (cocci) to
-attach `ownership_model` (alloc / checked-alloc / paired-free / double-free
-sites) and `privilege_model` (capability-check / LSM-hook sites) sections,
-each entry carrying `kind`, `file`, `line`, and `function`.
+attach three Phase B sections, each entry carrying `kind`, `file`, `line`,
+and `function`:
+
+* `ownership_model` — alloc / checked-alloc / paired-free / double-free sites
+  (extras: `allocator`, `free_fn`, `role`)
+* `privilege_model` — capability-check / LSM-hook sites
+  (extras: `name`, `grade`)
+* `shared_state` — lock acquire/release sites covering kernel spinlock /
+  mutex / rwlock and POSIX `pthread_mutex` (kernel: variants `_irq`,
+  `_irqsave`, `_bh`, `_interruptible`, `_killable`, `_trylock`; rw: read /
+  write variants). Entry `kind` is the compound `<lock_kind>_<op>`
+  (e.g. `spin_acquire`, `mutex_release`); extras: `fn` (concrete function
+  matched, e.g. `spin_lock_irqsave`), `lock_var` (first-arg expression,
+  whitespace-normalised). Atomics, RCU, and C++ scope-based locks
+  (`std::lock_guard`) are intentionally out of scope here — each has
+  semantics worth its own evidence shape and is deferred.
 
 ```bash
 libexec/raptor-enrich-context-map-sites "$WORKDIR"
@@ -261,10 +274,13 @@ libexec/raptor-enrich-context-map-sites "$WORKDIR"
 
 These are the *mechanical* halves of those sections — deterministic call
 sites, no LLM. (Semantic analysis — refcount-protocol anomalies, ownership
-transfers, privilege bypass paths — is the LLM's job when you populate the
-narrative.) Skip-silent: no-ops on non-C/C++ targets or when `spatch` isn't
-on PATH, so it only adds a cocci pass where it has something to find.
-Idempotent. Skip if `$WORKDIR/checklist.json` lacks `target_path`.
+transfers, privilege bypass paths, lock imbalance — is the LLM's job when
+you populate the narrative. Lock *imbalance* specifically has its own
+finding-style cocci at `engine/coccinelle/rules/lock_imbalance.cocci` for
+the bug-shape; this enrichment is enumeration only.) Skip-silent: no-ops on
+non-C/C++ targets or when `spatch` isn't on PATH, so it only adds a cocci
+pass where it has something to find. Idempotent. Skip if
+`$WORKDIR/checklist.json` lacks `target_path`.
 
 **[MAP-6] Record Coverage**
 

@@ -106,6 +106,24 @@ def build_privilege_model(si: "SourceIntelResult") -> List[Dict[str, Any]]:
     return out
 
 
+def build_shared_state(si: "SourceIntelResult") -> List[Dict[str, Any]]:
+    """Lock acquire / release sites — spin / mutex / rw / pthread.
+
+    Site `kind` is `<lock_kind>_<op>` (e.g. `spin_acquire`, `mutex_release`)
+    so consumers can filter on a single field. The concrete function
+    (`fn`) and lock expression (`lock_var`) ride alongside.
+    """
+    out: List[Dict[str, Any]] = []
+    for ls in getattr(si, "lock_sites", ()) or ():
+        kind = f"{getattr(ls, 'kind', '')}_{getattr(ls, 'op', '')}"
+        out.append(_site(
+            kind, ls,
+            fn=getattr(ls, "fn", None),
+            lock_var=getattr(ls, "lock_var", None),
+        ))
+    return out
+
+
 def enrich_context_map_with_sites(
     cmap: Dict[str, Any], si: "SourceIntelResult",
     *, repo_root: Optional[Union[str, Path]] = None,
@@ -129,13 +147,14 @@ def enrich_context_map_with_sites(
     merge-vs-replace decision — resolve it then, against that layer's design
     (the intended flow is mechanical-sites-first, LLM-enriches-on-top).
     """
-    counts = {"ownership_model": 0, "privilege_model": 0}
+    counts = {"ownership_model": 0, "privilege_model": 0, "shared_state": 0}
     if not isinstance(cmap, dict):
         return counts
     root = Path(repo_root) if repo_root is not None else None
     for key, builder in (
         ("ownership_model", build_ownership_model),
         ("privilege_model", build_privilege_model),
+        ("shared_state", build_shared_state),
     ):
         try:
             sites = builder(si)
