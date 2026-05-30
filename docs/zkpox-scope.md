@@ -101,11 +101,12 @@ single risk in the trust chain.
 You trust that the guest ELF embedded by the prover matches the source
 you can inspect at `core/zkpox/guest/`. The verifier checks
 `proof.verifier_key_hash` against the SDK-derived verifying key digest;
-that key is itself a function of the ELF. *Phase 1.5 caveat: this hash
-is a placeholder in the bundles produced today. Phase 1.5.x wires it
-to the real `sp1-sdk` digest.* Until then, `zkpox-verify` refuses to
-write a bundle without `--allow-placeholder-hashes` and emits a loud
-warning when that flag is on.
+that key is itself a function of the ELF. As of **Phase 1.5.1** this
+hash binds to the real `sp1-sdk` digest (extracted via
+`HashableKey::bytes32` at prove time); the producer no longer writes
+placeholder strings. As of **Phase 1.5.2** the standalone Rust
+verifier re-derives the vkey from the embedded ELF and refuses any
+mismatch under strict mode.
 
 ### age (the vendor envelope)
 
@@ -199,11 +200,12 @@ to the proof.** A producer could ship a bundle whose plaintext claims
 against target #1.
 
 What *is* committed to the proof is `target_id` (one of the five
-public values). Once Phase 1.5.x wires real STARK verification, a
-verifier that reads the public values will catch this lie immediately
-— the public-value `target_id` won't match the plaintext claim. *Until
-then, this is the most important reason to wait for 1.5.x before
-relying on a ZKPoX bundle for a real disclosure.*
+public values). As of **Phase 1.5.2** the standalone Rust verifier
+runs the SP1 STARK verification on the bundle's `proof.bytes` against
+the vkey derived from the embedded guest ELF — a verifier that reads
+the public values will catch a plaintext/public-value mismatch
+immediately. The plaintext fields stay useful as machine-parseable
+metadata; the proof is the load-bearing binding.
 
 ---
 
@@ -270,26 +272,31 @@ Named explicitly so reviewers know what isn't here:
 ```
 
 The output JSON includes a `structural_checks_passed` boolean and a
-human-readable rendering of every field. *In Phase 1.5*, exit code 0
-means "the CBOR parses, the lengths look right, the fingerprints
-match" — NOT "the STARK is valid" or "Rekor's anchor is in the tree."
-The `stark_verification` and `rekor_inclusion_verification` fields
-make this explicit ("DEFERRED" strings).
+human-readable rendering of every field. From **Phase 1.5.4** strict
+mode is the default — exit code 0 means structural checks passed AND
+every wired verification (SP1 STARK from 1.5.2; Python anchor
+verification from 1.5.3) reported `OK`. The `stark_verification` and
+`rekor_inclusion_verification` fields report the per-check verdict
+verbatim; remaining `DEFERRED` items (currently: Rust offline Rekor
+inclusion, pending Phase 1.5.3.x) cause strict mode to exit non-zero.
 
-To force the verifier to fail loudly on any deferred check, pass
-`--strict`. That flag becomes the default in Phase 1.5.x once the
-deferred checks land.
+To skip a DEFERRED check (knowingly, e.g. while 1.5.3.x is in
+flight), pass `--no-strict`.
 
 What you're checking, as a non-cryptographer:
 
 - Does the bundle parse? (`structural_checks_passed`)
+- Did the SP1 STARK proof verify? (`stark_verification` starts with
+  `"OK"` under `full-verify`.)
 - Does the gadget id match the claim in the disclosure? (Compare
-  `gadget_id` to the vendor's spec.)
+  `gadget_id` to the vendor's spec; `gadget_code_hash` (1.5.1+) lets
+  you reproduce the binding from the gadget's published file
+  manifest.)
 - Does the proof system match a release you trust? (`proof.system`,
   e.g. `sp1-stark-core/v6.1.0`.)
 - Was it anchored, and how long ago? (`timestamp.integrated_time` if
   present; convert from Unix epoch.)
-- For a real assurance pass, wait until 1.5.x — at which point
-  `zkpox-verify --strict` will also (a) reproduce the SP1 STARK
-  verification, (b) reconstruct the Rekor Merkle inclusion proof, and
-  (c) confirm `bundle_hash_pre_timestamp` matches what Rekor recorded.
+- For an anchored bundle, did the Rekor inclusion proof verify?
+  Today the Python verify path with `log_pubkey_pem` does the full
+  Merkle + SET signature check; the Rust offline path's Rekor wire
+  lands in 1.5.3.x.
