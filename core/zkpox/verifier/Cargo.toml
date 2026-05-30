@@ -12,12 +12,24 @@ path = "src/main.rs"
 # RAPTOR (vendors and CVE numbering authorities should be able to verify
 # proofs without our Python toolchain).
 #
-# Phase 1.3: parses the CBOR bundle, validates structural invariants
-# (gadget hash, envelope fingerprint, vendor pubkey fingerprint), prints
-# a summary. STARK verification itself is wired in 1.3.x / 1.5 — adding
-# sp1-sdk here doubles the verifier's compile time and the integration
-# benefits from landing alongside the disclosure-engineer command surface
-# rather than as part of the bundle producer.
+# Phase 1.5.2 added the ``full-verify`` feature (default): the verifier
+# links sp1-sdk, embeds the same guest ELF the prover uses, re-derives
+# the verifying key, and runs the STARK verify against the bundle's
+# proof bytes. The ``structural`` feature (opt-out via
+# ``--no-default-features --features structural``) keeps the original
+# 1.3/1.5 behaviour — no sp1-sdk, fast CI builds, structural checks only.
+
+[features]
+default = ["full-verify"]
+# Structural checks only (CBOR shape, envelope fingerprint, version
+# binding). No sp1-sdk, no proving-toolchain dependency. Use for CI
+# fast tiers and environments without the SP1 build chain.
+structural = []
+# Adds the SP1 STARK verification pass on top of the structural
+# checks. Pulls in sp1-sdk (heavy compile-time cost; ~doubles the
+# verifier build), bincode (for deserialising proof.bytes from the
+# bundle), and the same guest ELF the prover embeds.
+full-verify = ["dep:sp1-sdk", "dep:bincode"]
 
 [dependencies]
 anyhow = "1.0"
@@ -27,3 +39,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 hex = "0.4"
+# Phase 1.5.2 — gated behind the ``full-verify`` feature so a
+# structural-only build doesn't pay the sp1-sdk compile cost. Same
+# version pin as the prover (core/zkpox/prover/Cargo.toml) so the
+# producer and verifier agree on the proof / vkey wire format.
+sp1-sdk = { version = "6.0.1", optional = true, features = ["blocking", "native-gnark"] }
+# Matches what sp1-sdk's ``SP1ProofWithPublicValues::save`` writes; the
+# verifier needs the inverse to deserialise ``proof.bytes`` from the
+# bundle. Optional because the structural feature doesn't need it.
+bincode = { version = "1.3", optional = true }
+
+[build-dependencies]
+# Used to compile the SP1 guest into an ELF that ``full-verify`` then
+# embeds via ``include_elf!``. The build script itself is feature-aware
+# (keys on ``CARGO_FEATURE_FULL_VERIFY``) so a structural-only build
+# skips the SP1 build step entirely; sp1-build itself is a thin crate
+# so leaving it unconditional in build-deps is cheap.
+sp1-build = { version = "6.0.1" }
