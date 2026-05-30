@@ -72,11 +72,13 @@ def _resolve_prover_binary() -> Path:
 # sees it. Printed to stderr so it doesn't pollute stdout JSON output.
 _EXPERIMENTAL_BANNER = (
     "[zkpox] ============================================================\n"
-    "[zkpox] EXPERIMENTAL (beta) — Phase 1.5.x. Subject to change; the\n"
-    "[zkpox] proof system, bundle format, and verifier are NOT stable.\n"
-    "[zkpox] Standalone STARK + Rekor verification land in Phase 1.5.2 /\n"
-    "[zkpox] 1.5.3; ``--strict`` becomes the default in 1.5.4.\n"
-    "[zkpox] Scope statement: docs/zkpox-scope.md\n"
+    "[zkpox] EXPERIMENTAL — ZKPoX is beta. Phase 1.5.x landed real vkey/\n"
+    "[zkpox] harness binding (1.5.1), standalone STARK verification\n"
+    "[zkpox] (1.5.2), and Rekor Merkle + SET verify (1.5.3); strict mode\n"
+    "[zkpox] is the default verifier behaviour from 1.5.4.\n"
+    "[zkpox] Bundle format and verifier semantics may still change as\n"
+    "[zkpox] 1.6+ lands (Rust-side offline Rekor wire, multi-gadget\n"
+    "[zkpox] dispatch). Scope statement: docs/zkpox-scope.md\n"
     "[zkpox] ============================================================"
 )
 
@@ -174,15 +176,15 @@ def cmd_prove(args: argparse.Namespace) -> int:
                 "--target to use the manifest's recorded hash."
             )
 
-    # Phase 1.5.1: the placeholder gate (``--allow-placeholder-hashes``)
-    # is gone — bundles now bind to the real SP1 vkey + guest ELF, read
-    # from the prove record below. The flag stays as a deprecation
-    # no-op for one release cycle so existing operator scripts don't
-    # break; remove entirely in Phase 1.5.4.
+    # Phase 1.5.4: ``--allow-placeholder-hashes`` is gone — the flag was
+    # removed from the argparse below. If anyone still passes it via a
+    # stale wrapper script that constructs args directly, log + ignore;
+    # the bundle binds to the real vkey + guest ELF either way.
     if getattr(args, "allow_placeholder_hashes", False):
         logger.warning(
-            "[zkpox] --allow-placeholder-hashes is a Phase 1.5.1 no-op "
-            "(the placeholders are gone). It will be removed in 1.5.4."
+            "[zkpox] --allow-placeholder-hashes has been removed in "
+            "Phase 1.5.4 — the placeholders are gone since 1.5.1. "
+            "Drop the flag from any wrapper scripts that still pass it."
         )
 
     # ---- 1. Drive the Rust prover on the bundle's witness -------------
@@ -449,17 +451,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--harness-rev",
                     help="Harness source git revision")
     pp.add_argument("--tag", help="Bench tag for the prover record")
-    pp.add_argument(
-        "--allow-placeholder-hashes",
-        action="store_true",
-        help=(
-            "DEPRECATED — no-op since Phase 1.5.1. The placeholder "
-            "verifier_key_hash and harness.hash are gone; bundles now "
-            "bind to the real SP1 vkey + guest ELF via the prove "
-            "record. Flag is preserved for one release cycle for script "
-            "compatibility; removed in Phase 1.5.4."
-        ),
-    )
+    # Phase 1.5.4 removed ``--allow-placeholder-hashes`` from the parser
+    # entirely. The Phase 1.5.1 no-op + deprecation cycle is done. A
+    # stale wrapper script that still passes the flag now gets an
+    # argparse "unrecognised argument" error — intentional, so the
+    # caller updates rather than silently flipping into a different
+    # bundle shape than they expect.
     pp.add_argument(
         "--out",
         help=(

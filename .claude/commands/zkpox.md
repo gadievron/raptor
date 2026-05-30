@@ -60,13 +60,17 @@ python3 raptor.py zkpox reproduce out/disclosure-001/zkpox/<hash>/ --n 5
 #    prove takes the BUNDLE DIR — it reads witness.bin, the target
 #    hash, the outcome, and the Tier 1.5 reproduction evidence straight
 #    from manifest.json. proof.bin / bundle.cbor land in the bundle dir.
+#    Bundle binds to the real SP1 vkey + guest ELF + gadget code hash
+#    (no placeholders since Phase 1.5.1).
 python3 raptor.py zkpox prove out/disclosure-001/zkpox/<hash>/ \
     --target ./vulnerable-binary \
     --vendor-pubkey "$(cat vendor.age.pub)" \
-    --gadget-id "memory-safety::oob-write@0.1.0" \
-    --allow-placeholder-hashes
+    --gadget-id "memory-safety::oob-write@0.1.0"
 
-# 5. Verify the produced bundle (structural in 1.5; full STARK in 1.5.x).
+# 5. Verify the produced bundle. Strict by default since Phase 1.5.4 —
+#    STARK verification (1.5.2) and structural checks must all pass.
+#    Pass --no-strict to skip DEFERRED checks (currently: Rust offline
+#    Rekor inclusion, pending the bundle schema extension in 1.5.3.x).
 python3 raptor.py zkpox verify out/disclosure-001/zkpox/<hash>/bundle.cbor
 ```
 
@@ -94,12 +98,31 @@ Same exit-code semantics (0 = pass, 1 = structural fail, 2 = argument error).
 
 ## Status
 
-**Beta — Phase 1.5.** The `proof.verifier_key_hash` and `harness.hash`
-are placeholders until Phase 1.5.x replaces them with the real
-`sp1-sdk` verifying-key digest and harness binary hash. `prove` refuses
-to write a bundle without an explicit `--allow-placeholder-hashes`
-opt-in; the verifier prints a loud warning. Do not use for real
-coordinated disclosure until 1.5.x lands.
+**Beta — Phase 1.5.4.** The Phase 1.5.x credibility-gap work is
+complete on the producer side and on the Python verify path:
 
-Background: `docs/proposals/raptor-zkpox-design.md` and
-`docs/zkpox-scope.md`.
+- **Phase 1.5.1** — `proof.verifier_key_hash` binds to the real SP1
+  vkey, `harness.hash` to the real guest ELF, and `gadget_code_hash`
+  to the gadget's declared file manifest. No placeholders.
+- **Phase 1.5.2** — the standalone Rust verifier (`full-verify`
+  feature, default) re-derives the vkey from an embedded guest ELF,
+  checks the bundle's hashes against it, and runs the SP1 STARK
+  verification on the proof bytes.
+- **Phase 1.5.3** — Python anchor verification does RFC 6962 Merkle
+  inclusion + Rekor v1 SET (Signed Entry Timestamp) signature
+  validation against an operator-pinned log pubkey.
+- **Phase 1.5.4** — `--strict` is the default verifier behaviour;
+  `--allow-placeholder-hashes` removed; "do NOT use for real
+  disclosure" framing dropped.
+
+Still labelled "experimental" because the broader ecosystem (SP1
+zkVM, Rekor v2 witnessing model, Sigstore TUF) is still evolving and
+because **Rust-side offline Rekor inclusion verification** is still
+DEFERRED — pending a small bundle schema extension to carry the entry
+body bytes (Phase 1.5.3.x). Operators verifying anchored bundles via
+the standalone Rust verifier need `--no-strict` until that lands; the
+Python verify path with `log_pubkey_pem` already does the full
+inclusion + SET check.
+
+Background: `docs/proposals/raptor-zkpox-design.md`,
+`docs/proposals/zkpox-phase-1.5.x.md`, `docs/zkpox-scope.md`.

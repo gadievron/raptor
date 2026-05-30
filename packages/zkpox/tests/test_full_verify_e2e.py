@@ -121,9 +121,6 @@ def test_prove_bundle_verify_round_trip_under_strict(tmp_path):
             str(ZKPOX_DISPATCHER), "prove", str(bundle_dir),
             "--wrap", "core",
             "--gadget-id", "crash-only@0.1.0",
-            # The placeholder gate has been a no-op since Phase 1.5.1;
-            # pass it anyway so a legacy script path stays exercised.
-            "--allow-placeholder-hashes",
             "--no-anchor",
             "--out", str(out_dir),
         ],

@@ -60,7 +60,7 @@ const SUPPORTED_ENVELOPE_PREFIX: &str = "zkpox-aes256gcm+age+tlock-drand-quickne
 const SENTINEL_ENVELOPE_NONE: &str = "zkpox-none/v1";
 
 #[derive(Parser, Debug)]
-#[command(about = "Verify a zkpox CBOR disclosure bundle (structural; STARK verification is Phase 1.5.x)")]
+#[command(about = "Verify a zkpox CBOR disclosure bundle (Phase 1.5.4 — strict by default)")]
 struct Args {
     /// Path to the CBOR bundle.
     bundle: PathBuf,
@@ -69,12 +69,20 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// Exit non-zero on any DEFERRED check (STARK, Rekor inclusion).
-    /// Default off in Phase 1.5; becomes the default once 1.5.x lands
-    /// the deferred checks. Use this in CI / automated disclosure
-    /// pipelines so a structural-only pass is not silently treated as
-    /// "the bundle is verified."
+    /// Phase 1.5.4 — strict mode is now the DEFAULT. Use this flag to
+    /// suppress the strict-mode failure on a DEFERRED check
+    /// (currently: Rust offline Rekor inclusion, pending the bundle
+    /// schema extension in Phase 1.5.3.x). Operators with bundles
+    /// that carry a Rekor timestamp and want a clean exit can use
+    /// ``--no-strict`` until 1.5.3.x lands; STARK + structural
+    /// checks still run.
     #[arg(long)]
+    no_strict: bool,
+
+    /// Deprecated since Phase 1.5.4 — kept as a no-op alias for
+    /// scripts that still pass it. Strict is now the default. Will
+    /// be removed in a future release.
+    #[arg(long, hide = true)]
     strict: bool,
 }
 
@@ -220,6 +228,15 @@ fn main() -> Result<()> {
     };
 
     let summary = inspect(&map)?;
+    // Phase 1.5.4: strict is the default; ``--no-strict`` opts out.
+    // The legacy ``--strict`` flag is kept as a hidden no-op alias
+    // so existing scripts that still pass it don't break.
+    let strict = !args.no_strict;
+    if args.strict {
+        eprintln!(
+            "[zkpox] --strict is a no-op in Phase 1.5.4 (strict is now the default)."
+        );
+    }
 
     if args.json {
         let out = serde_json::to_string_pretty(&summary)?;
@@ -227,35 +244,34 @@ fn main() -> Result<()> {
     } else {
         print_human(&summary);
         if summary.experimental {
-            // Always-on beta marker — fires even with --strict so an
-            // operator running a strict pipeline still sees "this
-            // bundle was produced by an experimental version of the
-            // toolchain." Suppressed in --json so automated consumers
-            // parse the `experimental` field instead.
+            // Always-on beta marker — ZKPoX as a whole stays
+            // experimental even as 1.5.x closes the verification
+            // gap, because the SP1 zkVM and Rekor v2 layers are
+            // still evolving (see docs/proposals/zkpox-phase-1.5.x.md
+            // §13). Suppressed in --json so automated consumers parse
+            // the ``experimental`` field instead.
             eprintln!();
             eprintln!(
-                "  EXPERIMENTAL BUNDLE — produced by Phase 1.5 (beta) zkpox."
+                "  EXPERIMENTAL — ZKPoX is beta. Bundle format and verifier"
             );
             eprintln!(
-                "  Bundle format and verifier semantics are subject to change."
+                "  semantics are subject to change as 1.6+ lands. See"
             );
             eprintln!(
-                "  Do NOT use this bundle for real CVE disclosure."
-            );
-            eprintln!(
-                "  Scope: docs/zkpox-scope.md"
+                "  docs/zkpox-scope.md for the current trust model."
             );
         }
-        if !args.strict {
+        if !strict {
             // Loud banner so a casual reader doesn't mistake exit 0
-            // for "the bundle is verified." Suppressed in --json so
-            // automated consumers parse the verdict fields instead.
+            // under --no-strict for "the bundle is fully verified."
+            // Suppressed in --json so automated consumers parse the
+            // verdict fields directly.
             eprintln!();
             eprintln!(
-                "  MODE: structural-only — STARK proof and Rekor inclusion checks are DEFERRED."
+                "  MODE: --no-strict — DEFERRED checks are skipped (treated as PASS)."
             );
             eprintln!(
-                "        Pass --strict to fail on any deferred check."
+                "        Drop --no-strict to require every check to complete."
             );
         }
     }
@@ -263,16 +279,20 @@ fn main() -> Result<()> {
     if !summary.structural_checks_passed {
         std::process::exit(1);
     }
-    // --strict treats any DEFERRED check as a hard failure. Phase 1.5
-    // ships with both STARK and Rekor inclusion deferred; in 1.5.x the
-    // strict path narrows as each lands.
-    if args.strict {
+    // Phase 1.5.4: strict (now the default) treats any DEFERRED
+    // check as a hard failure. Phase 1.5.2 lands STARK verification;
+    // Phase 1.5.3 lands Python Merkle + SET. The Rust-side offline
+    // Rekor inclusion verify is still DEFERRED pending the bundle
+    // schema extension in Phase 1.5.3.x — operators verifying
+    // anchored bundles from the standalone Rust verifier need
+    // ``--no-strict`` until that lands.
+    if strict {
         let stark_done = !summary.stark_verification.starts_with("DEFERRED");
         let rekor_done = summary.timestamp.is_none()
             || !summary.rekor_inclusion_verification.starts_with("DEFERRED");
         if !stark_done || !rekor_done {
             eprintln!();
-            eprintln!("FAIL (--strict): deferred checks are present:");
+            eprintln!("FAIL (strict): deferred checks are present:");
             if !stark_done {
                 eprintln!("  - stark_verification: {}", summary.stark_verification);
             }
@@ -282,6 +302,10 @@ fn main() -> Result<()> {
                     summary.rekor_inclusion_verification,
                 );
             }
+            eprintln!(
+                "        Pass --no-strict to suppress (the underlying \
+                checks remain DEFERRED).",
+            );
             std::process::exit(2);
         }
     }
