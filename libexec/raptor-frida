@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+#
+# raptor-frida - libexec wrapper that runs a Frida session inside a
+# lifecycle-managed output directory.
+#
+# Two consumers:
+#   * .claude/skills/frida/SKILL.md invokes this directly via Bash, so
+#     the /frida slash command lands in a tracked run dir.
+#   * raptor.py mode "frida" (bin/raptor frida) calls this for the
+#     same reason - it's the single source of truth for the lifecycle
+#     plumbing.
+#
+# Usage:
+#   libexec/raptor-frida --target <pid|name|binary> --template <name>
+#                         [--script <path>] [--host HOST[:PORT]]
+#                         [--usb] [--duration N] [--spawn]
+#                         [--unsafe-attach] [--out DIR]
+#
+# If --out is omitted, an output dir is resolved via
+# raptor-run-lifecycle (active project or out/frida_<ts>/).
+
+set -euo pipefail
+
+# ─── trust-marker check (inline by design - do not source from a shared file) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor frida' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────────────
+
+# ─── resolve RAPTOR_DIR through symlinks (matches raptor-agentic) ───
+SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-frida: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
+    echo "raptor-frida: cannot find raptor.py under $RAPTOR_DIR" >&2
+    exit 1
+fi
+
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
+
+export RAPTOR_DIR
+# Make `python3 -m core.dynamic.frida.cli` importable regardless of the
+# caller's cwd. Relying on cwd==RAPTOR_DIR (the caller having cd'd in)
+# silently breaks direct `libexec/raptor-frida` invocations and the
+# `raptor frida` route once it stops cd-ing (so operator-relative
+# --target paths resolve against the operator's cwd, not the repo).
+export PYTHONPATH="$RAPTOR_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+# ─── short-circuit query modes (no target / lifecycle needed) ───────
+# --list-templates and -h/--help just print and exit; running them
+# through the lifecycle would create an empty run dir for nothing.
+for a in "$@"; do
+    case "$a" in
+        --list-templates|-h|--help)
+            exec python3 -m core.dynamic.frida.cli "$@"
+            ;;
+    esac
+done
+
+# ─── extract --target and --out from args for lifecycle setup ───────
+# We can't trust positional order - pull them out of the argv carefully.
+TARGET=""
+OUT=""
+PASS_ARGS=()
+i=0
+ARGS=("$@")
+while [ $i -lt ${#ARGS[@]} ]; do
+    a="${ARGS[$i]}"
+    case "$a" in
+        --target)
+            i=$((i + 1))
+            TARGET="${ARGS[$i]:-}"
+            PASS_ARGS+=("--target" "$TARGET")
+            ;;
+        --target=*)
+            TARGET="${a#--target=}"
+            PASS_ARGS+=("--target=$TARGET")
+            ;;
+        --out)
+            i=$((i + 1))
+            OUT="${ARGS[$i]:-}"
+            ;;
+        --out=*)
+            OUT="${a#--out=}"
+            ;;
+        *)
+            PASS_ARGS+=("$a")
+            ;;
+    esac
+    i=$((i + 1))
+done
+
+if [ -z "$TARGET" ]; then
+    echo "raptor-frida: --target is required" >&2
+    exit 2
+fi
+
+# ─── resolve output dir via run lifecycle if not provided ──────────
+if [ -z "$OUT" ]; then
+    # raptor-run-lifecycle's last line is OUTPUT_DIR=<path>. Capture
+    # all output and pluck it out so any warnings stay visible.
+    LIFECYCLE_OUT=$("$RAPTOR_DIR/libexec/raptor-run-lifecycle" \
+        start frida --target "$TARGET")
+    LIFECYCLE_RC=$?
+    echo "$LIFECYCLE_OUT"
+    if [ $LIFECYCLE_RC -ne 0 ]; then
+        echo "raptor-frida: run lifecycle start failed" >&2
+        exit $LIFECYCLE_RC
+    fi
+    OUT="$(echo "$LIFECYCLE_OUT" | awk -F= '/^OUTPUT_DIR=/ {print $2; exit}')"
+    if [ -z "$OUT" ]; then
+        echo "raptor-frida: could not parse OUTPUT_DIR from lifecycle" >&2
+        exit 1
+    fi
+    LIFECYCLE_OWNED=1
+else
+    LIFECYCLE_OWNED=0
+fi
+
+PASS_ARGS+=("--out" "$OUT")
+
+# ─── run the Python CLI ─────────────────────────────────────────────
+set +e
+python3 -m core.dynamic.frida.cli "${PASS_ARGS[@]}"
+RC=$?
+set -e
+
+# ─── lifecycle close-out (only if we opened it) ─────────────────────
+if [ $LIFECYCLE_OWNED -eq 1 ]; then
+    if [ $RC -eq 0 ]; then
+        "$RAPTOR_DIR/libexec/raptor-run-lifecycle" complete "$OUT" || true
+    else
+        "$RAPTOR_DIR/libexec/raptor-run-lifecycle" fail "$OUT" \
+            "frida cli exited $RC" || true
+    fi
+fi
+
+exit $RC

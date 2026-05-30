@@ -19,6 +19,7 @@ Available Modes:
     agentic     - Full autonomous workflow
     codeql      - CodeQL-only analysis
     doctor      - Status report for local setup (no claude needed)
+    frida       - Dynamic instrumentation via Frida (alpha)
     help        - Show detailed help for a specific mode
 
 Examples:
@@ -1044,6 +1045,27 @@ def mode_doctor(args: list) -> int:
     return doctor_main(args)
 
 
+def mode_frida(args: list) -> int:
+    """Run a Frida dynamic-instrumentation session.
+
+    The libexec wrapper owns lifecycle setup (output directory + run
+    state tracking) and dispatches to :mod:`core.dynamic.frida.cli`.
+    Routing through the wrapper rather than calling the cli module
+    directly keeps the lifecycle behaviour identical whether the
+    operator runs ``bin/raptor frida ...`` or invokes the wrapper
+    directly from a /frida skill.
+    """
+    import subprocess
+    script_root = Path(__file__).parent
+    wrapper = script_root / "libexec" / "raptor-frida"
+    if not wrapper.exists():
+        print(f"✗ Frida wrapper not found: {wrapper}")
+        return 1
+    env = os.environ.copy()
+    env.setdefault("_RAPTOR_TRUSTED", "1")
+    return subprocess.call([str(wrapper), *args], env=env)
+
+
 def _mode_help_scripts() -> dict:
     """Map mode name → the script whose argparse renders that mode's help.
 
@@ -1130,6 +1152,7 @@ Available Modes:
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
   doctor      - Status report for local setup (no claude needed)
+  frida       - Dynamic instrumentation via Frida (alpha)
 
 Examples:
   # Full autonomous workflow
@@ -1264,6 +1287,7 @@ def main():
         'analyze': mode_llm_analysis,
         'doctor': mode_doctor,
         'describe': mode_describe,
+        'frida': mode_frida,
     }
     
     if mode not in mode_handlers:
