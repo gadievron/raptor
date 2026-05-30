@@ -15,12 +15,15 @@ Persistence shape (JSON, ``out/llm_scorecard.json`` by default)::
             "last_seen_at":  "2026-05-06T...",
             "model_version": "claude-haiku-4-5-20251001",
             "policy_override": "auto",          // auto | force_short_circuit | force_fall_through
-            "events": {
-              "cheap_short_circuit":   {"correct": 47, "incorrect": 1},
-              "multi_model_consensus": {"correct":  0, "incorrect": 0},
-              "judge_review":          {"correct":  0, "incorrect": 0},
-              "tool_evidence":         {"correct":  0, "incorrect": 0},
-              "operator_feedback":     {"correct":  0, "incorrect": 0}
+            "events": {                            // v2: per-type "YYYY-MM" age buckets
+              "cheap_short_circuit": {
+                "2026-05": {"correct": 30, "incorrect": 1},
+                "2026-04": {"correct": 17, "incorrect": 0}
+              },
+              "multi_model_consensus": {},
+              "judge_review":          {},
+              "tool_evidence":         {},
+              "operator_feedback":     {}
             },
             "disagreement_samples": [
               {
@@ -54,12 +57,23 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from core.json import save_json
+from core.llm.scorecard.freshness import (
+    bucket_key,
+    flatten_counts,
+    is_bucketed,
+    weighted_counts,
+)
 from core.logging import get_logger
 
 logger = get_logger()
 
 
-SCHEMA_VERSION = 1
+# v2 (2026-05): per-event-type counts are stratified into "YYYY-MM" age buckets
+# (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
+# flat ``{"correct", "incorrect"}``, so reads can freshness-weight by bucket age.
+# Migration from v1 folds the flat counts into a single bucket keyed by the
+# cell's last-seen month. See ``freshness.py`` + ``~/design/scorecard-model-versioning.md``.
+SCHEMA_VERSION = 2
 
 # Wilson 95% upper bound is the gate; this many failures (or failure
 # rate, computed by Wilson on the success/failure split) above this
@@ -128,6 +142,14 @@ class EventType:
     # heuristic-first with a 2-step LLM tiebreak, no ground-truth
     # calibration.
     EXPLOIT_INTENT_MATCH = "exploit_intent_match"
+    # Per-call structured-output validity: did the response parse + match the
+    # schema. ``correct`` = passed first time, ``incorrect`` = failed (the
+    # provider may retry internally; this records the externally-observable
+    # outcome only). Producer: ``LLMClient.generate_structured`` via the
+    # run-end lifecycle flush. Recorded under the ``_structured`` decision
+    # class so it's a universal "how often does this model follow the schema"
+    # axis, decoupled from any task-specific reliability cell.
+    SCHEMA_VALID = "schema_valid"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -138,6 +160,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.OPERATOR_FEEDBACK,
     EventType.REASONING_DIVERGENCE,
     EventType.EXPLOIT_INTENT_MATCH,
+    EventType.SCHEMA_VALID,
 )
 
 
@@ -195,6 +218,17 @@ class DecisionClassStats:
     policy_override: PolicyOverride
     events: Dict[str, _EventCounts]
     disagreement_samples: List[Dict[str, str]] = field(default_factory=list)
+    # Lifecycle metrics — a volume/cost/speed signal, separate from the
+    # correct/incorrect reliability events. Bumped by register_uses once per
+    # run lifecycle; never affects the Wilson verdict. The cost + tokens are
+    # the "did I get value for money" axis every operator cares about.
+    calls: int = 0
+    cost_usd: float = 0.0
+    tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms_sum: int = 0
+    latency_ms_max: int = 0
 
 def _wilson_upper_bound(successes: int, failures: int, *,
                          z: float = 1.96) -> float:
@@ -234,13 +268,72 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _empty_events() -> Dict[str, Dict[str, int]]:
-    """A fresh ``events`` dict with all known event types initialised
-    to zero counts. Ensures the JSON shape is identical for cells
-    that have only seen one event type vs cells that have seen all
-    five — operators don't have to wonder "why is this key missing?"
-    when scanning the file."""
-    return {et: {"correct": 0, "incorrect": 0} for et in ALL_EVENT_TYPES}
+def _safe_int(v, default: int = 0) -> int:
+    """Coerce to ``int`` defensively — wrong-type/malformed cell fields
+    (a hand-edited ``"calls": "abc"``, a JSON list slipped in, ``None``) coerce
+    to the default rather than raising out of the locked context and aborting
+    the whole write."""
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(v, default: float = 0.0) -> float:
+    """Float counterpart to :func:`_safe_int`. Wrong-type values → default."""
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _empty_events() -> Dict[str, Dict[str, Dict[str, int]]]:
+    """A fresh ``events`` dict: every known event type present, each mapped to
+    an empty age-bucket map (``{}``). Buckets (``"YYYY-MM" -> {correct,
+    incorrect}``) are added lazily by :meth:`ModelScorecard.record_event`. All
+    event types are present so the JSON shape is identical across cells."""
+    return {et: {} for et in ALL_EVENT_TYPES}
+
+
+def _migrate_events_v1_to_v2(cell: Dict) -> None:
+    """In place: convert a cell's flat v1 ``events[type] = {correct, incorrect}``
+    to v2 age-bucketed ``events[type] = {month: {correct, incorrect}}``.
+
+    Flat counts fold into ONE bucket keyed by the cell's last-seen month (the
+    best-known freshness for that aggregate); zero-count types become empty
+    ``{}``. Idempotent — already-bucketed entries are left untouched, so this is
+    also safe as the ``_ensure_cell`` defensive backfill."""
+    events = cell.get("events")
+    if not isinstance(events, dict):
+        cell["events"] = _empty_events()
+        return
+    ts = cell.get("last_seen_at") or cell.get("first_seen_at") or _now_iso()
+    try:
+        month = bucket_key(ts)
+    except ValueError:
+        month = bucket_key(_now_iso())
+    for et, counts in list(events.items()):
+        if is_bucketed(counts):
+            continue
+        c = _safe_int(counts.get("correct"), 0)
+        i = _safe_int(counts.get("incorrect"), 0)
+        events[et] = {month: {"correct": c, "incorrect": i}} if (c or i) else {}
+
+
+def _migrate(data: Dict, from_version) -> bool:
+    """Migrate ``data`` in place from ``from_version`` to ``SCHEMA_VERSION``.
+    Returns True on success, False for an unknown version (caller raises rather
+    than silently corrupting). Currently: v1 -> v2 (flat -> bucketed events)."""
+    if from_version == 1:
+        for by_dc in data.get("models", {}).values():
+            if not isinstance(by_dc, dict):
+                continue
+            for cell in by_dc.values():
+                if isinstance(cell, dict):
+                    _migrate_events_v1_to_v2(cell)
+        data["version"] = SCHEMA_VERSION
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +365,7 @@ class ModelScorecard:
         auto_gc_after_days: Optional[int] = DEFAULT_AUTO_GC_AFTER_DAYS,
         auto_gc_interval_seconds: float = _AUTO_GC_INTERVAL_SECONDS,
         keep_models: Optional[Set[str]] = None,
+        freshness_half_life_days: Optional[float] = None,
         rng=None,
     ):
         """``shadow_rate`` is the probability (0-1) that a call to a
@@ -297,6 +391,10 @@ class ModelScorecard:
         self.shadow_rate = shadow_rate
         self.auto_gc_after_days = auto_gc_after_days
         self.auto_gc_interval_seconds = auto_gc_interval_seconds
+        # Freshness half-life (days) for age-weighting the cell counts at verdict
+        # time. None / <=0 = disabled → counts are summed unweighted (identical
+        # to pre-v2 behaviour). See freshness.py.
+        self.freshness_half_life_days = freshness_half_life_days
         # Cells whose ``model`` is in ``keep_models`` are protected
         # from auto-GC regardless of last_seen_at age. Intent: an
         # operator who configures a model in models.json but takes
@@ -345,8 +443,12 @@ class ModelScorecard:
             )
         with self._with_lock() as data:
             cell = self._ensure_cell(data, model, decision_class)
-            cell["events"][event_type][outcome] += 1
-            cell["last_seen_at"] = _now_iso()
+            now_iso = _now_iso()
+            bucket = cell["events"][event_type].setdefault(
+                bucket_key(now_iso), {"correct": 0, "incorrect": 0}
+            )
+            bucket[outcome] += 1
+            cell["last_seen_at"] = now_iso
             if model_version:
                 cell["model_version"] = model_version
             if (outcome == "incorrect"
@@ -366,6 +468,60 @@ class ModelScorecard:
                     cell["disagreement_samples"] = (
                         samples[-MAX_DISAGREEMENT_SAMPLES:]
                     )
+
+    def register_uses(self, uses: List[Dict]) -> None:
+        """Record per-(model, decision_class) USAGE — a volume/presence signal,
+        not a reliability outcome. Bumps each cell's ``calls`` counter and
+        last_seen; never touches the correct/incorrect events, so it cannot
+        affect the Wilson verdict or routing.
+
+        Intended to be flushed ONCE per run lifecycle (e.g. from ``LLMClient``
+        at process exit over ``get_fired_models()``) — so the per-call cost is
+        zero and a model that was *used* but not yet *scored* against an oracle
+        still shows up in the scorecard. One batched write for the whole list.
+
+        Each entry: ``{"model": str, "decision_class": str, "calls": int,
+        "model_version": Optional[str]}`` plus optional lifecycle metrics —
+        ``cost_usd``, ``tokens``, ``input_tokens``, ``output_tokens``,
+        ``latency_ms_sum``, ``latency_ms_max``. Missing metrics are treated as
+        0 (so callers can opt in to richer enrichment without changing the
+        signature)."""
+        if not uses:
+            return
+        with self._with_lock() as data:
+            for u in uses:
+                model = u.get("model")
+                dc = u.get("decision_class")
+                if not model or not dc:
+                    continue
+                cell = self._ensure_cell(data, model, dc)
+                cell["calls"] = _safe_int(cell.get("calls"), 0) + _safe_int(u.get("calls"), 1)
+                cell["cost_usd"] = _safe_float(cell.get("cost_usd"), 0.0) + _safe_float(u.get("cost_usd"), 0.0)
+                cell["tokens"] = _safe_int(cell.get("tokens"), 0) + _safe_int(u.get("tokens"), 0)
+                cell["input_tokens"] = _safe_int(cell.get("input_tokens"), 0) + _safe_int(u.get("input_tokens"), 0)
+                cell["output_tokens"] = _safe_int(cell.get("output_tokens"), 0) + _safe_int(u.get("output_tokens"), 0)
+                cell["latency_ms_sum"] = _safe_int(cell.get("latency_ms_sum"), 0) + _safe_int(u.get("latency_ms_sum"), 0)
+                u_max = _safe_int(u.get("latency_ms_max"), 0)
+                if u_max > _safe_int(cell.get("latency_ms_max"), 0):
+                    cell["latency_ms_max"] = u_max
+                # Optional batched schema-validity outcomes for this cell:
+                # accumulate into the current-month bucket of the SCHEMA_VALID
+                # event so the result counts towards the standard Wilson view
+                # over that slot. correct = response parsed + matched schema;
+                # incorrect = it didn't.
+                pass_n = int(u.get("schema_valid_pass", 0))
+                fail_n = int(u.get("schema_valid_fail", 0))
+                if pass_n or fail_n:
+                    now_iso = _now_iso()
+                    sv = cell["events"].setdefault(EventType.SCHEMA_VALID, {})
+                    bucket = sv.setdefault(
+                        bucket_key(now_iso), {"correct": 0, "incorrect": 0})
+                    bucket["correct"] += pass_n
+                    bucket["incorrect"] += fail_n
+                cell["last_seen_at"] = _now_iso()
+                mv = u.get("model_version")
+                if mv:
+                    cell["model_version"] = mv
 
     def should_short_circuit(
         self,
@@ -402,15 +558,12 @@ class ModelScorecard:
             return Policy.FALL_THROUGH
 
         ev = cell["events"].get(EventType.CHEAP_SHORT_CIRCUIT, {})
-        correct = int(ev.get("correct", 0))
-        incorrect = int(ev.get("incorrect", 0))
-        n = correct + incorrect
-        if n < sample_size_floor:
-            return Policy.LEARNING
-
-        upper = _wilson_upper_bound(correct, incorrect)
-        if upper > self.miss_rate_ceiling:
-            return Policy.FALL_THROUGH
+        policy = self._measured_policy(
+            ev, self.freshness_half_life_days,
+            sample_size_floor=sample_size_floor,
+        )
+        if policy != Policy.SHORT_CIRCUIT:
+            return policy
         # Cell is short-circuit-worthy. Roll the re-shadowing dice:
         # with probability ``shadow_rate`` we run full anyway so the
         # cell keeps accumulating fresh ground-truth signal and we
@@ -420,6 +573,80 @@ class ModelScorecard:
         if self.shadow_rate > 0 and self._rng() < self.shadow_rate:
             return Policy.SHADOW
         return Policy.SHORT_CIRCUIT
+
+    def _measured_policy(
+        self, ev: Dict, half_life_days: Optional[float],
+        *, sample_size_floor: int = 10,
+    ) -> str:
+        """The measured short-circuit policy for one cell's
+        ``cheap_short_circuit`` buckets — SHORT_CIRCUIT / FALL_THROUGH /
+        LEARNING — ignoring operator pins and shadow sampling.
+
+        With ``half_life_days`` set, counts are freshness-weighted (recent
+        observations dominate stale ones, so a model that regressed behind a
+        floating alias surfaces instead of being averaged against its own past);
+        ``n`` is then the fractional effective sample size, for which Wilson's
+        interval is valid. With it ``None``/<=0 the counts are summed unweighted
+        (pre-freshness behaviour). Shared by :meth:`should_short_circuit` and
+        :meth:`measure_freshness_impact` so both judge identically."""
+        if half_life_days:
+            correct, incorrect = weighted_counts(
+                ev, half_life_days, datetime.now(timezone.utc),
+            )
+        else:
+            correct, incorrect = flatten_counts(ev)
+        if correct + incorrect < sample_size_floor:
+            return Policy.LEARNING
+        if _wilson_upper_bound(correct, incorrect) > self.miss_rate_ceiling:
+            return Policy.FALL_THROUGH
+        return Policy.SHORT_CIRCUIT
+
+    def measure_freshness_impact(
+        self, half_life_days: float, *, sample_size_floor: int = 10,
+    ) -> Dict[str, int]:
+        """Offline gate: compare the cheap-short-circuit verdict for every cell
+        with decay OFF (baseline) vs ON at ``half_life_days``, and tally how
+        many trusted cells would FALL OUT of SHORT_CIRCUIT (and to which
+        policy). Run this before enabling freshness by default — freshness lowers
+        the effective sample size, and this quantifies the cold-start hit.
+        Read-only; ignores operator pins and shadow sampling (measures the
+        underlying drift signal)."""
+        out = {
+            "cells": 0,
+            "short_circuit_baseline": 0,
+            "short_circuit_weighted": 0,
+            "flipped_out": 0,
+            "flipped_out_to_learning": 0,
+            "flipped_out_to_fall_through": 0,
+            "flipped_in": 0,
+        }
+        with self._with_lock(write=False) as data:
+            for by_dc in (data.get("models") or {}).values():
+                if not isinstance(by_dc, dict):
+                    continue
+                for cell in by_dc.values():
+                    if not isinstance(cell, dict):
+                        continue
+                    ev = (cell.get("events") or {}).get(
+                        EventType.CHEAP_SHORT_CIRCUIT, {})
+                    base = self._measured_policy(
+                        ev, None, sample_size_floor=sample_size_floor)
+                    wgt = self._measured_policy(
+                        ev, half_life_days, sample_size_floor=sample_size_floor)
+                    out["cells"] += 1
+                    base_sc = base == Policy.SHORT_CIRCUIT
+                    wgt_sc = wgt == Policy.SHORT_CIRCUIT
+                    out["short_circuit_baseline"] += int(base_sc)
+                    out["short_circuit_weighted"] += int(wgt_sc)
+                    if base_sc and not wgt_sc:
+                        out["flipped_out"] += 1
+                        if wgt == Policy.LEARNING:
+                            out["flipped_out_to_learning"] += 1
+                        else:
+                            out["flipped_out_to_fall_through"] += 1
+                    elif not base_sc and wgt_sc:
+                        out["flipped_in"] += 1
+        return out
 
     def claim_and_record_tool_evidence(
         self,
@@ -466,8 +693,12 @@ class ModelScorecard:
             if finding_id in seen:
                 return False
             seen.append(finding_id)
-            cell["events"][EventType.TOOL_EVIDENCE][outcome] += 1
-            cell["last_seen_at"] = _now_iso()
+            now_iso = _now_iso()
+            bucket = cell["events"][EventType.TOOL_EVIDENCE].setdefault(
+                bucket_key(now_iso), {"correct": 0, "incorrect": 0}
+            )
+            bucket[outcome] += 1
+            cell["last_seen_at"] = now_iso
             if model_version:
                 cell["model_version"] = model_version
             if (outcome == "incorrect"
@@ -503,14 +734,24 @@ class ModelScorecard:
             cell = self._ensure_cell(data, model, decision_class)
             cell["policy_override"] = policy_override
 
-    def get_stats(self) -> List[DecisionClassStats]:
+    def get_stats(
+        self, *, freshness_half_life_days: Optional[float] = None,
+    ) -> List[DecisionClassStats]:
         """Materialise every cell as :class:`DecisionClassStats`.
-        Used by the CLI; not the hot path."""
+        Used by the CLI; not the hot path.
+
+        ``freshness_half_life_days`` (None = unweighted, the default) age-weights
+        each cell's counts so the materialised view — and every column the CLI
+        derives from it (policy / wilson-UB / calls-saved) — reflects the same
+        freshness the live gate would apply. Weighted counts are rounded for a
+        clean integer display."""
         out: List[DecisionClassStats] = []
         with self._with_lock(write=False) as data:
             for model, by_dc in (data.get("models") or {}).items():
                 for dc, cell in by_dc.items():
-                    out.append(self._cell_to_stats(model, dc, cell))
+                    out.append(self._cell_to_stats(
+                        model, dc, cell,
+                        freshness_half_life_days=freshness_half_life_days))
         return out
 
     def get_stat(
@@ -613,6 +854,13 @@ class ModelScorecard:
                 "policy_override": "auto",
                 "events": _empty_events(),
                 "disagreement_samples": [],
+                "calls": 0,
+                "cost_usd": 0.0,
+                "tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "latency_ms_sum": 0,
+                "latency_ms_max": 0,
             }
             by_dc[decision_class] = cell
         else:
@@ -623,21 +871,34 @@ class ModelScorecard:
             cell.setdefault("model_version", "")
             cell.setdefault("policy_override", "auto")
             cell.setdefault("disagreement_samples", [])
-            events = cell.setdefault("events", {})
+            cell.setdefault("calls", 0)
+            cell.setdefault("cost_usd", 0.0)
+            cell.setdefault("tokens", 0)
+            cell.setdefault("input_tokens", 0)
+            cell.setdefault("output_tokens", 0)
+            cell.setdefault("latency_ms_sum", 0)
+            cell.setdefault("latency_ms_max", 0)
+            cell.setdefault("events", {})
+            _migrate_events_v1_to_v2(cell)  # idempotent: convert any flat entries
             for et in ALL_EVENT_TYPES:
-                events.setdefault(et, {"correct": 0, "incorrect": 0})
+                cell["events"].setdefault(et, {})  # all types present, empty bucketed
         return cell
 
     def _cell_to_stats(
         self, model: str, decision_class: str, cell: Dict,
+        *, freshness_half_life_days: Optional[float] = None,
     ) -> DecisionClassStats:
-        events = {
-            et: _EventCounts(
-                correct=int(cell["events"].get(et, {}).get("correct", 0)),
-                incorrect=int(cell["events"].get(et, {}).get("incorrect", 0)),
-            )
-            for et in ALL_EVENT_TYPES
-        }
+        events = {}
+        for et in ALL_EVENT_TYPES:
+            buckets = cell["events"].get(et, {})
+            if freshness_half_life_days:
+                wc, wi = weighted_counts(
+                    buckets, freshness_half_life_days,
+                    datetime.now(timezone.utc))
+                c, i = round(wc), round(wi)
+            else:
+                c, i = flatten_counts(buckets)
+            events[et] = _EventCounts(correct=c, incorrect=i)
         return DecisionClassStats(
             decision_class=decision_class,
             model=model,
@@ -647,6 +908,13 @@ class ModelScorecard:
             policy_override=cell.get("policy_override", "auto"),
             events=events,
             disagreement_samples=list(cell.get("disagreement_samples", [])),
+            calls=_safe_int(cell.get("calls"), 0),
+            cost_usd=_safe_float(cell.get("cost_usd"), 0.0),
+            tokens=_safe_int(cell.get("tokens"), 0),
+            input_tokens=_safe_int(cell.get("input_tokens"), 0),
+            output_tokens=_safe_int(cell.get("output_tokens"), 0),
+            latency_ms_sum=_safe_int(cell.get("latency_ms_sum"), 0),
+            latency_ms_max=_safe_int(cell.get("latency_ms_max"), 0),
         )
 
     # ----- locked read-modify-write helper -----
@@ -722,15 +990,26 @@ class ModelScorecard:
             # silently downgrade.
             existing_version = self.data.get("version")
             if existing_version is None:
-                # Cold-start file or hand-edited — accept and stamp.
+                # Cold-start / hand-edited / aborted-prior-migration file — a
+                # missing version key may hide either v1 (flat events) or v2
+                # (bucketed) contents. Defensively run the v1→v2 migration
+                # before stamping: it's idempotent (already-bucketed cells are
+                # skipped per `is_bucketed`), so it's a no-op when the file is
+                # genuinely v2-shaped. Without this, a v1-shaped file would
+                # get the v2 banner with its cells still flat and only
+                # self-heal lazily as `_ensure_cell` touched each cell.
+                _migrate(self.data, 1)
                 self.data["version"] = SCHEMA_VERSION
             elif existing_version != SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"scorecard: schema version mismatch at {path}: "
-                    f"file has version={existing_version}, code "
-                    f"expects {SCHEMA_VERSION}. Migrate or delete "
-                    f"the sidecar to continue."
-                )
+                # Forward-migrate known older versions in memory; the migrated
+                # data is persisted on the next write under the lock we hold.
+                if not _migrate(self.data, existing_version):
+                    raise RuntimeError(
+                        f"scorecard: schema version mismatch at {path}: "
+                        f"file has version={existing_version}, code "
+                        f"expects {SCHEMA_VERSION} and has no migration "
+                        f"path. Migrate or delete the sidecar to continue."
+                    )
             self.data.setdefault("models", {})
             return self.data
 
@@ -841,12 +1120,12 @@ class ModelScorecard:
                 seen = cell.get("last_seen_at", "")
                 if seen and seen < cutoff_iso:
                     # Tally before deletion so the log line is
-                    # informative without a separate scan.
+                    # informative without a separate scan. Counts are
+                    # age-bucketed (v2) — flatten across buckets.
                     for et_counts in (cell.get("events") or {}).values():
-                        events_correct += int(
-                            et_counts.get("correct", 0))
-                        events_incorrect += int(
-                            et_counts.get("incorrect", 0))
+                        c, i = flatten_counts(et_counts)
+                        events_correct += c
+                        events_incorrect += i
                     del by_dc[dc_key]
                     per_model_counts[m_key] = (
                         per_model_counts.get(m_key, 0) + 1)

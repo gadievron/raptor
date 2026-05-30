@@ -973,6 +973,16 @@ class LLMConfig:
     # reset); set higher to validate more aggressively.
     scorecard_shadow_rate: float = 0.05
 
+    # Freshness half-life (days) for age-weighting scorecard reliability counts at
+    # verdict time. Recent observations dominate stale ones, so a model that
+    # regressed behind a floating alias (notably Gemini, which exposes no
+    # version signal) surfaces instead of being averaged against its own past.
+    # ``None`` (default) DISABLES weighting — counts are summed unweighted,
+    # identical to the pre-freshness behaviour. Enabling lowers the effective
+    # sample size, so confirm the cold-start impact with the offline measurement
+    # before turning it on by default. See ~/design/scorecard-model-versioning.md.
+    scorecard_freshness_half_life_days: Optional[float] = None
+
     def __post_init__(self) -> None:
         """Seed ``specialized_models`` with same-provider fast-tier
         defaults for routing-light task types (binary verdicts,

@@ -29,7 +29,9 @@ auto-policy gate (Wilson over ``CHEAP_SHORT_CIRCUIT``) is unaffected.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from . import _MAX_REASONING_CHARS
@@ -188,4 +190,113 @@ def record_tool_evidence_outcomes(
 __all__ = [
     "record_tool_evidence_outcome",
     "record_tool_evidence_outcomes",
+    "auto_back_prop_from_validate_run",
 ]
+
+
+# -----------------------------------------------------------------------------
+# Auto back-prop from /validate run-end (no operator action required)
+# -----------------------------------------------------------------------------
+
+
+def auto_back_prop_from_validate_run(
+    validate_output_dir: Any,
+    *,
+    scorecard: Optional[ModelScorecard] = None,
+    decision_class_prefix: str = "agentic",
+) -> int:
+    """Auto-record ``TOOL_EVIDENCE`` outcomes from a completed ``/validate``
+    run by joining a co-located ``orchestrated_report.json`` (the upstream
+    ``/agentic`` analysis) with the run's ``findings.json`` (carrying the
+    validator's ``is_exploitable`` verdicts) on ``finding_id``.
+
+    Best-effort: missing files / no concluded verdicts / no scorecard path →
+    returns 0 without raising. Intended to be called from
+    ``write_validation_report`` so every ``/validate`` run feeds the scorecard
+    with downstream-truth signal — the biggest unwired reliability source
+    today. Mirrors the join logic of the operator-driven ``tool-evidence``
+    CLI subcommand."""
+    out = Path(validate_output_dir)
+    orch_path = out / "orchestrated_report.json"
+    findings_path = out / "findings.json"
+    if not orch_path.exists() or not findings_path.exists():
+        return 0
+    try:
+        analysis = json.loads(orch_path.read_text(encoding="utf-8"))
+        validation = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.debug("auto_back_prop: cannot read reports under %s: %s", out, e)
+        return 0
+    # Top-level shape guard — a hand-edited or upstream-corrupted list/scalar
+    # would AttributeError on `.get(...)` later.
+    if not isinstance(analysis, dict) or not isinstance(validation, dict):
+        logger.debug(
+            "auto_back_prop: non-dict top-level in reports under %s "
+            "(analysis=%s validation=%s)",
+            out, type(analysis).__name__, type(validation).__name__,
+        )
+        return 0
+
+    # Build {finding_id: validation_verdict_bool}; inconclusive → skip.
+    val_by_id: Dict[str, bool] = {}
+    for vf in (validation.get("findings") or validation.get("results") or []):
+        if not isinstance(vf, dict):
+            continue
+        fid = vf.get("finding_id")
+        verdict = vf.get("is_exploitable")
+        # Tighten: a finding_id must be a non-empty str/int (a list/dict in
+        # that slot would stringify to nonsense and miscount silently).
+        if not isinstance(fid, (str, int)) or fid == "":
+            continue
+        # Tighten: is_exploitable must be a real bool — JSON spec says bool;
+        # a stringy "true"/"false" or "yes" shouldn't be quietly coerced.
+        if not isinstance(verdict, bool):
+            continue
+        val_by_id[str(fid)] = verdict
+    if not val_by_id:
+        return 0
+
+    # Walk analysis records and emit one tool-evidence dict per finding the
+    # validator concluded on. Skip records missing an attributable model
+    # (same rationale as ``cmd_tool_evidence``).
+    records = []
+    for r in (analysis.get("results") or []):
+        if not isinstance(r, dict):
+            continue
+        fid = r.get("finding_id")
+        model = r.get("analysed_by")
+        if not isinstance(fid, (str, int)) or str(fid) not in val_by_id:
+            continue
+        # Tighten: analysed_by must be a str (a list / dict / int would land
+        # under a stringified key and silently mangle attribution).
+        if not isinstance(model, str) or not model:
+            continue
+        analysis_verdict = r.get("is_exploitable", False)
+        if not isinstance(analysis_verdict, bool):
+            continue
+        records.append({
+            "model": model,
+            "rule_id": r.get("rule_id") or "unknown",
+            "analysis_verdict": analysis_verdict,
+            "validation_verdict": val_by_id[str(fid)],
+            "finding_id": fid,
+            "analysis_reasoning": r.get("reasoning") or "",
+        })
+    if not records:
+        return 0
+
+    if scorecard is None:
+        # Resolve the scorecard path via RAPTOR_DIR so /validate run from
+        # any cwd writes to the same sidecar the rest of RAPTOR uses,
+        # not a stray ./out/llm_scorecard.json next to the target repo.
+        import os
+        raptor_dir = os.environ.get("RAPTOR_DIR")
+        if raptor_dir:
+            default_path = Path(raptor_dir) / "out" / "llm_scorecard.json"
+        else:
+            default_path = Path("out/llm_scorecard.json")
+        scorecard = ModelScorecard(default_path)
+    return record_tool_evidence_outcomes(
+        scorecard, records=records,
+        decision_class_prefix=decision_class_prefix,
+    )

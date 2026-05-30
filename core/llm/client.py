@@ -473,6 +473,7 @@ class LLMClient:
                 retain_samples=self.config.scorecard_retain_samples,
                 shadow_rate=self.config.scorecard_shadow_rate,
                 keep_models=keep_models or None,
+                freshness_half_life_days=self.config.scorecard_freshness_half_life_days,
             )
         return self._scorecard
 
@@ -579,8 +580,196 @@ class LLMClient:
                 if fired is None:
                     fired = self._fired_models = {}
                 fired[key] = fired.get(key, 0) + 1
+            # Lazily arm the run-end usage flush — only on the FIRST real fire,
+            # so mocked/cached clients that never call a provider never register
+            # an atexit handler or write to the scorecard.
+            self._arm_usage_flush()
         except Exception:
             pass
+
+    def _record_usage(
+        self, alias: str, *, cost: float = 0.0, tokens: int = 0,
+        input_tokens: int = 0, output_tokens: int = 0,
+        duration_s: float = 0.0,
+    ) -> None:
+        """Accumulate per-alias cost / tokens / latency for the run-end flush
+        into the scorecard. Cheap dict update under ``_stats_lock`` — zero new
+        I/O on the hot path; the batched write happens once at lifecycle end.
+        Never raises (best-effort, like ``_record_fired_model``)."""
+        try:
+            ms = int(max(0.0, duration_s) * 1000)
+            with self._stats_lock:
+                usage = getattr(self, "_fired_usage", None)
+                if usage is None:
+                    usage = self._fired_usage = {}
+                cur = usage.setdefault(alias, {
+                    "cost_usd": 0.0, "tokens": 0,
+                    "input_tokens": 0, "output_tokens": 0,
+                    "latency_ms_sum": 0, "latency_ms_max": 0,
+                })
+                cur["cost_usd"] += float(cost or 0.0)
+                cur["tokens"] += int(tokens or 0)
+                cur["input_tokens"] += int(input_tokens or 0)
+                cur["output_tokens"] += int(output_tokens or 0)
+                cur["latency_ms_sum"] += ms
+                if ms > cur["latency_ms_max"]:
+                    cur["latency_ms_max"] = ms
+        except Exception:
+            pass
+
+    def _record_schema_validity(self, alias: str, *, success: bool) -> None:
+        """Accumulate per-alias schema-validation outcomes for the run-end
+        flush — one ``correct`` per structured call whose response parsed and
+        matched the schema, one ``incorrect`` per call that didn't.
+
+        Recorded under the ``_structured`` decision_class at flush time so it
+        becomes a universal "how reliably does this model follow the schema"
+        signal across every ``generate_structured`` use. Cheap dict update
+        under ``_stats_lock``; never raises."""
+        try:
+            with self._stats_lock:
+                schema = getattr(self, "_fired_schema", None)
+                if schema is None:
+                    schema = self._fired_schema = {}
+                cur = schema.setdefault(alias, {"pass": 0, "fail": 0})
+                if success:
+                    cur["pass"] += 1
+                else:
+                    cur["fail"] += 1
+        except Exception:
+            pass
+
+    def _arm_usage_flush(self) -> None:
+        """Register the run-end usage flush exactly once, the first time a real
+        provider call fires. Guarded so it's a no-op when the scorecard is
+        disabled."""
+        if getattr(self, "_usage_flush_armed", False):
+            return
+        self._usage_flush_armed = True
+        try:
+            if not getattr(self.config, "scorecard_enabled", True):
+                return
+            import atexit
+            atexit.register(self.flush_usage_to_scorecard)
+        except Exception:
+            pass
+
+    def _snapshot_and_clear_fired(self) -> tuple:
+        """Atomically copy + clear ``_fired_models`` / ``_fired_usage`` /
+        ``_fired_schema`` under a single ``_stats_lock``. Used by
+        :meth:`flush_usage_to_scorecard` to (1) tighten the snapshot the
+        adversarial review flagged — previously the flush re-acquired the lock
+        between the three reads, allowing an in-flight ``_record_*`` to land in
+        an inconsistent snapshot; and (2) let subsequent fires accumulate into a
+        fresh window so a manual mid-run flush isn't a one-shot."""
+        with self._stats_lock:
+            fm = dict(getattr(self, "_fired_models", {}) or {})
+            fu = {
+                k: dict(v)
+                for k, v in (getattr(self, "_fired_usage", {}) or {}).items()
+            }
+            fs = {
+                k: dict(v)
+                for k, v in (getattr(self, "_fired_schema", {}) or {}).items()
+            }
+            self._fired_models = {}
+            self._fired_usage = {}
+            self._fired_schema = {}
+        return fm, fu, fs
+
+    def flush_usage_to_scorecard(self) -> None:
+        """Flush this run's per-model usage into the scorecard — at run end
+        (armed lazily on first fire via :meth:`_arm_usage_flush`). Aggregates
+        per-alias call counts + cost / tokens / latency + schema validity, and
+        records them under the ``_usage`` (volume) and ``_structured`` (schema)
+        decision classes so a model that was *used* but never *scored* against
+        an oracle still appears in the scorecard.
+
+        Uses :meth:`_snapshot_and_clear_fired` so repeated flushes (atexit +
+        any explicit caller) each process a fresh window — no double-count, no
+        lost data after the first flush. Best-effort; never raises."""
+        try:
+            if not getattr(self.config, "scorecard_enabled", True):
+                return
+            fired_dict, usage_metrics, schema_dict = self._snapshot_and_clear_fired()
+            if not fired_dict:
+                return
+            # Build the same list shape get_fired_models() returns, from the
+            # snapshot. (provider, alias, resolved, role) -> count.
+            fired = [
+                {"provider": p, "alias": a, "resolved": r,
+                 "role": role, "calls": int(n)}
+                for (p, a, r, role), n in fired_dict.items()
+            ]
+            agg: Dict[str, Dict[str, Any]] = {}
+            for f in fired:
+                alias = f.get("alias")
+                if not alias:
+                    continue
+                cur = agg.setdefault(alias, {"calls": 0, "resolved": None})
+                cur["calls"] += int(f.get("calls", 0)) or 1
+                if f.get("resolved"):
+                    cur["resolved"] = f["resolved"]
+            uses = []
+            tot_calls = 0
+            tot_cost = 0.0
+            tot_lat_ms = 0
+            for a, v in agg.items():
+                m = usage_metrics.get(a, {})
+                calls = int(v["calls"])
+                cost = float(m.get("cost_usd", 0.0))
+                lat_sum = int(m.get("latency_ms_sum", 0))
+                tot_calls += calls
+                tot_cost += cost
+                tot_lat_ms += lat_sum
+                uses.append({
+                    "model": a, "decision_class": "_usage",
+                    "calls": calls, "model_version": v["resolved"],
+                    "cost_usd": cost,
+                    "tokens": int(m.get("tokens", 0)),
+                    "input_tokens": int(m.get("input_tokens", 0)),
+                    "output_tokens": int(m.get("output_tokens", 0)),
+                    "latency_ms_sum": lat_sum,
+                    "latency_ms_max": int(m.get("latency_ms_max", 0)),
+                })
+            # Append _structured entries for schema-validity outcomes. Different
+            # decision_class from _usage so the schema reliability signal is
+            # cleanly separable in `list` views and consumes the standard
+            # Wilson-over-events machinery on the schema_valid slot.
+            for alias, counts in schema_dict.items():
+                if not alias:
+                    continue
+                p = int(counts.get("pass", 0))
+                f = int(counts.get("fail", 0))
+                if not (p or f):
+                    continue
+                uses.append({
+                    "model": alias, "decision_class": "_structured",
+                    "calls": p + f,
+                    "schema_valid_pass": p, "schema_valid_fail": f,
+                })
+            self.scorecard.register_uses(uses)
+            # Per-run scorecard delta — the discoverability lever. One line at
+            # process end so every command's user sees the scorecard active
+            # and learns the command exists. Best-effort print to stderr.
+            try:
+                import sys as _sys
+                avg_ms = (tot_lat_ms // tot_calls) if tot_calls else 0
+                cost_s = f"${tot_cost:.4f}" if tot_cost else "$0"
+                models_s = ", ".join(
+                    f"{a} {agg[a]['calls']}c"
+                    for a in sorted(agg, key=lambda k: -agg[k]['calls'])
+                )
+                print(
+                    f"scorecard: {tot_calls} calls across {len(agg)} model(s) "
+                    f"[{models_s}] · {cost_s} · avg {avg_ms}ms — "
+                    f"`raptor-llm-scorecard` for details",
+                    file=_sys.stderr,
+                )
+            except Exception:
+                pass
+        except Exception as e:  # pragma: no cover - shutdown-path best effort
+            logger.debug("scorecard usage flush failed: %s", e)
 
     def get_fired_models(self) -> list:
         """Distinct models invoked during this run (cache hits excluded).
@@ -1008,6 +1197,14 @@ class LLMClient:
                             response.resolved_model,
                             "primary" if model_idx == 0 else "fallback",
                         )
+                        self._record_usage(
+                            model.model_name,
+                            cost=response.cost,
+                            tokens=response.tokens_used,
+                            input_tokens=response.input_tokens,
+                            output_tokens=response.output_tokens,
+                            duration_s=duration,
+                        )
 
                         logger.debug(f"Generation successful: {model.provider}/{model.model_name} "
                                     f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
@@ -1255,6 +1452,16 @@ class LLMClient:
                             model.provider, model.model_name, resolved,
                             "primary" if model_idx == 0 else "fallback",
                         )
+                        self._record_usage(
+                            model.model_name,
+                            cost=cost_delta,
+                            tokens=tokens_delta,
+                            duration_s=duration,
+                        )
+                        # Schema reliability signal — the response parsed and
+                        # matched the schema (otherwise we'd be in the except
+                        # branch). Recorded under _structured at flush time.
+                        self._record_schema_validity(model.model_name, success=True)
                         # Cache before returning so repeated identical calls
                         # short-circuit the provider entirely. Cache key is
                         # tied to model_config (the first-choice model), so
@@ -1265,6 +1472,15 @@ class LLMClient:
 
                     except Exception as e:
                         last_error = e
+                        # Schema reliability signal — only record the model as
+                        # schema-failing when the error class points at a
+                        # response-shape problem (parse / schema-mismatch /
+                        # validation), not at infra (network 5xx, timeouts,
+                        # quota). Otherwise we'd attribute provider flakes as
+                        # this model's schema unreliability and the SCHEMA_VALID
+                        # cell would drift to nonsense.
+                        if not (_is_quota_error(e) or _is_retryable_error(e)):
+                            self._record_schema_validity(model.model_name, success=False)
 
                         if _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)

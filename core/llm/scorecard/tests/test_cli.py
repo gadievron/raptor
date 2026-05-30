@@ -76,13 +76,15 @@ def _make_args(**kwargs):
     """Build a Namespace with the union of all defaults the CLI
     handlers expect; tests override specific fields."""
     base = dict(
-        path=None, by_savings=False, by_miss_rate=False,
+        path=None, by_savings=False, by_miss_rate=False, by_cost=False,
         untrusted=False, learning=False, consumer=None, since=None,
         model_a=None, model_b=None,
         decision_class=None, model=None, as_=None,
         older_than_days=None, all=False,
         outcome=None, note=None,
         event_type=EventType.CHEAP_SHORT_CIRCUIT,
+        freshness_half_life_days=None, half_life_days=None,
+        json=False,
     )
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -345,6 +347,29 @@ def test_pin_sets_policy_override(seeded_scorecard):
     assert stat.policy_override == "force_fall_through"
 
 
+def test_pin_friendly_value_maps_to_storage(seeded_scorecard):
+    """The ergonomic `--as short-circuit` (matching the `list` policy vocab)
+    maps to the internal `force_short_circuit` storage value — on-disk format
+    and verdict comparisons are unchanged."""
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        as_="short-circuit",
+    )
+    _capture(cli_mod.cmd_pin, args)
+    sc = ModelScorecard(seeded_scorecard)
+    stat = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    assert stat.policy_override == "force_short_circuit"
+
+
+def test_prefix_filters_by_decision_class():
+    """`--prefix` is the decision_class prefix filter (renamed from the jargon
+    `--consumer`)."""
+    parser = cli_mod._build_parser()
+    assert parser.parse_args(["list", "--prefix", "codeql"]).consumer == "codeql"
+
+
 def test_unpin_releases_to_auto(seeded_scorecard):
     sc = ModelScorecard(seeded_scorecard)
     sc.set_policy_override(
@@ -602,3 +627,276 @@ def test_humanise_age_days():
     now = _dt.datetime(2026, 5, 6, 12, 0, 0, tzinfo=_dt.timezone.utc)
     three_days_ago = (now - _dt.timedelta(days=3, hours=2)).isoformat()
     assert cli_mod._humanise_age(three_days_ago, now=now) == "3d ago"
+
+
+# ---------------------------------------------------------------------------
+# freshness
+# ---------------------------------------------------------------------------
+
+
+def _write_freshness_fixture(path):
+    """A cell trusted unweighted (stale correct dominates) but untrusted under
+    freshness (recent failures dominate)."""
+    import json
+
+    from core.llm.scorecard.freshness import bucket_key
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    cur = bucket_key(now)
+    stale = f"{now.year - 2:04d}-{now.month:02d}"
+    fixture = {"version": 2, "models": {"haiku": {"codeql:py/sqli": {
+        "first_seen_at": f"{stale}-01T00:00:00+00:00",
+        "last_seen_at": f"{cur}-01T00:00:00+00:00",
+        "model_version": "", "policy_override": "auto",
+        "events": {
+            "cheap_short_circuit": {cur: {"correct": 0, "incorrect": 18},
+                                    stale: {"correct": 4000, "incorrect": 0}},
+            "multi_model_consensus": {}, "judge_review": {},
+            "tool_evidence": {}, "operator_feedback": {},
+        },
+        "disagreement_samples": [],
+    }}}}
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    return path
+
+
+def test_list_freshness_flag_reweights_policy(tmp_path):
+    """`list --freshness-half-life-days` reflects recent behaviour: the cell is
+    trusted unweighted but falls through once the stale data decays away."""
+    path = _write_freshness_fixture(tmp_path / "sc.json")
+    _, out_off, _ = _capture(cli_mod.cmd_list, _make_args(path=path))
+    assert "short-circuit" in out_off
+    _, out_on, _ = _capture(
+        cli_mod.cmd_list, _make_args(path=path, freshness_half_life_days=30))
+    assert "fall-through" in out_on
+    # the freshness view appends an inline impact footer (folded-in what-if)
+    assert "fall out of short-circuit" in out_on
+
+
+def test_list_shows_calls_column(tmp_path):
+    """`list` surfaces the per-model usage count, so a used-but-unscored model
+    is visible with its call volume."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([{"model": "haiku", "decision_class": "_usage", "calls": 7}])
+    rc, out, _ = _capture(cli_mod.cmd_list, _make_args(path=tmp_path / "sc.json"))
+    assert rc == 0
+    assert "calls" in out                          # the new column header
+    assert "_usage" in out and "haiku" in out and "7" in out
+
+
+def test_list_freshness_shows_drift_marker_on_regression(tmp_path):
+    """When --freshness flips a cell from short-circuit -> fall-through, the
+    policy column gets a ↓ drift marker — the silent-regression signal."""
+    path = _write_freshness_fixture(tmp_path / "sc.json")
+    _, out, _ = _capture(
+        cli_mod.cmd_list, _make_args(path=path, freshness_half_life_days=30))
+    assert "↓ fall-through" in out
+
+
+def test_list_no_drift_marker_without_freshness(tmp_path):
+    """No drift markers in the default unweighted view (markers only make
+    sense when comparing weighted vs baseline)."""
+    path = _write_freshness_fixture(tmp_path / "sc.json")
+    _, out, _ = _capture(cli_mod.cmd_list, _make_args(path=path))
+    assert "↓" not in out and "↑" not in out
+
+
+def test_recommend_picks_cheapest_trusted(tmp_path):
+    """`recommend` ranks trusted models for a decision_class by cost-per-call
+    and surfaces the cheapest — the actionable payoff of the scorecard."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    # both models earn trust on codeql:py/sqli (n >= 73 clean keeps Wilson UB <= 5%)
+    for _ in range(80):
+        sc.record_event("codeql:py/sqli", "haiku",
+                        EventType.CHEAP_SHORT_CIRCUIT, "correct")
+        sc.record_event("codeql:py/sqli", "sonnet",
+                        EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    # _usage cells set per-model spend (haiku cheap, sonnet 12x more)
+    sc.register_uses([
+        {"model": "haiku", "decision_class": "_usage",
+         "calls": 100, "cost_usd": 0.10},
+        {"model": "sonnet", "decision_class": "_usage",
+         "calls": 100, "cost_usd": 1.20},
+    ])
+    rc, out, _ = _capture(
+        cli_mod.cmd_recommend,
+        _make_args(path=tmp_path / "sc.json",
+                   decision_class="codeql:py/sqli"))
+    assert rc == 0
+    assert "use: haiku" in out                      # cheapest trusted wins
+    assert "also trusted: sonnet" in out
+
+
+def test_recommend_no_data_reports_clearly(tmp_path):
+    """Unknown decision_class -> clear message, exit 0 (informational, not
+    an error to operator scripts)."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([{"model": "haiku", "decision_class": "_usage",
+                       "calls": 1, "cost_usd": 0.001}])
+    rc, _, err = _capture(
+        cli_mod.cmd_recommend,
+        _make_args(path=tmp_path / "sc.json",
+                   decision_class="codeql:py/unknown"))
+    assert rc == 0
+    assert "no scorecard data" in err
+
+
+def test_recommend_handles_pinned_trusted_with_no_events(tmp_path):
+    """A `force_short_circuit` pin with NO cheap_short_circuit events makes
+    max_miss% None for a SHORT_CIRCUIT cell; recommend must format it
+    gracefully (`max_miss=n/a`), not crash on `None.__format__`."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    sc.set_policy_override("codeql:py/sqli", "haiku", "force_short_circuit")
+    rc, out, _ = _capture(
+        cli_mod.cmd_recommend,
+        _make_args(path=tmp_path / "sc.json",
+                   decision_class="codeql:py/sqli"))
+    assert rc == 0
+    assert "use: haiku" in out
+    assert "max_miss=n/a" in out
+
+
+def test_recommend_freshness_shows_banner(tmp_path):
+    """When --freshness is set, the output header carries the half-life so a
+    different recommendation than unweighted has a visible breadcrumb."""
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    for _ in range(80):
+        sc.record_event("codeql:py/sqli", "haiku",
+                        EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    rc, out, _ = _capture(
+        cli_mod.cmd_recommend,
+        _make_args(path=tmp_path / "sc.json",
+                   decision_class="codeql:py/sqli",
+                   freshness_half_life_days=30))
+    assert rc == 0
+    assert "freshness half-life 30d" in out
+
+
+def test_list_shows_cost_column_and_by_cost_sorts(tmp_path):
+    """`list` surfaces per-cell spend in the $$ column, and `--by-cost` ranks
+    by it. The cost data is the universal 'did I get value for money' axis."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([
+        {"model": "haiku", "decision_class": "_usage",
+         "calls": 10, "cost_usd": 0.05},
+        {"model": "sonnet", "decision_class": "_usage",
+         "calls": 4, "cost_usd": 0.40},
+    ])
+    rc, out, _ = _capture(cli_mod.cmd_list, _make_args(path=tmp_path / "sc.json"))
+    assert rc == 0
+    assert "$$" in out                              # the cost column header
+    assert "$0.40" in out and "$0.05" in out        # both cells render their spend
+    # --by-cost ranks sonnet ($0.40) above haiku ($0.05)
+    rc2, out2, _ = _capture(
+        cli_mod.cmd_list, _make_args(path=tmp_path / "sc.json", by_cost=True))
+    assert rc2 == 0
+    assert out2.index("sonnet") < out2.index("haiku")
+
+
+def test_bare_invocation_defaults_to_list(seeded_scorecard):
+    """A bare `raptor-llm-scorecard` (no subcommand) runs `list` instead of
+    erroring — so `/scorecard` is fast and useful by default."""
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        rc = cli_mod.main(["--path", str(seeded_scorecard)])
+    assert rc == 0
+    text = out.getvalue()
+    assert "decision_class" in text                 # the list-table header rendered
+    assert "-h" in text                             # discoverability footer -> -h
+
+
+# ---------------------------------------------------------------------------
+# enhancements (--json, summary, compare extension)
+# ---------------------------------------------------------------------------
+
+
+def _seed_minimal(path):
+    """A small scorecard fixture: trusted haiku on codeql:py/sqli + usage cell
+    + an untrusted sonnet cell — enough to exercise summary/recommend/list."""
+    sc = ModelScorecard(path, shadow_rate=0.0)
+    for _ in range(80):
+        sc.record_event("codeql:py/sqli", "haiku",
+                        EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    sc.register_uses([
+        {"model": "haiku", "decision_class": "_usage",
+         "calls": 100, "cost_usd": 0.10},
+        {"model": "sonnet", "decision_class": "_usage",
+         "calls": 5, "cost_usd": 0.50},
+    ])
+    return path
+
+
+def test_list_json_emits_parseable_array(tmp_path):
+    """`list --json` emits JSON that downstream scripts can parse — and the
+    cells carry every field we render in the table (n / max_miss / cost / etc.)."""
+    import json as _json
+    _seed_minimal(tmp_path / "sc.json")
+    rc, out, _ = _capture(
+        cli_mod.cmd_list, _make_args(path=tmp_path / "sc.json", json=True))
+    assert rc == 0
+    parsed = _json.loads(out)
+    assert isinstance(parsed.get("cells"), list) and parsed["cells"]
+    sample = parsed["cells"][0]
+    for required in (
+        "decision_class", "model", "policy", "n",
+        "calls", "cost_usd", "max_miss_pct", "last_seen_at",
+    ):
+        assert required in sample, f"missing {required} in {sample}"
+
+
+def test_recommend_json_emits_recommendation(tmp_path):
+    """`recommend --json` emits the structured recommendation + trusted list."""
+    import json as _json
+    _seed_minimal(tmp_path / "sc.json")
+    rc, out, _ = _capture(
+        cli_mod.cmd_recommend,
+        _make_args(path=tmp_path / "sc.json",
+                   decision_class="codeql:py/sqli", json=True))
+    assert rc == 0
+    parsed = _json.loads(out)
+    assert parsed["decision_class"] == "codeql:py/sqli"
+    assert parsed["recommendation"]["model"] == "haiku"
+    assert any(t["model"] == "haiku" for t in parsed["trusted"])
+
+
+def test_summary_text_dashboard(tmp_path):
+    """The text summary surfaces total cells, policy breakdown, spend, and the
+    cheapest-trusted line — the daily-driver view."""
+    _seed_minimal(tmp_path / "sc.json")
+    rc, out, _ = _capture(
+        cli_mod.cmd_summary, _make_args(path=tmp_path / "sc.json"))
+    assert rc == 0
+    assert "cells:" in out and "trusted" in out
+    assert "total spend:" in out
+    assert "cheapest trusted: haiku" in out
+
+
+def test_summary_json_dashboard(tmp_path):
+    """`summary --json` shape: cells_total / policy_breakdown / spend_by_model /
+    cheapest_trusted — parseable for dashboards."""
+    import json as _json
+    _seed_minimal(tmp_path / "sc.json")
+    rc, out, _ = _capture(
+        cli_mod.cmd_summary, _make_args(path=tmp_path / "sc.json", json=True))
+    assert rc == 0
+    parsed = _json.loads(out)
+    assert parsed["cells_total"] > 0
+    assert parsed["policy_breakdown"]["trusted"] >= 1
+    assert parsed["cheapest_trusted"]["model"] == "haiku"
+
+
+def test_compare_text_includes_cost_and_calls(tmp_path):
+    """Extended `compare` shows $$ + calls per side, not just reliability."""
+    _seed_minimal(tmp_path / "sc.json")
+    # need a shared decision_class for both models — give sonnet a sql cell too
+    sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=0.0)
+    for _ in range(80):
+        sc.record_event("codeql:py/sqli", "sonnet",
+                        EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    rc, out, _ = _capture(
+        cli_mod.cmd_compare,
+        _make_args(path=tmp_path / "sc.json",
+                   model_a="haiku", model_b="sonnet"))
+    assert rc == 0
+    assert "haiku $$" in out and "sonnet $$" in out
+    assert "haiku calls" in out and "sonnet calls" in out
