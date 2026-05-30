@@ -17,7 +17,7 @@ from urllib.parse import urljoin, urlparse
 
 from core.logging import get_logger
 from core.sandbox import run_untrusted
-from core.security.redaction import redact_secrets
+from core.security.redaction import is_secret_field_name, redact_secrets
 
 logger = get_logger()
 
@@ -38,6 +38,8 @@ class FfufConfig:
     match_status: str | None = "200,204,301,302,307,401,403,405,500"
     filter_status: str | None = "404"
     filter_size: int | None = None
+    headers: tuple[str, ...] = ()
+    cookies: tuple[str, ...] = ()
 
 
 class FfufRunner:
@@ -59,6 +61,58 @@ class FfufRunner:
 
     def _redact(self, value: object) -> str:
         return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
+    def _redact_cookie_value(self, cookie: str) -> str:
+        if self.reveal_secrets:
+            return cookie
+        parts = []
+        for segment in cookie.split(";"):
+            prefix = segment[: len(segment) - len(segment.lstrip())]
+            stripped = segment.strip()
+            if "=" not in stripped:
+                parts.append(segment)
+                continue
+            name, _value = stripped.split("=", 1)
+            parts.append(f"{prefix}{name}=[REDACTED]")
+        return "; ".join(parts)
+
+    def _redact_header_value(self, header: str) -> str:
+        if self.reveal_secrets or ":" not in header:
+            return self._redact(header)
+        name, value = header.split(":", 1)
+        normalized = name.strip().lower()
+        if normalized in {"authorization", "proxy-authorization"}:
+            return f"{name}: {self._redact(value.strip())}"
+        if normalized in {"cookie", "set-cookie"}:
+            return f"{name}: {self._redact_cookie_value(value.strip())}"
+        if is_secret_field_name(normalized) or normalized in {
+            "x-api-key",
+            "x-auth-token",
+            "x-csrf-token",
+        }:
+            return f"{name}: [REDACTED]"
+        return self._redact(header)
+
+    def _redact_command(self, cmd: list[str]) -> list[str]:
+        redacted: list[str] = []
+        redact_next_cookie = False
+        for part in cmd:
+            if redact_next_cookie:
+                redacted.append(self._redact_cookie_value(part))
+                redact_next_cookie = False
+                continue
+            if part == "-b":
+                redacted.append(part)
+                redact_next_cookie = True
+                continue
+            if part == "-H":
+                redacted.append(part)
+                continue
+            if redacted and redacted[-1] == "-H":
+                redacted.append(self._redact_header_value(part))
+                continue
+            redacted.append(self._redact(part))
+        return redacted
 
     def build_url_template(self, path_template: str) -> str:
         """Build and scope-check the ffuf URL template.
@@ -102,6 +156,10 @@ class FfufRunner:
             raise ValueError("ffuf report limit must be >= 0")
         if config.filter_size is not None and config.filter_size < 0:
             raise ValueError("ffuf filter size must be >= 0 when set")
+        if any("\n" in header or "\r" in header for header in config.headers):
+            raise ValueError("ffuf headers must not contain newlines")
+        if any("\n" in cookie or "\r" in cookie for cookie in config.cookies):
+            raise ValueError("ffuf cookies must not contain newlines")
 
         url_template = self.build_url_template(config.path_template)
         cmd = [
@@ -128,6 +186,10 @@ class FfufRunner:
             cmd.extend(["-fc", config.filter_status])
         if config.filter_size is not None:
             cmd.extend(["-fs", str(config.filter_size)])
+        for header in config.headers:
+            cmd.extend(["-H", header])
+        for cookie in config.cookies:
+            cmd.extend(["-b", cookie])
         if config.rate is not None:
             cmd.extend(["-rate", str(config.rate)])
         return cmd
@@ -154,7 +216,7 @@ class FfufRunner:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         output_file = self.out_dir / "ffuf_results.json"
         cmd = self.build_command(config, output_file)
-        redacted_cmd = [self._redact(part) for part in cmd]
+        redacted_cmd = self._redact_command(cmd)
         logger.info(f"Running sandboxed ffuf: {' '.join(redacted_cmd)}")
 
         completed = run_untrusted(
