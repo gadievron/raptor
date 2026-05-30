@@ -520,12 +520,12 @@ def cmd_summary(args: argparse.Namespace) -> int:
         return 0
 
     models = set()
-    trusted = learning = fall_through = 0
+    short_circuit = learning = fall_through = 0
     total_cost = 0.0
     cost_per_model: Dict[str, float] = {}
     calls_per_model: Dict[str, int] = {}
     usage_cell_by_model: Dict[str, DecisionClassStats] = {}
-    trusted_models_by_dc: Dict[str, str] = {}   # for cheapest-trusted picking
+    sc_models_by_dc: Dict[str, str] = {}   # for cheapest-trusted picking
 
     for s in stats:
         models.add(s.model)
@@ -533,8 +533,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
         if s.decision_class == "_usage":
             usage_cell_by_model[s.model] = s
         if p == Policy.SHORT_CIRCUIT:
-            trusted += 1
-            trusted_models_by_dc[(s.decision_class, s.model)] = s.model
+            short_circuit += 1
+            sc_models_by_dc[(s.decision_class, s.model)] = s.model
         elif p == Policy.LEARNING:
             learning += 1
         elif p == Policy.FALL_THROUGH:
@@ -543,10 +543,10 @@ def cmd_summary(args: argparse.Namespace) -> int:
         cost_per_model[s.model] = cost_per_model.get(s.model, 0.0) + s.cost_usd
         calls_per_model[s.model] = calls_per_model.get(s.model, 0) + s.calls
 
-    # Cheapest trusted (lowest $/call from each trusted model's _usage cell).
+    # Cheapest short-circuit (lowest $/call from each cell's _usage row).
     cheapest: Optional[tuple] = None
-    trusted_aliases = {m for (_, m) in trusted_models_by_dc.keys()}
-    for m in trusted_aliases:
+    sc_aliases = {m for (_, m) in sc_models_by_dc.keys()}
+    for m in sc_aliases:
         u = usage_cell_by_model.get(m)
         if u and u.calls > 0:
             cpc = u.cost_usd / u.calls
@@ -574,7 +574,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
             "cells_total": len(stats),
             "models_total": len(models),
             "policy_breakdown": {
-                "trusted": trusted, "learning": learning, "fall_through": fall_through,
+                "short_circuit": short_circuit, "learning": learning, "fall_through": fall_through,
             },
             "total_spend_usd": total_cost,
             "spend_by_model": dict(cost_per_model),
@@ -583,7 +583,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
                 {"model": most_used[0], "calls": most_used[1]}
                 if most_used[0] else None
             ),
-            "cheapest_trusted": (
+            "cheapest_short_circuit": (
                 {"model": cheapest[0], "cost_per_call": cheapest[1]}
                 if cheapest else None
             ),
@@ -594,7 +594,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
     print(f"scorecard summary ({args.path}):")
     print(f"  cells: {len(stats)} across {len(models)} model(s)")
-    print(f"  policy: {trusted} trusted · {learning} learning · {fall_through} fall-through")
+    print(f"  policy: {short_circuit} trusted · {learning} learning · {fall_through} fall-through")
     cost_lines = [f"{m} ${c:.4f}" for m, c in sorted(
         cost_per_model.items(), key=lambda x: -x[1]) if c > 0]
     cost_break = " (" + ", ".join(cost_lines) + ")" if cost_lines else ""
@@ -642,7 +642,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         ev = c.events[EventType.CHEAP_SHORT_CIRCUIT]
         rows.append((c.model, ub, cpc, _policy_for_stats(c), ev.correct + ev.incorrect))
 
-    trusted = sorted(
+    sc_rows = sorted(
         (r for r in rows if r[3] == Policy.SHORT_CIRCUIT),
         key=lambda r: r[2] if r[2] is not None else float("inf"),
     )
@@ -662,15 +662,15 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         out = {
             "decision_class": target_dc,
             "freshness_half_life_days": hl,
-            "trusted": [_r(r) for r in trusted],
+            "short_circuit": [_r(r) for r in sc_rows],
             "learning": [r[0] for r in learning],
             "fall_through": [_r(r) for r in fall_through],
             "recommendation": (
-                {"model": trusted[0][0], "reason": "cheapest trusted"}
-                if trusted else None
+                {"model": sc_rows[0][0], "reason": "cheapest short-circuit"}
+                if sc_rows else None
             ),
         }
-        if not trusted and fall_through:
+        if not sc_rows and fall_through:
             out["least_bad"] = {"model": fall_through[0][0]}
         print(_json.dumps(out, indent=2, default=str))
         return 0
@@ -687,11 +687,11 @@ def cmd_recommend(args: argparse.Namespace) -> int:
     def _fmt_cpc(x):
         return f"${x:.4f}/call" if x is not None else "no cost data"
 
-    if trusted:
-        m, ub, cpc, _, n = trusted[0]
+    if sc_rows:
+        m, ub, cpc, _, n = sc_rows[0]
         cpc_note = " — cheapest trusted" if cpc is not None else " — trusted (no cost data to rank by)"
         print(f"  use: {m}  ({_fmt_ub(ub)} · n={n} · {_fmt_cpc(cpc)}){cpc_note}")
-        for m2, ub2, cpc2, _, _n2 in trusted[1:]:
+        for m2, ub2, cpc2, _, _n2 in sc_rows[1:]:
             print(f"  also trusted: {m2} ({_fmt_ub(ub2)} · {_fmt_cpc(cpc2)})")
     else:
         print("  no trusted model — none meet the miss-rate ceiling")

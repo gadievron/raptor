@@ -856,7 +856,7 @@ def test_recommend_json_emits_recommendation(tmp_path):
     parsed = _json.loads(out)
     assert parsed["decision_class"] == "codeql:py/sqli"
     assert parsed["recommendation"]["model"] == "haiku"
-    assert any(t["model"] == "haiku" for t in parsed["trusted"])
+    assert any(t["model"] == "haiku" for t in parsed["short_circuit"])
 
 
 def test_summary_text_dashboard(tmp_path):
@@ -881,8 +881,8 @@ def test_summary_json_dashboard(tmp_path):
     assert rc == 0
     parsed = _json.loads(out)
     assert parsed["cells_total"] > 0
-    assert parsed["policy_breakdown"]["trusted"] >= 1
-    assert parsed["cheapest_trusted"]["model"] == "haiku"
+    assert parsed["policy_breakdown"]["short_circuit"] >= 1
+    assert parsed["cheapest_short_circuit"]["model"] == "haiku"
 
 
 def test_compare_text_includes_cost_and_calls(tmp_path):
