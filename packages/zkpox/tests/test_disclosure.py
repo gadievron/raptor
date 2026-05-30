@@ -180,3 +180,45 @@ def test_target_hash_matches_when_manifest_has_no_hash():
     m = _manifest(target_binary_hash=None, target_source_hash=None)
     assert manifest_target_bare_hex(m) is None
     assert target_hash_matches(m, "a" * 64) is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5.1 — gadget_code_hash + BUNDLE_VERSION 1.1
+# ---------------------------------------------------------------------------
+
+def test_bundle_version_is_1_1():
+    """The Phase 1.5.1 schema bump. Pinned so a stray edit to
+    BUNDLE_VERSION is caught immediately."""
+    assert BUNDLE_VERSION == "zkpox-1.1"
+
+
+def test_projection_carries_gadget_code_hash_when_supplied():
+    """1.5.1 producers always supply gadget_code_hash; the projection
+    threads it into the Vulnerability dataclass and CBOR payload."""
+    db = disclosure_from_manifest(
+        _manifest(),
+        proof=Proof(system="s", bytes=b"\x00", verifier_key_hash="sha256:x"),
+        vendor_envelope=_empty_envelope(),
+        harness=HarnessRef(git_url=None, rev=None, hash="sha256:y"),
+        vuln_class="memory-safety",
+        gadget_id="memory-safety::oob-write@0.1.0",
+        gadget_id_hash="sha256:abc",
+        gadget_code_hash="sha256:" + "1" * 64,
+    )
+    assert db.vulnerability.gadget_code_hash == "sha256:" + "1" * 64
+    restored = from_cbor(to_cbor(db))
+    assert restored.vulnerability.gadget_code_hash == "sha256:" + "1" * 64
+
+
+def test_projection_omits_gadget_code_hash_when_absent():
+    """Backward-compat: a 1.0-shaped projection (no gadget_code_hash
+    arg) must still produce a serialisable bundle. The CBOR payload
+    omits the key — same pattern as researcher/timestamp/provenance —
+    so older verifiers don't see an unexpected field."""
+    db = _project(_manifest())
+    assert db.vulnerability.gadget_code_hash is None
+    payload = to_cbor(db)
+    restored = from_cbor(payload)
+    assert restored.vulnerability.gadget_code_hash is None
+    # Wire-level check: the encoded CBOR must not carry the key at all.
+    assert b"gadget_code_hash" not in payload

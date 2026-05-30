@@ -22,9 +22,10 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient},
-    include_elf, Elf, ProvingKey, SP1Stdin,
+    include_elf, Elf, HashableKey, ProvingKey, SP1Stdin,
 };
 
 const GUEST_ELF: Elf = include_elf!("zkpox-guest");
@@ -127,6 +128,18 @@ struct BenchRecord<'a> {
     wall_secs: f64,
     proof_bytes: Option<usize>,
     verified: Option<bool>,
+    /// sha256 of the GUEST_ELF bytes (bare hex, no `sha256:` prefix).
+    /// The Python wrapper formats this into the bundle's
+    /// `harness.hash`. Always emitted (cheap; identifies the binary
+    /// the bundle binds to). Phase 1.5.1.
+    guest_elf_hash: String,
+    /// SP1 verifying-key digest (`HashableKey::bytes32` value with the
+    /// `0x` prefix stripped — bare hex). Only present in prove mode;
+    /// execute mode doesn't call `client.setup` so there's no vkey to
+    /// digest. The Python wrapper formats this into the bundle's
+    /// `proof.verifier_key_hash`. Phase 1.5.1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vkey_digest: Option<String>,
 }
 
 fn read_verdicts(public_values: &mut sp1_sdk::SP1PublicValues) -> Verdicts {
@@ -173,6 +186,12 @@ fn main() -> Result<()> {
         .with_context(|| format!("reading witness {}", args.witness.display()))?;
     let witness_bytes = witness.len() as u64;
 
+    // Phase 1.5.1: bind the bundle to the real harness binary. ``Elf``
+    // ``Deref``s to ``[u8]`` so ``&GUEST_ELF[..]`` yields the embedded
+    // bytes. Always computed (cheap); the Python wrapper formats this
+    // into ``harness.hash`` and replaces the 1.5 placeholder.
+    let guest_elf_hash = format!("{:x}", Sha256::digest(&GUEST_ELF[..]));
+
     // Prepend the target-id byte so the guest's dispatch picks the
     // right C victim binding. Phase 1.6+ schema: [target_id: u8] || witness.
     let mut framed = Vec::with_capacity(witness.len() + 1);
@@ -204,9 +223,24 @@ fn main() -> Result<()> {
             wall_secs: wall,
             proof_bytes: None,
             verified: None,
+            guest_elf_hash: guest_elf_hash.clone(),
+            // No proving key in execute mode → no vkey digest. The
+            // Python wrapper refuses to write a bundle from an execute
+            // record, so this absence never reaches a disclosure bundle.
+            vkey_digest: None,
         }
     } else {
         let pk = client.setup(GUEST_ELF).expect("failed to setup guest ELF");
+
+        // Phase 1.5.1: the canonical SP1 vkey digest used for on-chain
+        // verification. ``HashableKey::bytes32`` returns ``"0x" + 64
+        // hex chars``; strip the prefix for bare-hex storage in the
+        // record (the Python wrapper adds the ``sha256:`` form).
+        let vkey_digest = pk
+            .verifying_key()
+            .bytes32()
+            .trim_start_matches("0x")
+            .to_string();
 
         let start = Instant::now();
         let proof = match args.wrap {
@@ -250,6 +284,8 @@ fn main() -> Result<()> {
             wall_secs: wall,
             proof_bytes,
             verified: Some(verified),
+            guest_elf_hash,
+            vkey_digest: Some(vkey_digest),
         }
     };
 
