@@ -44,11 +44,38 @@ def main():
 
     # create
     p_create = sub.add_parser("create", help="Create a new project",
-                              usage="raptor project create <name> --target <path> [-d <desc>] [--output-dir <dir>]", **_F)
+                              usage="raptor project create <name> --target <path> [-d <desc>] [--output-dir <dir>] [--binary <path>]", **_F)
     p_create.add_argument("name", help="Project name")
     p_create.add_argument("--target", required=True, metavar="<path>", help="Path to target codebase")
     p_create.add_argument("-d", "--description", default="", metavar="<text>", help="One-line description")
     p_create.add_argument("--output-dir", default=None, metavar="<dir>", help="Custom output directory")
+    p_create.add_argument(
+        "--binary", action="append", default=None, metavar="<path>",
+        help=("Debug binary for binary_oracle reachability enrichment "
+              "(repeatable for hybrid targets). Persisted on the "
+              "project; loaded into every subsequent /agentic / "
+              "/codeql / /validate run on this project. Explicit "
+              "--binary on the CLI is additive."),
+    )
+
+    # binary — per-project binary management
+    p_bin = sub.add_parser(
+        "binary",
+        help=("Manage per-project debug binaries for binary_oracle "
+              "enrichment"),
+        usage=("raptor project binary <add|remove|list|clear> [args] "
+               "[<name>]"),
+        **_F,
+    )
+    p_bin.add_argument(
+        "action", choices=("add", "remove", "list", "clear"),
+        help="Action: add <path>, remove <path>, list, or clear")
+    p_bin.add_argument(
+        "path", nargs="?", default=None,
+        help="Binary path (required for add/remove)")
+    p_bin.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
 
     # use
     p_use = sub.add_parser("use", help="Set the active project (no arg = show current)",
@@ -286,9 +313,78 @@ def main():
                 parser.print_help()
 
         elif args.subcommand == "create":
-            p = mgr.create(args.name, args.target, description=args.description,
-                           output_dir=args.output_dir)
+            p = mgr.create(args.name, args.target,
+                           description=args.description,
+                           output_dir=args.output_dir,
+                           binaries=getattr(args, "binary", None))
             print(f"Created project '{p.name}' → {p.output_dir}")
+            _p_binaries = getattr(p, "binaries", None) or []
+            if _p_binaries:
+                print(f"  binaries: {', '.join(_p_binaries)}")
+
+        elif args.subcommand == "binary":
+            from core.json import save_json
+            # list / clear don't take a path — if the operator wrote
+            # ``binary list <project>`` the project name lands in
+            # ``args.path``. Swap it.
+            if (args.action in ("list", "clear")
+                    and args.path and not args.name):
+                args.name, args.path = args.path, None
+            name = args.name or _get_active_project()
+            if not name:
+                print(_red("No project specified. "
+                          "Use: raptor project binary <action> [args] "
+                          "<name>, or set an active project first."))
+                return
+            p = mgr.load(name)
+            if not p:
+                print(_red(f"Project '{name}' not found."))
+                return
+            project_file = mgr.projects_dir / f"{name}.json"
+            if args.action == "list":
+                if not p.binaries:
+                    print(f"Project '{name}': no binaries declared.")
+                else:
+                    print(f"Project '{name}' binaries ({len(p.binaries)}):")
+                    for b in p.binaries:
+                        print(f"  {b}")
+            elif args.action == "add":
+                if not args.path:
+                    print(_red("add requires a <path> argument"))
+                    return
+                resolved_path = Path(args.path).expanduser().resolve()
+                if not resolved_path.is_file():
+                    # Reject at add-time so the operator sees the typo
+                    # NOW, not silently weeks later when the scan
+                    # produces no binary-oracle evidence (adversarial
+                    # review P1-D-2).
+                    print(_red(
+                        f"add: path does not exist or is not a file: "
+                        f"{args.path} (resolved to {resolved_path})"
+                    ))
+                    return
+                resolved = str(resolved_path)
+                if resolved in p.binaries:
+                    print(f"Already present: {resolved}")
+                else:
+                    p.binaries.append(resolved)
+                    save_json(project_file, p.to_dict())
+                    print(_green(f"Added: {resolved}"))
+            elif args.action == "remove":
+                if not args.path:
+                    print(_red("remove requires a <path> argument"))
+                    return
+                resolved = str(Path(args.path).resolve())
+                if resolved not in p.binaries:
+                    print(f"Not present: {resolved}")
+                else:
+                    p.binaries.remove(resolved)
+                    save_json(project_file, p.to_dict())
+                    print(_green(f"Removed: {resolved}"))
+            elif args.action == "clear":
+                p.binaries = []
+                save_json(project_file, p.to_dict())
+                print(_green(f"Cleared binaries for '{name}'"))
 
         elif args.subcommand == "list":
             projects = mgr.list_projects()

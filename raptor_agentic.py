@@ -763,7 +763,34 @@ Examples:
     )
 
     # Mitigation analysis options (NEW)
-    parser.add_argument("--binary", help="Target binary for mitigation analysis (enables pre-exploit checks)")
+    parser.add_argument(
+        "--binary", action="append", default=None,
+        help=(
+            "Target binary path. Used for (a) mitigation analysis "
+            "(pre-exploit checks) and (b) binary-oracle inventory "
+            "enrichment — DWARF-joined per-function classification, "
+            "drives finding suppression on dead functions. Repeat for "
+            "hybrid targets (e.g. --binary lib.so --binary app); a "
+            "function is classified ``absent`` only when EVERY declared "
+            "binary lacks it."
+        ),
+    )
+    parser.add_argument(
+        "--binary-auto", action="store_true",
+        help=(
+            "Auto-detect debug binaries under the target's build "
+            "directories. Honours --target-kind; appends detected paths "
+            "to any --binary values."
+        ),
+    )
+    parser.add_argument(
+        "--binary-edges", action="store_true",
+        help=(
+            "Inc 2b Tier 1: extract direct call edges (r2) and "
+            "annotate inventory functions with binary-found callers. "
+            "Slow; requires --binary."
+        ),
+    )
     parser.add_argument("--check-mitigations", action="store_true",
                        help="Run mitigation analysis before scanning (for binary exploit targets)")
     parser.add_argument("--skip-mitigation-checks", action="store_true",
@@ -1092,7 +1119,14 @@ Examples:
     logger.info(f"Max findings: {args.max_findings}")
     logger.info(f"Mode: {args.mode}")
     if args.binary:
-        logger.info(f"Target binary: {args.binary}")
+        logger.info(f"Target binary(s): {args.binary}")
+    # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
+    # — path validation, auto-detect walk, active-project binary
+    # layering, RaptorConfig mutation, and the no-leak-across-runs
+    # guarantee — lives in the shared CLI helper. raptor_codeql.py
+    # uses the same call site to keep behaviour aligned.
+    from core.inventory.binary_oracle_cli import apply_to_config
+    apply_to_config(args, Path(args.repo))
 
     workflow_start = time.time()
 
@@ -1128,7 +1162,11 @@ Examples:
         try:
             from packages.exploit_feasibility import analyze_binary, format_analysis_summary
 
-            binary_path = str(Path(args.binary)) if args.binary else None
+            # --binary is action='append' (list) for binary-oracle's
+            # hybrid multi-binary case; mitigation analysis is per-binary,
+            # so analyse the FIRST declared binary.
+            binary_path = (
+                str(Path(args.binary[0])) if args.binary else None)
             mitigation_result = analyze_binary(binary_path, output_dir=str(out_dir))
 
             # Display formatted summary
@@ -1664,7 +1702,10 @@ Examples:
         sarif_files=sarif_files,
         total_findings=total_findings,
         vuln_type=args.vuln_type,
-        binary_path=args.binary,
+        # First binary used for downstream per-binary helpers (mitigation,
+        # fuzzing). Binary-oracle's multi-binary combine still happens via
+        # RaptorConfig.BINARY_ORACLE_PATHS independently.
+        binary_path=args.binary[0] if args.binary else None,
         skip_dedup=args.skip_dedup,
         skip_feasibility=not (args.binary or args.check_mitigations),
         external_llm=llm_env.external_llm,
@@ -1963,7 +2004,8 @@ Examples:
             try:
                 from packages.fuzzing.orchestrator import FuzzingOrchestrator
                 orch = FuzzingOrchestrator(llm=None)
-                plan = orch.plan(Path(args.binary))
+                # Fuzzing is per-binary; use the first --binary.
+                plan = orch.plan(Path(args.binary[0]))
                 print(plan.summary())
 
                 if args.fuzz_plan_only:
@@ -2015,7 +2057,8 @@ Examples:
                         try:
                             print(f"\n  Triaging {fuzzing_result['crashes']} fuzz crashes...")
                             crash_outputs = _prepare_fuzz_crashes_for_validate(
-                                binary_path=Path(args.binary),
+                                # Per-binary crash triage uses the first --binary.
+                                binary_path=Path(args.binary[0]),
                                 fuzzing_result=fuzzing_result,
                                 fuzz_out=fuzz_out,
                                 limit=args.max_findings,
