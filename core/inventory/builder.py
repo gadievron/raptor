@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
+from core.config import RaptorConfig
 from core.hash import sha256_bytes
 from core.json import load_json
 
@@ -342,6 +343,43 @@ def build_inventory(
     inventory['target_kind_source'] = _lib['source']
     if limitations:
         inventory['limitations'] = limitations
+
+    # Binary-oracle enrichment (Inc 4 + Phase 4 multi-binary) — opt-in
+    # via the process-wide ``RaptorConfig.BINARY_ORACLE_PATHS`` (set by
+    # ``raptor_agentic`` / ``raptor_codeql``'s repeatable ``--binary``
+    # flag). Empty tuple = no-op. Populates ``inventory['binary_oracle']``
+    # + per-item metadata; the reach_witness/demoter consumers (Phase 2)
+    # then pick up the resulting BINARY_ORACLE_ABSENT verdicts via
+    # ``classify_reachability``. For ``--target-kind=hybrid`` (library +
+    # application), the operator passes multiple ``--binary`` flags and
+    # the enrichment combines per-binary verdicts with alive-in-any
+    # wins — so a function is only ``absent`` when EVERY declared binary
+    # lacks it. Best-effort — missing tools / non-ELF / stripped binary
+    # logs a skip and leaves the inventory unchanged.
+    bin_paths = RaptorConfig.BINARY_ORACLE_PATHS
+    if bin_paths:
+        try:
+            from .binary_oracle import enrich_inventory_with_binary_oracle
+            enrich_inventory_with_binary_oracle(inventory, bin_paths)
+        except Exception as exc:                          # noqa: BLE001
+            logger.warning("binary_oracle enrichment failed for %r: %s",
+                           bin_paths, exc)
+        # Inc 2b Tier 1: opt-in direct-call-edge extraction. Adds
+        # binary-found callers as positive reachability evidence
+        # (``binary_call_edge`` verdict). Slow (~10-30s per binary
+        # via r2 ``aaa``) so gated behind RaptorConfig.BINARY_ORACLE_EDGES.
+        if RaptorConfig.BINARY_ORACLE_EDGES:
+            try:
+                from .binary_oracle_edges import (
+                    extract_direct_call_edges,
+                    annotate_inventory_with_edges,
+                )
+                indices = [extract_direct_call_edges(Path(p))
+                           for p in bin_paths]
+                annotate_inventory_with_edges(inventory, indices)
+            except Exception as exc:                      # noqa: BLE001
+                logger.warning("binary_oracle_edges extraction failed: %s",
+                               exc)
 
     # Cumulative coverage: carry forward checked_by from previous inventory
     if old_inventory is not None:

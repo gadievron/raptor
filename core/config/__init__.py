@@ -219,6 +219,37 @@ class RaptorConfig:
     # lib+CLI whose manifest only exposes the library side).
     ENV_TARGET_KIND = "RAPTOR_TARGET_KIND"
 
+    # Operator-supplied debug binaries for the current target — triggers
+    # binary-oracle enrichment of the inventory (DWARF-joined per-function
+    # classification). Mutated by the ``--binary`` CLI flag (repeatable)
+    # at process start; read by ``build_inventory`` at the end of the
+    # build. Empty tuple = no enrichment.
+    #
+    # MULTIPLE binaries are the common case for ``--target-kind=hybrid``
+    # (a target that ships BOTH a library AND an application — npm
+    # package with main+bin, Python package with console_scripts,
+    # a C library that also ships a CLI). The classifier runs against
+    # each binary independently; the per-source-function results are
+    # combined with alive-in-any-wins semantics, so a function is only
+    # ``absent`` when EVERY declared binary lacks it. Picking the wrong
+    # single binary stops being a footgun.
+    #
+    # Follows the same in-process-ambient pattern as ``DEFAULT_TIMEOUT``
+    # — no env var (binary_oracle hasn't yet shown a need to cross
+    # subprocess boundaries; revisit if /validate or another helper grows
+    # one).
+    BINARY_ORACLE_PATHS: Tuple[str, ...] = ()
+
+    # Inc 2b Tier 1: when True, extract direct call edges from each
+    # binary in BINARY_ORACLE_PATHS (via r2) and annotate inventory
+    # items with binary-found callers. Affirmative reachability
+    # evidence — a function with binary-confirmed callers gets the
+    # ``binary_call_edge`` REACHABLE verdict via reach_witness.
+    # Opt-in because r2 ``aaa`` is slow (~10-30s per binary on
+    # typical sizes); operators turn it on when they care about
+    # source-graph false-deads on indirect / fn-pointer call sites.
+    BINARY_ORACLE_EDGES: bool = False
+
     # LLM Provider Configuration.
     #
     # OLLAMA_HOST reads the env var on every access so a runtime
