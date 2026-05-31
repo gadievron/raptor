@@ -23,3 +23,17 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+
+# Dev-profile tuning for local iteration. The heavy CI/test path is
+# `cargo build --release` (prover/verifier), which these do NOT touch —
+# release is left alone deliberately so proof artifacts and the
+# re-derived verifying key stay byte-reproducible. These only speed up
+# debug builds (`cargo check`, structural `cargo test`):
+#   - deps build optimised once and stay cached across source iteration;
+#   - thinner debuginfo keeps our own crates' link step cheap.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
