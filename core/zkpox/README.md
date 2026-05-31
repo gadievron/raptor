@@ -28,6 +28,37 @@ cd core/zkpox/guest && cargo prove build
 cd core/zkpox && cargo build --release
 ```
 
+### Fast local build (no SP1 toolchain)
+
+The verifier's `full-verify` feature (default) links `sp1-sdk`, which
+roughly doubles its build time. Contributors who aren't touching the
+crypto layer can skip it entirely and build the structural verifier:
+
+```sh
+# Structural checks only — CBOR shape, envelope fingerprint, version
+# binding. No sp1-sdk, no proving toolchain.
+cd core/zkpox && cargo build --release \
+  -p zkpox-verify --no-default-features --features structural
+```
+
+### Optional: faster local linking / caching (opt-in)
+
+Not committed to the repo because they hard-break any machine missing
+the tool. If you have them installed, drop a `core/zkpox/.cargo/config.toml`
+of your own:
+
+```toml
+# lld host linker — typically much faster than the default on this
+# dep-heavy workspace. Needs clang + lld on PATH.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# sccache — compile cache that survives `cargo clean`. Needs sccache on PATH.
+[build]
+rustc-wrapper = "sccache"
+```
+
 ## Test
 
 ```sh
