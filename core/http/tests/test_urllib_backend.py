@@ -1041,9 +1041,15 @@ class TestHostCircuitBreaker:
 class TestUrllibClientCircuitBreakerWiring:
     """The breaker fires from inside _fetch on real-shaped retries."""
 
-    def test_two_429s_then_third_request_fails_fast(self):
+    @patch("core.http.urllib_backend.time.sleep")
+    def test_two_429s_then_third_request_fails_fast(self, _mock_sleep):
         """After two 429s on host A, a third request to host A must
-        raise immediately without invoking the pool."""
+        raise immediately without invoking the pool.
+
+        ``time.sleep`` is patched: the first request runs the full
+        3-attempt 429 sequence whose 1+2=3s of real backoff is wall-clock
+        cost only — the assertion is about breaker *state*, not timing —
+        matching every other retry test in this file."""
         cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
         # 6 stub responses (one per backoff slot) — but the third
         # request should fail fast before the pool is hit again.
@@ -1114,7 +1120,8 @@ class TestUrllibClientCircuitBreakerWiring:
         cb.record_failure("flaky.example.com", 443)
         assert cb.is_open("flaky.example.com", 443)[0] is False
 
-    def test_breaker_state_persists_across_default_clients(self):
+    @patch("core.http.urllib_backend.time.sleep")
+    def test_breaker_state_persists_across_default_clients(self, _mock_sleep):
         """The fix for the ~90s-per-sample stress-sweep regression:
         when callers don't pass an explicit ``circuit_breaker``,
         the module-level singleton is used. State persists across

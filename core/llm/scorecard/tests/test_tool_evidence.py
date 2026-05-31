@@ -19,6 +19,7 @@ import pytest
 from core.llm.scorecard import cli as cli_mod
 from core.llm.scorecard.scorecard import EventType, ModelScorecard
 from core.llm.scorecard.tool_evidence import (
+    auto_back_prop_from_validate_run,
     record_tool_evidence_outcome,
     record_tool_evidence_outcomes,
 )
@@ -355,3 +356,108 @@ class TestCLIToolEvidence:
             EventType.CHEAP_SHORT_CIRCUIT
         ]
         assert (before.correct, before.incorrect) == (after.correct, after.incorrect)
+
+
+# ---------------------------------------------------------------------------
+# Auto back-prop from /validate run-end
+# ---------------------------------------------------------------------------
+
+
+class TestAutoBackPropFromValidateRun:
+    """`/validate` writes its report and then auto-feeds the scorecard: a
+    co-located orchestrated_report.json + findings.json get joined by
+    finding_id and one TOOL_EVIDENCE event lands per concluded verdict."""
+
+    def _write_run(self, run: Path, analysis_records, validation_findings):
+        run.mkdir(parents=True, exist_ok=True)
+        (run / "orchestrated_report.json").write_text(
+            json.dumps({"results": analysis_records}), encoding="utf-8")
+        (run / "findings.json").write_text(
+            json.dumps({"findings": validation_findings}), encoding="utf-8")
+
+    def test_join_emits_one_event_per_concluded_finding(self, tmp_path, scorecard):
+        run = tmp_path / "validate-run"
+        self._write_run(
+            run,
+            analysis_records=[
+                {"finding_id": "f-1", "rule_id": "py/sqli",
+                 "analysed_by": "claude-opus", "is_exploitable": True},
+                {"finding_id": "f-2", "rule_id": "py/xss",
+                 "analysed_by": "haiku", "is_exploitable": True},
+            ],
+            validation_findings=[
+                {"finding_id": "f-1", "is_exploitable": True},   # agree
+                {"finding_id": "f-2", "is_exploitable": False},  # disagree
+            ],
+        )
+        n = auto_back_prop_from_validate_run(run, scorecard=scorecard)
+        assert n == 2
+        # f-1: agree -> correct on the opus cell
+        opus = _stat(scorecard, "agentic:py/sqli", "claude-opus")
+        assert opus == (1, 0)
+        # f-2: disagree -> incorrect on the haiku cell
+        haiku = _stat(scorecard, "agentic:py/xss", "haiku")
+        assert haiku == (0, 1)
+
+    def test_inconclusive_skipped(self, tmp_path, scorecard):
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[{"finding_id": "f", "rule_id": "r",
+                               "analysed_by": "m", "is_exploitable": True}],
+            validation_findings=[{"finding_id": "f", "is_exploitable": None}],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
+    def test_missing_files_returns_zero(self, tmp_path, scorecard):
+        """No orchestrated_report.json (standalone /validate) → silent 0."""
+        run = tmp_path / "empty"
+        run.mkdir()
+        (run / "findings.json").write_text("{}")
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
+    def test_no_attributable_model_skipped(self, tmp_path, scorecard):
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[{"finding_id": "f", "rule_id": "r",
+                               "is_exploitable": True}],   # no analysed_by
+            validation_findings=[{"finding_id": "f", "is_exploitable": True}],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
+    def test_top_level_non_dict_does_not_crash(self, tmp_path, scorecard):
+        """List / scalar JSON in either report → 0 (no AttributeError on
+        `.get`). Adversarial: hand-edits or upstream corruption mustn't crash."""
+        run = tmp_path / "v"
+        run.mkdir()
+        (run / "orchestrated_report.json").write_text("[]")        # list
+        (run / "findings.json").write_text('{"findings": []}')
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+        (run / "orchestrated_report.json").write_text("42")        # scalar
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
+    def test_rejects_non_str_analysed_by(self, tmp_path, scorecard):
+        """`analysed_by` must be a non-empty string — a list/dict would
+        stringify to nonsense and silently mangle attribution."""
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[{"finding_id": "f", "rule_id": "r",
+                               "analysed_by": ["a", "b"],          # bad shape
+                               "is_exploitable": True}],
+            validation_findings=[{"finding_id": "f", "is_exploitable": True}],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0
+
+    def test_rejects_non_bool_is_exploitable(self, tmp_path, scorecard):
+        """A stringy verdict ('yes') shouldn't be silently truthy-coerced —
+        JSON spec says bool; anything else is a corrupt upstream record."""
+        run = tmp_path / "v"
+        self._write_run(
+            run,
+            analysis_records=[{"finding_id": "f", "rule_id": "r",
+                               "analysed_by": "m", "is_exploitable": True}],
+            validation_findings=[{"finding_id": "f", "is_exploitable": "yes"}],
+        )
+        assert auto_back_prop_from_validate_run(run, scorecard=scorecard) == 0

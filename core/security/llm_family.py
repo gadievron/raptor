@@ -97,6 +97,20 @@ def provider_of(model_id: str) -> str:
     return provider_for_family(family_of(model_id))
 
 
+def unknown_model_message(model_id: str) -> str:
+    """Operator-facing hint for a model id whose provider can't be resolved.
+
+    Used to fail loudly (instead of silently producing a keyless / provider-
+    less config) when an operator passes a prefix-less nickname like
+    ``opus-4-8`` rather than a recognizable id."""
+    return (
+        f"unrecognized model {model_id!r}: cannot determine its provider. "
+        f"Use a recognizable id (e.g. 'claude-opus-4-8', 'gpt-5', "
+        f"'gemini-2.5-pro') or an explicit 'provider/model' form "
+        f"(e.g. 'anthropic/claude-opus-4-8')."
+    )
+
+
 def bare_model_id(model_id: str) -> str:
     """Return the model identifier with any aggregator + provider
     prefix peeled off.

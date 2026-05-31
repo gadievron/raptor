@@ -26,6 +26,17 @@ real findings to chew on. That lets ``scan`` produce non-empty
 output, ``fix --cve-only`` produce non-empty rewrites, and
 ``bump --whatif`` produce non-Clean verdicts.
 
+Because those pins are deliberately vulnerable, every manifest in
+``fixture/`` is committed with a **``.fixture`` suffix**
+(``package.json.fixture``, ``pom.xml.fixture``,
+``requirements.txt.fixture``, ``Dockerfile.fixture``) so GitHub's
+dependency graph never parses the corpus and raises spurious
+Dependabot alerts / security-update PRs against the fixtures. The
+harness strips the suffix when it copies each fixture to its scan
+tempdir, so the scanner sees the real names. (The nested
+``.github/workflows/ci.yml`` is left as-is — the dependency graph
+only parses workflow files at the repo root.)
+
 ## Modes covered
 
 | Mode | What we assert |

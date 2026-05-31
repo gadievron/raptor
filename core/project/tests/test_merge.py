@@ -152,6 +152,107 @@ class TestMergeFindings(unittest.TestCase):
             self.assertEqual(len(merged), 1)
             self.assertEqual(merged[0]["final_status"], "ruled_out")
 
+    # --- provenance_refs preservation across merge (#2 finding↔provenance) ---
+
+    def test_three_way_merge_preserves_all_provenance_refs(self):
+        """A finding surfaced in 3 runs collapses to one record whose
+        ``provenance_refs`` is the UNION of all 3 sources' refs (deduped by
+        run_id, insertion order preserved)."""
+        with TemporaryDirectory() as d:
+            key = {"file": "a.c", "function": "f", "line": 10}
+            a = self._make_run(d, "a", [{
+                "id": "F-001", **key, "status": "not_disproven",
+                "provenance_refs": [{"run_id": "run-A", "ts": "t1"}],
+            }])
+            b = self._make_run(d, "b", [{
+                "id": "F-002", **key, "status": "confirmed",
+                "provenance_refs": [{"run_id": "run-B", "ts": "t2"}],
+            }])
+            c = self._make_run(d, "c", [{
+                "id": "F-003", **key, "status": "exploitable",
+                "provenance_refs": [{"run_id": "run-C", "ts": "t3"}],
+            }])
+            merged = merge_findings([a, b, c])
+            self.assertEqual(len(merged), 1)
+            # Winning representation has the most-progressed status
+            self.assertEqual(merged[0]["status"], "exploitable")
+            # Provenance trail preserves all 3 source runs
+            refs = merged[0]["provenance_refs"]
+            self.assertEqual(
+                [r["run_id"] for r in refs], ["run-A", "run-B", "run-C"]
+            )
+
+    def test_merge_preserves_provenance_when_loser_has_more_refs(self):
+        """The "winning" status doesn't determine which refs survive — every
+        source's refs are unioned regardless of who won the status race."""
+        with TemporaryDirectory() as d:
+            key = {"file": "x.c", "function": "g", "line": 5}
+            # Loser carries 2 refs (from a prior coalesce upstream)
+            a = self._make_run(d, "a", [{
+                "id": "X1", **key, "status": "not_disproven",
+                "provenance_refs": [
+                    {"run_id": "old-1"}, {"run_id": "old-2"},
+                ],
+            }])
+            # Winner carries 1 ref
+            b = self._make_run(d, "b", [{
+                "id": "X2", **key, "status": "exploitable",
+                "provenance_refs": [{"run_id": "new-1"}],
+            }])
+            merged = merge_findings([a, b])
+            self.assertEqual(merged[0]["status"], "exploitable")
+            self.assertEqual(
+                [r["run_id"] for r in merged[0]["provenance_refs"]],
+                ["old-1", "old-2", "new-1"],
+            )
+
+    def test_merge_dedupes_duplicate_run_ids_in_union(self):
+        """If the same run's refs appear via multiple sources (e.g. a re-
+        ingestion path), the union dedupes by run_id — no double-counting."""
+        with TemporaryDirectory() as d:
+            key = {"file": "y.c", "function": "h", "line": 1}
+            a = self._make_run(d, "a", [{
+                "id": "Y", **key, "status": "confirmed",
+                "provenance_refs": [{"run_id": "dup", "ts": "first"}],
+            }])
+            b = self._make_run(d, "b", [{
+                "id": "Y", **key, "status": "confirmed",
+                "provenance_refs": [{"run_id": "dup", "ts": "second"}],
+            }])
+            merged = merge_findings([a, b])
+            refs = merged[0]["provenance_refs"]
+            # ONE entry for dup; the first-seen wins (insertion-order stable).
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0]["ts"], "first")
+
+    def test_merge_legacy_findings_without_refs_omit_field(self):
+        """Pre-#2 findings (no ``provenance_refs`` on any source) merge
+        cleanly — the field is absent rather than synthesised as ``[]``,
+        so consumers can distinguish "no provenance" from "empty union"."""
+        with TemporaryDirectory() as d:
+            key = {"file": "z.c", "function": "i", "line": 99}
+            a = self._make_run(d, "a", [{"id": "Z1", **key, "status": "confirmed"}])
+            b = self._make_run(d, "b", [{"id": "Z2", **key, "status": "exploitable"}])
+            merged = merge_findings([a, b])
+            self.assertNotIn("provenance_refs", merged[0])
+
+    def test_merge_mixed_legacy_and_stamped(self):
+        """A legacy (un-stamped) source mixed with a stamped one yields a
+        union containing just the stamped run's refs — the legacy contributes
+        nothing rather than introducing a sentinel."""
+        with TemporaryDirectory() as d:
+            key = {"file": "m.c", "function": "j", "line": 2}
+            a = self._make_run(d, "a", [{"id": "M1", **key, "status": "confirmed"}])
+            b = self._make_run(d, "b", [{
+                "id": "M2", **key, "status": "exploitable",
+                "provenance_refs": [{"run_id": "stamped-only"}],
+            }])
+            merged = merge_findings([a, b])
+            self.assertEqual(
+                [r["run_id"] for r in merged[0]["provenance_refs"]],
+                ["stamped-only"],
+            )
+
 
 class TestVerifyMerge(unittest.TestCase):
 

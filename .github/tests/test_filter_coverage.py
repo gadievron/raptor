@@ -44,6 +44,7 @@ SUBSYSTEMS: list[tuple[str, str]] = [
     ("orchestration", "core/orchestration"),
     ("zkpox", "packages/zkpox"),
     ("sca", "packages/sca"),
+    ("source_intel", "packages/source_intel"),
 ]
 
 
@@ -133,6 +134,35 @@ class CIFilterCoverageTests(unittest.TestCase):
             )
             self.fail("\n".join(problems))
 
+    def test_each_subsystem_filter_is_canonical(self):
+        """Each dependency filter must be deduped/collapsed and laid out
+        in the canonical within-group order (own package, then alpha
+        ``packages/*`` → ``core/*`` → ``libexec/*``, then tails). Keeps
+        diffs small and ordering predictable. Fix with
+        ``python .github/tests/test_filter_coverage.py --update`` (it also
+        adds any missing import globs in the same pass)."""
+        problems: list[str] = []
+        for filter_name, pkg_rel in SUBSYSTEMS:
+            globs = compute_filters.FILTERS.get(filter_name)
+            if not globs:
+                continue
+            canonical = _canonical_order(
+                set(_normalise_globs(set(globs))), pkg_rel
+            )
+            if list(globs) != canonical:
+                problems.append(
+                    f"`{filter_name}` is not canonical:\n"
+                    f"    have: {list(globs)}\n"
+                    f"    want: {canonical}"
+                )
+        if problems:
+            problems.append("")
+            problems.append(
+                "Fix: run `python .github/tests/test_filter_coverage.py"
+                " --update`."
+            )
+            self.fail("\n".join(problems))
+
 
 class PromptAuditFilterCoverageTests(unittest.TestCase):
     """The ``prompt_audit`` filter's globs must cover every file
@@ -187,6 +217,86 @@ class PromptAuditFilterCoverageTests(unittest.TestCase):
             self.fail("\n".join(msg_lines))
 
 
+class NormaliseGlobsTests(unittest.TestCase):
+    """`_normalise_globs` dedups subsumed file globs and summarises
+    multiple same-package imports into one whole-package ``**``."""
+
+    def test_dedup_file_under_sibling_star(self):
+        # bare ``import core.inventory`` -> ``**`` and
+        # ``core.inventory.reachability`` -> file; the file is redundant.
+        self.assertEqual(
+            _normalise_globs(
+                {"core/inventory/**", "core/inventory/reachability.py"}
+            ),
+            ["core/inventory/**"],
+        )
+
+    def test_collapse_multiple_files_one_package(self):
+        self.assertEqual(
+            _normalise_globs({
+                "core/dataflow/finding.py",
+                "core/dataflow/label.py",
+                "core/dataflow/validator.py",
+            }),
+            ["core/dataflow/**"],
+        )
+
+    def test_single_file_import_stays_precise(self):
+        # One module from a big sibling package must NOT broaden to **.
+        self.assertEqual(
+            _normalise_globs({"packages/codeql/dataflow_validator.py"}),
+            ["packages/codeql/dataflow_validator.py"],
+        )
+
+    def test_mixed_set(self):
+        self.assertEqual(
+            _normalise_globs({
+                "core/dataflow/finding.py",      # 2 files -> collapse
+                "core/dataflow/label.py",
+                "core/inventory/**",             # ** present -> absorb file
+                "core/inventory/reachability.py",
+                "core/llm/client.py",            # lone file -> stays precise
+            }),
+            ["core/dataflow/**", "core/inventory/**", "core/llm/client.py"],
+        )
+
+    def test_idempotent(self):
+        once = _normalise_globs({
+            "core/dataflow/finding.py", "core/dataflow/label.py",
+        })
+        self.assertEqual(_normalise_globs(set(once)), once)
+
+    def test_canonical_order_groups_own_packages_core_tails(self):
+        # Own package first, then packages/* alpha, core/* alpha, tails.
+        self.assertEqual(
+            _canonical_order(
+                {
+                    "core/llm/**", "packages/coccinelle/**",
+                    ".github/workflows/tests.yml",
+                    "packages/source_intel/**", "core/build/**",
+                    "requirements*.txt",
+                },
+                "packages/source_intel",
+            ),
+            [
+                "packages/source_intel/**",   # own first
+                "packages/coccinelle/**",     # packages/* alpha
+                "core/build/**",              # core/* alpha
+                "core/llm/**",
+                "requirements*.txt",          # tails
+                ".github/workflows/tests.yml",
+            ],
+        )
+
+    def test_canonical_order_is_idempotent(self):
+        ordered = _canonical_order(
+            {"core/b/**", "core/a/**", "packages/x/**"}, "packages/x"
+        )
+        self.assertEqual(
+            _canonical_order(set(ordered), "packages/x"), ordered
+        )
+
+
 def _glob_for(path: Path) -> str:
     """Convert a resolved module path to a sensible filter glob.
 
@@ -199,6 +309,106 @@ def _glob_for(path: Path) -> str:
     if s.endswith(".py"):
         return s
     return s + "/**"
+
+
+# When a filter pulls in this many or more modules from a single depth-2
+# package (``core/dataflow``, ``packages/codeql``, ...), _normalise_globs
+# folds the per-file globs into one whole-package ``pkg/**`` — the
+# convention the hand-maintained filters already use. A SINGLE
+# cross-package import stays precise (cf. exploit_feasibility's
+# ``packages/codeql/smt_path_validator.py``), so this never silently
+# over-broadens a one-off dependency.
+_PACKAGE_COLLAPSE_THRESHOLD = 2
+
+
+def _package_root(glob: str) -> "str | None":
+    """Depth-2 package root of a path glob (``core/dataflow`` for
+    ``core/dataflow/finding.py``), or None for a non-path glob like
+    ``requirements*.txt`` that has no directory structure."""
+    parts = glob.split("/")
+    if len(parts) < 2:
+        return None
+    return "/".join(parts[:2])
+
+
+def _normalise_globs(globs: set[str]) -> list[str]:
+    """Dedup + summarise an additive glob set for one filter.
+
+    1. Collapse: per-file globs sharing a depth-2 package root fold into
+       ``root/**`` when a ``root/**`` is already in the set OR at least
+       ``_PACKAGE_COLLAPSE_THRESHOLD`` files share that root.
+    2. Dedup: drop any glob subsumed by a ``root/**`` kept in the set
+       (e.g. ``core/inventory/reachability.py`` under ``core/inventory/**``).
+
+    Single-file imports from a package (below threshold, no sibling
+    ``**``) keep their precise file glob. Operates only on the freshly
+    computed additive set — existing filter entries are never rewritten,
+    so the insert-only minimal-diff contract still holds.
+    """
+    from collections import Counter
+
+    present_roots = {
+        _package_root(g) for g in globs if g.endswith("/**")
+    }
+    present_roots.discard(None)
+    file_roots = [
+        _package_root(g) for g in globs if not g.endswith("/**")
+    ]
+    file_root_counts = Counter(r for r in file_roots if r is not None)
+    collapse = present_roots | {
+        r for r, n in file_root_counts.items()
+        if n >= _PACKAGE_COLLAPSE_THRESHOLD
+    }
+
+    folded = {
+        (_package_root(g) + "/**") if _package_root(g) in collapse else g
+        for g in globs
+    }
+
+    # Drop anything strictly under a kept root's ``**``.
+    roots = {g[: -len("/**")] for g in folded if g.endswith("/**")}
+    result: list[str] = []
+    for g in sorted(folded):
+        target = g[: -len("/**")] if g.endswith("/**") else g
+        if any(
+            root != target and (target == root or target.startswith(root + "/"))
+            for root in roots
+        ):
+            continue
+        result.append(g)
+    return result
+
+
+def _canonical_key(glob: str, own_prefix: str) -> "tuple[int, str]":
+    """Sort key for the canonical within-group glob order.
+
+    Groups, in order: the subsystem's OWN package first, then
+    ``packages/*`` (alphabetical), ``core/*`` (alphabetical),
+    ``libexec/*`` (alphabetical), then the conventional tails
+    (``requirements*.txt`` → ``pyproject.toml`` → ``.github/...``).
+    Ordering is purely cosmetic — ``match_glob`` is order-independent —
+    but a deterministic layout keeps diffs small and the lists readable.
+    """
+    if glob == own_prefix + "/**" or glob == own_prefix:
+        return (0, "")
+    if glob.startswith("packages/"):
+        return (1, glob)
+    if glob.startswith("core/"):
+        return (2, glob)
+    if glob.startswith("libexec/"):
+        return (3, glob)
+    if glob.startswith("requirements"):
+        return (4, glob)
+    if glob == "pyproject.toml":
+        return (5, glob)
+    if glob.startswith(".github/"):
+        return (6, glob)
+    return (7, glob)
+
+
+def _canonical_order(globs: "set[str]", own_prefix: str) -> list[str]:
+    """Return ``globs`` in the canonical within-group order."""
+    return sorted(globs, key=lambda g: _canonical_key(g, own_prefix))
 
 
 def _compute_per_filter_missing() -> dict[str, list[str]]:
@@ -224,58 +434,81 @@ def _compute_per_filter_missing() -> dict[str, list[str]]:
             if any(compute_filters.match_glob(str(path), g) for g in globs):
                 continue
             missing.setdefault(filter_name, set()).add(_glob_for(path))
-    return {k: sorted(v) for k, v in missing.items()}
+    return {k: _normalise_globs(v) for k, v in missing.items()}
 
 
-def _insert_globs(source: str, filter_name: str,
-                  new_globs: list[str]) -> str:
-    """Insert globs into FILTERS["<filter_name>"]'s list literal.
+def _rewrite_filter_block(source: str, filter_name: str,
+                          ordered_globs: list[str]) -> str:
+    """Replace FILTERS["<filter_name>"]'s list body with ordered_globs.
 
-    Inserts just before the closing `    ],` line of the block.
-    Preserves all comments, ordering of existing entries, and
-    surrounding whitespace. Minimal-diff: only adds N lines, never
-    rewrites existing content.
+    Rewrites only the lines between the ``"name": [`` opener and its
+    ``],`` closer; the leading comment (which sits ABOVE the key line)
+    and every other filter are untouched. Safe only for lists with no
+    inline comments between entries — i.e. the SUBSYSTEMS dependency
+    filters. ``prompt_audit`` (inline comments + registry-mirror order)
+    and the hand-curated specials (``python``, ``ci_lint``,
+    ``codeql_*``) are never passed here.
 
-    Raises RuntimeError if the block can't be located — caller
-    should treat that as "compute_filters.py shape has drifted,
-    requires manual update."
+    Raises RuntimeError if the block can't be located — treat that as
+    "compute_filters.py shape has drifted, update by hand."
     """
     lines = source.splitlines(keepends=True)
     start_marker = f'    "{filter_name}": ['
     end_marker = "    ],"
-    inside = False
-    insert_at: int | None = None
+    start: "int | None" = None
+    end: "int | None" = None
     for i, line in enumerate(lines):
-        if not inside and line.startswith(start_marker):
-            inside = True
+        if start is None and line.startswith(start_marker):
+            start = i
             continue
-        if inside and line.startswith(end_marker):
-            insert_at = i
+        if start is not None and line.startswith(end_marker):
+            end = i
             break
-    if insert_at is None:
+    if start is None or end is None:
         raise RuntimeError(
             f"Couldn't find list literal for filter {filter_name!r} in "
             f"compute_filters.py — file shape drift, update by hand."
         )
-    new_lines = [f'        "{g}",\n' for g in new_globs]
-    return "".join(lines[:insert_at] + new_lines + lines[insert_at:])
+    body = [f'        "{g}",\n' for g in ordered_globs]
+    return "".join(lines[: start + 1] + body + lines[end:])
 
 
-def _update_compute_filters() -> dict[str, list[str]]:
-    """Apply missing globs to .github/scripts/compute_filters.py.
+def _update_compute_filters() -> dict[str, dict]:
+    """Canonicalize every SUBSYSTEMS dependency filter + add missing globs.
 
-    Returns the dict of changes for printing. Empty dict means no
-    update was needed.
+    For each subsystem: take ``existing ∪ missing-import-globs``,
+    dedup/collapse it (``_normalise_globs``), lay it out in the canonical
+    within-group order (``_canonical_order``), and rewrite the list body
+    when it differs from what's there. This makes one ``--update`` run do
+    both jobs — fill coverage gaps AND normalize ordering/redundancy —
+    and it's idempotent once a filter is canonical.
+
+    Returns ``{name: {"added": [...], "removed": [...], "reordered":
+    bool}}`` for the filters that changed (``removed`` = entries folded
+    away by dedup/collapse).
     """
     missing = _compute_per_filter_missing()
-    if not missing:
-        return missing
     filter_file = REPO / ".github" / "scripts" / "compute_filters.py"
     source = filter_file.read_text(encoding="utf-8")
-    for filter_name in sorted(missing):
-        source = _insert_globs(source, filter_name, missing[filter_name])
-    filter_file.write_text(source, encoding="utf-8")
-    return missing
+    changes: dict[str, dict] = {}
+    for filter_name, pkg_rel in SUBSYSTEMS:
+        existing = compute_filters.FILTERS.get(filter_name)
+        if not existing:
+            continue
+        added = missing.get(filter_name, [])
+        normalised = set(_normalise_globs(set(existing) | set(added)))
+        ordered = _canonical_order(normalised, pkg_rel)
+        if list(existing) == ordered:
+            continue
+        source = _rewrite_filter_block(source, filter_name, ordered)
+        changes[filter_name] = {
+            "added": sorted(set(ordered) - set(existing)),
+            "removed": sorted(set(existing) - set(ordered)),
+            "reordered": set(existing) == set(ordered),
+        }
+    if changes:
+        filter_file.write_text(source, encoding="utf-8")
+    return changes
 
 
 if __name__ == "__main__":
@@ -292,27 +525,38 @@ if __name__ == "__main__":
         "--update",
         action="store_true",
         help=(
-            "Auto-insert missing globs into compute_filters.py and "
-            "exit 0. Mirrors the prompt-envelope audit --update "
-            "workflow (PR #429): see test failure → run --update → "
-            "review diff → commit. Doesn't auto-narrow over-broad "
-            "globs and doesn't remove dead entries — those are still "
-            "manual decisions."
+            "Canonicalize the subsystem dependency filters in "
+            "compute_filters.py and add any missing import globs, then "
+            "exit 0. Mirrors the prompt-envelope audit --update workflow "
+            "(PR #429): see test failure → run --update → review diff → "
+            "commit. Adds coverage and normalizes ordering/redundancy; "
+            "does NOT narrow a deliberately-broad glob or remove a dead "
+            "entry whose import was deleted — those stay manual."
         ),
     )
     args, remaining = parser.parse_known_args()
     if args.update:
-        missing = _update_compute_filters()
-        if not missing:
+        changes = _update_compute_filters()
+        if not changes:
             print(
-                "✓ all subsystem filters already cover their imports "
-                "— no changes"
+                "✓ all subsystem filters cover their imports and are "
+                "in canonical order — no changes"
             )
             sys.exit(0)
-        for filter_name, globs in sorted(missing.items()):
-            print(f"updated `{filter_name}`:")
-            for g in globs:
-                print(f"  + {g}")
+        for name in sorted(changes):
+            c = changes[name]
+            bits = []
+            if c["added"]:
+                bits.append(f"+{len(c['added'])}")
+            if c["removed"]:
+                bits.append(f"-{len(c['removed'])} folded")
+            if c["reordered"]:
+                bits.append("reordered")
+            print(f"updated `{name}`: {', '.join(bits)}")
+            for g in c["added"]:
+                print(f"    + {g}")
+            for g in c["removed"]:
+                print(f"    - {g}")
         print()
         print(
             "Review the diff to .github/scripts/compute_filters.py "

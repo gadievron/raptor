@@ -67,6 +67,10 @@ def detect_dead_scopes(language: str, content: str) -> List[DeadRange]:
             return _detect_javascript(content)
         if language == "rust":
             return _detect_rust(content)
+        if language == "php":
+            return _detect_php(content)
+        if language == "ruby":
+            return _detect_ruby(content)
     except Exception:  # noqa: BLE001
         return []
     return []
@@ -268,6 +272,82 @@ def _skip_string(source: str, start: int) -> "int | None":
             return i + 1
         i += 1
     return None
+
+
+# ---------------------------------------------------------------------------
+# PHP — ``if (false) {…}`` / ``if (0)`` / ``if (null)`` blocks. Same brace
+# shape as JS, so the JS block-matching is reused; PHP adds ``#`` line
+# comments. Conservative: only literal always-false constants (NOT
+# ``if ($flag)`` — a runtime name). Mutually-recursive functions inside the
+# block otherwise read CALLED, masking that the whole block is dead.
+# ---------------------------------------------------------------------------
+
+
+_PHP_HASH_COMMENT = re.compile(r"#[^\n]*")
+_PHP_DEAD_IF = re.compile(r"\bif\s*\(\s*(?:false|0|null)\s*\)\s*\{")
+
+
+def _detect_php(content: str) -> List[DeadRange]:
+    # Strip /* */, // and # comments so a brace/keyword inside one doesn't
+    # mislead the matcher (mirrors the JS detector + PHP's extra # comments).
+    def _spaces(m: "re.Match[str]") -> str:
+        return re.sub(r"[^\n]", " ", m.group(0))
+    stripped = _JS_BLOCK_COMMENT.sub(_spaces, content)
+    stripped = _JS_LINE_COMMENT.sub(_spaces, stripped)
+    stripped = _PHP_HASH_COMMENT.sub(_spaces, stripped)
+    ranges: List[DeadRange] = []
+    for m in _PHP_DEAD_IF.finditer(stripped):
+        close = _match_brace(stripped, m.end() - 1)
+        if close is None:
+            continue
+        ranges.append((stripped.count("\n", 0, m.start()) + 1,
+                       stripped.count("\n", 0, close) + 1))
+    return ranges
+
+
+# ---------------------------------------------------------------------------
+# Ruby — ``if false`` / ``if nil`` / ``unless true`` / ``while false`` blocks
+# (Ruby's only falsey constants are ``false`` and ``nil``). No braces, so the
+# matching ``end`` is found by INDENTATION anchoring: Ruby's universal
+# convention puts the closing ``end`` at the same column as the opening
+# keyword. The dead branch ends at an ``else``/``elsif`` (live) or the ``end``
+# at that column; if the scan dedents past the opener first (malformed /
+# unconventional), we BAIL and report nothing — a false positive here would
+# hard-suppress live code, so ambiguity must under-detect.
+# ---------------------------------------------------------------------------
+
+
+_RB_DEAD_IF = re.compile(
+    r"^(\s*)(?:if\s+(?:false|nil)|unless\s+true|while\s+false|until\s+true)"
+    r"\s*(?:then\b.*)?$")
+_RB_BRANCH_AT = re.compile(r"^(\s*)(?:else|elsif)\b")
+_RB_END_AT = re.compile(r"^(\s*)end\b")
+
+
+def _detect_ruby(content: str) -> List[DeadRange]:
+    lines = [re.sub(r"#.*$", "", ln) for ln in content.split("\n")]
+    ranges: List[DeadRange] = []
+    for i, line in enumerate(lines):
+        m = _RB_DEAD_IF.match(line)
+        if not m:
+            continue
+        ind = m.group(1)
+        for j in range(i + 1, len(lines)):
+            lj = lines[j]
+            if not lj.strip():
+                continue
+            cur = lj[:len(lj) - len(lj.lstrip())]
+            be = _RB_BRANCH_AT.match(lj)
+            en = _RB_END_AT.match(lj)
+            if (be and be.group(1) == ind) or (en and en.group(1) == ind):
+                # dead branch body is lines i+1..j-1 (0-indexed) →
+                # (i+2 .. j) 1-indexed.
+                if i + 2 <= j:
+                    ranges.append((i + 2, j))
+                break
+            if len(cur) < len(ind):
+                break  # dedented past the opener without a match — bail (sound)
+    return ranges
 
 
 __all__ = ["DeadRange", "detect_dead_scopes"]

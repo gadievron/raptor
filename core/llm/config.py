@@ -908,6 +908,18 @@ class ModelConfig:
     role: Optional[str] = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"
 
 
+def _shared_prefix_len(a: str, b: str) -> int:
+    """Length of the common case-insensitive prefix of two model names —
+    the specificity score for credential reuse (longer = closer relative)."""
+    a, b = a.lower(), b.lower()
+    n = 0
+    for ca, cb in zip(a, b):
+        if ca != cb:
+            break
+        n += 1
+    return n
+
+
 @dataclass
 class LLMConfig:
     """Main LLM configuration for RAPTOR."""
@@ -961,6 +973,16 @@ class LLMConfig:
     # reset); set higher to validate more aggressively.
     scorecard_shadow_rate: float = 0.05
 
+    # Freshness half-life (days) for age-weighting scorecard reliability counts at
+    # verdict time. Recent observations dominate stale ones, so a model that
+    # regressed behind a floating alias (notably Gemini, which exposes no
+    # version signal) surfaces instead of being averaged against its own past.
+    # ``None`` (default) DISABLES weighting — counts are summed unweighted,
+    # identical to the pre-freshness behaviour. Enabling lowers the effective
+    # sample size, so confirm the cold-start impact with the offline measurement
+    # before turning it on by default. See ~/design/scorecard-model-versioning.md.
+    scorecard_freshness_half_life_days: Optional[float] = None
+
     def __post_init__(self) -> None:
         """Seed ``specialized_models`` with same-provider fast-tier
         defaults for routing-light task types (binary verdicts,
@@ -983,6 +1005,67 @@ class LLMConfig:
             return
         for task in FAST_TIER_TASKS:
             self.specialized_models.setdefault(task, fast_config)
+
+    def _configured_models(self) -> List[ModelConfig]:
+        """Every model the operator has configured: primary + fallbacks +
+        specialized."""
+        models: List[ModelConfig] = []
+        if self.primary_model is not None:
+            models.append(self.primary_model)
+        models.extend(self.fallback_models or [])
+        models.extend((self.specialized_models or {}).values())
+        return models
+
+    def config_for_model(self, model_id: str) -> ModelConfig:
+        """Build a ModelConfig for an arbitrary ``model_id``, reusing the
+        most specific credential already configured.
+
+        Resolution, most specific first:
+          1. an exact configured entry for ``model_id`` — returned as-is, so
+             its per-model settings (temperature, base, role) are preserved;
+          2. otherwise, among configured models of the same provider that
+             carry a credential, the one whose name shares the longest prefix
+             with ``model_id`` — a configured ``claude-opus-4-6`` lends its
+             key to ``claude-opus-4-8`` ahead of a ``claude-haiku-*`` entry;
+             its api_key / api_base are borrowed onto a config for ``model_id``;
+          3. otherwise a bare config (api_key=None) so the SDK / dispatcher /
+             provider env var supplies the credential at call time.
+        """
+        from core.security.llm_family import (
+            bare_model_id,
+            provider_of,
+            unknown_model_message,
+        )
+
+        candidates = self._configured_models()
+        for mc in candidates:
+            if mc.model_name == model_id:
+                return mc
+
+        provider = provider_of(model_id)
+        if not provider:
+            # Fail loudly rather than synthesizing a keyless, provider-less
+            # config that fails opaquely downstream — an explicit override
+            # with an unrecognizable name is almost always a typo / nickname.
+            raise ValueError(unknown_model_message(model_id))
+        same_provider = [
+            mc for mc in candidates if mc.provider == provider and mc.api_key
+        ]
+        if same_provider:
+            target = bare_model_id(model_id)
+            best = max(
+                same_provider,
+                key=lambda mc: _shared_prefix_len(
+                    target, bare_model_id(mc.model_name)
+                ),
+            )
+            return ModelConfig(
+                provider=provider,
+                model_name=model_id,
+                api_key=best.api_key,
+                api_base=best.api_base,
+            )
+        return ModelConfig(provider=provider, model_name=model_id)
 
     def to_file(self, config_path: Path) -> None:
         """Save a MINIMAL snapshot of this configuration to JSON.

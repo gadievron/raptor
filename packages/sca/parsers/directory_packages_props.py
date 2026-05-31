@@ -99,6 +99,49 @@ except ImportError:                                 # pragma: no cover
 # wrong (or attacker-tainted) version string.
 _MSBUILD_PROPERTY_RE = re.compile(r"[\$@%]\([^)]+\)")
 
+# A single ``$(Name)`` property reference. We resolve these against properties
+# defined IN THE SAME FILE — the dominant pre-CPM pattern, where a
+# Directory.Build.targets sets ``<ExtensionsVersion>3.1.0</>`` in a
+# PropertyGroup and uses it as ``Version="$(ExtensionsVersion)"``. Cross-file
+# inheritance and ``@(...)`` / ``%(...)`` item/metadata expressions are still
+# left unresolved (skipped), as is a floating wildcard like ``3.1.0-*``.
+_PROP_REF_RE = re.compile(r"\$\(([A-Za-z_][\w.\-]*)\)")
+_MAX_PROP_DEPTH = 8
+
+
+def _extract_properties(root) -> "Dict[str, str]":
+    """Collect ``<PropertyGroup>`` properties (name → text) from one file.
+    Conditions are ignored and later definitions win — an approximation of
+    MSBuild evaluation that's correct for the unconditional central-version
+    files this matters for."""
+    props: Dict[str, str] = {}
+    for prop_group in _findall_local(root, "PropertyGroup"):
+        for el in prop_group:
+            text = (el.text or "").strip()
+            if text:
+                props[_strip_namespace(el.tag).lower()] = text
+    return props
+
+
+def _resolve_property_version(
+    version: str, props: "Dict[str, str]", _depth: int = 0,
+) -> Optional[str]:
+    """Substitute ``$(Prop)`` tokens in ``version`` from same-file ``props``
+    (recursive, capped). Returns a concrete version, or ``None`` if anything
+    MSBuild-expression-shaped survives (cross-file / item / metadata) or the
+    result is a floating wildcard (``*``) — neither is a pinnable version."""
+    if _depth > _MAX_PROP_DEPTH:
+        return None
+    resolved = _PROP_REF_RE.sub(
+        lambda m: props.get(m.group(1).lower(), m.group(0)), version,
+    )
+    if resolved != version and "$(" in resolved:
+        deeper = _resolve_property_version(resolved, props, _depth + 1)
+        resolved = deeper if deeper is not None else resolved
+    if resolved is None or _MSBUILD_PROPERTY_RE.search(resolved) or "*" in resolved:
+        return None
+    return resolved
+
 
 @dataclass(frozen=True)
 class CentralPackage:
@@ -274,6 +317,7 @@ def _extract_package_versions(
     out: List[CentralPackage] = []
     # Track which package names we've seen; last-wins on duplicates.
     by_lower_name: Dict[str, int] = {}
+    props = _extract_properties(root)
 
     for item_group in _findall_local(root, "ItemGroup"):
         for el in item_group:
@@ -300,14 +344,17 @@ def _extract_package_versions(
                 )
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
-                logger.debug(
-                    "sca.parsers.directory_packages_props: %s in "
-                    "%s uses MSBuild property %r; SCA can't resolve "
-                    "it statically — skipping",
-                    escape_nonprintable(name), declared_in,
-                    escape_nonprintable(version),
-                )
-                continue
+                resolved = _resolve_property_version(version, props)
+                if resolved is None:
+                    logger.debug(
+                        "sca.parsers.directory_packages_props: %s in "
+                        "%s uses unresolvable MSBuild expression %r "
+                        "(cross-file / item / floating); skipping",
+                        escape_nonprintable(name), declared_in,
+                        escape_nonprintable(version),
+                    )
+                    continue
+                version = resolved
             entry = CentralPackage(
                 name=name, version=version,
                 is_global=is_global, declared_in=declared_in,
@@ -362,6 +409,23 @@ def find_build_props_chain(start_dir: Path) -> List[Path]:
     case before declaring the dep unresolvable.
     """
     return _find_msbuild_chain(start_dir, "Directory.Build.props")
+
+
+def find_build_targets_chain(start_dir: Path) -> List[Path]:
+    """Walk UP from ``start_dir`` collecting ``Directory.Build.targets``
+    paths. Same innermost-first / git-boundary semantics as
+    :func:`find_build_props_chain`.
+
+    ``Directory.Build.targets`` is the OTHER MSBuild auto-import (imported
+    *after* the project, vs ``Directory.Build.props`` before it). Pre-CPM
+    monorepos routinely centralise versions here via
+    ``<PackageReference Update="Name" Version="X"/>`` — e.g. IdentityServer4
+    puts its whole version table in ``Directory.Build.targets``. Parsed with
+    the same :func:`parse_directory_build_props` reader (the ``<Project>`` /
+    ``PackageReference`` shape is identical); ``Update`` rows are already
+    handled there.
+    """
+    return _find_msbuild_chain(start_dir, "Directory.Build.targets")
 
 
 _MAX_WALK_UP_DEPTH = 12
@@ -469,6 +533,7 @@ def parse_directory_build_props(path: Path) -> Optional[CPMFile]:
         return None
     packages: List[CentralPackage] = []
     seen: Dict[str, int] = {}
+    props = _extract_properties(root)
     for item_group in _findall_local(root, "ItemGroup"):
         for el in item_group:
             if _strip_namespace(el.tag) != "PackageReference":
@@ -484,7 +549,10 @@ def parse_directory_build_props(path: Path) -> Optional[CPMFile]:
             if not version:
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
-                continue
+                resolved_ver = _resolve_property_version(version, props)
+                if resolved_ver is None:
+                    continue
+                version = resolved_ver
             entry = CentralPackage(
                 name=name, version=version,
                 is_global=False, declared_in=resolved,

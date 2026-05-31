@@ -37,7 +37,8 @@ class _SI:
 
     _FIELDS = (
         "allocations", "checked_allocations", "paired_frees",
-        "double_frees", "capabilities", "lsm_hooks",
+        "double_frees", "capabilities", "lsm_hooks", "lock_sites",
+        "crypto_calls",
     )
 
     def __init__(self, **kw):
@@ -88,10 +89,92 @@ def test_privilege_sites():
     assert cap["name"] == "capable" and cap["grade"] == "same_function"
 
 
+def test_shared_state_sites_aggregated_with_kind_op_compound():
+    # Coverage: every (op × kind) pair carries fn + lock_var alongside.
+    si = _SI(lock_sites=[
+        _Ev(location=("d.c", 11), enclosing_function="do_work",
+            op="acquire", kind="spin", fn="spin_lock", lock_var="&sl"),
+        _Ev(location=("d.c", 14), enclosing_function="do_work",
+            op="release", kind="spin", fn="spin_unlock", lock_var="&sl"),
+        _Ev(location=("d.c", 22), enclosing_function="do_work",
+            op="acquire", kind="mutex", fn="mutex_lock_interruptible",
+            lock_var="&m"),
+        _Ev(location=("d.c", 25), enclosing_function="do_work",
+            op="release", kind="mutex", fn="mutex_unlock", lock_var="&m"),
+        _Ev(location=("e.c", 3), enclosing_function="thread_fn",
+            op="acquire", kind="pthread_mutex", fn="pthread_mutex_lock",
+            lock_var="&pm"),
+    ])
+    cmap: dict = {}
+    counts = enrich_context_map_with_sites(cmap, si)
+    assert counts["shared_state"] == 5
+    ss = cmap["shared_state"]
+    # compound kind = <lock_kind>_<op>; fn + lock_var preserved.
+    assert {e["kind"] for e in ss} == {
+        "spin_acquire", "spin_release",
+        "mutex_acquire", "mutex_release",
+        "pthread_mutex_acquire",
+    }
+    spin_acq = next(e for e in ss if e["kind"] == "spin_acquire")
+    assert spin_acq == {
+        "kind": "spin_acquire", "file": "d.c", "line": 11,
+        "function": "do_work", "fn": "spin_lock", "lock_var": "&sl",
+    }
+
+
+def test_shared_state_section_omitted_when_empty():
+    # No lock_sites → no shared_state key written (mirrors the
+    # ownership_model / privilege_model contract: never shadow an LLM
+    # populator with an empty list).
+    cmap: dict = {}
+    counts = enrich_context_map_with_sites(cmap, _SI())
+    assert counts["shared_state"] == 0
+    assert "shared_state" not in cmap
+
+
+def test_crypto_inventory_sites_aggregated_with_api_and_fn():
+    # Coverage: both kinds × across-API mix carries api + fn alongside.
+    si = _SI(crypto_calls=[
+        _Ev(location=("c.c", 11), enclosing_function="encrypt_record",
+            kind="primitive_call", api="openssl", fn="EVP_EncryptInit_ex"),
+        _Ev(location=("c.c", 14), enclosing_function="encrypt_record",
+            kind="primitive_call", api="openssl", fn="EVP_EncryptUpdate"),
+        _Ev(location=("c.c", 22), enclosing_function="seed_state",
+            kind="rng_source", api="openssl", fn="RAND_bytes"),
+        _Ev(location=("c.c", 33), enclosing_function="legacy_hash",
+            kind="primitive_call", api="libsodium",
+            fn="crypto_generichash"),
+        _Ev(location=("c.c", 40), enclosing_function="legacy_hash",
+            kind="rng_source", api="libc", fn="rand"),
+    ])
+    cmap: dict = {}
+    counts = enrich_context_map_with_sites(cmap, si)
+    assert counts["crypto_inventory"] == 5
+    inv = cmap["crypto_inventory"]
+    # kind is the call kind directly (primitive_call / rng_source); api +
+    # fn ride alongside so a consumer can filter without re-parsing.
+    assert {e["kind"] for e in inv} == {"primitive_call", "rng_source"}
+    assert {e["api"] for e in inv} == {"openssl", "libsodium", "libc"}
+    evp_init = next(e for e in inv if e["fn"] == "EVP_EncryptInit_ex")
+    assert evp_init == {
+        "kind": "primitive_call", "file": "c.c", "line": 11,
+        "function": "encrypt_record", "api": "openssl",
+        "fn": "EVP_EncryptInit_ex",
+    }
+
+
+def test_crypto_inventory_section_omitted_when_empty():
+    cmap: dict = {}
+    counts = enrich_context_map_with_sites(cmap, _SI())
+    assert counts["crypto_inventory"] == 0
+    assert "crypto_inventory" not in cmap
+
+
 def test_empty_result_writes_no_keys():
     cmap = {"entry_points": []}
     counts = enrich_context_map_with_sites(cmap, _SI())
-    assert counts == {"ownership_model": 0, "privilege_model": 0}
+    assert counts == {"ownership_model": 0, "privilege_model": 0,
+                      "shared_state": 0, "crypto_inventory": 0}
     assert "ownership_model" not in cmap and "privilege_model" not in cmap
 
 
@@ -117,6 +200,7 @@ def test_best_effort_on_malformed_evidence():
 def test_non_dict_cmap_is_noop():
     assert enrich_context_map_with_sites(None, _SI()) == {
         "ownership_model": 0, "privilege_model": 0,
+        "shared_state": 0, "crypto_inventory": 0,
     }
 
 
@@ -152,7 +236,8 @@ def test_degrades_gracefully_without_spatch(monkeypatch):
 
     cmap = {"entry_points": []}
     counts = enrich_context_map_with_sites(cmap, si)
-    assert counts == {"ownership_model": 0, "privilege_model": 0}
+    assert counts == {"ownership_model": 0, "privilege_model": 0,
+                      "shared_state": 0, "crypto_inventory": 0}
     assert "ownership_model" not in cmap and "privilege_model" not in cmap
 
 
@@ -217,6 +302,97 @@ def test_synth_aggregates_multiple_sites_per_function(tmp_path):
     assert body.count("site:") == 3  # all three sites survive
     assert "line 9" in body and "line 10" in body and "line 7" in body
     assert "site_categories=ownership,privilege" in body
+
+
+def test_synth_aggregates_all_three_categories_with_shared_state(tmp_path):
+    # Same regression class as the ownership+privilege test above, extended
+    # to verify shared_state (Phase B concurrency axis) joins the dispatch
+    # tuple cleanly. A function with ownership + privilege + multiple lock
+    # sites must yield ONE annotation carrying every site, with
+    # site_categories listing all three. Regression risk: if the synth
+    # category tuple isn't extended, shared_state sites silently drop and
+    # site_categories degrades to ownership,privilege.
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "checklist.json").write_text(
+        json.dumps({"target_path": str(tmp_path / "repo")}), encoding="utf-8",
+    )
+    cmap = {
+        "ownership_model": [
+            {"kind": "alloc", "file": "k.c", "line": 5,
+             "function": "handler", "allocator": "kmalloc"},
+        ],
+        "privilege_model": [
+            {"kind": "capability", "file": "k.c", "line": 7,
+             "function": "handler", "name": "capable"},
+        ],
+        "shared_state": [
+            {"kind": "spin_acquire", "file": "k.c", "line": 11,
+             "function": "handler", "fn": "spin_lock", "lock_var": "&sl"},
+            {"kind": "spin_release", "file": "k.c", "line": 14,
+             "function": "handler", "fn": "spin_unlock", "lock_var": "&sl"},
+            {"kind": "mutex_acquire", "file": "k.c", "line": 18,
+             "function": "handler", "fn": "mutex_lock", "lock_var": "&m"},
+        ],
+    }
+    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
+
+    counts = synthesise_from_understand_output(out)
+    assert counts.emitted == 1  # one annotation per (file, function)
+    body = (out / "annotations" / "k.c.md").read_text(encoding="utf-8")
+    assert body.count("site:") == 5  # 1 ownership + 1 privilege + 3 shared
+    # shared_state-specific extras land in the body
+    assert "fn: spin_lock" in body and "lock_var: &sl" in body
+    assert "fn: mutex_lock" in body and "lock_var: &m" in body
+    # all three categories appear in the metadata header
+    assert "site_categories=ownership,privilege,shared_state" in body
+
+
+def test_synth_aggregates_all_four_categories_with_crypto(tmp_path):
+    # Same regression class as the three-category test above, extended to
+    # verify crypto_inventory (Phase B crypto axis) joins the dispatch
+    # tuple cleanly. A function with ownership + privilege + lock + crypto
+    # sites must yield ONE annotation with every site, site_categories
+    # listing all four. Regression risk: if the synth dispatch tuple
+    # isn't extended, crypto sites silently drop and site_categories
+    # degrades to ownership,privilege,shared_state.
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "checklist.json").write_text(
+        json.dumps({"target_path": str(tmp_path / "repo")}), encoding="utf-8",
+    )
+    cmap = {
+        "ownership_model": [
+            {"kind": "alloc", "file": "k.c", "line": 5,
+             "function": "session", "allocator": "kmalloc"},
+        ],
+        "privilege_model": [
+            {"kind": "capability", "file": "k.c", "line": 7,
+             "function": "session", "name": "capable"},
+        ],
+        "shared_state": [
+            {"kind": "spin_acquire", "file": "k.c", "line": 11,
+             "function": "session", "fn": "spin_lock", "lock_var": "&sl"},
+        ],
+        "crypto_inventory": [
+            {"kind": "primitive_call", "file": "k.c", "line": 18,
+             "function": "session", "api": "openssl",
+             "fn": "EVP_EncryptInit_ex"},
+            {"kind": "rng_source", "file": "k.c", "line": 19,
+             "function": "session", "api": "openssl", "fn": "RAND_bytes"},
+        ],
+    }
+    (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
+
+    counts = synthesise_from_understand_output(out)
+    assert counts.emitted == 1  # one annotation per (file, function)
+    body = (out / "annotations" / "k.c.md").read_text(encoding="utf-8")
+    assert body.count("site:") == 5  # 1+1+1+2 sites survive
+    # crypto-specific extras (api + fn) land in the body
+    assert "api: openssl" in body
+    assert "fn: EVP_EncryptInit_ex" in body and "fn: RAND_bytes" in body
+    # all four categories appear in the metadata header
+    assert "site_categories=crypto,ownership,privilege,shared_state" in body
 
 
 # --- producer shim --------------------------------------------------------

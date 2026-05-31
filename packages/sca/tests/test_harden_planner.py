@@ -12,6 +12,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+import pytest
+
 from packages.sca.harden import HardenCandidate, _plan_one
 from packages.sca.models import (
     Advisory,
@@ -933,3 +935,282 @@ def test_bounded_downgrade_generalises_to_non_pypi() -> None:
     )
     assert cand.status == "downgraded_safety", cand.status
     assert cand.to_version == "2.5.0"   # highest clean in [2.0.0, 2.7.0)
+
+
+# ---------------------------------------------------------------------------
+# library_mode: minimal safe floor-raise (target_kind consumer)
+# ---------------------------------------------------------------------------
+
+def test_application_mode_picks_newest_safe() -> None:
+    """Default (application) posture: pin to the newest safe version in range."""
+    dep = _dep(version="1.0", pin_style=PinStyle.RANGE)
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=_FakeOsv(), offline=False, allow_major=False,
+    )
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.3"            # newest in range
+    assert cand.selection == "highest_safe"
+
+
+def test_library_mode_skips_clean_baseline() -> None:
+    """Library posture: an already-safe declared floor is left intact — don't
+    narrow an intentional range when there's no security reason."""
+    dep = _dep(version="1.0", pin_style=PinStyle.RANGE)  # floor 1.0 clean
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=_FakeOsv(), offline=False, allow_major=False,
+        library_mode=True,
+    )
+    assert cand.status == "up_to_date"
+    assert "already safe" in cand.detail
+
+
+def test_library_mode_floor_raises_when_baseline_vulnerable() -> None:
+    """Vulnerable floor → minimal safe floor-raise (lowest clean above it)."""
+    dep = _dep(version="1.0", pin_style=PinStyle.RANGE)
+    osv = _FakeOsv({"1.0": [_adv("CVE-FLOOR")]})   # declared floor vulnerable
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=osv, offline=False, allow_major=False,
+        library_mode=True,
+    )
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.1"            # minimal safe, not 1.3
+    assert cand.selection == "library_minimal"
+
+
+def test_library_mode_minimal_skips_vulnerable_nearest() -> None:
+    """Minimal means minimal *clean*: skip a vulnerable nearest version."""
+    dep = _dep(version="1.0", pin_style=PinStyle.RANGE)
+    osv = _FakeOsv({"1.0": [_adv("C0")], "1.1": [_adv("C1")]})  # floor+1.1 vuln
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=osv, offline=False, allow_major=False,
+        library_mode=True,
+    )
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.2"            # lowest clean above floor
+
+
+def test_library_mode_npm_floor_raises_to_range() -> None:
+    """npm (Increment 2): a vulnerable library dep is promoted with a minimal,
+    range-preserving floor-raise (the bare→caret happens in _bump_npm_spec)."""
+    dep = replace(_dep(ecosystem="npm", name="lodash", version="1.0",
+                       pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/package.json"))
+    osv = _FakeOsv({"1.0": [_adv("C")]})        # vulnerable floor
+    cand = _plan_one(
+        dep, registries={"npm": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"],
+                                              ecosystem="npm")},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status == "promoted"
+    assert cand.to_version == "1.1"             # minimal safe above floor
+    assert cand.selection == "library_minimal"
+
+
+@pytest.mark.parametrize("eco,manifest", [
+    ("NuGet", "App.csproj"),
+    ("NuGet", "Directory.Packages.props"),
+    ("Maven", "pom.xml"),
+    ("Maven", "libs.versions.toml"),
+])
+def test_library_mode_min_version_ecosystem_promotes_not_skipped(eco, manifest) -> None:
+    """NuGet/Gradle/Maven (Increment 3): minimum/soft-version manifests resolve
+    by floor, so the normal bump is already a safe floor-raise — they promote,
+    they are not skipped."""
+    dep = replace(_dep(ecosystem=eco, name="some.pkg",
+                       version="1.0", pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x") / manifest)
+    osv = _FakeOsv({"1.0": [_adv("C")]})
+    cand = _plan_one(
+        dep, registries={eco: _FakeRegistry(["1.3", "1.2", "1.1", "1.0"],
+                                            ecosystem=eco)},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status == "promoted"
+    assert cand.selection == "library_minimal"
+    assert cand.to_version == "1.1"
+
+
+def test_library_mode_inline_install_is_unsupported_not_pinned() -> None:
+    """Inline installs (``pip install x==Y``) are exact by nature — refuse
+    rather than over-constrain a library."""
+    dep = replace(_dep(version="1.0", pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/Dockerfile"))
+    osv = _FakeOsv({"1.0": [_adv("C")]})
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status == "library_floor_raise_unsupported"
+    assert cand.selection == "highest_safe"     # never marked library_minimal
+
+
+@pytest.mark.parametrize("manifest,supported", [
+    ("requirements.txt", True), ("requirements-dev.txt", True),
+    ("pyproject.toml", True), ("package.json", True),
+    ("App.csproj", True), ("Directory.Packages.props", True),
+    ("Directory.Build.targets", True),   # pre-CPM central-version table
+    ("libs.versions.toml", True), ("pom.xml", True),
+    ("Dockerfile", False), ("install.sh", False), ("setup.cfg", False),
+])
+def test_supports_library_floor_raise_matrix(manifest, supported) -> None:
+    from packages.sca.harden import _supports_library_floor_raise
+    dep = replace(_dep(), declared_in=Path("/x") / manifest)
+    assert _supports_library_floor_raise(dep) is supported
+
+
+def test_two_csprojs_sharing_central_dep_collapse_to_one_patch(tmp_path) -> None:
+    """Two csprojs both inheriting one central PackageVersion must produce
+    a SINGLE patch on the central file, not one per csproj. The dedup key in
+    _apply uses the write-path (cand.resolved_in) for exactly this."""
+    from packages.sca.harden import _apply
+    props = tmp_path / "Directory.Packages.props"
+    props.write_text(
+        '<Project><ItemGroup>'
+        '<PackageVersion Include="X" Version="1.0.0"/></ItemGroup></Project>')
+    cands = []
+    for sub in ("A", "B"):
+        (tmp_path / sub).mkdir()
+        csp = tmp_path / sub / f"{sub}.csproj"
+        csp.write_text('<Project/>')
+        cands.append(HardenCandidate(
+            ecosystem="NuGet", name="X", manifest=str(csp),
+            pin_style="exact", from_version="1.0.0", to_version="1.0.1",
+            crosses_major=False, status="promoted",
+            resolved_in=str(props),
+        ))
+    out = tmp_path / "out"
+    _apply(cands, target=tmp_path, out_dir=out,
+           allow_major_without_review=False, allow_degraded=False,
+           ecosystem_allowlist=None)
+    patched = list((out / "proposed").rglob("*"))
+    csproj_patches = [p for p in patched if p.is_file() and p.suffix == ".csproj"]
+    props_patches = [p for p in patched if p.is_file() and p.name == "Directory.Packages.props"]
+    assert len(props_patches) == 1, f"expected ONE .props patch, got {len(props_patches)}"
+    assert csproj_patches == [], f"no csproj should be patched, got {csproj_patches}"
+
+
+def test_central_version_dep_routes_apply_to_resolved_in(tmp_path) -> None:
+    """A dep whose version is owned by a central file (CPM Directory.Packages
+    .props or pre-CPM Directory.Build.targets) must have its PATCH routed to
+    THAT file by _apply — not to the csproj where the PackageReference is
+    declared (the csproj holds no Version attribute to update). Carried via
+    HardenCandidate.resolved_in, set from dep.source_extra['resolved_in']."""
+    from packages.sca.harden import _apply
+    csproj = tmp_path / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">'
+        '<ItemGroup><PackageReference Include="X"/></ItemGroup></Project>')
+    props = tmp_path / "Directory.Packages.props"
+    props.write_text(
+        '<Project><ItemGroup>'
+        '<PackageVersion Include="X" Version="1.0.0"/></ItemGroup></Project>')
+    cand = HardenCandidate(
+        ecosystem="NuGet", name="X", manifest=str(csproj),
+        pin_style="exact", from_version="1.0.0", to_version="1.0.1",
+        crosses_major=False, status="promoted",
+        resolved_in=str(props),         # parser-set: version lives in props
+    )
+    out = tmp_path / "out"
+    _apply([cand], target=tmp_path, out_dir=out,
+           allow_major_without_review=False, allow_degraded=False,
+           ecosystem_allowlist=None)
+    proposed_props = out / "proposed" / "Directory.Packages.props"
+    proposed_csproj = out / "proposed" / "App.csproj"
+    assert proposed_props.exists() and 'Version="1.0.1"' in proposed_props.read_text()
+    assert not proposed_csproj.exists()
+
+
+def test_library_mode_directory_build_targets_no_longer_unsupported() -> None:
+    """Directory.Build.targets was rejected as unsupported_manifest by the
+    pre-follow-up harden._has_rewriter. With the new rewriter + dispatch +
+    gate entries, deps attributed to that file flow through the planner
+    cleanly (status driven by the registry/OSV result, not by the gate)."""
+    dep = replace(_dep(ecosystem="NuGet", name="IdentityServer4",
+                       version="3.1.0", pin_style=PinStyle.RANGE),
+                  declared_in=Path("/x/Directory.Build.targets"))
+    osv = _FakeOsv({"3.1.0": [_adv("C")]})
+    cand = _plan_one(
+        dep, registries={"NuGet": _FakeRegistry(["4.2.0", "4.1.2", "3.1.0"],
+                                                ecosystem="NuGet")},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status != "unsupported_manifest"
+    assert cand.status != "library_floor_raise_unsupported"
+
+
+def test_library_mode_no_clean_version_refuses_to_pin() -> None:
+    """Library + no safe version anywhere in range → refuse (never degrade-pin
+    a library to a single/residual-vulnerable version)."""
+    dep = _dep(version="1.0", pin_style=PinStyle.RANGE)
+    osv = _FakeOsv({v: [_adv(f"C-{v}")] for v in ("1.0", "1.1", "1.2", "1.3")})
+    cand = _plan_one(
+        dep, registries={"PyPI": _FakeRegistry(["1.3", "1.2", "1.1", "1.0"])},
+        osv=osv, offline=False, allow_major=False, library_mode=True,
+    )
+    assert cand.status == "library_floor_raise_unsupported"
+
+
+def test_pypi_floor_raise_spec_is_a_range_not_a_pin() -> None:
+    """The leaf: floor_raise raises the lower bound and drops the == pin."""
+    from packages.sca.update import _pypi_pin_preserving_bounds
+    # corridor (app): keep floor, add exact pin
+    assert _pypi_pin_preserving_bounds(">=2.0,<3.0", "2.1") == ">=2.0,==2.1,<3.0"
+    # floor-raise (library): raise floor, keep ceiling, NO ==
+    assert _pypi_pin_preserving_bounds(">=2.0,<3.0", "2.1",
+                                       floor_raise=True) == ">=2.1,<3.0"
+    assert "==" not in _pypi_pin_preserving_bounds(">=2.0", "2.1",
+                                                   floor_raise=True)
+
+
+def test_report_surfaces_library_detection_and_override() -> None:
+    """The report banner states detection + override, keyed on target_kind."""
+    import tempfile
+    from packages.sca.harden import _write_report
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "report.md"
+        _write_report(out, [], [], target_kind="library",
+                      target_kind_reason="pyproject.toml [project]")
+        text = out.read_text()
+    assert "Detected as a library target" in text
+    assert "pyproject.toml [project]" in text
+    assert "RAPTOR_TARGET_KIND=application" in text
+
+
+def test_report_lists_unsupported_section() -> None:
+    """When deps were refused, the report has a per-dep detail section so the
+    operator sees exactly which ones (and why) — not just a summary count."""
+    import tempfile
+    from packages.sca.harden import _write_report
+    cand = HardenCandidate(
+        ecosystem="PyPI", name="pkg", manifest="Dockerfile",
+        pin_style="range", from_version="1.0", to_version=None,
+        crosses_major=False, status="library_floor_raise_unsupported",
+        detail="library target: refusing to pin (would force exact pin)",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "report.md"
+        _write_report(out, [cand], [], target_kind="library")
+        text = out.read_text()
+    assert "Library floor-raise unsupported" in text
+    assert "**PyPI:pkg**" in text and "Dockerfile" in text
+
+
+def test_target_kind_cli_flag_sets_env(monkeypatch) -> None:
+    """`raptor-sca fix --harden --target-kind library` sets RAPTOR_TARGET_KIND
+    so the in-process detector honours the operator's intent (the same env
+    consulted by resolve_library_mode)."""
+    monkeypatch.delenv("RAPTOR_TARGET_KIND", raising=False)
+    from packages.sca.harden import _parse_args
+    args = _parse_args(["/tmp", "--target-kind", "library"])
+    assert args.target_kind == "library"
+    # main() sets the env from args; replicate that single line here to keep
+    # this a focused unit test (full main() needs registries/cache).
+    import os
+    from core.config import RaptorConfig
+    if args.target_kind != "auto":
+        os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
+    assert os.environ.get(RaptorConfig.ENV_TARGET_KIND) == "library"

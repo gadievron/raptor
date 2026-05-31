@@ -273,6 +273,40 @@ class LsmEvidence:
 
 
 @dataclass(frozen=True)
+class LockSiteEvidence:
+    """A single lock acquire or release site (spin/mutex/rw/pthread).
+
+    Enumeration only — does NOT imply imbalance or bug. Populated from
+    engine/coccinelle/source_intel/concurrency/lock_sites.cocci output.
+    Feeds the Phase B `shared_state` /understand --map section.
+    """
+
+    op: str                                       # "acquire" | "release"
+    kind: str                                     # "spin" | "mutex" | "rw" | "pthread_mutex"
+    fn: str                                       # concrete function name (e.g. "spin_lock_irqsave")
+    lock_var: str                                 # first-arg expression, normalised
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CryptoCallEvidence:
+    """A single cryptographic primitive call or RNG-source call site.
+
+    Enumeration only — does NOT imply algorithm weakness, key reuse, or
+    misuse. Populated from
+    engine/coccinelle/source_intel/crypto/crypto_calls.cocci output.
+    Feeds the Phase B `crypto_inventory` /understand --map section.
+    """
+
+    kind: str                                     # "primitive_call" | "rng_source"
+    api: str                                      # "openssl" | "kernel" | "libsodium" | "libc"
+    fn: str                                       # concrete function name (e.g. "EVP_EncryptInit_ex")
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class WarnEvidence:
     """A single observation of a non-aborting runtime-warning call
     (WARN_ON / pr_warn / KASAN_REPORT etc.).
@@ -544,6 +578,20 @@ class SourceIntelResult:
     #: Informational — feeds Stage D LLM as memory-leak corroboration.
     paired_frees: Tuple[PairedFreeEvidence, ...] = ()
 
+    #: Phase B (concurrency axis): lock acquire/release sites
+    #: enumerated by lock_sites.cocci. Informational; feeds the
+    #: shared_state /understand --map section + per-function
+    #: annotations. No verdict policy attached — pairing/imbalance
+    #: detection is lock_imbalance.cocci's job.
+    lock_sites: Tuple[LockSiteEvidence, ...] = ()
+
+    #: Phase B (crypto axis): cryptographic primitive call + RNG-source
+    #: sites enumerated by crypto_calls.cocci. Informational; feeds the
+    #: crypto_inventory /understand --map section + per-function
+    #: annotations. No verdict policy attached — broken-RNG-in-crypto
+    #: reasoning is a separate finding-style rule.
+    crypto_calls: Tuple[CryptoCallEvidence, ...] = ()
+
     #: Axis 6 consumer: build-hardening flags observed in the target's
     #: build configuration. Populated from core.build.build_flags when
     #: signal exists; otherwise default BuildFlagsContext() (all None,
@@ -809,6 +857,8 @@ def analyze(
     c_level_source_observations: List[CLevelSourceEvidence] = []
     double_free_observations: List[DoubleFreeEvidence] = []
     paired_free_observations: List[PairedFreeEvidence] = []
+    lock_site_observations: List[LockSiteEvidence] = []
+    crypto_call_observations: List[CryptoCallEvidence] = []
 
     # spatch invocation per axis. ``no_includes=True`` matches the
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
@@ -864,6 +914,12 @@ def analyze(
                 paired_free_observations.extend(
                     _parse_match_to_paired_free(match)
                 )
+                lock_site_observations.extend(
+                    _parse_match_to_lock_site(match)
+                )
+                crypto_call_observations.extend(
+                    _parse_match_to_crypto_call(match)
+                )
 
     # Project-specific alias discovery: walk target headers, classify
     # `#define MACRO __attribute__((...))` patterns by family, count
@@ -909,6 +965,8 @@ def analyze(
         lsm_hooks=tuple(lsm_observations),
         double_frees=tuple(double_free_observations),
         paired_frees=tuple(paired_free_observations),
+        lock_sites=tuple(lock_site_observations),
+        crypto_calls=tuple(crypto_call_observations),
         build_flags=extract_flags(target),
     )
 
@@ -1401,6 +1459,80 @@ def _parse_match_to_lsm(match: Any) -> List[LsmEvidence]:
     )
     return [LsmEvidence(
         hook_name=hook,
+        location=(file_path, line_no),
+        enclosing_function=enclosing_fn,
+    )]
+
+
+_LOCK_SITE_KINDS = frozenset({"spin", "mutex", "rw", "pthread_mutex"})
+_LOCK_SITE_OPS = frozenset({"acquire", "release"})
+
+
+def _parse_match_to_lock_site(match: Any) -> List[LockSiteEvidence]:
+    """Convert a cocci SpatchMatch from lock_sites.cocci into a
+    LockSiteEvidence record. Message: ``lock_site:<op>:<kind>:<fn>:<lock_var>``.
+    The lock_var segment can contain ``:`` if the expression uses scope
+    resolution etc. — only the first 4 segments are structural; the
+    rest is rejoined as the lock_var."""
+    msg = (getattr(match, "message", "") or "").strip()
+    if not msg.startswith("lock_site:"):
+        return []
+    parts = msg.split(":", 4)
+    if len(parts) < 5:
+        return []
+    _prefix, op, kind, fn, lock_var = parts
+    if op not in _LOCK_SITE_OPS or kind not in _LOCK_SITE_KINDS:
+        return []
+    if not fn:
+        return []
+    # spatch renders `&foo` as `& foo`; normalise the common cases so
+    # downstream consumers can group by lock_var without re-parsing.
+    lock_var = lock_var.strip().replace("& ", "&")
+    file_path = getattr(match, "file", "")
+    line_no = int(getattr(match, "line", 0))
+    enclosing_fn = (
+        _enclosing_function(file_path, line_no) if file_path else None
+    )
+    return [LockSiteEvidence(
+        op=op,
+        kind=kind,
+        fn=fn,
+        lock_var=lock_var,
+        location=(file_path, line_no),
+        enclosing_function=enclosing_fn,
+    )]
+
+
+_CRYPTO_CALL_KINDS = frozenset({"primitive_call", "rng_source"})
+_CRYPTO_CALL_APIS = frozenset({"openssl", "kernel", "libsodium", "libc"})
+
+
+def _parse_match_to_crypto_call(match: Any) -> List[CryptoCallEvidence]:
+    """Convert a cocci SpatchMatch from crypto_calls.cocci into a
+    CryptoCallEvidence record. Message: ``crypto:<kind>:<api>:<fn>``.
+    Function names from this rule set don't contain ``:`` so a 4-way
+    split is structural."""
+    msg = (getattr(match, "message", "") or "").strip()
+    if not msg.startswith("crypto:"):
+        return []
+    parts = msg.split(":", 3)
+    if len(parts) < 4:
+        return []
+    _prefix, kind, api, fn = parts
+    if kind not in _CRYPTO_CALL_KINDS or api not in _CRYPTO_CALL_APIS:
+        return []
+    fn = fn.strip()
+    if not fn:
+        return []
+    file_path = getattr(match, "file", "")
+    line_no = int(getattr(match, "line", 0))
+    enclosing_fn = (
+        _enclosing_function(file_path, line_no) if file_path else None
+    )
+    return [CryptoCallEvidence(
+        kind=kind,
+        api=api,
+        fn=fn,
         location=(file_path, line_no),
         enclosing_function=enclosing_fn,
     )]

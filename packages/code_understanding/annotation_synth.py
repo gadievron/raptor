@@ -203,20 +203,25 @@ def _emit_site_annotations(
     counts: SynthCounts,
 ) -> None:
     """Emit ONE annotation per function aggregating its mechanically-detected
-    ownership + privilege sites (from ``context_map_sites``).
+    ownership / privilege / shared-state / crypto sites (from
+    ``context_map_sites``).
 
     Aggregation is mandatory: annotations key on ``(file, function)`` and a
     function commonly holds several sites (e.g. alloc + double-free, or
-    ownership *and* a capability check), so a per-site write would clobber
-    down to the last one. Each site already carries its ``function``
-    (source_intel's enclosing function); checklist resolution is a fallback so
-    coverage survives an inventory miss. Source is ``source_intel`` and the
-    substrate's ``respect-manual`` write never clobbers an operator note.
+    ownership *and* a capability check, or many lock acquire/release pairs,
+    or a crypto primitive call alongside an RNG source), so a per-site write
+    would clobber down to the last one. Each site already carries its
+    ``function`` (source_intel's enclosing function); checklist resolution is
+    a fallback so coverage survives an inventory miss. Source is
+    ``source_intel`` and the substrate's ``respect-manual`` write never
+    clobbers an operator note.
     """
     groups: Dict[tuple, Dict[str, Any]] = {}
     for category, section_key in (
         ("ownership", "ownership_model"),
         ("privilege", "privilege_model"),
+        ("shared_state", "shared_state"),
+        ("crypto", "crypto_inventory"),
     ):
         for item in _safe_list_of_dicts(cmap, section_key):
             file_path = item.get("file")
@@ -241,7 +246,8 @@ def _emit_site_annotations(
             if line:
                 head += f" (line {line})"
             detail = [head]
-            for k in ("allocator", "free_fn", "name", "grade", "role"):
+            for k in ("allocator", "free_fn", "name", "grade", "role",
+                      "fn", "lock_var", "api"):
                 if item.get(k):
                     detail.append(f"  {k}: {item[k]}")
             g["lines"].append("\n".join(detail))

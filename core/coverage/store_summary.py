@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from .registry import category_of
+from .registry import DEPTH_SCANNED, category_of, depth_of
 from .store import CoverageStore, iter_inventory_functions
 
 _CATEGORIES = ("static", "llm", "runtime")
@@ -155,12 +155,14 @@ def file_breakdown(store: CoverageStore, checklist: Dict[str, Any]) -> List[Dict
         row = files.setdefault(f, {
             "path": f, "items": 0, "reviewable": 0, "llm": 0, "examined": 0})
         row["items"] += 1
-        cats = {category_of(t) for t in store.tool_coverage_of_range(f, lo, high)}
+        cov = store.tool_coverage_of_range(f, lo, high)
         if store.function_verdict(f, lo, high) != "unexamined":
             row["examined"] += 1
         if kind in _REVIEWABLE_KINDS:
             row["reviewable"] += 1
-            if "llm" in cats:
+            # reviewed = deep llm review (depth >= analysed), not a whole-file read.
+            if any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
+                   for t in cov):
                 row["llm"] += 1
     for f, row in files.items():
         row["findings"] = len(store.finding_ids(f))
@@ -261,6 +263,7 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
     total = 0
     covered_any = 0
     reviewable_total = 0
+    reviewed_count = 0
     by_category = {c: 0 for c in _CATEGORIES}
     by_kind: Dict[str, int] = {}
     llm_gap: List[Dict[str, Any]] = []
@@ -274,6 +277,12 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         high = hi if hi is not None else lo
         cov = store.tool_coverage_of_range(file, lo, high)
         cats = {category_of(tool) for tool in cov}
+        # REVIEWED = an llm-category tool examined this at depth >= analysed (a
+        # function-level review). A whole-file `read` (llm/scanned) does NOT
+        # count — reading a file is not reviewing its functions. This is the
+        # read-vs-reviewed distinction the LLM-review gap (and /audit) needs.
+        reviewed = any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
+                       for t in cov)
         verdict = store.function_verdict(file, lo, high)
         # "Examined" tracks the verdict, not just coverage marks: a finding is
         # itself examination evidence (see function_verdict), so an open /
@@ -298,7 +307,11 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         # include every kind.)
         if kind in _REVIEWABLE_KINDS:
             reviewable_total += 1
-            if "llm" not in cats:
+            if reviewed:
+                reviewed_count += 1
+            else:
+                # not reviewed — even if the LLM merely READ the file, it lands
+                # here (that's the point: read ≠ reviewed).
                 llm_gap.append({"file": file, "function": name, "line": lo})
 
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
@@ -318,6 +331,7 @@ def store_view(store: CoverageStore, checklist: Dict[str, Any]) -> Dict[str, Any
         "functions_covered": covered_any,
         "functions_by_category": by_category,
         "llm_reviewable": reviewable_total,
+        "functions_reviewed": reviewed_count,   # reviewable units with a deep llm review
         "gap_no_tool": total_gap,
         "gap_no_llm": len(llm_gap),
         "llm_gap_functions": llm_gap,
@@ -347,6 +361,12 @@ def format_store_view(view: Dict[str, Any], max_gap: int = 15) -> str:
     for cat in _CATEGORIES:
         n = view["functions_by_category"][cat]
         lines.append(f"      {cat:<8} {n:>5} ({_pct(n, total):.1f}%)")
+    reviewable = view.get("llm_reviewable", 0)
+    if reviewable:
+        rev = view.get("functions_reviewed", 0)
+        lines.append(
+            f"    llm-reviewed: {rev}/{reviewable} reviewable units "
+            f"({_pct(rev, reviewable):.1f}%) — whole-file reads excluded")
     v = view.get("verdicts")
     if v:
         lines.append("  Verdict:")

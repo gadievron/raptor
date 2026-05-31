@@ -39,6 +39,26 @@ from . import register
 
 logger = logging.getLogger(__name__)
 
+
+# .NET / ASP.NET Core shared-framework packages are referenced WITHOUT a
+# version — the SDK's FrameworkReference (Microsoft.AspNetCore.App /
+# Microsoft.NETCore.App) supplies it — so a version-less ref to one is expected,
+# not a coverage gap. The Microsoft.AspNetCore.* prefix covers the 3.0+ shared
+# framework (Authentication.*, Mvc.*, …); a few standalone Microsoft.AspNetCore.*
+# packages match too, but they're version-less here for the same reason.
+_FRAMEWORK_METAPACKAGES = frozenset({
+    "microsoft.aspnetcore.app", "microsoft.aspnetcore.all",
+    "microsoft.netcore.app", "microsoft.windowsdesktop.app",
+})
+_FRAMEWORK_REF_PREFIXES = ("microsoft.aspnetcore.",)
+
+
+def _is_shared_framework_ref(name: str) -> bool:
+    """True if a version-less PackageReference is provided by the shared
+    framework (so its missing version is by-design, not a parse gap)."""
+    n = name.lower()
+    return n in _FRAMEWORK_METAPACKAGES or n.startswith(_FRAMEWORK_REF_PREFIXES)
+
 # ``.csproj`` / ``.fsproj`` / ``.vbproj`` files come from the target
 # repo, so an attacker-controlled XXE / billion-laughs payload could
 # DoS the parser or exfil filesystem content via external entities
@@ -152,6 +172,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             declared_in=path,
             source_extra=source_extra,
             source_origin="cpm_global",
+            resolved_in=global_pkg.declared_in,
         )
         if dep.key() in seen_keys:
             continue
@@ -180,18 +201,25 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             if override:
                 version = override.strip()
                 source_origin = "version_override"
+        cpm_resolved_in: Optional[Path] = None
         if not version and cpm_map:
             # Fall through to the CPM map walked from the
-            # csproj's directory.
-            version = cpm_map.get(name.lower())
-            if version is not None:
+            # csproj's directory. ``cpm_map`` carries (version, central_file)
+            # — the central file owns the version so harden/bumper can route
+            # the patch there instead of the csproj.
+            hit = cpm_map.get(name.lower())
+            if hit is not None:
+                version, cpm_resolved_in = hit
                 source_origin = "cpm_central"
         if not version:
-            # No resolvable version (no inline, no VersionOverride, no CPM
-            # entry). Common + benign for shared-framework refs whose version
-            # comes from the SDK (e.g. Microsoft.AspNetCore.App). Collect and
-            # emit ONE warning per file below — a .NET monorepo's sample
-            # projects otherwise produce dozens of per-ref lines.
+            if _is_shared_framework_ref(name):
+                # Version-less by design — supplied by the .NET / ASP.NET Core
+                # shared framework, not an independently-pinned dep. Skip
+                # silently; it's not a coverage gap to surface.
+                continue
+            # No resolvable version (no inline, VersionOverride, or central
+            # entry) for a normal package. Collect + emit ONE warning per file
+            # below (a .NET monorepo otherwise produces dozens of per-ref lines).
             skipped_no_version.append(name)
             continue
         pin_style, normalised = _classify_version_spec(version)
@@ -206,6 +234,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             source_extra=source_extra,
             source_origin=source_origin,
             pin_style=pin_style,
+            resolved_in=cpm_resolved_in,
         )
         if dep.key() in seen_keys:
             continue
@@ -232,6 +261,7 @@ def _build_msbuild_dep(
     source_extra: Optional[dict] = None,
     source_origin: str = "inline_version",
     pin_style: PinStyle = PinStyle.EXACT,
+    resolved_in: Optional[Path] = None,
 ) -> Dependency:
     """Construct a Dependency carrying the MSBuild source-origin
     annotation. ``source_origin`` records where the version came
@@ -241,14 +271,26 @@ def _build_msbuild_dep(
       * ``inline_version_child`` — csproj ``<Version>`` child
       * ``version_override`` — csproj ``VersionOverride=``
       * ``cpm_central`` — Directory.Packages.props PackageVersion
+                          OR Directory.Build.targets PackageReference Update=
       * ``cpm_global`` — Directory.Packages.props GlobalPackageReference
 
     Bumper consumers read this off ``dep.source_extra["origin"]`` to
     pick the rewriter target.
+
+    ``resolved_in`` carries the absolute path of the central file the
+    version was actually read from (Directory.Packages.props /
+    Directory.Build.targets / Directory.Build.props), exposed as
+    ``source_extra["resolved_in"]``. Patch-emitters (harden / bumper) use
+    this to write the new version to the file that owns it, instead of the
+    csproj that ``declared_in`` points at — without it, ``cpm_central`` /
+    ``cpm_global`` deps round-trip through the csproj rewriter, which
+    finds no ``Version=`` attribute and emits no patch.
     """
     purl = _build_purl(name, version)
     extra = dict(source_extra) if source_extra else {}
     extra["origin"] = source_origin
+    if resolved_in is not None:
+        extra["resolved_in"] = str(resolved_in)
     return Dependency(
         ecosystem=ECOSYSTEM,
         name=name,
@@ -301,22 +343,32 @@ def _resolve_cpm_chain(start_dir: Path):
     Returns ``({}, [])`` for the no-MSBuild-auto-import case.
     """
     from .directory_packages_props import (
-        find_build_props_chain, find_cpm_chain,
+        find_build_props_chain, find_build_targets_chain, find_cpm_chain,
         parse_directory_build_props, parse_directory_packages_props,
     )
 
     cpm_paths = find_cpm_chain(start_dir)
     build_paths = find_build_props_chain(start_dir)
-    if not cpm_paths and not build_paths:
+    targets_paths = find_build_targets_chain(start_dir)
+    if not cpm_paths and not build_paths and not targets_paths:
         return {}, []
 
     cpm_files = [parse_directory_packages_props(p) for p in cpm_paths]
     cpm_files = [f for f in cpm_files if f is not None]
     build_files = [parse_directory_build_props(p) for p in build_paths]
     build_files = [f for f in build_files if f is not None]
+    # Directory.Build.targets uses the same <Project>/PackageReference shape
+    # (incl. ``Update=`` rows), so the same reader applies. Pre-CPM monorepos
+    # (e.g. IdentityServer4) keep their whole version table here.
+    targets_files = [parse_directory_build_props(p) for p in targets_paths]
+    targets_files = [f for f in targets_files if f is not None]
 
     cpm_active = bool(cpm_files) and all(f.cpm_enabled for f in cpm_files)
 
+    # ``merged`` carries (version, central_file_path) per package — the path
+    # is the file that ACTUALLY owns the version (vs the csproj that
+    # references the package), so patch-emitters can route writes to the
+    # right place. See ``_build_msbuild_dep(resolved_in=)``.
     merged: dict = {}
     globals_by_name: dict = {}
 
@@ -326,12 +378,17 @@ def _resolve_cpm_chain(start_dir: Path):
     # and more authoritative system).
     for build_file in reversed(build_files):
         for pkg in build_file.packages:
-            merged[pkg.name.lower()] = pkg.version
+            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
+    # Directory.Build.targets is auto-imported AFTER the project (and after
+    # Directory.Build.props), so it wins over .props for the same package.
+    for targets_file in reversed(targets_files):
+        for pkg in targets_file.packages:
+            merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
 
     if cpm_active:
         for cpm_file in reversed(cpm_files):
             for pkg in cpm_file.packages:
-                merged[pkg.name.lower()] = pkg.version
+                merged[pkg.name.lower()] = (pkg.version, pkg.declared_in)
                 if pkg.is_global:
                     globals_by_name[pkg.name.lower()] = pkg
                 elif pkg.name.lower() in globals_by_name:

@@ -1,6 +1,8 @@
 """Tests for cve_diff/diffing/extraction_agreement.py — cross-check verdicts."""
 from __future__ import annotations
 
+import pytest
+
 from cve_diff.core.models import (
     CommitSha,
     DiffBundle,
@@ -57,11 +59,20 @@ def test_compare_pair_partial_when_api_truncated() -> None:
     assert ea._compare_pair(clone, api) == "partial"
 
 
+@pytest.mark.integration
 def test_compute_returns_none_for_unsupported_forge() -> None:
     """Forges without an API extractor (savannah cgit, googlesource,
     sourceware) return None — caller renders ``single_source``. GitHub
     and gitlab.* are supported and would dispatch to a live API call;
-    a cgit URL is the canonical "no API extractor" case."""
+    a cgit URL is the canonical "no API extractor" case.
+
+    Unlike its mocked siblings below, this exercises the *real*
+    ``extract_for_agreement`` dispatcher: savannah cgit has no JSON API
+    extractor but DOES have a ``patch_url`` path, so this makes a live
+    HTTP fetch to git.savannah.gnu.org (a bogus ``deadbeef`` commit that
+    404s → empty extras → None). That live fetch is the ~12s cost and
+    the reason this is an ``integration`` test, not a plain unit test —
+    deselected by default, opt in with ``pytest -m integration``."""
     ref = RepoRef(
         repository_url="https://git.savannah.gnu.org/cgit/bash.git",
         fix_commit="deadbeef" * 5,

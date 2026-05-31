@@ -168,6 +168,7 @@ from . import yaml_image              # noqa: E402,F401
 # ``parsers/gradle_version_catalog`` for the read-side.
 from . import csproj                              # noqa: E402,F401
 from . import directory_packages_props            # noqa: E402,F401
+from . import directory_build_targets             # noqa: E402,F401
 from . import gradle_version_catalog              # noqa: E402,F401
 
 

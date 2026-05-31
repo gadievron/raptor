@@ -677,6 +677,14 @@ class _PlanEntry:
     target: str
     manifest: Path
     advisory_ids: List[str]
+    # Library posture (set by harden for library/hybrid targets): raise the
+    # dependency FLOOR to ``target`` and keep a usable range, rather than
+    # corridor-pinning ``==target``. Pinning a library's deps over-constrains
+    # downstream consumers' resolvers. Default off → ``update`` and the
+    # application path are unchanged. Only the PyPI requirements.txt /
+    # pyproject PEP 508 paths honour it; other forms refuse to rewrite under
+    # floor_raise rather than emit an exact pin (never make a library worse).
+    floor_raise: bool = False
 
 
 def _crosses_major(ecosystem: str, installed: str, target: str) -> bool:
@@ -804,6 +812,12 @@ def _rewrite_one(
     # right one via ``plan.manifest`` (set by the planner to
     # match the dep's source-origin field).
     if name == "Directory.Packages.props":
+        return _rewrite_via_registry(manifest, text, plan)
+    # Pre-CPM central-version table: <PackageReference Update="X" Version="Y"/>
+    # in Directory.Build.targets. Same registry dispatch — the dedicated
+    # rewriter (rewriters/directory_build_targets.py) matches Update= rather
+    # than Include=.
+    if name == "Directory.Build.targets":
         return _rewrite_via_registry(manifest, text, plan)
     if suffix in (".csproj", ".fsproj", ".vbproj"):
         return _rewrite_via_registry(manifest, text, plan)
@@ -972,7 +986,8 @@ def _rewrite_package_json(
     def _replace(m: re.Match) -> str:
         nonlocal rewrote
         prefix, current, suffix = m.group(1), m.group(2), m.group(3)
-        new_spec = _bump_npm_spec(current, plan.installed, plan.target)
+        new_spec = _bump_npm_spec(current, plan.installed, plan.target,
+                                  floor_raise=plan.floor_raise)
         if new_spec is None:
             return m.group(0)
         rewrote = True
@@ -989,23 +1004,32 @@ def _rewrite_package_json(
     return text, False, "spec matched but not safely bumpable (out of declared range or unsupported form)"
 
 
-def _bump_npm_spec(current: str, installed: str, target: str) -> Optional[str]:
+def _bump_npm_spec(current: str, installed: str, target: str,
+                   floor_raise: bool = False) -> Optional[str]:
     """Compute the replacement spec.
 
     Preserves the operator's leading prefix (``^``, ``~``, ``>=``,
     blank). Returns ``None`` when the current spec is a tarball / git
     URL / npm-alias — those need manual review.
+
+    ``floor_raise`` (library posture, npm + Poetry): a BARE exact spec
+    (``"1.0.0"`` / empty / ``*`` / ``latest``) is an exact pin that
+    over-constrains a library's consumers, so emit a caret RANGE
+    (``^target``) instead of the bare version. Caret/tilde/comparator
+    forms are already ranges, so they're unchanged by this flag.
     """
+    # Bare result for the no-prefix cases: a caret range under floor_raise.
+    bare = f"^{target}" if floor_raise else target
     s = current.strip()
     if not s:
-        return target
+        return bare
     if s.startswith(("git+", "git@", "git:", "github:", "bitbucket:",
                      "gitlab:", "gist:", "file:", "npm:")):
         return None
     if s.startswith(("http://", "https://")):
         return None
     if s in ("*", "x", "X", "latest"):
-        return target
+        return bare
     for prefix in ("^", "~"):
         if s.startswith(prefix):
             return f"{prefix}{target}"
@@ -1035,7 +1059,7 @@ def _bump_npm_spec(current: str, installed: str, target: str) -> Optional[str]:
         except VersionError:
             return None
         return s[:lo.start(2)] + target + s[lo.end(2):]
-    return target
+    return bare
 
 
 # ----- requirements.txt -----------------------------------------------------
@@ -1096,7 +1120,8 @@ def _rewrite_requirements_txt(
         # pin instead of collapsing them — they record the safe corridor
         # for future up/downgrades. Splicing on the match end keeps any
         # trailing PEP 508 marker (``; python_version >= ...``) intact.
-        new_spec = _pypi_pin_preserving_bounds(m.group(2) or "", plan.target)
+        new_spec = _pypi_pin_preserving_bounds(
+            m.group(2) or "", plan.target, floor_raise=plan.floor_raise)
         new_inner = m.group(1) + new_spec + line_value[m.end():]
         new_line = f"{comment_prefix}{new_inner}" if comment_prefix else new_inner
         out_lines.append(raw.replace(stripped, new_line))
@@ -1201,6 +1226,15 @@ def _rewrite_inline_install(
     command keyword or sit inside its continued args.
     """
     eco = plan.ecosystem
+    # Library posture: an inline ``pip install pkg==X`` is inherently an exact
+    # pin; we have no range-preserving form for it, so refuse rather than
+    # over-constrain a library's dep. (Inline installs are an application/
+    # container concern far more than a library one.)
+    if plan.floor_raise:
+        return text, False, (
+            "library floor-raise unsupported for inline-install (would force "
+            "an exact pin); leaving the dependency unpinned"
+        )
     cmd_re = _INLINE_INSTALL_CMD_RES.get(eco)
     if cmd_re is None:
         return text, False, (
@@ -1261,9 +1295,16 @@ def _rewrite_inline_install(
 _PYPI_CLAUSE_RE = re.compile(r"^\s*(===|==|>=|<=|~=|!=|>|<)\s*(.+?)\s*$")
 
 
-def _pypi_pin_preserving_bounds(spec: str, target: str) -> str:
+def _pypi_pin_preserving_bounds(spec: str, target: str,
+                                floor_raise: bool = False) -> str:
     """Return a PEP 440 specifier that pins to ``target`` while keeping
     any range bounds from ``spec`` as a record of the safe corridor.
+
+    ``floor_raise`` (library posture): instead of adding ``==target``, RAISE
+    the lower bound to ``>=target`` and keep ceilings/excludes — a range,
+    not an exact pin — so a library's downstream consumers can still resolve.
+    Example: ``>=2.0,<3.0`` + target ``2.1`` → ``>=2.1,<3.0`` (vs the default
+    ``>=2.0,==2.1,<3.0``).
 
     ``spec`` is the specifier text *after* the package name::
 
@@ -1291,7 +1332,11 @@ def _pypi_pin_preserving_bounds(spec: str, target: str) -> str:
             uppers.append(f"{op}{ver}")
         elif op == "!=":
             excludes.append(f"{op}{ver}")
-        # ==, ===, ~= are dropped — replaced by the ==target below.
+        # ==, ===, ~= are dropped — replaced by the pin/floor below.
+    if floor_raise:
+        # Library posture: a single ``>=target`` floor (replacing any old
+        # lowers), keep ceilings/excludes, no exact pin.
+        return ",".join([f">={target}"] + uppers + excludes)
     return ",".join(lowers + [f"=={target}"] + uppers + excludes)
 
 
@@ -1567,7 +1612,11 @@ def _rewrite_pyproject_toml(
         nonlocal poetry_hit
         if _normalise_pypi_name(m.group(3)) != norm:
             return m.group(0)
-        new_spec = _bump_npm_spec(m.group(4), plan.installed, plan.target)
+        # Poetry specs are semver (caret/tilde/range), so _bump_npm_spec's
+        # floor_raise handles the library posture: caret/tilde/range forms
+        # stay ranges, a bare exact becomes a caret range.
+        new_spec = _bump_npm_spec(m.group(4), plan.installed, plan.target,
+                                  floor_raise=plan.floor_raise)
         if new_spec is None:
             return m.group(0)
         poetry_hit = True
@@ -1582,6 +1631,11 @@ def _rewrite_pyproject_toml(
     def _pep508_sub(m: re.Match) -> str:
         if _normalise_pypi_name(m.group(1)) != norm:
             return m.group(0)
+        if plan.floor_raise:
+            # Library posture: raise the floor, keep bounds, no exact pin.
+            new_spec = _pypi_pin_preserving_bounds(
+                m.group(2), plan.target, floor_raise=True)
+            return f'"{m.group(1)}{new_spec}"'
         return f'"{m.group(1)}=={plan.target}"'
 
     new_text = pep508_re.sub(_pep508_sub, new_text)

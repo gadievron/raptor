@@ -37,11 +37,11 @@ FILTERS: dict[str, list[str]] = {
     # .github/tests/test_filter_coverage.py).
     "sandbox": [
         "core/sandbox/**",
-        "core/security/**",
         "core/config/**",
         "core/run/**",
-        "libexec/raptor-run-sandboxed",
+        "core/security/**",
         "libexec/raptor-pid1-shim",
+        "libexec/raptor-run-sandboxed",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
@@ -55,11 +55,11 @@ FILTERS: dict[str, list[str]] = {
         "packages/exploit_feasibility/**",
         "packages/binary_analysis/**",
         "packages/codeql/smt_path_validator.py",
+        "core/config/**",
         "core/function_taxonomy/**",
         "core/hash/**",
         "core/json/**",
         "core/logging/**",
-        "core/config/**",
         "core/orchestration/**",
         "core/sandbox/**",
         "core/smt_solver/**",
@@ -173,15 +173,15 @@ FILTERS: dict[str, list[str]] = {
     ],
     "sage": [
         "core/sage/**",
+        "packages/autonomous/**",
+        "packages/exploit_feasibility/**",
+        "packages/llm_analysis/**",
         "core/config/**",
         "core/hash/**",
         "core/llm/**",
         "core/logging/**",
         "core/sandbox/**",
         "core/security/**",
-        "packages/autonomous/**",
-        "packages/exploit_feasibility/**",
-        "packages/llm_analysis/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
@@ -193,6 +193,9 @@ FILTERS: dict[str, list[str]] = {
     # SCA actually imports (validated by test_filter_coverage.py).
     "sca": [
         "packages/sca/**",
+        "packages/binary_analysis/**",
+        "packages/cvss/**",
+        "packages/osv/**",
         "core/binary/**",
         "core/config/**",
         "core/coverage/**",
@@ -209,14 +212,13 @@ FILTERS: dict[str, list[str]] = {
         "core/tar/**",
         "core/upstream_latest/**",
         "core/zip/**",
-        "packages/binary_analysis/**",
-        "packages/cvss/**",
-        "packages/osv/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
     "orchestration": [
         "core/orchestration/**",
+        "packages/codeql/**",
+        "packages/exploitability_validation/**",
         "core/ast/**",
         "core/config/**",
         "core/hash/**",
@@ -227,8 +229,27 @@ FILTERS: dict[str, list[str]] = {
         "core/sandbox/**",
         "core/schema_constants/**",
         "core/security/**",
-        "packages/codeql/**",
-        "packages/exploitability_validation/**",
+        "requirements*.txt",
+        ".github/workflows/tests.yml",
+    ],
+    # source_intel: Coccinelle-driven memory-corruption evidence.
+    # Carved into its own tier so the dedicated job can apt-install
+    # coccinelle and actually RUN the real-spatch E2E — in the broad
+    # ``python`` fast tier those tests skipif(not which("spatch")) and
+    # so never executed in CI (spatch isn't installed there). The
+    # import-derived globs below are auto-maintained by
+    # ``.github/tests/test_filter_coverage.py --update``.
+    "source_intel": [
+        "packages/source_intel/**",
+        "packages/coccinelle/**",
+        "packages/codeql/dataflow_validator.py",
+        "packages/llm_analysis/**",
+        "core/build/**",
+        "core/dataflow/**",
+        "core/function_taxonomy/**",
+        "core/inventory/**",
+        "core/llm/**",
+        "core/security/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],

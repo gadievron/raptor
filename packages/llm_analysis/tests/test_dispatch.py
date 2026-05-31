@@ -1111,6 +1111,25 @@ class TestConfigRoleValidation:
         assert result["analysis_model"] == m1
 
 
+class _StubConfigWithDefaults:
+    """Stand-in for LLMConfig that injects config-derived defaults (a
+    cross-provider fallback + a role=consensus model) when constructed
+    WITHOUT an explicit fallback_models — i.e. what models.json would load.
+    Passing fallback_models=[] (the override path) yields no defaults."""
+
+    def __init__(self, primary_model=None, fallback_models=None, **kw):
+        from core.llm.config import ModelConfig
+        self.primary_model = primary_model
+        if fallback_models is None:
+            self.fallback_models = [
+                ModelConfig(provider="gemini", model_name="gemini-2.5-flash", role="fallback"),
+                ModelConfig(provider="anthropic", model_name="claude-haiku-4-5", role="consensus"),
+            ]
+        else:
+            self.fallback_models = list(fallback_models)
+        self.specialized_models = {}
+
+
 class TestBuildLLMConfigFromFlags:
     def test_no_flags_no_autodetect_returns_none(self):
         from packages.llm_analysis.orchestrator import build_llm_config_from_flags
@@ -1215,6 +1234,41 @@ class TestBuildLLMConfigFromFlags:
         consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
         assert len(consensus_models) == 1
         assert consensus_models[0].model_name == "mistral-large-latest"
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "k"})
+    def test_explicit_model_suppresses_config_derived_defaults(self):
+        """An explicit --model is a general override: config-derived fallback
+        / role models (e.g. a cross-provider fallback or a role=consensus
+        entry from models.json) must NOT load when --model is set without the
+        matching role flag."""
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        with patch("core.llm.config.LLMConfig", _StubConfigWithDefaults):
+            result = build_llm_config_from_flags(models=["gpt-5"], auto_detect=False)
+        assert result is not None
+        assert result.fallback_models == []  # nothing config-derived leaked
+        assert all(m.provider != "gemini" for m in result.fallback_models)
+        assert all(m.role != "consensus" for m in result.fallback_models)
+
+    def test_unrecognized_model_name_fails_loudly(self, capsys):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(models=["opus-4-8"], auto_detect=False)
+        assert result is None
+        assert "unrecognized model" in capsys.readouterr().out
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "k", "MISTRAL_API_KEY": "k2"})
+    def test_explicit_model_composes_with_role_flag_only(self):
+        """--model X --consensus Y → only Y as consensus; the config-derived
+        consensus + cross-provider fallback are still suppressed."""
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        with patch("core.llm.config.LLMConfig", _StubConfigWithDefaults):
+            result = build_llm_config_from_flags(
+                models=["gpt-5"], consensus="mistral-large-latest", auto_detect=False,
+            )
+        assert result is not None
+        consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
+        assert len(consensus_models) == 1
+        assert consensus_models[0].model_name == "mistral-large-latest"
+        assert all(m.provider != "gemini" for m in result.fallback_models)
 
 
 # -----------------------------------------------------------------------

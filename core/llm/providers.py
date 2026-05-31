@@ -10,6 +10,7 @@ JSON-in-prompt fallback for providers that lack native structured support.
 
 import json
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -37,6 +38,31 @@ from .tool_use.types import (
 )
 
 logger = get_logger()
+
+_TEMPERATURE_DEPRECATED_FROM = (4, 7)
+_CLAUDE_VERSION_RE = re.compile(r"claude-[a-z]+-(\d+)-(\d+)")
+
+
+def supports_temperature(model_name: str) -> bool:
+    """Whether ``model_name`` accepts the ``temperature`` request parameter.
+
+    Anthropic deprecated ``temperature`` for the reasoning tier from 4.7:
+    verified empirically that opus-4-7 / opus-4-8 reject it with a 400, while
+    opus-4-6-and-older and all sonnet/haiku (<=4-6) still accept it. We gate on
+    version >= 4.7 across tiers — every model that is actually >4.6 today is a
+    deprecated opus, and omitting ``temperature`` is harmless (the model falls
+    back to its default) whereas sending it to a deprecated model is a hard 400,
+    so we err toward omitting for >=4.7 (over-omitting a future tier that still
+    accepts it costs nothing). The regex matches the ``claude-<tier>-<major>-
+    <minor>`` core anywhere in the identifier, so Bedrock region prefixes
+    (``us.anthropic.claude-opus-4-7``) and dated snapshots
+    (``claude-opus-4-7-20260301``) are handled. Non-claude / unparseable names
+    keep ``temperature``.
+    """
+    m = _CLAUDE_VERSION_RE.search(model_name or "")
+    if not m:
+        return True
+    return (int(m.group(1)), int(m.group(2))) < _TEMPERATURE_DEPRECATED_FROM
 
 
 def _safe_float(value: Any, *, default: float) -> float:
@@ -1515,9 +1541,11 @@ class AnthropicProvider(LLMProvider):
         create_kwargs = {
             "model": self.config.model_name,
             "messages": messages,
-            "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
         }
+        # Opus 4.7+ deprecated `temperature` (400 if sent); omit it for those.
+        if supports_temperature(self.config.model_name):
+            create_kwargs["temperature"] = kwargs.get("temperature", self.config.temperature)
         if system_prompt:
             create_kwargs["system"] = system_prompt
 
@@ -1599,9 +1627,11 @@ class AnthropicProvider(LLMProvider):
                     "model": self.config.model_name,
                     "response_model": pydantic_model,
                     "messages": messages,
-                    "temperature": temperature,
                     "max_tokens": self.config.max_tokens,
                 }
+                # Opus 4.7+ deprecated `temperature` (400 if sent); omit it for those.
+                if supports_temperature(self.config.model_name):
+                    create_kwargs["temperature"] = temperature
                 if system_prompt:
                     create_kwargs["system"] = system_prompt
 

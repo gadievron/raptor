@@ -455,25 +455,20 @@ def _runs(lines):
     return out
 
 
-def import_runtime(
-    store: CoverageStore, path, checklist: Dict[str, Any],
-    fmt: Optional[str] = None, tool: Optional[str] = None,
+def mark_runtime(
+    store: CoverageStore, data: Dict[str, Any], checklist: Dict[str, Any],
+    tool: str,
 ) -> int:
-    """Import external runtime coverage (gcov / lcov / coverage.py) into the
-    store (Phase 4). Detects the format (unless ``fmt`` given), parses executed
-    source lines, normalises each source path to the inventory's key (gcov/lcov
-    report build-relative or absolute paths — reuse the tested matcher), and
-    marks contiguous runs under the runtime ``tool`` label. Returns marks made.
-    """
-    from .parsers import default_tool, detect_format, parse
-
-    fmt = fmt or detect_format(path)
-    if not fmt:
-        return 0
-    tool = tool or default_tool(fmt)
+    """Mark a ``{source_path: iterable-of-executed-lines}`` map into the store
+    under the runtime ``tool`` label. Normalises each source path to the
+    inventory's key (gcov/lcov/llvm report build-relative or absolute paths —
+    reuse the tested matcher) and stays inventory-anchored (skips non-target /
+    system-header paths). Marks contiguous runs, not one call per line. Shared
+    by :func:`import_runtime` (parsed artifacts) and the collectors in
+    ``core.coverage.collect`` (tool-run artifacts)."""
     inv = _inventory_paths(checklist)
     marked = 0
-    for src, lines in parse(path, fmt).items():
+    for src, lines in data.items():
         key = _to_inventory_path(src, inv)
         if key not in inv:
             continue          # not an inventory file (system header, non-target)
@@ -481,3 +476,20 @@ def import_runtime(
             store.mark(key, lo, hi, tool)
             marked += 1
     return marked
+
+
+def import_runtime(
+    store: CoverageStore, path, checklist: Dict[str, Any],
+    fmt: Optional[str] = None, tool: Optional[str] = None,
+) -> int:
+    """Import external runtime coverage (gcov / lcov / coverage.py) into the
+    store (Phase 4). Detects the format (unless ``fmt`` given), parses executed
+    source lines, and marks them under the runtime ``tool`` label. Returns
+    marks made."""
+    from .parsers import default_tool, detect_format, parse
+
+    fmt = fmt or detect_format(path)
+    if not fmt:
+        return 0
+    tool = tool or default_tool(fmt)
+    return mark_runtime(store, parse(path, fmt), checklist, tool)

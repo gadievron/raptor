@@ -198,10 +198,12 @@ def test_schema_includes_version_field(tmp_path):
 
 
 def test_all_event_types_present_in_cells(tmp_path):
-    """A cell that's only seen ``cheap_short_circuit`` still has
-    zero-counts for the other 4 event types so operators inspecting
-    the JSON see a uniform shape, not 'why is `tool_evidence`
-    missing?'"""
+    """A cell that's only seen ``cheap_short_circuit`` still has every event
+    type present (v2: each as an age-bucket map) so operators inspecting the
+    JSON see a uniform shape, not 'why is `tool_evidence` missing?'. Untouched
+    types are empty ``{}``; the touched type has a current-month bucket."""
+    from core.llm.scorecard.freshness import flatten_counts
+
     path = tmp_path / "sc.json"
     sc = ModelScorecard(path)
     sc.record_event(
@@ -210,9 +212,237 @@ def test_all_event_types_present_in_cells(tmp_path):
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     cell = on_disk["models"]["m"]["x:y"]
     for et in ALL_EVENT_TYPES:
-        assert et in cell["events"]
-        assert "correct" in cell["events"][et]
-        assert "incorrect" in cell["events"][et]
+        assert et in cell["events"]              # uniform shape: all types present
+    # Untouched types are empty bucket maps.
+    assert cell["events"][EventType.MULTI_MODEL_CONSENSUS] == {}
+    # The touched type has a single current-month "YYYY-MM" bucket.
+    cheap = cell["events"][EventType.CHEAP_SHORT_CIRCUIT]
+    assert flatten_counts(cheap) == (1, 0)
+    assert all(len(k) == 7 and k[4] == "-" for k in cheap)
+
+
+def test_v1_file_migrates_to_v2_buckets(tmp_path):
+    """A v1 (flat-events) scorecard file loads, migrates to v2 age-bucketed
+    shape keyed by the cell's last-seen month, preserves counts (so the verdict
+    is unchanged), and bumps the persisted version on the next write."""
+    path = tmp_path / "sc.json"
+    v1 = {
+        "version": 1,
+        "models": {"m": {"x:y": {
+            "first_seen_at": "2026-03-01T00:00:00+00:00",
+            "last_seen_at": "2026-04-15T00:00:00+00:00",
+            "model_version": "",
+            "policy_override": "auto",
+            "events": {
+                "cheap_short_circuit":   {"correct": 47, "incorrect": 1},
+                "multi_model_consensus": {"correct": 0, "incorrect": 0},
+                "judge_review":          {"correct": 0, "incorrect": 0},
+                "tool_evidence":         {"correct": 0, "incorrect": 0},
+                "operator_feedback":     {"correct": 0, "incorrect": 0},
+            },
+            "disagreement_samples": [],
+        }}},
+    }
+    path.write_text(json.dumps(v1), encoding="utf-8")
+
+    sc = ModelScorecard(path)
+    # In-memory migration preserves counts on the read path.
+    stats = {(s.model, s.decision_class): s for s in sc.get_stats()}
+    cheap_stat = stats[("m", "x:y")].events[EventType.CHEAP_SHORT_CIRCUIT]
+    assert (cheap_stat.correct, cheap_stat.incorrect) == (47, 1)
+
+    # A write persists the migrated v2 shape.
+    sc.record_event("x:y", "m", EventType.JUDGE_REVIEW, "correct")
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["version"] == 2
+    cell = on_disk["models"]["m"]["x:y"]
+    # Flat counts folded into the last-seen month bucket (2026-04), untouched.
+    assert cell["events"]["cheap_short_circuit"] == {"2026-04": {"correct": 47, "incorrect": 1}}
+    # Zero-count types became empty bucket maps.
+    assert cell["events"]["multi_model_consensus"] == {}
+
+
+def test_version_less_v1_file_gets_migrated_on_load(tmp_path):
+    """Adversarial: a version-LESS file with v1-shaped flat events must NOT be
+    silently stamped v2 while the events stay flat (which would only self-heal
+    lazily as cells are touched). __enter__ now defensively runs v1->v2 even
+    when no version key is present."""
+    path = tmp_path / "sc.json"
+    path.write_text(json.dumps({
+        # NO `version` key
+        "models": {"m": {"x:y": {
+            "first_seen_at": "2026-04-01T00:00:00+00:00",
+            "last_seen_at": "2026-04-15T00:00:00+00:00",
+            "model_version": "", "policy_override": "auto",
+            "events": {
+                "cheap_short_circuit": {"correct": 50, "incorrect": 1},
+                "multi_model_consensus": {"correct": 0, "incorrect": 0},
+                "judge_review": {"correct": 0, "incorrect": 0},
+                "tool_evidence": {"correct": 0, "incorrect": 0},
+                "operator_feedback": {"correct": 0, "incorrect": 0},
+            },
+            "disagreement_samples": [],
+        }}},
+    }))
+    sc = ModelScorecard(path)
+    # Trigger a write so the migrated shape persists.
+    sc.record_event("x:y", "m", EventType.JUDGE_REVIEW, "correct")
+    on_disk = json.loads(path.read_text())
+    assert on_disk["version"] == 2
+    # Cheap counts must be bucketed under last_seen month (not still flat).
+    cheap = on_disk["models"]["m"]["x:y"]["events"]["cheap_short_circuit"]
+    assert cheap == {"2026-04": {"correct": 50, "incorrect": 1}}
+
+
+def test_freshness_weighting_flips_verdict_on_recent_regression(tmp_path):
+    """A model that was reliable long ago but regressed recently: unweighted,
+    the stale correct counts dilute the recent failures and the cell stays
+    trusted; freshness-weighted, the 2-year-old data decays away and the recent
+    regression flips the verdict to FALL_THROUGH. This is the whole point."""
+    from datetime import datetime, timezone
+
+    from core.llm.scorecard.freshness import bucket_key
+
+    now = datetime.now(timezone.utc)
+    cur = bucket_key(now)
+    stale = f"{now.year - 2:04d}-{now.month:02d}"   # ~24 months ago
+    fixture = {
+        "version": 2,
+        "models": {"m": {"x:y": {
+            "first_seen_at": f"{stale}-01T00:00:00+00:00",
+            "last_seen_at": f"{cur}-01T00:00:00+00:00",
+            "model_version": "",
+            "policy_override": "auto",
+            "events": {
+                "cheap_short_circuit": {
+                    cur:   {"correct": 0, "incorrect": 15},     # recent: all wrong
+                    stale: {"correct": 2000, "incorrect": 0},   # 2y stale: all right
+                },
+                "multi_model_consensus": {},
+                "judge_review": {},
+                "tool_evidence": {},
+                "operator_feedback": {},
+            },
+            "disagreement_samples": [],
+        }}},
+    }
+    path = tmp_path / "sc.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+
+    # Decay OFF: 15/2015 ≈ 0.7% miss-rate → trusted.
+    off = ModelScorecard(path)
+    assert off.should_short_circuit("x:y", "m") == Policy.SHORT_CIRCUIT
+    # Decay ON (30-day half-life): the 2-year-stale correct counts decay to ~0,
+    # the recent failures dominate → fall through (regression surfaces).
+    on = ModelScorecard(path, freshness_half_life_days=30)
+    assert on.should_short_circuit("x:y", "m") == Policy.FALL_THROUGH
+
+
+def test_measure_freshness_impact_counts_flips(tmp_path):
+    """The offline gate reports how many trusted cells fall out of SHORT_CIRCUIT
+    under a candidate half-life — the cold-start check before enabling decay."""
+    from datetime import datetime, timezone
+
+    from core.llm.scorecard.freshness import bucket_key
+
+    now = datetime.now(timezone.utc)
+    cur = bucket_key(now)
+    stale = f"{now.year - 2:04d}-{now.month:02d}"
+
+    def _cell(cheap_buckets, seen_month):
+        return {
+            "first_seen_at": f"{stale}-01T00:00:00+00:00",
+            "last_seen_at": f"{seen_month}-01T00:00:00+00:00",
+            "model_version": "", "policy_override": "auto",
+            "events": {
+                "cheap_short_circuit": cheap_buckets,
+                "multi_model_consensus": {}, "judge_review": {},
+                "tool_evidence": {}, "operator_feedback": {},
+            },
+            "disagreement_samples": [],
+        }
+
+    fixture = {"version": 2, "models": {"m": {
+        # regresses recently → flips OUT of short-circuit under decay
+        "x:y": _cell({cur: {"correct": 0, "incorrect": 15},
+                      stale: {"correct": 2000, "incorrect": 0}}, cur),
+        # consistently good recently → stays trusted (≥73 clean obs needed for
+        # Wilson UB ≤ ceiling with zero failures)
+        "x:z": _cell({cur: {"correct": 100, "incorrect": 0}}, cur),
+    }}}
+    path = tmp_path / "sc.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+
+    out = ModelScorecard(path).measure_freshness_impact(30)
+    assert out["cells"] == 2
+    assert out["short_circuit_baseline"] == 2     # both trusted unweighted
+    assert out["short_circuit_weighted"] == 1     # only the stable one survives
+    assert out["flipped_out"] == 1
+    assert out["flipped_out_to_fall_through"] == 1
+    assert out["flipped_in"] == 0
+
+
+def test_register_uses_records_calls_without_touching_verdict(tmp_path):
+    """Usage registration is a volume/presence signal: it bumps `calls` +
+    last_seen and makes a used-but-unscored model APPEAR, without creating
+    reliability outcomes (verdict stays LEARNING)."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([
+        {"model": "haiku", "decision_class": "_usage", "calls": 3,
+         "model_version": "haiku-20251001"},
+        {"model": "haiku", "decision_class": "_usage", "calls": 2},
+    ])
+    stats = {(s.model, s.decision_class): s for s in sc.get_stats()}
+    assert ("haiku", "_usage") in stats           # the model now appears
+    cell = stats[("haiku", "_usage")]
+    assert cell.calls == 5                         # 3 + 2 accumulated
+    assert cell.model_version == "haiku-20251001"
+    # No reliability outcomes recorded → verdict is LEARNING, routing unaffected.
+    assert sc.should_short_circuit("_usage", "haiku") == Policy.LEARNING
+    assert cell.events[EventType.CHEAP_SHORT_CIRCUIT].total() == 0
+
+
+def test_register_uses_aggregates_cost_and_tokens(tmp_path):
+    """Lifecycle enrichment: register_uses sums cost / tokens / latency_sum and
+    takes the MAX of latency_max — the 'did I get value for money' axis."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([{
+        "model": "haiku", "decision_class": "_usage",
+        "calls": 3, "cost_usd": 0.05, "tokens": 1200,
+        "input_tokens": 1000, "output_tokens": 200,
+        "latency_ms_sum": 4500, "latency_ms_max": 1800,
+    }])
+    sc.register_uses([{
+        "model": "haiku", "decision_class": "_usage",
+        "calls": 2, "cost_usd": 0.02, "tokens": 400,
+        "input_tokens": 350, "output_tokens": 50,
+        "latency_ms_sum": 2200, "latency_ms_max": 1300,
+    }])
+    cell = {(s.model, s.decision_class): s for s in sc.get_stats()}[("haiku", "_usage")]
+    assert cell.calls == 5
+    assert abs(cell.cost_usd - 0.07) < 1e-9
+    assert cell.tokens == 1600
+    assert cell.input_tokens == 1350
+    assert cell.output_tokens == 250
+    assert cell.latency_ms_sum == 6700
+    assert cell.latency_ms_max == 1800           # max, not sum
+
+
+def test_register_uses_records_schema_valid_events(tmp_path):
+    """Lifecycle batched-write for schema validity: register_uses with
+    schema_valid_pass / schema_valid_fail bumps the SCHEMA_VALID event slot
+    in the current-month bucket — the universal "does this model follow the
+    schema" axis fed by every generate_structured call."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.register_uses([{
+        "model": "haiku", "decision_class": "_structured",
+        "calls": 5, "schema_valid_pass": 4, "schema_valid_fail": 1,
+    }])
+    cell = sc.get_stat("_structured", "haiku")
+    assert cell is not None
+    ev = cell.events[EventType.SCHEMA_VALID]
+    assert (ev.correct, ev.incorrect) == (4, 1)
+    assert cell.calls == 5
 
 
 def test_model_first_layout(tmp_path):
@@ -852,3 +1082,33 @@ class TestAutoGc:
             assert data.get("last_gc_at"), (
                 "last_gc_at must be stamped after first auto-GC pass"
             )
+
+
+def test_safe_coercion_tolerates_wrong_type_scalar_cell_fields(tmp_path):
+    """Adversarial: hand-edited cells with wrong-type scalar fields
+    (e.g. ``"calls": "abc"``, ``"cost_usd": None``) must NOT abort the
+    read/write — `_safe_int`/`_safe_float` coerce to 0 instead. Subsequent
+    `register_uses` then bumps from the coerced default."""
+    path = tmp_path / "sc.json"
+    path.write_text(json.dumps({"version": 2, "models": {"m": {"x:y": {
+        "first_seen_at": "2026-05-01T00:00:00+00:00",
+        "last_seen_at": "2026-05-01T00:00:00+00:00",
+        "model_version": "", "policy_override": "auto",
+        "events": {et: {} for et in ALL_EVENT_TYPES},
+        "disagreement_samples": [],
+        # garbage scalar fields:
+        "calls": "abc",
+        "cost_usd": None,
+        "tokens": "garbage",
+        "latency_ms_sum": [1, 2, 3],
+    }}}}))
+    sc = ModelScorecard(path)
+    stats = {(s.model, s.decision_class): s for s in sc.get_stats()}
+    cell = stats[("m", "x:y")]
+    assert cell.calls == 0 and cell.cost_usd == 0.0 and cell.tokens == 0
+    assert cell.latency_ms_sum == 0
+    # And a register_uses bumps cleanly from the defaults
+    sc.register_uses([{"model": "m", "decision_class": "x:y",
+                       "calls": 2, "cost_usd": 0.5}])
+    after = sc.get_stat("x:y", "m")
+    assert after.calls == 2 and abs(after.cost_usd - 0.5) < 1e-9

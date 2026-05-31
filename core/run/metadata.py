@@ -552,26 +552,55 @@ def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
     # Materialise the LLM read-coverage record from the plugin's .reads-manifest
     # FIRST, so the snapshot below imports it alongside the scanner records.
     _convert_reads_manifest(output_dir)
+    # Stamp findings with provenance_refs back to this run's manifest. Must run
+    # AFTER _update_status (manifest sealed) and BEFORE _snapshot_run_coverage
+    # (coverage importer pulls findings into the store; we want them stamped
+    # by then). Best-effort: a stamping failure must not fail the lifecycle.
+    _stamp_findings_provenance(output_dir)
     # Snapshot AFTER the status/manifest write so coverage provenance can read
     # the sealed manifest (engine versions / resolved models).
     _snapshot_run_coverage(output_dir)
 
 
+def _stamp_findings_provenance(output_dir: Path) -> None:
+    """Best-effort: stamp every finding in this run's ``findings.json`` (and
+    ``sca/findings.json``) with a ``provenance_refs`` field pointing back to
+    the run's manifest, so downstream consumers (``/project correlate``, the
+    citation view, audit reports) can trace each finding to the run that
+    produced it.
+
+    Idempotent (re-runs do nothing). Never raises — lifecycle hooks must not
+    fail on a stamping error. See ``core/run/findings.py``.
+    """
+    import logging
+    try:
+        from core.run.findings import stamp_findings_in_run
+        stamp_findings_in_run(Path(output_dir))
+    except Exception:  # noqa: BLE001 — never fail lifecycle on a stamping error
+        logging.getLogger(__name__).debug(
+            "_stamp_findings_provenance failed for %s", output_dir, exc_info=True
+        )
+
+
 def _convert_reads_manifest(output_dir: Path) -> None:
     """Turn the coverage plugin's ``.reads-manifest`` (the files the LLM read
     this run, captured by the PostToolUse-on-Read hook) into a
-    ``coverage-llm.json`` record so LLM examined-extent reaches the store.
+    ``coverage-read.json`` record so LLM read-extent reaches the store.
 
-    The plugin captures the reads but nothing converted them — this wires that
-    conversion at run completion. Best-effort: a missing/empty manifest is a
-    no-op, and a failure must never break the lifecycle.
+    Labelled ``read`` (not ``llm``): a whole-file *read* is shallow coverage —
+    it is NOT a function-level review. The store distinguishes read from
+    reviewed by depth, so a file the LLM merely read still surfaces in the
+    LLM-review gap (the gap /audit fills). The plugin captures the reads but
+    nothing converted them — this wires that conversion at run completion.
+    Best-effort: a missing/empty manifest is a no-op, and a failure must never
+    break the lifecycle.
     """
     import logging
     try:
         from core.coverage.record import build_from_manifest, write_record
-        record = build_from_manifest(Path(output_dir), "llm")
+        record = build_from_manifest(Path(output_dir), "read")
         if record:
-            write_record(Path(output_dir), record, tool_name="llm")
+            write_record(Path(output_dir), record, tool_name="read")
     except Exception:  # noqa: BLE001 — never fail lifecycle on a coverage write
         logging.getLogger(__name__).debug(
             "_convert_reads_manifest failed for %s", output_dir, exc_info=True

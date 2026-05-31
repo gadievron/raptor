@@ -24,6 +24,21 @@ Behaviour notes:
   - No network calls when ``--offline``: in offline mode every dep
     becomes ``status="needs_network"``.
 
+Library posture (``--target-kind library|hybrid`` or auto-detected from the
+target's package manifests via ``resolve_library_mode``): a library's deps
+are consumed by *downstream* resolvers, so exact-pinning them
+over-constrains every consumer. Under the library posture harden therefore:
+  - leaves an already-safe declared range alone (skip-clean);
+  - emits a RANGE floor-raise (``>=target``, no ``==``) for PyPI + npm +
+    PyPI Poetry; trusts NuGet/Gradle/Maven's existing min/soft-version
+    rewrites (their bumps are already floor-raises);
+  - refuses forms that can only produce an exact pin (inline-install,
+    Debian apt) with ``status="library_floor_raise_unsupported"`` — never
+    silently corridor-pins a library;
+  - picks the MINIMAL safe version (not the newest) as the floor-raise
+    target, to preserve the widest compatible range for consumers.
+``RAPTOR_TARGET_KIND=application`` is the operator override.
+
 What harden does NOT do (deferred):
   - LLM-classified breaking-change analysis — separate follow-up.
     Major-version candidates emit ``status="review_required"`` and are
@@ -121,8 +136,23 @@ class HardenCandidate:
     candidates_rejected_for_cve: int = 0
     status: str = "error"
     detail: str = ""
+    # Version-selection posture. ``highest_safe`` (default, application
+    # targets): pin to the newest safe version in range. ``library_minimal``
+    # (library/hybrid targets): pick the LOWEST safe version above the
+    # baseline — the minimal floor-raise that clears advisories — so the
+    # library's compatible range stays as wide as possible for downstream
+    # consumers (pinning a library's deps to latest over-constrains them).
+    selection: str = "highest_safe"
     # Reserved: the LLM impact analysis (Follow-up #7) populates this.
     impact_analysis: Optional[Dict[str, Any]] = None
+    # When the dep's version is owned by a *central* file (CPM
+    # Directory.Packages.props or pre-CPM Directory.Build.targets/props),
+    # ``manifest`` points at the csproj where the PackageReference is
+    # *declared* but the patch must go to the file that owns the version.
+    # Set from ``dep.source_extra['resolved_in']`` by the parser; consumed
+    # by ``_apply`` when building the ``_PlanEntry`` so the rewrite is
+    # routed to the right file. ``None`` for inline / non-central deps.
+    resolved_in: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +170,14 @@ def main(argv: Sequence[str]) -> int:
         except ImportError:
             logger.debug("raptor-sca fix: cc_trust unavailable; "
                           "--trust-repo had no effect")
+
+    # --target-kind: translate into RAPTOR_TARGET_KIND so resolve_library_mode
+    # (the in-process detector below) picks it up. 'auto' leaves the env
+    # unset → per-target manifest detection.
+    if getattr(args, "target_kind", "auto") != "auto":
+        import os
+        from core.config import RaptorConfig
+        os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
 
     target = Path(args.target).resolve()
     if not target.exists():
@@ -182,6 +220,26 @@ def main(argv: Sequence[str]) -> int:
         "Homebrew": HomebrewClient(http, cache, offline=args.offline),
     }
 
+    # Classify the target (manifest-based, reuses the same files harden
+    # parses). For a library/hybrid, pinning deps to latest over-constrains
+    # downstream consumers, so harden raises floors MINIMALLY instead — see
+    # ``selection`` on HardenCandidate. Use resolve_library_mode (not the raw
+    # detector) so the operator's RAPTOR_TARGET_KIND override — which is
+    # allowlisted to survive into this subprocess — takes effect here too.
+    try:
+        from core.inventory.library_detection import resolve_library_mode
+        _mode = resolve_library_mode("auto", str(target))
+        target_kind = _mode["kind"]
+        library_mode = _mode["enabled"]
+        target_kind_reason = _mode["reason"]
+    except Exception as exc:                              # noqa: BLE001
+        logger.debug("sca.harden: target-kind detection failed (%s); "
+                     "defaulting to application posture", exc)
+        target_kind, library_mode, target_kind_reason = "unknown", False, ""
+    if library_mode:
+        logger.info("sca.harden: target classified %s — raising dependency "
+                    "floors minimally to preserve ranges", target_kind)
+
     candidates = plan(
         target=target,
         registries=registries,
@@ -192,6 +250,7 @@ def main(argv: Sequence[str]) -> int:
         allow_major=args.allow_major,
         pin_only=args.pin_only,
         pin_debian=args.pin_debian,
+        library_mode=library_mode,
     )
 
     # ``--ecosystems`` is a post-plan filter: candidates outside the
@@ -221,8 +280,9 @@ def main(argv: Sequence[str]) -> int:
             allow_degraded=args.allow_degraded,
             ecosystem_allowlist=ecosystem_allowlist,
         )
-        _write_report(out_dir / "report.md", candidates, [])
-        _print_summary(candidates, [], out_dir)
+        _write_report(out_dir / "report.md", candidates, [],
+                      target_kind=target_kind, target_kind_reason=target_kind_reason)
+        _print_summary(candidates, [], out_dir, target_kind=target_kind)
         if actionable:
             print(f"raptor-sca fix --harden --check: {actionable} candidate(s) would be "
                   f"applied; rerun without --check to apply.")
@@ -273,8 +333,9 @@ def main(argv: Sequence[str]) -> int:
         if rc != 0:
             return rc
 
-    _write_report(out_dir / "report.md", candidates, changes)
-    _print_summary(candidates, changes, out_dir)
+    _write_report(out_dir / "report.md", candidates, changes,
+                  target_kind=target_kind, target_kind_reason=target_kind_reason)
+    _print_summary(candidates, changes, out_dir, target_kind=target_kind)
     return 0
 
 
@@ -293,6 +354,7 @@ def plan(
     allow_major: bool,
     pin_only: bool = False,
     pin_debian: bool = False,
+    library_mode: bool = False,
 ) -> List[HardenCandidate]:
     """Walk the target and produce one HardenCandidate per dep.
 
@@ -310,6 +372,10 @@ def plan(
       allow_major: when False, candidates whose latest-safe crosses a
         major boundary become ``review_required`` and are omitted from
         the patch.
+      library_mode: when True (library/hybrid target), select the minimal
+        safe version above the baseline rather than the newest — a minimal
+        floor-raise that clears advisories while keeping the dependency
+        range wide for downstream consumers.
     """
     manifests = find_manifests(target)
     raw_deps: List[Dependency] = []
@@ -347,8 +413,65 @@ def plan(
                              kev=kev, epss=epss,
                              offline=offline, allow_major=allow_major,
                              pin_only=pin_only, pin_debian=pin_debian,
-                             platform_matrix=platform_matrix))
+                             platform_matrix=platform_matrix,
+                             library_mode=library_mode))
     return out
+
+
+def _supports_library_floor_raise(dep: Dependency) -> bool:
+    """Whether harden can promote this dep without over-constraining a
+    library's consumers (i.e. without emitting an exact ``==`` pin). True for
+    every manifest whose rewriter yields a range or a minimum/soft version:
+
+      - PyPI requirements.txt / pyproject.toml — explicit floor-raise
+        (``>=target``, no ``==``); see ``_pypi_pin_preserving_bounds`` /
+        ``_bump_npm_spec(floor_raise=)``.
+      - npm package.json — semver (caret/tilde/range stay ranges; a bare
+        exact becomes ``^target``).
+      - NuGet csproj / Directory.Packages.props, Gradle libs.versions.toml,
+        Maven pom.xml — these resolve by MINIMUM (NuGet/Gradle) or SOFT
+        (Maven) version, so the normal bump is already a floor-raise, not an
+        exact pin; the floor_raise flag is a harmless no-op for them.
+
+    False for inline-install files (``pip install x==Y`` is exact by nature,
+    no range form) and Debian apt lines — library mode refuses those rather
+    than pin. Mirrors ``update._rewrite_one``'s dispatch, minus inline.
+
+    Known scope limitations (pre-existing rewriter behaviour, not introduced
+    by library mode; rare in practice):
+      - Maven ``<version>[1.0,2.0)</version>`` *ranges* are collapsed to bare
+        by ``_rewrite_pom_xml`` regardless of mode; library mode doesn't
+        un-collapse them. Maven version ranges are uncommon.
+      - Gradle catalog ``foo = {{ strictly = "X" }}`` keeps the ``strictly``
+        wrapper (so it stays exact-for-downstream). The bare ``foo = "X"``
+        and ``foo = {{ require = "X" }}`` shorthand forms behave as
+        floor/preferred and are fine for libraries."""
+    n = dep.declared_in.name
+    if n in ("pyproject.toml", "package.json", "Directory.Packages.props",
+             "Directory.Build.targets", "libs.versions.toml", "pom.xml"):
+        return True
+    if n.startswith("requirements") and n.endswith(".txt"):
+        return True
+    return dep.declared_in.suffix.lower() in (".csproj", ".fsproj", ".vbproj")
+
+
+def _baseline_is_clean(dep: Dependency, baseline: Optional[str], *,
+                       osv: OsvClient, kev=None, epss=None) -> bool:
+    """True if the dep's declared floor version itself carries no advisory —
+    i.e. the range's minimum is already safe, so a library should leave the
+    (intentional) range alone. A non-concrete baseline (a RANGE spec string
+    with no recorded floor) can't be assessed → return False so harden still
+    acts (conservative: better to floor-raise than to silently skip a real
+    vuln)."""
+    if not baseline or any(c in baseline for c in "<>=!~ ,*"):
+        return False
+    try:
+        ranked = _rank_candidates_by_safety(
+            ecosystem=dep.ecosystem, name=dep.name,
+            candidates=[baseline], osv=osv, kev=kev, epss=epss)
+    except Exception:                                    # noqa: BLE001
+        return False
+    return bool(ranked) and not ranked[0].advisory_ids
 
 
 def _plan_one(
@@ -363,7 +486,15 @@ def _plan_one(
     pin_only: bool = False,
     pin_debian: bool = False,
     platform_matrix=None,
+    library_mode: bool = False,
 ) -> HardenCandidate:
+    # The parser annotates a dep whose version is owned by a *central* file
+    # (CPM Directory.Packages.props, pre-CPM Directory.Build.targets/props)
+    # with ``source_extra['resolved_in']`` pointing at that file. Carry it on
+    # the candidate so ``_apply`` routes the rewrite there — without it the
+    # patch would target the csproj where the PackageReference is *declared*,
+    # which holds no Version to update.
+    resolved_in = (dep.source_extra or {}).get("resolved_in")
     cand = HardenCandidate(
         ecosystem=dep.ecosystem,
         name=dep.name,
@@ -372,6 +503,7 @@ def _plan_one(
         from_version=dep.version,
         to_version=None,
         crosses_major=False,
+        resolved_in=resolved_in,
     )
 
     # ``--pin-only``: skip loose pins entirely (don't convert ``>=X`` to
@@ -513,10 +645,53 @@ def _plan_one(
     cand.candidates_rejected_for_cve = len(ranked) - len(clean)
 
     if clean:
-        # Fully-safe path: pick the newest clean version.
-        target_version = clean[0].version
+        # Fully-safe path. Applications pin to the NEWEST clean version
+        # (clean[0]). Libraries/hybrids instead get a minimal, range-preserving
+        # FLOOR-RAISE — pinning a library's deps over-constrains downstream
+        # consumers' resolvers — but only when there's a security reason and
+        # only where we can emit a range (never corridor-pin a library).
+        if library_mode:
+            # (a) Don't narrow an intentional, already-safe range: if the
+            #     declared floor is itself clean, leave the dep untouched.
+            if _baseline_is_clean(dep, baseline, osv=osv, kev=kev, epss=epss):
+                cand.status = "up_to_date"
+                cand.detail = (
+                    f"library target: declared floor {baseline} is already "
+                    f"safe; range left intact (no exact pin)"
+                )
+                return cand
+            # (b) Only PyPI requirements.txt / pyproject PEP 508 can emit a
+            #     range-preserving floor-raise today. For anything else, refuse
+            #     rather than corridor-pin a library's dep (that is the harm).
+            if not _supports_library_floor_raise(dep):
+                cand.status = "library_floor_raise_unsupported"
+                cand.detail = (
+                    f"library target: range-preserving floor-raise not yet "
+                    f"implemented for {dep.ecosystem} / {dep.declared_in.name}; "
+                    f"refusing to pin (would over-constrain consumers)"
+                )
+                cand.to_version = clean[-1].version
+                return cand
+            target_version = clean[-1].version   # minimal safe above baseline
+            cand.selection = "library_minimal"
+        else:
+            target_version = clean[0].version
         residual_advs: List[str] = []
         target_status = "promoted"
+    elif library_mode:
+        # Library posture + no clean version in range: the only remaining
+        # moves (bounded-downgrade / degraded promotion) pin a SPECIFIC
+        # version (== ), which would over-constrain a library's consumers —
+        # and a degraded pick is still vulnerable. Refuse rather than pin;
+        # the operator sees the dep flagged but the library isn't made worse.
+        cand.status = "library_floor_raise_unsupported"
+        cand.detail = (
+            "library target: no fully-safe version in the declared range; "
+            "refusing to pin a library to a single (or residual-vulnerable) "
+            "version. Remediate the range bounds manually or scan as an "
+            "application (RAPTOR_TARGET_KIND=application)."
+        )
+        return cand
     else:
         # No clean version exists at/above the pin. Before settling for a
         # still-vulnerable upgrade, try a BOUNDED DOWNGRADE: the highest
@@ -581,6 +756,12 @@ def _plan_one(
             f"downgrade to clean {target_version} "
             f"(>= recorded floor {dep.version_floor})"
         )
+    elif target_status == "promoted" and cand.selection == "library_minimal":
+        cand.detail = (
+            f"library target: minimal safe floor-raise to {target_version} "
+            f"(smallest clean version above {dep.version or '*'}) — preserves "
+            f"the dependency range for downstream consumers"
+        )
 
     # Full safety check — the "harden" promise. Beyond OSV/KEV/EPSS,
     # consult the bump-tier supply-chain signals (recent_publish,
@@ -625,12 +806,17 @@ def _has_rewriter(manifest: Path) -> bool:
     """True if ``update._rewrite_one`` knows how to patch this file.
 
     Mirrors the dispatch table in ``update.py``. Update both together
-    when adding a new rewriter.
+    when adding a new rewriter — and a drift here causes harden to
+    silently mark patchable manifests as ``unsupported_manifest``.
     """
     name = manifest.name
-    if name in ("pom.xml", "package.json", "pyproject.toml"):
+    if name in ("pom.xml", "package.json", "pyproject.toml",
+                "Directory.Packages.props", "Directory.Build.targets",
+                "libs.versions.toml"):
         return True
     if name.startswith("requirements") and name.endswith(".txt"):
+        return True
+    if manifest.suffix.lower() in (".csproj", ".fsproj", ".vbproj"):
         return True
     # Delegate to update's own predicate so the two dispatches stay
     # in lockstep when new file-shapes land.
@@ -1204,14 +1390,25 @@ def _apply(
         # inline-install) still work; the ones that do (pom.xml,
         # package.json) refuse with a clear reason.
         installed = cand.from_version or ""
-        key = (cand.ecosystem, cand.name, cand.manifest)
+        # Route the rewrite to the file that OWNS the version. For CPM /
+        # pre-CPM central-version deps the parser set ``resolved_in`` to the
+        # central file (Directory.Packages.props / Directory.Build.targets /
+        # Directory.Build.props); fall back to ``manifest`` (the csproj where
+        # the dep is declared) for inline / non-central deps.
+        write_path = Path(cand.resolved_in) if cand.resolved_in else Path(cand.manifest)
+        # Dedup key by (eco, name, write_path) — two csprojs both inheriting
+        # the same central version collapse to one patch on the central file.
+        key = (cand.ecosystem, cand.name, str(write_path))
         plans[key] = _PlanEntry(
             ecosystem=cand.ecosystem,
             name=cand.name,
             installed=installed,
             target=cand.to_version,
-            manifest=Path(cand.manifest),
+            manifest=write_path,
             advisory_ids=[],
+            # Library posture: the rewriter raises the floor to a range
+            # (``>=target``) instead of corridor-pinning ``==target``.
+            floor_raise=(cand.selection == "library_minimal"),
         )
     if not plans:
         return []
@@ -1249,6 +1446,20 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     p.add_argument("target", help="path to the project to harden")
     p.add_argument("--out", help="output dir (default: ./out/sca-harden-<ts>/)")
+    p.add_argument(
+        "--target-kind",
+        choices=("auto", "library", "hybrid", "application"),
+        default="auto",
+        help=(
+            "Classify the target so harden's pinning posture matches it. "
+            "'auto' (default) sniffs package manifests; 'library' / 'hybrid' "
+            "raise floors to ranges (>=X) instead of pinning (==X), preserve "
+            "already-safe ranges, and refuse forms that would force an exact "
+            "pin; 'application' pins to the newest safe version. Sets "
+            "RAPTOR_TARGET_KIND so the in-process inventory detector honours "
+            "the operator's intent."
+        ),
+    )
     p.add_argument("--allow-major", action="store_true",
                    help="emit candidates that cross a major-version boundary")
     p.add_argument("--allow-major-without-review", action="store_true",
@@ -1335,6 +1546,9 @@ def _write_report(
     path: Path,
     candidates: List[HardenCandidate],
     changes: List[UpgradeChange],
+    *,
+    target_kind: str = "unknown",
+    target_kind_reason: str = "",
 ) -> None:
     by_status: Dict[str, List[HardenCandidate]] = {}
     for c in candidates:
@@ -1344,6 +1558,22 @@ def _write_report(
     lines.append(f"_Generated: "
                  f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC_")
     lines.append("")
+    if target_kind in ("library", "hybrid"):
+        why = f" ({target_kind_reason})" if target_kind_reason else ""
+        lines.append(
+            f"> **Detected as a {target_kind} target**{why}. Dependency floors "
+            "are raised to the *minimal* safe version as a **range** "
+            "(`>=X`), not pinned (`==X`) — exact-pinning a library's deps "
+            "over-constrains downstream consumers' resolvers. Already-safe "
+            "ranges are left untouched, and ecosystems/forms that can't yet "
+            "express a range-preserving floor-raise are skipped rather than "
+            "pinned (see the `library_floor_raise_unsupported` rows).")
+        lines.append(">")
+        lines.append(
+            "> **Wrong call?** If this is actually an application, override "
+            "with `RAPTOR_TARGET_KIND=application raptor-sca fix --harden …` "
+            "to pin dependencies to the newest safe version instead.")
+        lines.append("")
     lines.append("## Summary")
     lines.append("")
     lines.append("| Status | Count |")
@@ -1351,6 +1581,7 @@ def _write_report(
     for status in (
         "promoted", "degraded_safety", "review_required", "up_to_date",
         "skipped_loose_pin", "unsupported_manifest",
+        "library_floor_raise_unsupported",
         "no_versions", "registry_unsupported",
         "needs_network", "error",
     ):
@@ -1380,6 +1611,25 @@ def _write_report(
             )
         lines.append("")
 
+    if "library_floor_raise_unsupported" in by_status:
+        lines.append("## Library floor-raise unsupported (refused, not pinned)")
+        lines.append("")
+        lines.append("Library mode refused to pin these — either the manifest "
+                     "form can only emit an exact pin (inline installs, "
+                     "Debian apt lines) or no fully-safe version exists in "
+                     "the declared range. Address them by widening the range "
+                     "manually, switching the dep to a range-capable manifest, "
+                     "or scanning as an application "
+                     "(`RAPTOR_TARGET_KIND=application`).")
+        lines.append("")
+        for c in by_status["library_floor_raise_unsupported"]:
+            tgt = f"would-be → `{c.to_version}`" if c.to_version else "no safe target"
+            lines.append(
+                f"- **{c.ecosystem}:{c.name}** `{c.from_version or '*'}` "
+                f"({tgt}) in `{c.manifest}` — {c.detail}"
+            )
+        lines.append("")
+
     if "degraded_safety" in by_status:
         lines.append("## Degraded safety (no fully-clean version exists)")
         lines.append("")
@@ -1405,14 +1655,31 @@ def _print_summary(
     candidates: List[HardenCandidate],
     changes: List[UpgradeChange],
     out_dir: Path,
+    *,
+    target_kind: str = "unknown",
 ) -> None:
     by_status: Dict[str, int] = {}
     for c in candidates:
         by_status[c.status] = by_status.get(c.status, 0) + 1
+    if target_kind in ("library", "hybrid"):
+        print(f"raptor-sca fix: target detected as a {target_kind} — raising "
+              f"dependency floors to safe ranges (>=X), not exact pins (==X). "
+              f"Override: RAPTOR_TARGET_KIND=application")
     print(f"raptor-sca fix: {len(candidates)} deps analysed, "
           f"{by_status.get('promoted', 0)} promoted, "
           f"{by_status.get('degraded_safety', 0)} degraded, "
           f"{by_status.get('review_required', 0)} need review")
+    if target_kind in ("library", "hybrid"):
+        # Library-posture-specific counters: how many were left alone because
+        # the declared range is already safe (skip-clean) and how many were
+        # refused (would have needed an exact pin).
+        clean_left = sum(1 for c in candidates
+                         if c.status == "up_to_date"
+                         and "library target" in (c.detail or ""))
+        refused = by_status.get("library_floor_raise_unsupported", 0)
+        if clean_left or refused:
+            print(f"raptor-sca fix (library): {clean_left} already-safe range(s) "
+                  f"left intact, {refused} refused (would force an exact pin)")
     print(f"raptor-sca fix: candidates.json   {out_dir / 'candidates.json'}")
     print(f"raptor-sca fix: report.md         {out_dir / 'report.md'}")
 

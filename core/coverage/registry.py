@@ -36,7 +36,17 @@ _REGISTRY = {
     "codeql": (CATEGORY_STATIC, DEPTH_SCANNED),
     "claude": (CATEGORY_LLM, DEPTH_ANALYSED),
     "llm": (CATEGORY_LLM, DEPTH_ANALYSED),
-    "understand": (CATEGORY_LLM, DEPTH_ANALYSED),
+    # "read" = the LLM *read* the file (reads-manifest, whole-file) — llm
+    # category but only SCANNED depth, i.e. NOT a function-level review. The
+    # read-vs-reviewed distinction: reviewed = llm at depth >= analysed.
+    "read": (CATEGORY_LLM, DEPTH_SCANNED),
+    # "understand" = /understand IDENTIFIES attack surface (entry points /
+    # sinks / flows) — a structural map, NOT a per-function vuln review. So it
+    # is llm-extent but only SCANNED depth (not "reviewed"): the functions it
+    # flags are review *targets*, and must stay in the review gap, not drop out
+    # of it. (Uses the same not-reviewed bucket as "read"; the depth ladder has
+    # no distinct "mapped" rung and the review axis is depth's only consumer.)
+    "understand": (CATEGORY_LLM, DEPTH_SCANNED),
     "audit": (CATEGORY_LLM, DEPTH_ANALYSED),
     # checked_by source_labels are command:stage (all LLM-driven; scanners
     # use the file-level coverage records, not checked_by).
@@ -45,8 +55,14 @@ _REGISTRY = {
     "annotations": (CATEGORY_LLM, DEPTH_ANALYSED),
     "gcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "lcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "llvm-cov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "llvm": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "afl": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "fuzz": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    # binary-coverage tracers, addr2line/DWARF-resolved to source.
+    "bincov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "drcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "sancov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     # Python-test runtime (coverage.py / pytest-cov).
     "coverage.py": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "coverage": (CATEGORY_RUNTIME, DEPTH_RUNTIME),

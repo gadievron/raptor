@@ -59,6 +59,206 @@ def test_csproj_child_element_version(tmp_path: Path) -> None:
     assert deps[0].version == "1.2.3"
 
 
+def test_versionless_ref_resolved_via_directory_build_targets(
+    tmp_path: Path,
+) -> None:
+    """IdentityServer4 pattern: the csproj has version-less
+    ``<PackageReference Include="X"/>`` and the version lives in an ancestor
+    ``Directory.Build.targets`` as ``<PackageReference Update="X" Version="Y"/>``.
+    The resolver must walk ``.targets`` (not just ``.props``) and honour
+    ``Update=`` rows — otherwise the dep is dropped as unversionable."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Build.targets").write_text(
+        "<Project>\n"
+        "  <ItemGroup>\n"
+        '    <PackageReference Update="IdentityModel" Version="4.1.1" />\n'
+        '    <PackageReference Update="Newtonsoft.Json" Version="12.0.2" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        "  <ItemGroup>\n"
+        '    <PackageReference Include="IdentityModel" />\n'
+        '    <PackageReference Include="Newtonsoft.Json" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    by = {d.name: d for d in parse_msbuild_project(csproj)}
+    assert by["IdentityModel"].version == "4.1.1"
+    assert by["Newtonsoft.Json"].version == "12.0.2"
+    # source_extra['resolved_in'] tells harden / bumper where the version
+    # actually lives so the patch is routed to the .targets file, not the
+    # csproj (which holds no Version to update).
+    targets = str(tmp_path / "Directory.Build.targets")
+    assert by["IdentityModel"].source_extra["resolved_in"] == targets
+    assert by["Newtonsoft.Json"].source_extra["resolved_in"] == targets
+
+
+def test_cpm_central_dep_records_resolved_in(tmp_path: Path) -> None:
+    """A CPM dep resolved from Directory.Packages.props records that file in
+    source_extra['resolved_in'] so harden routes the patch there."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Packages.props").write_text(
+        '<Project>\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '  <ItemGroup>'
+        '<PackageVersion Include="Newtonsoft.Json" Version="13.0.1" />'
+        '</ItemGroup>\n'
+        '</Project>\n',
+        encoding="utf-8",
+    )
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '  <ItemGroup>'
+        '<PackageReference Include="Newtonsoft.Json" />'
+        '</ItemGroup>\n'
+        '</Project>\n',
+        encoding="utf-8",
+    )
+    deps = list(parse_msbuild_project(csproj))
+    nj = next(d for d in deps if d.name == "Newtonsoft.Json")
+    assert nj.source_extra["origin"] == "cpm_central"
+    assert nj.source_extra["resolved_in"] == str(tmp_path / "Directory.Packages.props")
+
+
+def test_inline_dep_has_no_resolved_in(tmp_path: Path) -> None:
+    """A normal inline ``<PackageReference Include="X" Version="Y"/>`` dep
+    does NOT set resolved_in — its version lives in the csproj itself."""
+    (tmp_path / ".git").mkdir()
+    csproj = tmp_path / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        '  <ItemGroup>'
+        '<PackageReference Include="Newtonsoft.Json" Version="13.0.1"/>'
+        '</ItemGroup>\n'
+        '</Project>\n',
+        encoding="utf-8",
+    )
+    nj = next(d for d in parse_msbuild_project(csproj))
+    assert nj.source_extra["origin"] == "inline_version"
+    assert "resolved_in" not in nj.source_extra
+
+
+def test_cpm_global_dep_records_resolved_in(tmp_path: Path) -> None:
+    """GlobalPackageReference (cpm_global) deps also need resolved_in so
+    harden routes the patch to Directory.Packages.props, not the csproj."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Packages.props").write_text(
+        '<Project>\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '  <ItemGroup>'
+        '<GlobalPackageReference Include="Newtonsoft.Json" Version="13.0.1"/>'
+        '</ItemGroup>\n'
+        '</Project>\n', encoding="utf-8")
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n'
+        '  <PropertyGroup>'
+        '<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+        '</PropertyGroup>\n'
+        '</Project>\n', encoding="utf-8")
+    nj = next(d for d in parse_msbuild_project(csproj) if d.name == "Newtonsoft.Json")
+    assert nj.source_extra["origin"] == "cpm_global"
+    assert nj.source_extra["resolved_in"] == str(tmp_path / "Directory.Packages.props")
+
+
+def test_directory_build_targets_wins_over_props(tmp_path: Path) -> None:
+    """MSBuild import order: Directory.Build.targets is auto-imported AFTER
+    the project AND after Directory.Build.props, so it wins for the same
+    package — resolved_in must point at .targets, not .props."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Build.props").write_text(
+        '<Project><ItemGroup>'
+        '<PackageReference Update="X" Version="1.0.0"/>'
+        '</ItemGroup></Project>\n', encoding="utf-8")
+    (tmp_path / "Directory.Build.targets").write_text(
+        '<Project><ItemGroup>'
+        '<PackageReference Update="X" Version="2.0.0"/>'
+        '</ItemGroup></Project>\n', encoding="utf-8")
+    proj = tmp_path / "src" / "App"
+    proj.mkdir(parents=True)
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+        '<PackageReference Include="X"/></ItemGroup></Project>\n',
+        encoding="utf-8")
+    x = next(d for d in parse_msbuild_project(csproj) if d.name == "X")
+    assert x.version == "2.0.0", f"targets value must win, got {x.version}"
+    assert x.source_extra["resolved_in"] == str(tmp_path / "Directory.Build.targets")
+
+
+def test_central_version_via_msbuild_property(tmp_path: Path) -> None:
+    """A central ``Update=`` version given as an MSBuild property defined in the
+    SAME file resolves; a floating-wildcard property stays unresolved (a
+    ``3.1.0-*`` self-ref isn't a pinnable version)."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "Directory.Build.targets").write_text(
+        "<Project>\n"
+        "  <PropertyGroup>\n"
+        "    <FooVersion>2.3.4</FooVersion>\n"
+        "    <SelfVersion>9.9.9-*</SelfVersion>\n"
+        "  </PropertyGroup>\n"
+        "  <ItemGroup>\n"
+        '    <PackageReference Update="Foo" Version="$(FooVersion)" />\n'
+        '    <PackageReference Update="SelfPkg" Version="$(SelfVersion)" />\n'
+        "  </ItemGroup>\n"
+        "</Project>\n",
+        encoding="utf-8",
+    )
+    proj = tmp_path / "src"
+    proj.mkdir()
+    csproj = proj / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n  <ItemGroup>\n'
+        '    <PackageReference Include="Foo" />\n'
+        '    <PackageReference Include="SelfPkg" />\n'
+        "  </ItemGroup>\n</Project>\n",
+        encoding="utf-8",
+    )
+    by = {d.name: d for d in parse_msbuild_project(csproj)}
+    assert by["Foo"].version == "2.3.4"
+    assert "SelfPkg" not in by   # floating $(SelfVersion)=9.9.9-* → unresolved
+
+
+def test_shared_framework_ref_skipped_silently(tmp_path: Path, caplog) -> None:
+    """A version-less ``Microsoft.AspNetCore.*`` ref is framework-provided, so
+    it's skipped silently (no parser warning); a real version-less ref still
+    surfaces a warning."""
+    import logging
+    csproj = tmp_path / "App.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk">\n  <ItemGroup>\n'
+        '    <PackageReference Include="Microsoft.AspNetCore.Authentication.'
+        'OpenIdConnect" />\n'
+        '    <PackageReference Include="Some.Real.Package" />\n'
+        "  </ItemGroup>\n</Project>\n",
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.WARNING, logger="sca.parsers.nuget")
+    parse_msbuild_project(csproj)
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "Some.Real.Package" in msgs
+    assert "Microsoft.AspNetCore" not in msgs
+
+
 def test_csproj_namespaced(tmp_path: Path) -> None:
     """Legacy projects with the MSBuild XML namespace."""
     body = """\

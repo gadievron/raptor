@@ -1086,6 +1086,138 @@ class TestRustCrateMembership:
                 for f in inv2["files"]}.get("src/orphan.rs") is False
 
 
+class TestRustExtraction:
+    """Rust item extraction via tree-sitter (previously a regex fallback that
+    dropped impl methods sharing a trait-decl name and never associated methods
+    with their impl type). impl methods now extract with class_name = the impl
+    target; ``pub`` is an entry; and a trait-impl method dispatched via
+    ``&dyn Trait`` reads UNCERTAIN (the trait is recorded as a base → CHA),
+    while a never-dispatched inherent method stays dead. Needs tree-sitter-rust."""
+
+    _SRC = (
+        "pub fn public_api() {}\n"
+        "fn private_free() {}\n"
+        "trait Handler { fn handle(&self); }\n"
+        "struct Foo;\n"
+        "impl Handler for Foo {\n"
+        "    fn handle(&self) { self.helper(); }\n"
+        "    fn helper(&self) {}\n"
+        "}\n"
+        "impl Foo { fn inherent_dead(&self) {} }\n"
+        "fn dispatch(h: &dyn Handler) { h.handle(); }\n")
+
+    def _build(self, tmp_path):
+        pytest.importorskip("tree_sitter_rust")
+        (tmp_path / "m.rs").write_text(self._SRC)
+        return build_inventory(str(tmp_path), str(tmp_path / "out"))
+
+    def test_impl_methods_extracted_with_class(self, tmp_path):
+        inv = self._build(tmp_path)
+        meta = {it["name"]: (it.get("metadata") or {})
+                for f in inv["files"] for it in f["items"]
+                if it.get("kind", "function") == "function"}
+        # impl method `handle` (line 6) is extracted, not dropped by the
+        # same-named trait decl, and associated with its impl target Foo.
+        assert "handle" in meta and meta["handle"]["class_name"] == "Foo"
+        assert meta["helper"]["class_name"] == "Foo"
+        assert meta["public_api"]["visibility"] == "pub"
+
+    def test_rust_dispatch_verdicts(self, tmp_path):
+        from core.inventory.reach_audit import classify_reachability
+        inv = self._build(tmp_path)
+
+        def verdict(name):
+            for f in inv["files"]:
+                for it in f["items"]:
+                    if it.get("name") == name:
+                        return classify_reachability(
+                            inv, f["path"], name,
+                            int(it.get("line_start") or 0), "m")
+            return None
+
+        assert verdict("public_api") == "reachable"        # pub → entry
+        assert verdict("handle") == "uncertain"             # trait dispatch
+        assert verdict("inherent_dead") == "no_path_from_entry"  # genuinely dead
+        assert verdict("private_free") == "no_path_from_entry"   # private, uncalled
+
+
+class TestExtractionCompleteness:
+    """Per-language method↔class association + completeness gaps found by audit:
+    C++ inline methods (class_specifier name wasn't resolved → class_name=None),
+    Java enum methods (enum_declaration wasn't a class type), and JS private
+    methods (``#priv`` — private_property_identifier was dropped). Each case
+    skips without its grammar."""
+
+    def _items(self, tmp_path, fn, src):
+        (tmp_path / fn).write_text(src)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"))
+        return {it["name"]: (it.get("metadata") or {}).get("class_name")
+                for f in inv["files"] for it in f["items"]
+                if it.get("kind", "function") == "function"}
+
+    def test_cpp_methods_associate_with_class(self, tmp_path):
+        pytest.importorskip("tree_sitter_cpp")
+        items = self._items(
+            tmp_path, "a.cpp",
+            "class Foo { public: void inl() {} };\n"
+            "struct Bar { void bm() {} };\n"
+            "template<class T> class Tpl { public: void tm() {} };\n")
+        assert items.get("inl") == "Foo"
+        assert items.get("bm") == "Bar"
+        assert items.get("tm") == "Tpl"
+
+    def test_cpp_operator_overloads_extracted(self, tmp_path):
+        # Operator overloads were dropped entirely (operator_name /
+        # reference_declarator unhandled) — a vuln in operator[] / operator=
+        # would be invisible.
+        pytest.importorskip("tree_sitter_cpp")
+        items = self._items(
+            tmp_path, "op.cpp",
+            "class Foo { public:\n"
+            "  Foo& operator+(const Foo& o) { return *this; }\n"
+            "  int& operator[](int i) { static int x; return x; }\n"
+            "  operator bool() const { return true; }\n};\n")
+        assert items.get("operator+") == "Foo"
+        assert items.get("operator[]") == "Foo"
+        assert items.get("operator bool") == "Foo"   # conversion operator
+
+    def test_java_enum_methods_associate(self, tmp_path):
+        pytest.importorskip("tree_sitter_java")
+        items = self._items(
+            tmp_path, "E.java", "enum E { X; void ev() {} E() {} }\n")
+        assert items.get("ev") == "E"
+
+    def test_js_private_method_extracted(self, tmp_path):
+        pytest.importorskip("tree_sitter_javascript")
+        items = self._items(tmp_path, "a.js", "class C { #priv() {} m() {} }")
+        assert items.get("#priv") == "C"   # was dropped entirely
+        assert items.get("m") == "C"
+
+    def test_csharp_operators_and_indexer_extracted(self, tmp_path):
+        # Operator overloads / conversions / indexers carry logic — were
+        # dropped (not in C# func types).
+        pytest.importorskip("tree_sitter_c_sharp")
+        items = self._items(
+            tmp_path, "a.cs",
+            "class C {\n"
+            "  public static C operator +(C a, C b) { return a; }\n"
+            "  public int this[int i] { get { return i; } }\n"
+            "  public static explicit operator int(C c) { return 0; }\n}\n")
+        assert items.get("operator+") == "C"
+        assert items.get("this[]") == "C"
+        assert items.get("operator int") == "C"
+
+    def test_ruby_operator_methods_extracted(self, tmp_path):
+        # ``def []=`` / ``def <=>`` — the name is an ``operator`` node, not an
+        # identifier; previously dropped.
+        pytest.importorskip("tree_sitter_ruby")
+        items = self._items(
+            tmp_path, "a.rb",
+            "class C\n  def []=(k, v); end\n  def <=>(o); 0; end\n  def m; end\nend\n")
+        assert items.get("[]=") == "C"
+        assert items.get("<=>") == "C"
+
+
 class TestGoReachability:
     """End-to-end Go dead-code coverage. Go needed no new substrate (it was
     already complete via //go:build ignore → build_excluded, init-panic →
@@ -1813,6 +1945,65 @@ class TestPythonFrameworkConvention:
         assert verdict("validate_email") == "reachable"   # DRF serializer hook
         assert verdict("clean_email") == "reachable"      # Django form hook
         assert verdict("dead") == "not_called"            # control
+
+
+class TestLibraryEntryMode:
+    """Opt-in library mode (build_inventory(treat_exports_as_entries=True)):
+    for the dynamic/JVM langs (entry_model='none'), a library's exported/public
+    symbols are entry points — the API surface is reachable by consumers. OFF
+    by default so an application's dead public functions are still surfaced.
+    Private/internal symbols stay dead even in library mode; functions reachable
+    FROM the public API become reachable via the closure."""
+
+    def _verds(self, tmp_path, files, library):
+        for fn, src in files.items():
+            (tmp_path / fn).write_text(src)
+        inv = build_inventory(str(tmp_path), str(tmp_path / "out"),
+                              treat_exports_as_entries=library)
+        from core.inventory.reach_audit import classify_reachability
+        out = {}
+        for f in inv["files"]:
+            mod = ".".join(f["path"].rsplit(".", 1)[0].split("/"))
+            for it in f["items"]:
+                if it.get("kind", "function") == "function":
+                    out[it.get("name")] = classify_reachability(
+                        inv, f["path"], it.get("name"),
+                        int(it.get("line_start") or 0), mod)
+        return out
+
+    def test_default_app_mode_public_not_entry(self, tmp_path):
+        v = self._verds(tmp_path, {"x.py": "def public_api(): pass\n"}, False)
+        assert v["public_api"] == "not_called"   # default: public != entry
+
+    def test_python_library_mode(self, tmp_path):
+        files = {"x.py": (
+            "def public_api():\n    return _helper()\n"
+            "def _helper():\n    return 1\n"
+            "def _orphan():\n    return 2\n"
+            "class C:\n  def method(self): pass\n  def _priv(self): pass\n")}
+        v = self._verds(tmp_path, files, True)
+        assert v["public_api"] == "reachable"     # public top-level
+        assert v["_helper"] == "reachable"         # reachable FROM the API
+        assert v["_orphan"] == "not_called"        # private + unreachable -> dead
+        assert v["method"] == "reachable"          # public method
+        assert v["_priv"] == "not_called"          # private method stays dead
+
+    def test_ts_export_and_java_php_public(self, tmp_path):
+        for grammar in ("tree_sitter_typescript", "tree_sitter_java",
+                        "tree_sitter_php"):
+            pytest.importorskip(grammar)
+        files = {
+            "x.ts": "export function expApi(){}\nfunction internalFn(){}\n",
+            "x.java": "public class C { public void pubApi(){} private void prv(){} }\n",
+            "x.php": "<?php\nclass D { public function phpApi(){} private function phpPrv(){} }\n",
+        }
+        v = self._verds(tmp_path, files, True)
+        assert v["expApi"] == "reachable"          # TS export
+        assert v["internalFn"] == "not_called"     # non-export -> dead
+        assert v["pubApi"] == "reachable"          # Java public
+        assert v["prv"] == "not_called"            # Java private stays dead
+        assert v["phpApi"] == "reachable"          # PHP public
+        assert v["phpPrv"] == "not_called"         # PHP private stays dead
 
 
 class TestPhpCoverage:

@@ -34,9 +34,10 @@ source (no Maven build).
 
 Note: OWASP exercises the *surface* Java reachability (and was what
 surfaced the servlet-entry handling now in `entry_reachability`). It does
-**not** exercise the enforce-eligible sound witnesses (`module_aborts`,
-`lexical_dead`), which are py/js/go/rust-only — for those, use live trees
-in those languages.
+**not** exercise the enforce-eligible sound witnesses — `module_aborts`
+(py/js/ts/go/rust/ruby/php) and `lexical_dead` (py/js/ts/rust/ruby/php) — for
+those, use live trees in those languages. (Java/C# have neither: no top-level
+execution, no def-inside-always-false-guard.)
 
 ## OpenSSL (over-fire gate, C)
 

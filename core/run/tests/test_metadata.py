@@ -405,11 +405,15 @@ class TestRunCoverageSnapshot(unittest.TestCase):
             self.assertEqual(store.who_checked("a.c", 10), ["semgrep"])
             self.assertEqual(store.function_verdict("a.c", 1, 20), "open")  # F1 in f1
 
-    def test_completion_converts_reads_manifest_to_llm_coverage(self):
+    def test_completion_converts_reads_manifest_to_read_coverage(self):
         # The coverage plugin captures LLM file-reads into .reads-manifest;
-        # complete_run must materialise that into a coverage-llm.json record so
-        # LLM examined-extent reaches the store.
+        # complete_run materialises that into a coverage-read.json record.
+        # Labelled `read` (shallow), NOT a function-level review — so the
+        # function still surfaces in the LLM-review gap (read != reviewed).
+        import json
+
         from core.coverage.store import CoverageStore
+        from core.coverage.store_summary import store_view
         with TemporaryDirectory() as d:
             proj = Path(d)
             (proj / "checklist.json").write_text(self._checklist())  # a.c, lines 50
@@ -418,9 +422,14 @@ class TestRunCoverageSnapshot(unittest.TestCase):
             (run / ".reads-manifest").write_text("a.c\n")  # the LLM read a.c
             complete_run(run)
 
-            self.assertTrue((run / "coverage-llm.json").exists())
+            self.assertTrue((run / "coverage-read.json").exists())
             store = CoverageStore(proj / "coverage.json")
-            self.assertEqual(store.who_checked("a.c", 5), ["llm"])
+            self.assertEqual(store.who_checked("a.c", 5), ["read"])
+            # read != reviewed: f1 is still in the LLM-review gap.
+            view = store_view(store, json.loads(self._checklist()))
+            self.assertEqual(view["functions_reviewed"], 0)
+            self.assertTrue(any(g["file"] == "a.c"
+                                for g in view["llm_gap_functions"]))
 
     def test_standalone_run_writes_no_store(self):
         import json

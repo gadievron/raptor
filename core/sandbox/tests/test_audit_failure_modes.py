@@ -458,12 +458,17 @@ class TestStaleAuditConfigSweep:
     def test_sweep_removes_same_uid_stale_files(self, tmp_path):
         # Create some fake stale config files (own UID).
         from core.sandbox._spawn import _sweep_stale_audit_configs
-        # Put them in /tmp where the sweep looks.
+        # Put them where the sweep actually looks: tempfile.gettempdir()
+        # (TMPDIR-aware), NOT a hardcoded "/tmp". On a box with
+        # TMPDIR=/tmp/<something> the sweep globs $TMPDIR while a hardcoded
+        # /tmp would never match — the test would fail spuriously even
+        # though the sweep is correct.
         import tempfile
         stale_paths = []
         for _ in range(3):
             fd, p = tempfile.mkstemp(
-                prefix="raptor-audit-cfg-test-", suffix=".json", dir="/tmp",
+                prefix="raptor-audit-cfg-test-", suffix=".json",
+                dir=tempfile.gettempdir(),
             )
             os.write(fd, b"{}")
             os.close(fd)

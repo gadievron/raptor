@@ -12,15 +12,19 @@ The slash command is for **research and ops**, not a routing API. The actual rou
 
 ```
 /scorecard                              # default: list all cells with derived columns
-/scorecard list [flags]                 # filtered / sorted views
+/scorecard list [flags]                 # filtered / sorted views (--recency N adds a recency view + impact footer)
 /scorecard compare <model-a> <model-b>  # side-by-side on shared decision_classes
 /scorecard samples <decision_class>     # disagreement-reasoning samples (the "why was it wrong?" view)
-/scorecard pin <decision_class> --model <m> --as <override>
+/scorecard pin <decision_class> --model <m> --as <short-circuit|fall-through|auto>
 /scorecard unpin <decision_class> --model <m>
 /scorecard reset [<decision_class>] [--model <m>] [--older-than-days <n>] [--all]
 ```
 
-`list` flags: `--by-savings` `--by-miss-rate` `--untrusted` `--learning` `--consumer <prefix>` `--since <Nd|Nh>`.
+**On a bare `/scorecard` (no args), run `libexec/raptor-llm-scorecard` directly — the CLI now defaults to `list`. Do NOT deliberate or interpret; treat the input as a natural-language question only when the user actually types one.** (Keeps `/scorecard` instant instead of pausing on an LLM round-trip.)
+
+`list` flags: `--by-savings` `--by-miss-rate` `--untrusted` `--learning` `--prefix <prefix>` (filter by decision_class prefix) `--since <Nd|Nh>` `--recency <days>` (weight the policy/wilson/calls columns toward recent behaviour).
+
+A `calls` column shows per-model usage volume. Models appear here once used — even before any reliability outcome is scored — via the run-end usage flush; a `_usage` decision_class row is the pure usage signal (no reliability data yet).
 
 The CLI lives at `libexec/raptor-llm-scorecard`. Output is markdown so it pastes cleanly into notebooks / issues / chat.
 

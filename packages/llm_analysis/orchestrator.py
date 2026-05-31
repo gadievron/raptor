@@ -184,7 +184,11 @@ def build_llm_config_from_flags(
 
     Args:
         models: List of analysis model names. Single entry = one primary.
-            Multiple = multi-model mode (each independently analyses).
+            Multiple = multi-model mode (each independently analyses). When
+            set, this is a GENERAL OVERRIDE: config-derived fallback / role
+            defaults from models.json are suppressed, so only these models +
+            any explicit --consensus/--judge/--aggregate are used (nothing
+            cross-provider sneaks in from config).
         consensus: Blind second-opinion model name.
         judge: Non-blind review model name.
         aggregate: Final synthesis model name.
@@ -233,6 +237,13 @@ def build_llm_config_from_flags(
                 break
         mc = _model_config_from_entry(entry)
         if not mc.api_key:
+            if not provider:
+                # Unrecognizable name and no configured entry matched it by
+                # name — fail loudly with the recognizable-id hint rather
+                # than the unhelpful "Set ??? env var" path below.
+                from core.security.llm_family import unknown_model_message
+                print(f"\n  Error: {unknown_model_message(name)}")
+                return None
             env_key = PROVIDER_ENV_KEYS.get(provider, "???")
             print(f"\n  Error: no API key for --model {name}")
             print(f"  Set {env_key} or add the key to models.json")
@@ -242,7 +253,17 @@ def build_llm_config_from_flags(
     if models:
         primary_mc = _resolve_model(models[0], "analysis")
         if primary_mc:
-            llm_config = LLMConfig(primary_model=primary_mc)
+            # Explicit --model is a GENERAL OVERRIDE over config-derived
+            # defaults: construct with fallback_models=[] so the models.json /
+            # env fallback + role models (e.g. a configured cross-provider
+            # fallback, or a role="consensus" entry) do NOT load. Only the
+            # explicit --model list (here) and explicit --consensus/--judge/
+            # --aggregate flags (below) populate roles — nothing the operator
+            # didn't ask for sneaks in, and an explicit single-provider --model
+            # can never silently fall back cross-provider. Specialized
+            # fast-tier models are still auto-seeded by __post_init__ from the
+            # primary's OWN provider, so they stay same-provider (cheap).
+            llm_config = LLMConfig(primary_model=primary_mc, fallback_models=[])
             for extra in models[1:]:
                 mc = _resolve_model(extra, "analysis")
                 if mc:
