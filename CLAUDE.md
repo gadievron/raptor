@@ -57,6 +57,10 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 /project coverage              # shows tool coverage summary
 /project report                # merged view across all runs
 /project correlate             # cross-run finding correlation
+/project binary add <path>     # persist a debug binary for binary-oracle enrichment
+/project binary list           # list persisted binaries on the active project
+/project binary remove <path>  # remove one
+/project binary clear          # clear all
 /project clean --keep 3        # delete old runs
 /project none                  # clear active project
 ```
@@ -331,6 +335,43 @@ Two places Z3 is used — both degrade gracefully when absent:
    positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
    `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,
    CWE-193, CWE-476.
+
+---
+
+## BINARY-ORACLE REACHABILITY
+
+When `--binary <path>` is passed to /agentic / /codeql, RAPTOR joins the source inventory with the debug binary via DWARF + nm and annotates each native (C/C++/Rust/Go) function with a per-binary verdict:
+
+- `symbol_present` / `inlined` / `folded` — the function survived compilation in some form
+- `absent` — the compiler / linker removed it from the analysed binary
+
+`absent` is corpus-earned for suppression: **1952/1952 verdicts correct across 6 iteratively-tuned corpora (consistency) + 187/187 on the held-out zstd v1.5.6 corpus with NO classifier tuning (generalization)** — rule-of-three 95% UB on miss rate ≤1.6% on first-contact-with-unseen-data. The held-out is non-vacuous: 473/1431 functions exercised by the workload, zero `absent` verdicts on actually-live functions. Conditional on full-DWARF evidence — a stripped binary in the analysed set downgrades to `tier="symbol_only"` and the chokepoint refuses to suppress.
+
+The verdict flows through the existing reachability chokepoint: /codeql + /agentic skip LLM analysis on absent-function findings (pre-LLM hard-suppress); /validate's demoter clamps attack-path proximity; /understand --map annotates entry-points and sinks with the per-binary verdict + tier.
+
+**Operator usage**:
+- `--binary <path>` — pass a debug binary. Repeatable for hybrid targets. Path validated at parse time.
+- `--binary-auto` — auto-detect debug binaries under `build/`, `target/release/`, `cmake-build-*/`, `bazel-bin/`, `builddir/`, `Debug/`, `Release/`, `out/`, `dist/`, `bin/`, Rust `target/<triple>/release` cross-target globs, and the source root. Honours `--target-kind`. Warns when the result cap (8) is reached.
+- `--binary-edges` — Inc 2b Tier 1/2: extract direct call edges + vtable resolution via r2 (single-invocation script-file mode; cached per-build-id with cross-target collision check). Slow (~10-30s per binary, then cached). Required for the `binary_call_edge` REACHABLE promote witness (rescues functions the source-graph thought were dead).
+- For `--target-kind=hybrid` deployments (library + application both shipped), declare MULTIPLE binaries — a function is `absent` only when EVERY declared binary lacks it. Tier-weighted combine: when full-DWARF and symbol-only disagree, full-DWARF wins (`alive-in-any` rule only applies same-tier).
+
+**Persistent per-project config**:
+- `/project binary add <path>` — persist a binary path on the active project. Auto-loaded by every subsequent /agentic / /codeql / /validate run. `is_file()`-validated at add time.
+- `/project binary list` / `remove` / `clear` — manage the persisted list.
+
+**Audit trail**:
+- `suppressions.jsonl` is written to the run's output directory whenever the chokepoint hard-suppresses a finding. One JSON record per suppression with `finding_id`, `rule_id`, `file_path`, `line`, `function`, `verdict`, `reason`. Query with `jq -c . suppressions.jsonl`. Both /agentic and /codeql write to the same file shape.
+- The classifier's per-finding analysis record also carries `analysis.reachability_suppression: true` + `analysis.reachability_verdict: <verdict>` for per-finding inspection.
+
+**Defenses against hostile / wrong-binary scenarios**:
+- Source-coverage floor (≥5% of project source names matched, min 3 matched, kicks in at ≥8 project names) — a planted ELF unrelated to source gets dropped with a loud warning rather than driving every source function to `absent`.
+- Sandbox isolation: r2 runs under `core.sandbox.run` (namespace + Landlock + network deny); binutils tools (readelf, nm, objdump, c++filt) under `core.sandbox.run_trusted`.
+
+**E2E + precision verification**:
+- `libexec/raptor-binary-oracle-e2e` — single-invocation audit that builds a real C target and walks 15 consumer surfaces (54 assertions). No LLM calls. Run via `bin/raptor` or `CLAUDECODE=1 libexec/...`.
+- `libexec/raptor-binary-oracle-precision --corpus <name>` — re-measure absent-precision on any corpus driver (synthetic/zlib/libsodium/snappy/leveldb/regex-rust/zstd_holdout). Report includes per-corpus cross-tab (classifier × gcov live/dead), aggregate with rule-of-three UB, n-concentration dominator detection, and the toolchain block (cc/gcov/llvm-cov versions) so the precision number is reproducible.
+
+**Skill location**: `core/inventory/binary_oracle.py` (classifier), `core/inventory/binary_oracle_autodetect.py` (auto-detect), `core/inventory/binary_oracle_precision.py` (measurement harness — `libexec/raptor-binary-oracle-precision` CLI shim runs it). Design + validation writeup: `~/design/binary-oracle-reachability.md` §9-11.
 
 ---
 

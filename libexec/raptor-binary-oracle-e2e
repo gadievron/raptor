@@ -1,0 +1,550 @@
+#!/usr/bin/env python3
+"""Comprehensive E2E driver for the binary-oracle arc.
+
+Exercises EVERY consumer surface against a real C target it builds
+fresh under ``$TMPDIR/raptor-bo-e2e/``. No LLM calls — pure mechanical
+traversal of the pipeline. Prints pass/fail per surface so a single
+invocation is a self-contained audit covering: classifier, inventory
+enrichment, chokepoint accessor (incl. tier guard + name-collision
+disambiguation), reach_audit verdict chain, verdict→witness→suppression
+mapping, shared chokepoint helper, suppressions.jsonl audit trail,
+auto-detect, hostile-ELF defense, multi-binary combine, stripped-binary
+tier fallback, corpus driver registry, annotation_synth binary_oracle
+tags, /project schema persistence, full build_inventory pipeline.
+
+Usage::
+
+    libexec/raptor-binary-oracle-e2e
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+RAPTOR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RAPTOR))
+os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
+
+TARGET = Path(tempfile.gettempdir()) / "raptor-bo-e2e"
+BINARY = TARGET / "build" / "app"
+
+results: list[tuple[str, bool, str]] = []
+
+
+def _build_target() -> None:
+    """Build the canonical E2E target if it isn't already there.
+    Source mix: live functions, dead functions, an inlined target,
+    file-static helpers, multiple TUs — exercises every classifier
+    verdict shape with ``-O2 -ffunction-sections --gc-sections``."""
+    import subprocess
+    src = TARGET / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (TARGET / "build").mkdir(parents=True, exist_ok=True)
+    (src / "api.h").write_text(
+        "int api_open(const char *path);\n"
+        "void api_close(int fd);\n"
+        "int api_read(int fd, char *buf, int n);\n"
+        "int api_internal_helper(int x);\n"
+        "int api_dead_function(int x);\n"
+        "int api_inlined_target(int x);\n"
+    )
+    (src / "api.c").write_text(
+        '#include "api.h"\n'
+        "int api_open(const char *path) { return path ? 0 : -1; }\n"
+        "void api_close(int fd) { (void)fd; }\n"
+        "int api_read(int fd, char *buf, int n) {\n"
+        "    if (fd < 0 || !buf || n <= 0) return -1;\n"
+        "    for (int i = 0; i < n; i++) buf[i] = (char)(fd + i);\n"
+        "    return n;\n"
+        "}\n"
+        "static int _validate(int x) { return x > 0 ? 1 : 0; }\n"
+        "int api_internal_helper(int x) {\n"
+        "    return _validate(x) ? x * 2 : -1;\n"
+        "}\n"
+    )
+    (src / "util.c").write_text(
+        '#include "api.h"\n'
+        "int api_dead_function(int x) { return x * 999; }\n"
+        "static inline int api_inlined_target_impl(int x){return x+41;}\n"
+        "int api_inlined_target(int x){return api_inlined_target_impl(x);}\n"
+        "static void util_dead_static(void) { }\n"
+        "int util_compute(int a, int b) { return a * b + 7; }\n"
+    )
+    (src / "main.c").write_text(
+        "#include <stdio.h>\n"
+        '#include "api.h"\n'
+        "extern int util_compute(int a, int b);\n"
+        "int main(int argc, char **argv) {\n"
+        "    int fd = api_open(argc > 1 ? argv[1] : \"default\");\n"
+        "    char buf[16];\n"
+        "    int n = api_read(fd, buf, sizeof buf);\n"
+        "    api_close(fd);\n"
+        "    int h = api_internal_helper(42);\n"
+        "    int i = api_inlined_target(1);\n"
+        "    int u = util_compute(n, h);\n"
+        "    printf(\"%d\\n\", u + i);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    subprocess.run([
+        "gcc", "-O2", "-g",
+        "-ffunction-sections", "-fdata-sections",
+        "-Wl,--gc-sections",
+        str(src / "main.c"), str(src / "api.c"), str(src / "util.c"),
+        "-o", str(BINARY),
+    ], check=True)
+
+
+_build_target()
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    results.append((name, ok, detail))
+    mark = "PASS" if ok else "FAIL"
+    print(f"  [{mark}] {name}{(' — ' + detail) if detail else ''}")
+
+
+# ---------------------------------------------------------------------------
+# 1. Direct classifier — verdicts on a real binary
+# ---------------------------------------------------------------------------
+print("\n=== 1. Direct classifier ===")
+from core.inventory.binary_oracle import classify_binary_evidence
+
+names = ["api_open", "api_close", "api_read", "api_internal_helper",
+         "api_inlined_target", "util_compute", "main",
+         "api_dead_function", "util_dead_static"]
+verdicts = classify_binary_evidence(names, BINARY)
+check("classifier returns verdict for every queried name",
+      len(verdicts) == len(names), f"{len(verdicts)}/{len(names)}")
+check("api_open classified as symbol_present",
+      verdicts["api_open"].classification == "symbol_present",
+      verdicts["api_open"].classification)
+check("api_dead_function classified as absent",
+      verdicts["api_dead_function"].classification == "absent",
+      verdicts["api_dead_function"].classification)
+check("util_dead_static classified as absent",
+      verdicts["util_dead_static"].classification == "absent",
+      verdicts["util_dead_static"].classification)
+check("api_internal_helper classified as alive",
+      verdicts["api_internal_helper"].classification
+      in ("symbol_present", "inlined"),
+      verdicts["api_internal_helper"].classification)
+check("main classified as symbol_present",
+      verdicts["main"].classification == "symbol_present",
+      verdicts["main"].classification)
+check("all verdicts carry tier=full",
+      all(w.tier == "full" for w in verdicts.values()),
+      f"tiers={set(w.tier for w in verdicts.values())}")
+
+
+# ---------------------------------------------------------------------------
+# 2. Inventory enrichment + multi-binary combine (single binary case)
+# ---------------------------------------------------------------------------
+print("\n=== 2. Inventory enrichment ===")
+from core.inventory.binary_oracle import enrich_inventory_with_binary_oracle
+
+# Real source surface — names that actually match the binary so the
+# hostile-ELF coverage floor doesn't fire on a legitimate target.
+inv = {"files": [
+    {"path": "src/api.c", "language": "c", "items": [
+        {"name": "api_open", "kind": "function", "line_start": 4},
+        {"name": "api_close", "kind": "function", "line_start": 8},
+        {"name": "api_read", "kind": "function", "line_start": 12},
+        {"name": "api_internal_helper", "kind": "function",
+         "line_start": 22},
+        {"name": "api_dead_function", "kind": "function",
+         "line_start": 26, "metadata": {}},
+    ]},
+    {"path": "src/util.c", "language": "c", "items": [
+        {"name": "api_inlined_target", "kind": "function",
+         "line_start": 12},
+        {"name": "util_dead_static", "kind": "function",
+         "line_start": 18},
+        {"name": "util_compute", "kind": "function", "line_start": 21},
+    ]},
+    # Non-native file — must be skipped
+    {"path": "src/script.py", "language": "python", "items": [
+        {"name": "py_func", "kind": "function", "line_start": 1},
+    ]},
+]}
+# Index of (file_path, name) → item for downstream lookups.
+def _it(file_path, name):
+    for f in inv["files"]:
+        if f["path"] != file_path:
+            continue
+        for it in f["items"]:
+            if it["name"] == name:
+                return it
+    raise AssertionError(f"{file_path}:{name} not in inv")
+
+counts = enrich_inventory_with_binary_oracle(inv, (BINARY,))
+check("enrichment classified >= 4 items", counts["classified"] >= 4,
+      f"classified={counts['classified']}")
+check("non-native python item skipped",
+      counts["skipped_non_native"] >= 1,
+      f"skipped={counts['skipped_non_native']}")
+_dead_api = _it("src/api.c", "api_dead_function")
+_dead_util = _it("src/util.c", "util_dead_static")
+check("api_dead_function has binary_oracle absent",
+      _dead_api["metadata"]["binary_oracle"]["classification"] == "absent")
+check("util_dead_static has binary_oracle absent",
+      _dead_util["metadata"]["binary_oracle"]["classification"] == "absent")
+check("api_dead_function metadata has binaries[] with tier",
+      _dead_api["metadata"]["binary_oracle"]["binaries"][0]["tier"] == "full")
+check("top-level inventory.binary_oracle.earns_suppression == True",
+      inv["binary_oracle"]["earns_suppression"] is True)
+
+
+# ---------------------------------------------------------------------------
+# 3. Chokepoint accessor — line disambiguation + tier guard
+# ---------------------------------------------------------------------------
+print("\n=== 3. Chokepoint accessor ===")
+from core.inventory.reachability import binary_oracle_absent
+
+check("absent verdict fires for dead function",
+      binary_oracle_absent(inv, "src/api.c", "api_dead_function") is True)
+check("absent verdict does NOT fire for live function",
+      binary_oracle_absent(inv, "src/api.c", "api_open") is False)
+check("absent verdict does NOT fire for unknown file",
+      binary_oracle_absent(inv, "src/missing.c",
+                           "api_dead_function") is False)
+# Synthesise a mixed-tier case (one full + one symbol_only) — chokepoint
+# must refuse to fire even though classification is absent.
+_dead_api["metadata"]["binary_oracle"]["binaries"] = [
+    {"tier": "full", "path": str(BINARY)},
+    {"tier": "symbol_only", "path": "/stripped/binary"},
+]
+# Index caches the lookup; invalidate so the modified inventory is
+# re-walked rather than served from cache (P1-C-2 perf fix side effect).
+from core.inventory import reachability as _R
+_R._BO_ITEM_INDEX_CACHE.clear()
+check("mixed-tier (full + symbol_only) refuses to suppress",
+      binary_oracle_absent(inv, "src/api.c",
+                           "api_dead_function") is False)
+# Restore full-tier so subsequent checks pass.
+_dead_api["metadata"]["binary_oracle"]["binaries"] = [
+    {"tier": "full", "path": str(BINARY)}]
+_R._BO_ITEM_INDEX_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# 4. reach_audit verdict chain
+# ---------------------------------------------------------------------------
+print("\n=== 4. reach_audit classify_reachability ===")
+from core.inventory.reach_audit import classify_reachability
+
+v_dead = classify_reachability(
+    inv, "src/api.c", "api_dead_function", 26, "src.api")
+check("classify_reachability returns binary_oracle_absent for dead",
+      v_dead == "binary_oracle_absent", v_dead)
+
+
+# ---------------------------------------------------------------------------
+# 5. Verdict → witness → suppression chain
+# ---------------------------------------------------------------------------
+print("\n=== 5. Verdict → witness → suppression ===")
+from core.inventory.reach_witness import (
+    STRUCTURALLY_SUPPRESSIBLE_KINDS, VERDICTS,
+    verdict_from_classification, WitnessKind,
+)
+
+rv = verdict_from_classification("binary_oracle_absent")
+check("binary_oracle_absent witness kind == BINARY_ORACLE_ABSENT",
+      rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT)
+check("binary_oracle_absent VerdictSpec.earns_suppression",
+      VERDICTS["binary_oracle_absent"].earns_suppression is True)
+check("rv.may_suppress with EARNED set",
+      rv.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is True)
+check("rv.may_suppress with empty earned set",
+      rv.may_suppress() is False)
+
+
+# ---------------------------------------------------------------------------
+# 6. Shared chokepoint helper (reach_chokepoint.check_suppress)
+# ---------------------------------------------------------------------------
+print("\n=== 6. Shared chokepoint helper ===")
+from core.inventory.reach_chokepoint import check_suppress, record_suppression
+
+decision = check_suppress(
+    checklist=inv,
+    file_path="src/api.c", function_name="api_dead_function", line=26,
+    repo_root=TARGET,
+)
+check("check_suppress fires on dead function",
+      decision is not None and decision[0] == "binary_oracle_absent")
+decision = check_suppress(
+    checklist=inv,
+    file_path="src/api.c", function_name="api_open", line=4,
+    repo_root=TARGET,
+)
+check("check_suppress does NOT fire on live function",
+      decision is None)
+# Absolute path normalization
+decision = check_suppress(
+    checklist=inv,
+    file_path=str(TARGET / "src" / "api.c"),
+    function_name="api_dead_function", line=26,
+    repo_root=TARGET,
+)
+check("check_suppress handles absolute finding path",
+      decision is not None and decision[0] == "binary_oracle_absent")
+# manual_override blocks
+decision = check_suppress(
+    checklist=inv,
+    file_path="src/api.c", function_name="api_dead_function", line=26,
+    repo_root=TARGET, manual_override=True,
+)
+check("check_suppress respects manual_override",
+      decision is None)
+
+
+# ---------------------------------------------------------------------------
+# 7. suppressions.jsonl audit trail
+# ---------------------------------------------------------------------------
+print("\n=== 7. suppressions.jsonl ===")
+with tempfile.TemporaryDirectory() as td:
+    out = Path(td)
+    record_suppression(
+        out,
+        finding={"finding_id": "e2e-1", "rule_id": "cpp/test",
+                 "file_path": "src/api.c", "line": 26,
+                 "function": "api_dead_function"},
+        verdict="binary_oracle_absent",
+        reason="E2E test suppression",
+    )
+    p = out / "suppressions.jsonl"
+    check("suppressions.jsonl file created", p.is_file())
+    record = json.loads(p.read_text().strip())
+    check("record has finding_id", record["finding_id"] == "e2e-1")
+    check("record has verdict", record["verdict"] == "binary_oracle_absent")
+
+
+# ---------------------------------------------------------------------------
+# 8. Auto-detect on real project tree
+# ---------------------------------------------------------------------------
+print("\n=== 8. Auto-detect ===")
+from core.inventory.binary_oracle_autodetect import detect_binaries
+
+detected = detect_binaries(TARGET, "application")
+check("auto-detect finds build/app",
+      any(p.name == "app" for p in detected),
+      f"detected={[p.name for p in detected]}")
+
+
+# ---------------------------------------------------------------------------
+# 9. Hostile-ELF defense — planted binary dropped
+# ---------------------------------------------------------------------------
+print("\n=== 9. Hostile-ELF defense ===")
+import subprocess
+hostile_src = TARGET / "build" / "hostile.c"
+hostile_src.write_text(
+    "int totally_unrelated_thing(int x){return x^0xdeadbeef;}\n"
+    "int main(void){return totally_unrelated_thing(0);}\n"
+)
+hostile = TARGET / "build" / "planted"
+subprocess.run(["gcc", "-O0", "-g", str(hostile_src),
+                "-o", str(hostile)], check=True)
+inv2 = {"files": [
+    {"path": "src/api.c", "language": "c", "items": [
+        {"name": f"api_func_{i}", "kind": "function", "line_start": i + 1}
+        for i in range(15)
+    ]},
+]}
+counts_h = enrich_inventory_with_binary_oracle(inv2, (hostile,))
+check("planted-ELF dropped — zero items annotated",
+      counts_h["classified"] == 0,
+      f"classified={counts_h['classified']}")
+
+
+# ---------------------------------------------------------------------------
+# 10. Multi-binary combine (alive-in-any-wins)
+# ---------------------------------------------------------------------------
+print("\n=== 10. Multi-binary combine ===")
+# Build a SECOND binary that ONLY defines api_dead_function (in our
+# real target it's absent). Combined verdict should be symbol_present
+# (alive-in-any-wins).
+alt_src = TARGET / "build" / "alt.c"
+alt_src.write_text(
+    "int api_dead_function(int x){return x*999;}\n"
+    "int main(void){return api_dead_function(1);}\n"
+)
+alt_bin = TARGET / "build" / "alt"
+subprocess.run(["gcc", "-O0", "-g", str(alt_src), "-o", str(alt_bin)],
+               check=True)
+inv3 = {"files": [
+    {"path": "src/api.c", "language": "c", "items": [
+        {"name": "api_dead_function", "kind": "function", "line_start": 1},
+        # 8 padding items so the floor doesn't bounce the small binary.
+        *[{"name": f"api_open_{i}" if i == 0 else f"api_p_{i}",
+           "kind": "function", "line_start": 10 + i} for i in range(8)],
+    ]},
+]}
+# Make the padding match BOTH binaries by giving names api_open knows.
+# Actually simpler: use names that THE REAL BINARY has, but the alt binary
+# lacks. So real binary contributes coverage > floor; alt binary's coverage
+# is low. Both will be admitted (floor only kicks in at >= 8 project names
+# in EACH binary; alt has just "api_dead_function" + "main").
+# Per current floor implementation: floor applies when n_project >= 8;
+# we have 9 project names; alt matches only 1 of them → 11% which is
+# above 5% floor BUT min_matched=3 means alt gets dropped.
+# Let me restructure: use names that BOTH have.
+inv3 = {"files": [
+    {"path": "src/api.c", "language": "c", "items": [
+        {"name": "api_dead_function", "kind": "function", "line_start": 1},
+        {"name": "main", "kind": "function", "line_start": 2},
+        # Below 8 project names → floor doesn't fire.
+    ]},
+]}
+counts_m = enrich_inventory_with_binary_oracle(inv3, (BINARY, alt_bin))
+items_m = {it["name"]: it for it in inv3["files"][0]["items"]}
+dead_bo = items_m["api_dead_function"]["metadata"]["binary_oracle"]
+check("multi-binary combined verdict for api_dead_function is alive-in-any",
+      dead_bo["classification"] == "symbol_present",
+      dead_bo["classification"])
+check("multi-binary records both binaries",
+      len(dead_bo["binaries"]) == 2)
+
+
+# ---------------------------------------------------------------------------
+# 11. Stripped binary → symbol_only tier fallback (E1)
+# ---------------------------------------------------------------------------
+print("\n=== 11. Stripped-binary tier fallback ===")
+stripped = TARGET / "build" / "app_stripped"
+import shutil
+shutil.copy(BINARY, stripped)
+subprocess.run(["strip", "--strip-debug", str(stripped)], check=True)
+v_stripped = classify_binary_evidence(["api_open", "api_dead_function"],
+                                      stripped)
+check("stripped binary verdicts present", len(v_stripped) > 0)
+check("stripped binary verdicts carry tier=symbol_only",
+      any(w.tier == "symbol_only" for w in v_stripped.values()),
+      f"tiers={set(w.tier for w in v_stripped.values())}")
+
+
+# ---------------------------------------------------------------------------
+# 12. Sandbox writes for gcov instrumentation (via libsodium pattern)
+# ---------------------------------------------------------------------------
+print("\n=== 12. Sandbox + corpus driver harness ===")
+# Verify the sandbox-aware corpus driver path imports cleanly + the
+# wiring is in place. Don't actually run the corpus build (slow).
+from core.inventory.binary_oracle_corpora import REGISTRY
+check("registry contains all 7 corpora",
+      len(REGISTRY) == 7,
+      f"got {len(REGISTRY)}: {sorted(REGISTRY.keys())}")
+for name in ("synthetic", "zlib", "libsodium", "snappy", "leveldb",
+             "regex-rust", "zstd_holdout"):
+    check(f"  driver {name!r} registered",
+          name in REGISTRY)
+
+
+# ---------------------------------------------------------------------------
+# 13. annotation_synth — binary_oracle tag emission
+# ---------------------------------------------------------------------------
+print("\n=== 13. annotation_synth binary_oracle tag ===")
+from packages.code_understanding.annotation_synth import (
+    _binary_oracle_tag, _binary_oracle_body_line,
+)
+
+func_full = {"metadata": {"binary_oracle": {
+    "classification": "absent",
+    "binaries": [{"path": "/b", "classification": "absent",
+                  "tier": "full"}],
+}}}
+tag = _binary_oracle_tag(func_full)
+check("full-tier tag has classification + tier=full",
+      tag.get("binary_oracle") == "absent"
+      and tag.get("binary_oracle_tier") == "full")
+body = _binary_oracle_body_line(func_full)
+check("full-tier body line says 'in deployed binary surface'",
+      "deployed binary surface" in body, body)
+func_symonly = {"metadata": {"binary_oracle": {
+    "classification": "absent",
+    "binaries": [{"path": "/b", "classification": "absent",
+                  "tier": "symbol_only"}],
+}}}
+tag2 = _binary_oracle_tag(func_symonly)
+check("symbol_only tag has tier=symbol_only",
+      tag2.get("binary_oracle_tier") == "symbol_only")
+body2 = _binary_oracle_body_line(func_symonly)
+check("symbol_only body line says 'does NOT license suppression'",
+      "does NOT license suppression" in body2, body2)
+
+
+# ---------------------------------------------------------------------------
+# 14. /project binaries persistence round-trip
+# ---------------------------------------------------------------------------
+print("\n=== 14. /project persistence ===")
+from core.project.project import Project
+
+p = Project(name="e2e", target=str(TARGET),
+            output_dir=str(TARGET / "out"))
+p.binaries = [str(BINARY)]
+d = p.to_dict()
+check("project schema version 2", d["version"] == 2)
+check("project to_dict has binaries", d.get("binaries") == [str(BINARY)])
+# Round-trip
+p2 = Project.from_dict(d)
+check("project from_dict preserves binaries",
+      p2.binaries == [str(BINARY)])
+# Back-compat: v1 file (no version, no binaries)
+p3 = Project.from_dict({"name": "old", "target": "/t",
+                         "output_dir": "/o"})
+check("v1 back-compat: empty binaries default",
+      p3.binaries == [])
+
+
+# ---------------------------------------------------------------------------
+# 15. Inventory builder honours BINARY_ORACLE_PATHS
+# ---------------------------------------------------------------------------
+print("\n=== 15. build_inventory + BINARY_ORACLE_PATHS ===")
+from core.config import RaptorConfig
+from core.inventory.builder import build_inventory
+
+# Save / restore
+_orig_paths = RaptorConfig.BINARY_ORACLE_PATHS
+try:
+    RaptorConfig.BINARY_ORACLE_PATHS = (str(BINARY),)
+    with tempfile.TemporaryDirectory() as outdir:
+        full_inv = build_inventory(str(TARGET), outdir)
+    bo_summary = full_inv.get("binary_oracle")
+    check("full inventory has binary_oracle summary",
+          bo_summary is not None and "counts" in bo_summary)
+    if bo_summary:
+        check("summary records absent count",
+              bo_summary["counts"].get("absent", 0) > 0,
+              f"absent={bo_summary['counts'].get('absent', 0)}")
+        check("summary earns_suppression=True",
+              bo_summary.get("earns_suppression") is True)
+finally:
+    RaptorConfig.BINARY_ORACLE_PATHS = _orig_paths
+
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+print(f"\n{'=' * 72}")
+n_pass = sum(1 for _, ok, _ in results if ok)
+n_fail = len(results) - n_pass
+print(f"E2E: {n_pass}/{len(results)} passed, {n_fail} failed")
+if n_fail:
+    print("\nFailures:")
+    for name, ok, detail in results:
+        if not ok:
+            print(f"  - {name}: {detail}")
+    sys.exit(1)
+print("All E2E checks passed.")
