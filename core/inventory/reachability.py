@@ -195,6 +195,61 @@ class _FunctionCalledIndex:
 _FN_CALLED_INDEX_CACHE: Dict[int, Tuple[Dict[str, Any], _FunctionCalledIndex]] = {}
 _FN_CALLED_INDEX_CACHE_MAX = 8
 
+# Inverse index for ``binary_oracle_absent`` / ``binary_call_edge_present``
+# lookups — without it, each accessor call walks every file × every item
+# of the inventory (O(N_files × N_items)). On a 30k-file inventory with
+# thousands of findings that's 100M file-walks per analysis pass; with
+# the index each call is hash-lookup-fast (adversarial review P1-C-2).
+# Map shape: ``{normalised_path: {name: [item, item, ...]}}``.
+_BO_ITEM_INDEX_CACHE: Dict[
+    int, Tuple[Dict[str, Any], Dict[str, Dict[str, List[Dict[str, Any]]]]],
+] = {}
+_BO_ITEM_INDEX_CACHE_MAX = 8
+
+
+def _build_bo_item_index(
+    inventory: Dict[str, Any],
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    """Walk the inventory ONCE and build the
+    ``{path: {name: [item, ...]}}`` map. List values handle the in-
+    file name-collision case (static helpers / overloads / #if-#else
+    branches recorded as multiple items)."""
+    out: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    for file_record in inventory.get("files", []) or []:
+        if not isinstance(file_record, dict):
+            continue
+        rec_path = file_record.get("path")
+        if not isinstance(rec_path, str):
+            continue
+        normalised = rec_path.replace("\\", "/")
+        by_name: Dict[str, List[Dict[str, Any]]] = out.setdefault(
+            normalised, {})
+        for item in file_record.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str):
+                continue
+            by_name.setdefault(name, []).append(item)
+    return out
+
+
+def _get_bo_item_index(
+    inventory: Dict[str, Any],
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    inv_id = id(inventory)
+    cached = _BO_ITEM_INDEX_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    if cached is not None:
+        _BO_ITEM_INDEX_CACHE.pop(inv_id, None)
+    idx = _build_bo_item_index(inventory)
+    _BO_ITEM_INDEX_CACHE[inv_id] = (inventory, idx)
+    if len(_BO_ITEM_INDEX_CACHE) > _BO_ITEM_INDEX_CACHE_MAX:
+        oldest = next(iter(_BO_ITEM_INDEX_CACHE))
+        _BO_ITEM_INDEX_CACHE.pop(oldest, None)
+    return idx
+
 
 def _build_function_called_index(
     inventory: Dict[str, Any],
@@ -2264,6 +2319,126 @@ def build_excluded(
     return None
 
 
+def binary_call_edge_present(
+    inventory: Dict[str, Any],
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """True iff the function ``name`` in ``file_path`` has at least
+    one incoming direct call edge in the binary's call graph
+    (extracted via ``binary_oracle_edges``). Affirmative reachability
+    evidence: source extraction may have missed the call edge (header-
+    inline, indirect dispatch the analyser couldn't resolve, etc.) but
+    the binary mechanically shows the function is called.
+
+    HEURISTIC — binary direct-edge extraction (r2 ``axffj``) misses
+    indirect calls (~8% on the Inc 3 corpora) so a False here does NOT
+    imply the function is unreachable; it just means we have no direct-
+    edge evidence. earns_suppression=False because this is a REACHABLE
+    witness; it shouldn't license dropping findings, only promote
+    reachability uncertainty for upstream consumers (Inc 2b Tier 1).
+
+    Path-keyed lookup via the shared inverse index (avoids the
+    O(N_files × N_items) walk per call)."""
+    if not file_path or not name:
+        return False
+    normalised = file_path.replace("\\", "/")
+    idx = _get_bo_item_index(inventory)
+    by_name = idx.get(normalised)
+    if not by_name:
+        return False
+    candidates = by_name.get(name)
+    if not candidates:
+        return False
+    for item in candidates:
+        if line and int(item.get("line_start") or 0) != line:
+            continue
+        meta = item.get("metadata")
+        if not isinstance(meta, dict):
+            return False
+        edges = meta.get("binary_oracle_edges")
+        return bool(edges)
+    return False
+
+
+def binary_oracle_absent(
+    inventory: Dict[str, Any],
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """True iff the function ``name`` in ``file_path`` carries a
+    ``binary_oracle`` classification of ``"absent"`` — the compiler /
+    linker eliminated this function from the analysed binary, and no
+    ``DW_TAG_inlined_subroutine`` instance pulled it into a surviving
+    caller. Returns ``False`` (don't claim deadness) when no
+    binary_oracle annotation is present (no ``--binary`` passed,
+    non-native language, or stripped binary).
+
+    SOUND — mechanically derivable from ``nm`` + DWARF on the analysed
+    binary (no extraction approximation, no 1-hop assumption). But
+    BUILD-SPECIFIC: the verdict is about THIS binary's symbol table,
+    not a universal source-level claim. ``earns_suppression=True`` per
+    two layers of evidence (``~/design/binary-oracle-reachability.md``
+    §9): (1) consistency check 1952/1952 across 6 iteratively-tuned
+    corpora; (2) honest hold-out 187/187 on zstd v1.5.6 with no
+    classifier tuning — rule-of-three 95% UB miss rate ≤1.6% on
+    first-contact-with-unseen-data. The operator burden — pointing at
+    the binary that matches the source / build config being suppressed
+    — is enforced by ``binary_oracle.build_id`` recorded on every
+    witness.
+
+    Path-keyed lookup, no index build — mirrors :func:`build_excluded`.
+    When ``line > 0`` the line is consulted to disambiguate
+    name-collisions within a single file (C static-scoped helpers, C++
+    ``#if/#else`` branches, overloaded methods extracted as separate
+    items). Without the line-disambiguation, the FIRST same-name item
+    wins and a live function's finding could be silently suppressed
+    because a dead namesake matched first (adversarial review P0-C-3).
+    """
+    if not file_path or not name:
+        return False
+    normalised = file_path.replace("\\", "/")
+    idx = _get_bo_item_index(inventory)
+    by_name = idx.get(normalised)
+    if not by_name:
+        return False
+    candidates = by_name.get(name)
+    if not candidates:
+        return False
+    for item in candidates:
+        # Line disambiguation: name-collisions inside a file are
+        # real (static helpers, #if/#else, overloads). Skip non-
+        # matching items so the caller's (name, line) tuple
+        # actually identifies the function it intended.
+        if line and int(item.get("line_start") or 0) != line:
+            continue
+        meta = item.get("metadata")
+        if not isinstance(meta, dict):
+            return False
+        bo = meta.get("binary_oracle")
+        if not isinstance(bo, dict):
+            return False
+        if bo.get("classification") != "absent":
+            return False
+        # Soundness gate (E1 stripped-binary fallback + adversarial
+        # review P0-C-4): the corpus-earned suppression property is
+        # conditional on full-DWARF evidence. Refuse to fire when
+        # (a) no per-binary records exist (legacy inventory or
+        # writer bug — no tier evidence ⇒ no trust) OR (b) ANY
+        # contributing binary was symbol-only (could be inlined,
+        # not absent — we just can't see it without DWARF).
+        per_binary = bo.get("binaries") or []
+        if not per_binary:
+            return False
+        if any(isinstance(b, dict) and b.get("tier") != "full"
+               for b in per_binary):
+            return False
+        return True
+    return False
+
+
 def is_lexically_dead(
     inventory: Dict[str, Any],
     file_path: str,
@@ -3560,6 +3735,9 @@ __all__ = [
     "ReachabilityResult",
     "Verdict",
     "all_paths",
+    "binary_call_edge_present",
+    "binary_oracle_absent",
+    "build_excluded",
     "call_lines_of",
     "callees_of",
     "callers_of",

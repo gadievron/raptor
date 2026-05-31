@@ -254,6 +254,39 @@ class TestContextMap:
         assert "SINK-001" in ann.body
 
 
+class TestBinaryOracleAnnotations:
+    """Phase 3c: when the inventory carries binary_oracle classifications
+    (--binary was passed), /understand --map annotations surface the
+    classification on entry-point + sink items. Researcher sees "this
+    sink is absent in the deployed binary" while reading the map."""
+
+    def test_helper_extracts_classification_from_func_metadata(self):
+        from packages.code_understanding.annotation_synth import (
+            _binary_oracle_tag, _binary_oracle_body_line,
+        )
+        func = {"metadata": {"binary_oracle": {
+            "classification": "absent",
+            "binaries": [
+                {"path": "/build/example", "classification": "absent"},
+                {"path": "/build/libfoo.so", "classification": "absent"},
+            ],
+        }}}
+        tag = _binary_oracle_tag(func)
+        assert tag["binary_oracle"] == "absent"
+        assert len(tag["binary_oracle_per_binary"]) == 2
+        assert _binary_oracle_body_line(func) == (
+            "Binary oracle: absent (in deployed binary surface)")
+
+    def test_helper_silent_when_no_classification(self):
+        from packages.code_understanding.annotation_synth import (
+            _binary_oracle_tag, _binary_oracle_body_line,
+        )
+        assert _binary_oracle_tag({}) == {}
+        assert _binary_oracle_body_line({}) == ""
+        assert _binary_oracle_tag({"metadata": {}}) == {}
+        assert _binary_oracle_tag({"metadata": {"binary_oracle": {}}}) == {}
+
+
 class TestFlowTrace:
     def test_emits_per_step_annotations(self, understand_run):
         repo, out = understand_run

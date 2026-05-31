@@ -67,6 +67,22 @@ def _stage_lexical_dead(ctx: "_ClassifyCtx", R) -> Optional[str]:
     return None
 
 
+def _stage_binary_oracle_absent(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.binary_oracle_absent(
+        ctx.inventory, ctx.file_path, ctx.name, ctx.line,
+    ):
+        return "binary_oracle_absent"
+    return None
+
+
+def _stage_binary_call_edge(ctx: "_ClassifyCtx", R) -> Optional[str]:
+    if R.binary_call_edge_present(
+        ctx.inventory, ctx.file_path, ctx.name, ctx.line,
+    ):
+        return "binary_call_edge"
+    return None
+
+
 def _stage_build_excluded(ctx: "_ClassifyCtx", R) -> Optional[str]:
     if R.build_excluded(ctx.inventory, ctx.file_path):
         return "build_excluded"
@@ -145,9 +161,26 @@ def _stage_one_hop(ctx: "_ClassifyCtx", R) -> Optional[str]:
 PRECEDENCE = (
     _stage_module_aborts,
     _stage_lexical_dead,
+    # binary_oracle absent is mechanically derivable from nm + DWARF —
+    # stronger than build_excluded (build-config parsing heuristic), so
+    # checked first among C/C++/Rust/Go dead witnesses. SOUND +
+    # corpus-earned (Inc 3d: 841/841 absent verdicts correct).
+    _stage_binary_oracle_absent,
     _stage_build_excluded,
     _stage_framework,
     _stage_registered,
+    # Binary direct-call-edge promote (Inc 2b Tier 1). Affirmative
+    # reachability evidence: if the binary shows an incoming direct
+    # call to this function, it's reachable in this build — even when
+    # source extraction missed the edge (header-only inline,
+    # address-taken-then-direct-called). MUST run BEFORE _stage_entry:
+    # entry-reachability is a heuristic graph walk and returns the
+    # negative ``no_path_from_entry`` verdict when it fails — without
+    # this ordering, a function the binary mechanically proves
+    # reachable would get the dead verdict from _stage_entry first
+    # and the binary evidence would never be consulted. Affirmative
+    # binary evidence beats heuristic source-graph dead claims.
+    _stage_binary_call_edge,
     _stage_entry,
     _stage_one_hop,
 )
