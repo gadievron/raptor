@@ -808,13 +808,20 @@ def test_codeql_cli_wires_binary_flag_to_raptor_config() -> None:
     P1-D-4 DRY refactor the actual wiring lives in the shared
     ``binary_oracle_cli`` helper; verify both raptor_codeql.py imports
     it AND the helper itself contains the argparse + config-mutation
-    code path."""
-    import raptor_codeql
-    from core.inventory import binary_oracle_cli
-    codeql_src = Path(raptor_codeql.__file__).read_text()
+    code path.
+
+    Reads files directly without ``import raptor_codeql`` — that import
+    pulls in the entire CLI graph (LLM providers, scanners, sandbox …)
+    and was the single slowest test in the binary-oracle suite at ~5s.
+    The assertions are textual; an import is not needed.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    codeql_path = repo_root / "raptor_codeql.py"
+    helper_path = repo_root / "core" / "inventory" / "binary_oracle_cli.py"
+    codeql_src = codeql_path.read_text()
     assert "binary_oracle_cli" in codeql_src, (
         "raptor_codeql should use the shared binary_oracle_cli helper")
-    helper_src = Path(binary_oracle_cli.__file__).read_text()
+    helper_src = helper_path.read_text()
     assert '"--binary"' in helper_src, (
         "binary_oracle_cli should declare --binary argparse arg")
     assert "BINARY_ORACLE_PATHS" in helper_src, (

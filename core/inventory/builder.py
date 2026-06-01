@@ -6,6 +6,7 @@ function-level reachability tier, and any other consumer that
 needs a cached call-graph view of the project.
 """
 
+import ast
 import fnmatch
 import hashlib
 import logging
@@ -63,6 +64,53 @@ logger = logging.getLogger(__name__)
 # ``tuning.json`` (``max_inventory_workers``) so operators tune it
 # alongside the other RAPTOR pool sizes; default "auto" resolves to
 # half the available CPU count, capped at 8.
+def _extract_python_dunder_all(content: str) -> Optional[List[str]]:
+    """Return the list of names declared in module-level ``__all__``, or
+    ``None`` if not declared (or the file isn't valid Python).
+
+    ``__all__`` is Python's explicit export contract: a name not in
+    ``__all__`` is the module author saying "this isn't part of the
+    public API." The reachability heuristic uses this as an authoritative
+    signal that complements the weaker leading-underscore convention —
+    so a public-named function that's been omitted from ``__all__`` still
+    qualifies as a dead-island candidate.
+
+    Module-level only. Conditional / runtime-mutated ``__all__`` (e.g.
+    ``__all__.append(...)`` after the initial assignment) is captured
+    only via the initial Assign / AugAssign — runtime extensions aren't
+    seen, which is the conservative direction (more uncertainty, not
+    less confidence in "internal" claims).
+    """
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, ValueError):
+        return None
+    names: List[str] = []
+    saw_declaration = False
+    for node in tree.body:
+        targets = []
+        value = None
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "__all__":
+                    targets.append(t)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                targets.append(node.target)
+            value = node.value
+        if not targets or value is None:
+            continue
+        saw_declaration = True
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            for el in value.elts:
+                if isinstance(el, ast.Constant) and isinstance(el.value, str):
+                    names.append(el.value)
+    if not saw_declaration:
+        return None
+    return names
+
+
 def _resolved_max_workers() -> int:
     try:
         from core.tuning import load_tuning
@@ -742,6 +790,16 @@ def _process_single_file(
         # whichever languages have a walker.
         if language == 'python':
             record['call_graph'] = extract_call_graph_python(parse_text).to_dict()
+            # Module-level ``__all__`` is the explicit export contract.
+            # Stored on the file record as a sorted list (so the JSON
+            # snapshot is stable) — absent when the module doesn't
+            # declare it. ``entry_reachability`` reads this to
+            # distinguish "module author marked internal" from "no
+            # contract declared, fall back to PEP 8 underscore
+            # convention as a softer hint."
+            exports = _extract_python_dunder_all(parse_text)
+            if exports is not None:
+                record['exports'] = sorted(set(exports))
         elif language in ('javascript', 'typescript', 'tsx'):
             # Tree-sitter-driven; gracefully empty when the grammar
             # isn't installed. TS/TSX use the typescript grammar so typed

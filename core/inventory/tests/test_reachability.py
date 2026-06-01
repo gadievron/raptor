@@ -518,14 +518,21 @@ def test_directly_called_beats_macro_masking():
 # directly so the dead-island / entry logic is exercised on any CI.
 
 
-def _entry_inv(path, language, items, calls, indirection=None):
+def _entry_inv(path, language, items, calls, indirection=None,
+               library_mode=False, exports=None):
     cg = {"imports": {}, "calls": calls}
     if indirection:
         cg["indirection"] = indirection
-    return {"files": [{
+    file_record: Dict[str, Any] = {
         "path": path, "language": language,
         "items": items, "call_graph": cg,
-    }]}
+    }
+    if exports is not None:
+        file_record["exports"] = sorted(exports)
+    inv: Dict[str, Any] = {"files": [file_record]}
+    if library_mode:
+        inv["treat_exports_as_entries"] = True
+    return inv
 
 
 def _fn(name, line, vis=None):
@@ -585,57 +592,87 @@ def test_masking_indirection_forces_uncertain():
 
 
 def test_python_private_dead_island_no_path_from_entry():
-    # Python's entry model is heuristic: module-level public (non-``_``)
-    # functions are entries by convention. A private fn (``_helper``)
-    # with no caller and no reflection-masking in its file IS a real
-    # dead-island — return ``no_path_from_entry`` (HEURISTIC tier:
-    # surface-only, doesn't earn suppression).
+    # Python is HEURISTIC tier: leading underscore is the PEP 8 internal
+    # convention. With no ``__all__`` declared and no in-project caller
+    # and no file-level reflection, ``_helper`` is a dead-island —
+    # ``no_path_from_entry`` (heuristic, surface-only).
     inv = _entry_inv("m.py", "python", [_fn("_helper", 1)], [])
     assert _er(inv, "m.py", "_helper", 1) == "no_path_from_entry"
 
 
-def test_python_public_module_level_is_entry():
-    # Module-level public function (no leading ``_``, no class_name in
-    # metadata) — counts as an entry; reachable verdict.
+def test_python_public_no_all_is_uncertain():
+    # Public name (no leading underscore), no ``__all__`` declared, no
+    # in-project caller. Neither hint signal fires — could be library
+    # API, externally imported, or reflection-dispatched — so we don't
+    # claim dead. UNCERTAIN falls through to the 1-hop NOT_CALLED layer.
     inv = _entry_inv("m.py", "python", [_fn("api", 1)], [])
+    assert _er(inv, "m.py", "api", 1) == "uncertain"
+
+
+def test_python_public_module_level_entry_in_library_mode():
+    # Library mode (opt-in): a public module-level function is an
+    # entry — the API surface is reachable by consumers.
+    inv = _entry_inv("m.py", "python", [_fn("api", 1)], [],
+                     library_mode=True)
     assert _er(inv, "m.py", "api", 1) == "reachable"
 
 
-def test_python_public_chain_reaches_dead_helper():
-    # Public ``api`` calls private ``_step`` — ``_step`` is reachable
-    # via the public entry chain, not a dead-island.
+def test_python_public_chain_reaches_dead_helper_in_library_mode():
+    # Library mode: public ``api`` is an entry, transitively making
+    # the private helper it calls reachable too.
     inv = _entry_inv(
         "m.py", "python",
         [_fn("api", 1), _fn("_step", 5)],
         [{"caller": "api", "chain": ["_step"], "line": 2}],
+        library_mode=True,
     )
     assert _er(inv, "m.py", "_step", 5) == "reachable"
 
 
-def test_python_nested_closure_is_not_an_entry():
-    # Python extractors flatten nested ``def`` statements into top-level
-    # inventory items. A nested closure (e.g. an inner function inside
-    # a decorator factory) HAS no enclosing class_name and HAS no
-    # leading ``_``, but it ISN'T an external entry — the only way to
-    # reach it is via its enclosing function. The nested-detection
+def test_python_nested_closure_is_not_an_entry_in_library_mode():
+    # Python extractors flatten nested ``def`` statements to top-level
+    # items. A nested closure HAS no class_name and HAS no leading
+    # underscore, but it ISN'T an external entry. Nested detection
     # uses line-range containment: an item whose line_start falls
     # inside another item's [line_start, line_end] range is nested.
     inv = _entry_inv(
         "m.py", "python",
         [
-            # outer is a public entry (live)
-            {**_fn("outer", 1), "line_end": 10},
-            # inner is nested inside outer → NOT an entry
-            {**_fn("inner", 3), "line_end": 9},
+            {**_fn("outer", 1), "line_end": 10},   # public entry
+            {**_fn("inner", 3), "line_end": 9},    # nested inside outer
         ],
-        # no edges — inner is genuinely orphaned at the static graph,
-        # but it's still part of outer's body (live) at runtime.
         [],
+        library_mode=True,
     )
-    # outer is reachable (public entry)
     assert _er(inv, "m.py", "outer", 1) == "reachable"
-    # inner is NOT an entry (nested) → no_path_from_entry, NOT reachable
     assert _er(inv, "m.py", "inner", 3) == "no_path_from_entry"
+
+
+def test_python_dunder_all_excludes_public_name_claims_no_path():
+    # Explicit-contract path: module declares ``__all__ = ["api"]``;
+    # ``helper`` is public-named but NOT in ``__all__``. The author
+    # declared it internal — ``__all__`` is the authoritative signal.
+    # No caller, no masking → ``no_path_from_entry``.
+    inv = _entry_inv(
+        "m.py", "python",
+        [_fn("api", 1), _fn("helper", 5)],
+        [],
+        exports=["api"],
+    )
+    assert _er(inv, "m.py", "helper", 5) == "no_path_from_entry"
+
+
+def test_python_dunder_all_includes_underscore_name_is_uncertain():
+    # ``__all__`` overrides the underscore convention: a leading-``_``
+    # name listed in ``__all__`` is explicitly exported by the author.
+    # No caller, but the explicit contract says "external" → UNCERTAIN.
+    inv = _entry_inv(
+        "m.py", "python",
+        [_fn("_dunder", 1)],
+        [],
+        exports=["_dunder"],
+    )
+    assert _er(inv, "m.py", "_dunder", 1) == "uncertain"
 
 
 def test_python_no_path_from_entry_witness_stays_heuristic():
