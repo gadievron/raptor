@@ -36,6 +36,15 @@ concurrency:
 
 jobs:
   refresh:
+    # These sources are public and deterministic — the lists are identical no
+    # matter who runs the refresh, and forks consume the merged result from
+    # upstream. So the weekly cron runs only on the canonical repo (otherwise
+    # every active fork runs its own copy and fails at the PR step, since gh
+    # defaults the base repo to the upstream parent on a fork). A fork that
+    # wants fresh data without syncing can still trigger it manually via
+    # workflow_dispatch; the gh commands below pin --repo so that lands a PR
+    # on the fork itself.
+    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -163,16 +172,20 @@ jobs:
           if [ -s "$CAND" ]; then
             BODY="$BODY"$'\n\n---\n\n'"$(cat "$CAND")"
           fi
+          # --repo pins the running repo: without it gh defaults the base
+          # repo to the upstream parent on a fork, so a manual fork run would
+          # target (and fail against) the parent instead of the fork.
           if ! gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh bundled popular-package lists" \
                 --body "$BODY" 2>/dev/null; then
-            gh pr edit "$BRANCH" --body "$BODY"
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --body "$BODY"
           fi
           # Labels best-effort (see sca-self-bump): a missing label must
           # never block the PR. Create them once under Settings → Labels.
           for lbl in automated sca data-refresh; do
-            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --add-label "$lbl" 2>/dev/null \
               || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
           done

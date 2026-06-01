@@ -35,6 +35,14 @@ concurrency:
 
 jobs:
   refresh:
+    # Public, deterministic sources (KEV / EPSS) — the corpus is identical no
+    # matter who runs it, and forks consume the merged result from upstream.
+    # So the cron runs only on the canonical repo (otherwise every active fork
+    # runs its own copy and fails at the PR step, since gh defaults the base
+    # repo to the upstream parent on a fork). A fork can still refresh on
+    # demand via workflow_dispatch; the gh commands pin --repo so the PR lands
+    # on the fork itself.
+    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -197,12 +205,16 @@ jobs:
           # Idempotent create-or-update: ``gh pr create`` exits non-zero
           # when a PR for the branch already exists — fall through to
           # ``gh pr edit`` to refresh the body. (Labels applied below.)
+          # --repo pins the running repo: without it gh defaults the base
+          # repo to the upstream parent on a fork, so a manual fork run would
+          # target (and fail against) the parent instead of the fork.
           if ! gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration corpus" \
                 --body-file "$RUNNER_TEMP/pr-body.md" 2>/dev/null; then
-            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --body-file "$RUNNER_TEMP/pr-body.md"
           fi
           # Labels best-effort (see sca-self-bump): pull-requests:write
           # applies EXISTING labels but can't create them, and
@@ -210,6 +222,6 @@ jobs:
           # (which killed this step in run #3). Create the canonical
           # labels once under Settings → Labels to auto-apply them.
           for lbl in automated sca data-refresh; do
-            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --add-label "$lbl" 2>/dev/null \
               || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
           done

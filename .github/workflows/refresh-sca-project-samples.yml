@@ -36,6 +36,14 @@ concurrency:
 
 jobs:
   collect:
+    # Deterministic refresh from public sources — identical for any runner,
+    # and forks consume the merged result from upstream. So the cron runs only
+    # on the canonical repo (otherwise every active fork runs its own copy and
+    # fails at the PR step, since gh defaults the base repo to the upstream
+    # parent on a fork). A fork can still refresh on demand via
+    # workflow_dispatch; the gh commands pin --repo so the PR lands on the
+    # fork itself.
+    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Higher than the daily refreshes — cloning + scanning the corpus is
     # the heaviest job. The collector now scans projects in parallel
@@ -169,16 +177,20 @@ jobs:
           - [ ] Tests pass
           EOF
           )
+          # --repo pins the running repo: without it gh defaults the base
+          # repo to the upstream parent on a fork, so a manual fork run would
+          # target (and fail against) the parent instead of the fork.
           if ! gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
                 --base main \
                 --head "$BRANCH" \
                 --title "chore(sca): refresh calibration project samples" \
                 --body "$BODY" 2>/dev/null; then
-            gh pr edit "$BRANCH" --body "$BODY"
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --body "$BODY"
           fi
           # Labels best-effort (see sca-self-bump): a missing label must
           # never block the PR. Create them once under Settings → Labels.
           for lbl in automated sca data-refresh; do
-            gh pr edit "$BRANCH" --add-label "$lbl" 2>/dev/null \
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$BRANCH" --add-label "$lbl" 2>/dev/null \
               || echo "label '$lbl' not in repo; skipping (create it under Settings → Labels to auto-apply)"
           done
