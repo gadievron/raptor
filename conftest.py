@@ -27,6 +27,14 @@ from pathlib import Path
 
 os.environ.setdefault("_RAPTOR_TRUSTED", "1")
 
+# Disable reach_verdict_log atexit flush during tests so the synthetic
+# inventories that test suites build don't pollute the operator-facing
+# sidecar (the cross-project verdict-frequency log is supposed to
+# reflect real operator runs, not the test corpus). Tests that
+# exercise the log directly opt back in via ``RAPTOR_REACH_VERDICT_LOG``
+# pointing at a tmp file (see core/inventory/tests/test_reach_verdict_log.py).
+os.environ.setdefault("RAPTOR_REACH_VERDICT_LOG_DISABLED", "1")
+
 # Force RAPTOR_DIR to point at THIS worktree, not whatever the
 # developer's login shell exports. ``setdefault`` is a no-op when the
 # env var is already set, so a developer with multiple checkouts who

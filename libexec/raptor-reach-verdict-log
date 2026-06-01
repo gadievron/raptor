@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Inspect / maintain the per-language reachability verdict-frequency log.
+# Substrate: core/inventory/reach_verdict_log.py.
+#
+# Records (language, verdict) → count across every classify_reachability
+# call; sidecar flushes at process exit. Used to spot empirical signal
+# for "which language's framework catalog needs work?" — e.g. lots of
+# not_called on Python = entry detection is missing handlers.
+#
+# Run with --help for usage.
+
+set -e
+
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$REPO_ROOT"
+exec python3 -m core.inventory.reach_verdict_log_cli "$@"

@@ -250,3 +250,72 @@ class TestRealWorldShape:
         assert b["blocked"] == 0
         assert b["severity_mismatches"] == []
         assert b["inconsistent_findings"] == []
+
+
+class TestStatusAwareBucketing:
+    """QoL #19 wiring: when a finding carries the explicit ``status``
+    field, the funnel uses it; otherwise the legacy field-detection
+    path runs. Backwards-compat for pre-#19 emit sites."""
+
+    def test_explicit_status_wins_over_field_inference(self):
+        from core.run.finding_status import ANALYSIS_INCONSISTENT
+        results = [{
+            "is_true_positive": True,
+            "is_exploitable": True,
+            "status": ANALYSIS_INCONSISTENT,
+            # No self_contradictory; legacy path would route to
+            # ``exploitable``; explicit status routes to inconsistent.
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 0
+        assert b["inconsistent"] == 1
+
+    def test_skipped_statuses_excluded_from_verdict_buckets(self):
+        # Skipped findings don't contribute to TP/FP/exploitable/
+        # inconsistent. They weren't analysed, so no verdict applies.
+        from core.run.finding_status import (
+            SKIPPED_DEAD_CODE, SKIPPED_DUPLICATE, SKIPPED_OVER_BUDGET,
+        )
+        results = [
+            {"status": SKIPPED_OVER_BUDGET,
+             "is_true_positive": True, "is_exploitable": True},
+            {"status": SKIPPED_DEAD_CODE,
+             "is_true_positive": True, "is_exploitable": True},
+            {"status": SKIPPED_DUPLICATE,
+             "is_true_positive": False},
+            # The only actually-analysed finding.
+            {"is_true_positive": True, "is_exploitable": True},
+        ]
+        b = bucket_orchestration_results(results)
+        assert b["true_positives"] == 1
+        assert b["exploitable"] == 1
+        assert b["false_positives"] == 0
+
+    def test_judge_resolved_contradiction_now_lands_in_exploitable(self):
+        # Composes #11-11d (judge clears self_contradictory) with
+        # the funnel: the resolved finding correctly counts as
+        # exploitable, not inconsistent. Operator headline drops
+        # the inconsistent count without losing the finding.
+        results = [{
+            "is_true_positive": True,
+            "is_exploitable": True,
+            "self_contradictory": False,
+            "contradiction_resolved_by_judge": True,
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 1
+        assert b["inconsistent"] == 0
+
+    def test_error_field_takes_precedence_over_explicit_status(self):
+        # Defensive: a finding that recorded an error AND an
+        # explicit status (rare but possible if partial-state write)
+        # still gets bucketed as failed/blocked. The error field is
+        # the most-load-bearing signal for ''did this complete?''.
+        from core.run.finding_status import ANALYSED
+        results = [{
+            "status": ANALYSED,
+            "error": "post-status crash",
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["failed"] == 1
+        assert b["true_positives"] == 0

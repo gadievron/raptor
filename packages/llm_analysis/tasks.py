@@ -672,6 +672,20 @@ class JudgeTask(DispatchTask):
                     for ja in judge_analyses
                 ]
 
+                # Contradiction resolution (QoL #11-11d): when the
+                # primary came back self_contradictory after Stage F
+                # retry, the judge stage HAS now seen the finding
+                # and produced a verdict — that verdict IS the
+                # tie-break. Clear the self_contradictory flag so
+                # the headline's ''Inconsistent (review needed)''
+                # count drops; preserve the original ``contradictions``
+                # list + a new ``contradiction_resolved_by_judge``
+                # marker so the audit trail survives for operators
+                # who want to inspect HOW it was resolved.
+                if primary.get("self_contradictory"):
+                    primary["contradiction_resolved_by_judge"] = True
+                    primary["self_contradictory"] = False
+
         return results
 
 
