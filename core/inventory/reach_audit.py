@@ -217,19 +217,31 @@ def classify_reachability(
     """Strongest applicable reachability verdict for one function — the first
     stage in :data:`PRECEDENCE` that fires, else ``"uncertain"``. Single
     source of truth consumed by the CodeQL prefilter, the /agentic enrichment
-    prepass, and the /validate demoter."""
+    prepass, and the /validate demoter.
+
+    Every verdict is also recorded into the per-language verdict-frequency
+    log (see ``core.inventory.reach_verdict_log``). Counts accumulate
+    in-memory and flush to a sidecar at process exit — gives empirical
+    grounding for "which language needs better framework-catalog
+    coverage" questions without burdening any consumer.
+    """
     from core.inventory import reachability as R
+    from core.inventory import reach_verdict_log
     ctx = _ClassifyCtx(
         inventory=inventory, file_path=file_path, name=name, line=line,
         module=module,
         target=R.InternalFunction(file_path=file_path, name=name, line=line),
         class_name=_lookup_class_name(inventory, file_path, name, line),
     )
+    verdict = "uncertain"
     for stage in PRECEDENCE:
-        verdict = stage(ctx, R)
-        if verdict:
-            return verdict
-    return "uncertain"
+        result = stage(ctx, R)
+        if result:
+            verdict = result
+            break
+    reach_verdict_log.record_verdict(
+        R._file_language(inventory, file_path), verdict)
+    return verdict
 
 
 @dataclass
