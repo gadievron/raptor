@@ -145,24 +145,29 @@ jobs:
           tag = sys.argv[1]
           ver = tag.lstrip('v')
 
-          # raptor-offset banner (lives under core/startup/assets/)
-          BANNER = 'core/startup/assets/raptor-offset'
-          text = open(BANNER).read()
-          def replace_banner(m):
-              prefix = m.group(1)
-              content = prefix + tag
-              pad = 76 - len(content)
-              return content + ' ' * pad + '║'
-          text = re.sub(r'(║\s+Based on Claude Code - )\S+[^║]*║', replace_banner, text)
-          open(BANNER, 'w').write(text)
+          # The startup banner (core/startup/assets/raptor-offset) is NOT
+          # stamped: it carries a __VERSION__ placeholder and banner.py injects
+          # RaptorConfig.effective_version() at render time (git-describe in a
+          # checkout, else the baked VERSION below). So a clone shows its true
+          # position past the last tag and an archive shows the stamped VERSION.
 
-          # core/config.py VERSION
-          text = open('core/config.py').read()
+          # core/config VERSION (lives in the package __init__)
+          CONFIG = 'core/config/__init__.py'
+          text = open(CONFIG).read()
           text = re.sub(
               r'^(\s+VERSION = \")[^\"]+(\")' ,
               lambda m: m.group(1) + ver + m.group(2),
               text, count=1, flags=re.MULTILINE)
-          open('core/config.py', 'w').write(text)
+          open(CONFIG, 'w').write(text)
+
+          # CITATION.cff version (semver, no leading 'v')
+          CITATION = 'CITATION.cff'
+          text = open(CITATION).read()
+          text = re.sub(
+              r'^(version: \")[^\"]+(\")',
+              lambda m: m.group(1) + ver + m.group(2),
+              text, count=1, flags=re.MULTILINE)
+          open(CITATION, 'w').write(text)
 
           # README.md banner — 'Based on Claude Code (vX.Y.Z)' inside box
           text = open('README.md').read()
@@ -175,8 +180,8 @@ jobs:
           open('README.md', 'w').write(text)
           " "$TAG"
           echo "Stamped:"
-          grep "Based on Claude Code" core/startup/assets/raptor-offset
-          grep 'VERSION = ' core/config.py | head -1
+          grep 'VERSION = ' core/config/__init__.py | head -1
+          grep '^version: ' CITATION.cff
           grep "Based on Claude Code" README.md
 
       # Push the version-stamp commit and re-tag using a request-scoped
@@ -194,7 +199,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add core/startup/assets/raptor-offset core/config.py README.md
+          git add core/config/__init__.py README.md CITATION.cff
           if ! git diff --cached --quiet; then
             git commit -m "release: stamp ${TAG}"
             git tag -a -f "${TAG}" -m "Release ${TAG}"

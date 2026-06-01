@@ -21,6 +21,13 @@ if [ ! -d "$RAPTOR_DIR/core" ]; then
     exit 1
 fi
 
+# Fast path: print the framework version and exit without launching a session.
+case "${1:-}" in
+    --version|-V|version)
+        exec python3 "$RAPTOR_DIR/raptor.py" --version
+        ;;
+esac
+
 # Strip env vars that would inject code into the launcher's own exec
 # chain — the Python parent (libseccomp/ctypes loads) and the Claude
 # Code Node process that replaces this bash shell via exec. A hostile

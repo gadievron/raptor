@@ -164,7 +164,13 @@ def _render(
     if project_line:
         passes.append(project_line.strip())
 
-    out: List[str] = ["RAPTOR doctor", "============="]
+    from core.config import RaptorConfig
+
+    out: List[str] = [
+        "RAPTOR doctor",
+        "=============",
+        f"version: {RaptorConfig.effective_version()}",
+    ]
 
     # Defence in depth: although every current producer of these
     # strings is RAPTOR-internal (check_tools, check_llm, check_env),

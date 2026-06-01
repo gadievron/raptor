@@ -924,6 +924,14 @@ def main():
         parser.print_help()
         return 0
     
+    # Print the running framework version and exit. Uses effective_version()
+    # so a checkout reports its true position past the last tag (git describe)
+    # and an installed/archived copy reports the baked VERSION.
+    if sys.argv[1] in ('--version', '-V', 'version'):
+        from core.config import RaptorConfig
+        print(RaptorConfig.effective_version())
+        return 0
+
     # Get mode from first argument
     mode = sys.argv[1].lower()
     remaining = sys.argv[2:]

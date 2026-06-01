@@ -621,7 +621,9 @@ def check_active_project() -> str | None:
 # ---------------------------------------------------------------------------
 
 def main():
-    logo = read_logo()
+    from core.config import RaptorConfig
+
+    logo = read_logo(RaptorConfig.effective_version())
     quote = read_random_quote()
 
     try:

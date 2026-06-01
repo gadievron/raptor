@@ -31,6 +31,37 @@ from unittest.mock import patch
 from core.config import RaptorConfig
 
 
+class TestEffectiveVersion:
+    """Tests for RaptorConfig.effective_version()."""
+
+    def test_falls_back_to_VERSION_on_git_error(self):
+        """Any git failure (binary absent, not a repo) → baked VERSION."""
+        import subprocess
+        with patch.object(subprocess, "run", side_effect=OSError("no git")):
+            assert RaptorConfig.effective_version() == RaptorConfig.VERSION
+
+    def test_falls_back_to_VERSION_on_nonzero_exit(self):
+        import subprocess
+        from types import SimpleNamespace
+        fake = SimpleNamespace(returncode=128, stdout="", stderr="fatal")
+        with patch.object(subprocess, "run", return_value=fake):
+            assert RaptorConfig.effective_version() == RaptorConfig.VERSION
+
+    def test_uses_git_describe_and_strips_leading_v(self):
+        """In a checkout, derive from describe (leading 'v' stripped)."""
+        from pathlib import Path
+        from types import SimpleNamespace
+        import subprocess
+
+        repo = Path(__file__).resolve().parents[3]
+        if not (repo / ".git").exists():
+            pytest.skip("not a git checkout")
+        fake = SimpleNamespace(returncode=0, stdout="v3.0.0-5-gabc1234\n",
+                               stderr="")
+        with patch.object(subprocess, "run", return_value=fake):
+            assert RaptorConfig.effective_version() == "3.0.0-5-gabc1234"
+
+
 class TestGetSafeEnv:
     """Tests for RaptorConfig.get_safe_env()."""
 

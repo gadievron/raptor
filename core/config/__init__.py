@@ -52,7 +52,41 @@ class RaptorConfig:
         )
 
     # Version
+    #
+    # ``VERSION`` is the baked release constant: it is stamped to the clean
+    # release number in the tag/archive at release time (see
+    # ``.github/workflows/release.yml``) and is what a release archive — which
+    # has no ``.git`` to derive from — reports.
+    #
+    # ``effective_version()`` is what the running tool should report/display.
+    # In a git checkout it derives the true position relative to the last
+    # release tag (e.g. ``3.0.0-1786-g7fcf38ea``) so a clone that is many
+    # commits past a release never masquerades as that clean release. It falls
+    # back to ``VERSION`` when there is no usable git checkout (archive,
+    # exported copy, git absent).
     VERSION = "3.0.0"
+
+    @classmethod
+    def effective_version(cls) -> str:
+        """Runtime version: ``git describe`` in a checkout, else ``VERSION``."""
+        import subprocess
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        if not (repo / ".git").exists():
+            return cls.VERSION
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo), "describe",
+                 "--tags", "--dirty=-local", "--always"],
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return cls.VERSION
+        desc = proc.stdout.strip()
+        if proc.returncode != 0 or not desc:
+            return cls.VERSION
+        return desc.lstrip("v")
 
     # Tool dependencies for startup checks
     # severity: "required" = feature unavailable, "degrades" = feature limited
