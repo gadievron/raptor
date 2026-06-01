@@ -9,8 +9,6 @@ contaminate the real sidecar — each test isolates via the
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 import pytest
 
 from core.inventory import reach_verdict_log
