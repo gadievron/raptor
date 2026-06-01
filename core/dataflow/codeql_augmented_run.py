@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence, Tuple
 
+from packages.codeql.tunables import CodeQLTunables
+
 
 DEFAULT_TIMEOUT_SECONDS = 600
 DEFAULT_CODEQL_BIN = "codeql"
@@ -129,6 +131,7 @@ def analyze(
         "--format=sarif-latest",
         f"--output={output_path}",
     ]
+    CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
     if extension_pack is not None:
         cmd.extend(["--additional-packs", str(extension_pack)])
     cmd.extend(extra_args)

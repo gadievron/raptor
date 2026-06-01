@@ -30,7 +30,13 @@ CODEQL_LANGUAGES = (
 )
 
 # Injection CWEs the trust sound-tier targets.
-INJECTION_CWES = ("CWE-89", "CWE-78", "CWE-79", "CWE-22")
+#
+# CWE-94 (code injection) and CWE-918 (SSRF) added 2026-05-30 to extend the
+# walk corpus.  CWE-94 has a Tier-2-shaped fix pattern (charset / allowlist
+# strip before eval/exec); CWE-918 is allowlist-on-URL-host shape, only
+# Tier 2 viable.  CWE-611/352 omitted — their fixes are parser-config /
+# middleware shape, not value-barrier shape.
+INJECTION_CWES = ("CWE-89", "CWE-78", "CWE-79", "CWE-22", "CWE-94", "CWE-918")
 
 
 @dataclass(frozen=True)

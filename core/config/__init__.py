@@ -201,6 +201,16 @@ class RaptorConfig:
     def CODEQL_THREADS(cls):
         return cls._tuning().codeql_threads
 
+    @classproperty
+    def CODEQL_MAX_DISK_CACHE_MB(cls):
+        """``--max-disk-cache`` MB cap on codeql's DB build cache.
+
+        Sentinel ``0`` means "leave codeql's unbounded default in place"
+        — corresponds to the unset state for callers like
+        :meth:`packages.codeql.CodeQLTunables.from_tuning`.
+        """
+        return cls._tuning().codeql_max_disk_cache_mb
+
     # CodeQL DB cache: grace period before _evict_stale_canonical evicts
     # a canonical that has no metadata yet. The promote sequence has a
     # gap between os.rename(staging, canonical) and save_metadata

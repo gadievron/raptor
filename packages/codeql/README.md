@@ -119,27 +119,47 @@ export RAPTOR_OUT_DIR=/custom/output/dir
 
 ### RaptorConfig Settings
 
-All configuration is centralized in `core/config.py`:
+CodeQL resource settings live in **`tuning.json`** at the repo root (the
+single source of truth, resolved by `core.tuning.get_tuning()`).
+`RaptorConfig` exposes them as classproperties for code that wants the
+resolved integers directly; new CodeQL invocations should use
+`packages.codeql.CodeQLTunables.from_tuning()` instead so the flag set
+stays consistent across consumers.
+
+`tuning.json` keys:
+
+```jsonc
+{
+  "codeql_ram_mb":  "auto",   // -M MB; "auto" = 25% of system RAM clamped [2048, 16384]
+  "codeql_threads": "auto",   // -j N;  "auto" = 0 = all CPUs (override the codeql default of 1)
+  "max_codeql_workers": 2     // parallel codeql operations in same process
+}
+```
+
+Adding a new CodeQL invocation:
 
 ```python
-# Database storage
-CODEQL_DB_DIR = REPO_ROOT / "codeql_dbs"
+from packages.codeql import CodeQLTunables
 
-# Timeouts
-CODEQL_TIMEOUT = 1800              # 30 minutes (database creation)
-CODEQL_ANALYZE_TIMEOUT = 2400      # 40 minutes (query execution)
+cmd = [codeql, "database", "analyze", db, query, "--format=sarif-latest", f"--output={sarif}"]
+CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
+```
 
-# Resources
-CODEQL_RAM_MB = 8192               # 8GB RAM for analysis
-CODEQL_THREADS = 0                 # 0 = use all CPUs
-CODEQL_MAX_PATHS = 4               # Max dataflow paths per query
+For `database create`, pass `include_disk_cache=True` (the `--max-disk-cache`
+flag is only valid there).  See `packages/codeql/tunables.py` for the
+full surface; the trust-witness corpus walker (`core.dataflow.cvefix_walk`)
+is a worked operator example with CLI overrides for `--threads`/`--ram`/
+`--max-disk-cache`.
 
-# Caching
-CODEQL_DB_CACHE_DAYS = 7           # Keep databases for 7 days
-CODEQL_DB_AUTO_CLEANUP = True      # Auto-cleanup old databases
+Non-tuning settings still live in `core/config.py`:
 
-# Parallel processing
-MAX_CODEQL_WORKERS = 2             # Parallel operations
+```python
+CODEQL_DB_DIR        = REPO_ROOT / "codeql_dbs"
+CODEQL_TIMEOUT       = 1800   # 30 minutes (database creation)
+CODEQL_ANALYZE_TIMEOUT = 2400 # 40 minutes (query execution)
+CODEQL_MAX_PATHS     = 4      # Max dataflow paths per query
+CODEQL_DB_CACHE_DAYS = 7      # Keep databases for 7 days
+CODEQL_DB_AUTO_CLEANUP = True # Auto-cleanup old databases
 ```
 
 ## Output Structure
@@ -302,10 +322,15 @@ CODEQL_TIMEOUT = 3600  # 60 minutes
 
 ### Out of memory
 
-```python
-# Reduce RAM allocation in core/config.py
-CODEQL_RAM_MB = 4096  # 4GB instead of 8GB
+Edit `tuning.json` at the repo root (or run `/tune balanced` to do it):
+
+```jsonc
+{
+  "codeql_ram_mb": 4096   // 4GB instead of "auto"
+}
 ```
+
+`CodeQLTunables.from_tuning()` picks this up immediately on the next run.
 
 ## Next Steps (Phase 2)
 

@@ -25,6 +25,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Set
 
+from packages.codeql.tunables import CodeQLTunables
+
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
 
 logger = logging.getLogger(__name__)
@@ -271,6 +273,7 @@ class CodeQLAdapter(ToolAdapter):
                     f"--output={sarif_path}",
                     "--no-rerun",
                 ]
+                CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
                 try:
                     proc = runner(
                         cmd, capture_output=True, text=True,
@@ -414,6 +417,7 @@ class CodeQLAdapter(ToolAdapter):
                     f"--output={sarif_path}",
                     "--no-rerun",
                 ]
+                CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
                 try:
                     proc = runner(
                         cmd, capture_output=True, text=True,

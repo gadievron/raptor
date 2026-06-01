@@ -319,7 +319,11 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     hit the same auth error they would have at call time anyway.
     """
     from dataclasses import replace
-    from core.llm.config import ModelConfig, _PROVIDER_BUILDERS
+    from core.llm.config import (
+        ModelConfig,
+        _PROVIDER_BUILDERS,
+        _get_configured_models,
+    )
 
     if "/" in model_name:
         provider, model_name = model_name.split("/", 1)
@@ -332,8 +336,24 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
     else:
         provider = "anthropic"
 
+    # Credential discovery, in this order:
+    #   1. env-var-based provider builder (covers the common case)
+    #   2. operator's ``models.json`` — needed when keys aren't in env
+    #      (the previous version silently skipped this path and produced
+    #      auth failures when the operator's credentials lived only in
+    #      the config file)
     builder = _PROVIDER_BUILDERS.get(provider)
     base = builder() if builder is not None else None
+    if base is None:
+        for entry in _get_configured_models():
+            if entry.get("provider") == provider and entry.get("api_key"):
+                base = ModelConfig(
+                    provider=provider,
+                    model_name=entry.get("model", model_name),
+                    api_key=entry["api_key"],
+                    api_base=entry.get("api_base"),
+                )
+                break
     if base is None:
         primary = ModelConfig(provider=provider, model_name=model_name, role="code")
     else:
