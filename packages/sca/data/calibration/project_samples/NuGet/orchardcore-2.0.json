@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:45Z",
+    "fetched_at": "2026-06-01T11:45:36Z",
     "git_ref": "v2.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of orchardcore-2.0",
@@ -189,8 +189,8 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/OrchardCore/OrchardCore.Infrastructure/Email/EmailAddressValidator.cs:1",
-          "src/OrchardCore.Modules/OrchardCore.Email.Smtp/Services/SmtpEmailProviderBase.cs:8"
+          "src/OrchardCore.Modules/OrchardCore.Email.Smtp/Services/SmtpEmailProviderBase.cs:8",
+          "src/OrchardCore/OrchardCore.Infrastructure/Email/EmailAddressValidator.cs:1"
         ],
         "verdict": "imported"
       },
@@ -239,7 +239,7 @@
       "dep_name": "pip",
       "dep_version": "22.0.3",
       "ecosystem": "PyPI",
-      "epss": 0.00021,
+      "epss": 0.00022,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -250,7 +250,7 @@
       "finding_id": "sca:vuln:PyPI:pip:22.0.3:GHSA-4xh5-x5gv-qwph",
       "in_kev": false,
       "purl": "pkg:pypi/pip@22.0.3",
-      "raptor_risk_estimate": 2.6683034575675797,
+      "raptor_risk_estimate": 2.66833754897556,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -265,10 +265,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399407163,
+        "epss_multiplier": 0.399412266,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.6683034575675797,
+        "final": 2.66833754897556,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -434,7 +434,7 @@
       "dep_name": "pip",
       "dep_version": "22.0.3",
       "ecosystem": "PyPI",
-      "epss": 0.00016,
+      "epss": 0.00017,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -445,7 +445,7 @@
       "finding_id": "sca:vuln:PyPI:pip:22.0.3:GHSA-jp4c-xjxw-mgf9",
       "in_kev": false,
       "purl": "pkg:pypi/pip@22.0.3",
-      "raptor_risk_estimate": 2.6681330005276793,
+      "raptor_risk_estimate": 2.6681670919356595,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -460,10 +460,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399381648,
+        "epss_multiplier": 0.399386751,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.6681330005276793,
+        "final": 2.6681670919356595,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -774,7 +774,7 @@
       "dep_name": "@babel/plugin-transform-modules-systemjs",
       "dep_version": "7.22.5",
       "ecosystem": "npm",
-      "epss": null,
+      "epss": 0.0002,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -785,7 +785,7 @@
       "finding_id": "sca:vuln:npm:@babel/plugin-transform-modules-systemjs:7.22.5:GHSA-fv7c-fp4j-7gwp",
       "in_kev": false,
       "purl": "pkg:npm/@babel/plugin-transform-modules-systemjs@7.22.5",
-      "raptor_risk_estimate": 11.501355581065873,
+      "raptor_risk_estimate": 7.019123098586916,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -800,10 +800,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.39940206,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.501355581065873,
+        "final": 7.019123098586916,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1167,6 +1167,73 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44495"
+        ],
+        "fixed_versions": [
+          "1.15.2",
+          "0.31.1"
+        ],
+        "id": "GHSA-3g43-6gmg-66jw",
+        "modified": "2026-05-29T16:15:52.575987+00:00",
+        "published": "2026-05-29T16:07:31+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-3g43-6gmg-66jw",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "summary": "axios Vulnerable to Credential Theft and Response Hijacking via Prototype Pollution Gadget in Config Merge"
+      },
+      "cvss_score": 7.0,
+      "dep_name": "axios",
+      "dep_version": "0.21.4",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.4:GHSA-3g43-6gmg-66jw",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.4",
+      "raptor_risk_estimate": 14.026043391543748,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'axios' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.026043391543748,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-62718"
         ],
         "fixed_versions": [
@@ -1515,6 +1582,74 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44490"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-898c-q2cr-xwhg",
+        "modified": "2026-05-29T16:00:11.639985+00:00",
+        "published": "2026-05-29T15:54:57+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-898c-q2cr-xwhg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 4.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
+        },
+        "summary": "axios has DoS & Header Injection via Prototype Pollution Read-Side Gadgets in axios merge functions"
+      },
+      "cvss_score": 4.8,
+      "dep_name": "axios",
+      "dep_version": "0.21.4",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.4:GHSA-898c-q2cr-xwhg",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.4",
+      "raptor_risk_estimate": 9.617858325629998,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'axios' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 48.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.617858325629998,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2026-40175"
         ],
         "fixed_versions": [
@@ -1782,6 +1917,74 @@
         "reachability_multiplier": 0.67849,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44492"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-pjwm-pj3p-43mv",
+        "modified": "2026-05-29T16:15:52.668986+00:00",
+        "published": "2026-05-29T15:59:30+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-pjwm-pj3p-43mv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "axios's shouldBypassProxy does not recognize IPv4-mapped IPv6 addresses, allowing NO_PROXY bypass (incomplete fix for CVE-2025-62718)"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "axios",
+      "dep_version": "0.21.4",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.4:GHSA-pjwm-pj3p-43mv",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.4",
+      "raptor_risk_estimate": 17.23199616675375,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'axios' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 17.23199616675375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
@@ -3499,9 +3702,9 @@
         "evidence": [
           "gulpfile.js:2",
           ".scripts/update.js:5",
+          ".scripts/cleanup.js:5",
           ".scripts/project.js:23",
-          ".scripts/install.js:5",
-          ".scripts/cleanup.js:5"
+          ".scripts/install.js:5"
         ],
         "verdict": "imported"
       },
@@ -4270,9 +4473,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -4343,9 +4546,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -4415,9 +4618,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/sb-watch.js:3"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/sb-watch.js:3"
         ],
         "verdict": "imported"
       },
@@ -5986,9 +6189,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6058,9 +6261,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6132,9 +6335,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6204,9 +6407,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6278,9 +6481,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6350,9 +6553,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6424,9 +6627,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6496,9 +6699,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-scss.js:6"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-scss.js:6"
         ],
         "verdict": "imported"
       },
@@ -6640,9 +6843,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-pug.js:4",
           "src/OrchardCore.Themes/TheAgencyTheme/Assets/scripts/render-pug.js:4",
-          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-pug.js:4",
-          "src/OrchardCore.Themes/TheComingSoonTheme/Assets/scripts/render-pug.js:4"
+          "src/OrchardCore.Themes/TheBlogTheme/Assets/scripts/render-pug.js:4"
         ],
         "verdict": "imported"
       },
@@ -6694,7 +6897,7 @@
       "dep_name": "qs",
       "dep_version": "6.2.3",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6705,7 +6908,7 @@
       "finding_id": "sca:vuln:npm:qs:6.2.3:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.2.3",
-      "raptor_risk_estimate": 4.527527874072671,
+      "raptor_risk_estimate": 4.525851442017724,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6720,10 +6923,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.527527874072671,
+        "final": 4.525851442017724,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7330,7 +7533,7 @@
       "dep_name": "socket.io-parser",
       "dep_version": "4.0.4",
       "ecosystem": "npm",
-      "epss": 0.0006,
+      "epss": 0.00051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7341,7 +7544,7 @@
       "finding_id": "sca:vuln:npm:socket.io-parser:4.0.4:GHSA-677m-j7p3-52f9",
       "in_kev": false,
       "purl": "pkg:npm/socket.io-parser@4.0.4",
-      "raptor_risk_estimate": 3.4257123509567067,
+      "raptor_risk_estimate": 3.42531863159245,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7356,10 +7559,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39960618,
+        "epss_multiplier": 0.399560253,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4257123509567067,
+        "final": 3.42531863159245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7540,7 +7743,7 @@
       "dep_name": "socket.io-parser",
       "dep_version": "4.1.2",
       "ecosystem": "npm",
-      "epss": 0.0006,
+      "epss": 0.00051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7551,7 +7754,7 @@
       "finding_id": "sca:vuln:npm:socket.io-parser:4.1.2:GHSA-677m-j7p3-52f9",
       "in_kev": false,
       "purl": "pkg:npm/socket.io-parser@4.1.2",
-      "raptor_risk_estimate": 4.89387478708101,
+      "raptor_risk_estimate": 4.893312330846358,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7566,10 +7769,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39960618,
+        "epss_multiplier": 0.399560253,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.89387478708101,
+        "final": 4.893312330846358,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7860,6 +8063,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },

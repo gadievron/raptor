@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:48:44Z",
+    "fetched_at": "2026-06-01T11:43:30Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.2",
@@ -57,11 +57,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/System.Management.Automation/engine/PSConfiguration.cs:9",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
+          "src/System.Management.Automation/engine/PSConfiguration.cs:9",
           "... (+5 more)"
         ],
         "verdict": "imported"

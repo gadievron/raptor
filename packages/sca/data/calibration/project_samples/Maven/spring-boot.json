@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:46:09Z",
+    "fetched_at": "2026-06-01T11:40:12Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -109,7 +109,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00112,
+      "epss": 0.00121,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -120,7 +120,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-67mf-3cr5-8w23",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.2176812248,
+      "raptor_risk_estimate": 7.218510207149999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -137,10 +137,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39987153599999997,
+        "epss_multiplier": 0.399917463,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2176812248,
+        "final": 7.218510207149999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -182,7 +182,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00191,
+      "epss": 0.00259,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -193,7 +193,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-8xfc-gm6g-vgpv",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.573069148136248,
+      "raptor_risk_estimate": 9.58136818255125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -210,10 +210,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40027467299999997,
+        "epss_multiplier": 0.400621677,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.573069148136248,
+        "final": 9.58136818255125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -320,7 +320,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00077,
+      "epss": 0.00094,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -331,7 +331,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-m44j-cfrm-g8qc",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.559156061028748,
+      "raptor_risk_estimate": 9.561230819632499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -348,10 +348,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399692931,
+        "epss_multiplier": 0.39977968199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.559156061028748,
+        "final": 9.561230819632499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -460,7 +460,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00105,
+      "epss": 0.00142,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -471,7 +471,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-v435-xc8x-wvr9",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 10.64512877960625,
+      "raptor_risk_estimate": 10.650155636467499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -488,10 +488,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399835815,
+        "epss_multiplier": 0.400024626,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.64512877960625,
+        "final": 10.650155636467499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -549,9 +549,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -622,9 +622,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -675,7 +675,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 7e-05,
+      "epss": 9e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -686,7 +686,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-wwpq-f5c3-7hvx",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 12.614017087087499,
+      "raptor_risk_estimate": 12.6143394691125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -694,9 +694,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "SpringBootApplication.java:27",
-          "IntegrationPropertiesEnvironmentPostProcessor.java:23"
+          "SampleRSocketApplication.java:18",
+          "SampleFlywayApplication.java:20",
+          "SampleJettySslApplication.java:18"
         ],
         "verdict": "imported"
       },
@@ -705,10 +705,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399335721,
+        "epss_multiplier": 0.399345927,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.614017087087499,
+        "final": 12.6143394691125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -767,9 +767,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -841,9 +841,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -915,9 +915,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -989,9 +989,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1063,9 +1063,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1137,9 +1137,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1212,9 +1212,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1286,9 +1286,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },
@@ -1357,9 +1357,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AutoConfigurations.java:25",
-          "AutoConfigurations.java:27",
-          "AutoConfigurationImportSelector.java:49"
+          "ProjectController.java:20",
+          "ProjectController.java:22",
+          "GraphQlRSocketController.java:25"
         ],
         "verdict": "imported"
       },

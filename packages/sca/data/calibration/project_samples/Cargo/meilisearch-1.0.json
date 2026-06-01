@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:23Z",
+    "fetched_at": "2026-06-01T11:45:27Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of meilisearch-1.0",
@@ -1725,7 +1725,7 @@
       "dep_name": "mio",
       "dep_version": "0.8.5",
       "ecosystem": "Cargo",
-      "epss": 0.00937,
+      "epss": 0.00963,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1736,7 +1736,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.5:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.5",
-      "raptor_risk_estimate": 13.254622968017229,
+      "raptor_risk_estimate": 13.258975052481073,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1751,10 +1751,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404081511,
+        "epss_multiplier": 0.404214189,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.254622968017229,
+        "final": 13.258975052481073,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2229,7 +2229,7 @@
           "0.17.12"
         ],
         "id": "GHSA-4p46-pwfr-66x6",
-        "modified": "2026-02-04T03:33:19.024195+00:00",
+        "modified": "2026-05-29T20:59:15.779360+00:00",
         "published": "2025-03-07T16:23:50+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
@@ -2512,7 +2512,7 @@
       "dep_name": "rustls",
       "dep_version": "0.20.7",
       "ecosystem": "Cargo",
-      "epss": 0.00054,
+      "epss": 0.00056,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2523,7 +2523,7 @@
       "finding_id": "sca:vuln:Cargo:rustls:0.20.7:RUSTSEC-2024-0336",
       "in_kev": false,
       "purl": "pkg:cargo/rustls@0.20.7",
-      "raptor_risk_estimate": 9.466194798506248,
+      "raptor_risk_estimate": 9.466436585024999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2541,10 +2541,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399575562,
+        "epss_multiplier": 0.399585768,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.466194798506248,
+        "final": 9.466436585024999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2684,6 +2684,71 @@
     },
     {
       "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.4.46"
+        ],
+        "id": "GHSA-3pv8-6f4r-ffg2",
+        "modified": "2026-06-01T10:59:10.816473+00:00",
+        "published": "2026-05-29T19:16:12+00:00",
+        "references": [
+          "https://github.com/composefs/tar-rs/security/advisories/GHSA-3pv8-6f4r-ffg2",
+          "https://github.com/composefs/tar-rs/pull/454",
+          "https://github.com/composefs/tar-rs/commit/bab14dd84b411ac16ecb56d4f2d2f7bfb88a9838",
+          "https://github.com/composefs/tar-rs",
+          "https://github.com/composefs/tar-rs/releases/tag/0.4.46"
+        ],
+        "severity": null,
+        "summary": "tar has a PAX header desynchronization issue"
+      },
+      "cvss_score": null,
+      "dep_name": "tar",
+      "dep_version": "0.4.38",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-3pv8-6f4r-ffg2",
+      "in_kev": false,
+      "purl": "pkg:cargo/tar@0.4.38",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "meilisearch-types/src/compression.rs:8"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
         "aliases": [
           "CVE-2026-33055",
           "RUSTSEC-2026-0068"
@@ -2712,7 +2777,7 @@
       "dep_name": "tar",
       "dep_version": "0.4.38",
       "ecosystem": "Cargo",
-      "epss": 0.00017,
+      "epss": 0.00019,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2723,7 +2788,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-gchp-q4r4-x4ff",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 19.58413141700824,
+      "raptor_risk_estimate": 19.584631873382275,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2740,10 +2805,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.58413141700824,
+        "final": 19.584631873382275,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2785,7 +2850,7 @@
       "dep_name": "tar",
       "dep_version": "0.4.38",
       "ecosystem": "Cargo",
-      "epss": 0.00017,
+      "epss": 0.00019,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2796,7 +2861,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-j4xf-2g29-59ph",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 8.200158848188124,
+      "raptor_risk_estimate": 8.200368396504375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2813,10 +2878,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.200158848188124,
+        "final": 8.200368396504375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2872,11 +2937,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "meilisearch-auth/src/lib.rs:16",
-          "meilisearch-auth/src/store.rs:17",
           "dump/src/lib.rs:12",
           "dump/src/lib.rs:214",
           "dump/src/writer.rs:11",
+          "dump/src/reader/v6/mod.rs:7",
+          "dump/src/reader/v2/updates.rs:2",
           "... (+42 more)"
         ],
         "verdict": "imported"

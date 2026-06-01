@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:49:54Z",
+    "fetched_at": "2026-06-01T11:44:43Z",
     "git_ref": "v0.7.19",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of pterodactyl-0.7",
@@ -173,7 +173,7 @@
       "dep_name": "aws/aws-sdk-php",
       "dep_version": "3.74.1",
       "ecosystem": "Packagist",
-      "epss": 0.00014,
+      "epss": 0.00017,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -184,7 +184,7 @@
       "finding_id": "sca:vuln:Packagist:aws/aws-sdk-php:3.74.1:GHSA-x8cp-jf6f-r4xh",
       "in_kev": false,
       "purl": "pkg:composer/aws/aws-sdk-php@3.74.1",
-      "raptor_risk_estimate": 6.480575014271003,
+      "raptor_risk_estimate": 6.480823432441308,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -199,10 +199,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39937144199999997,
+        "epss_multiplier": 0.399386751,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.480575014271003,
+        "final": 6.480823432441308,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -313,7 +313,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.00975,
+      "epss": 0.00969,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -324,7 +324,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-frqg-7g38-6gcf",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 7.104767996961613,
+      "raptor_risk_estimate": 7.104229913830465,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -339,10 +339,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40427542499999997,
+        "epss_multiplier": 0.404244807,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.104767996961613,
+        "final": 7.104229913830465,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -455,7 +455,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.02744,
+      "epss": 0.01972,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -466,7 +466,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-h5h8-pc6h-jvvx",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 7.794882072333547,
+      "raptor_risk_estimate": 7.720582853638829,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -481,10 +481,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.413302632,
+        "epss_multiplier": 0.40936311599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.794882072333547,
+        "final": 7.720582853638829,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -527,7 +527,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.01179,
+      "epss": 0.01575,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -538,7 +538,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-jm6m-4632-36hf",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 7.644262542207593,
+      "raptor_risk_estimate": 7.68237457666758,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -553,10 +553,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.405316437,
+        "epss_multiplier": 0.40733722499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.644262542207593,
+        "final": 7.68237457666758,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -670,7 +670,7 @@
       "dep_name": "composer/composer",
       "dep_version": "1.7.3",
       "ecosystem": "Packagist",
-      "epss": 0.00237,
+      "epss": 0.00211,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -681,7 +681,7 @@
       "finding_id": "sca:vuln:Packagist:composer/composer:1.7.3:GHSA-x7cr-6qr6-2hh6",
       "in_kev": false,
       "purl": "pkg:composer/composer/composer@1.7.3",
-      "raptor_risk_estimate": 7.124420159291515,
+      "raptor_risk_estimate": 7.122060030435781,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -696,10 +696,10 @@
         "cvss_base": 83.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400509411,
+        "epss_multiplier": 0.400376733,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.124420159291515,
+        "final": 7.122060030435781,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -828,11 +828,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -907,11 +907,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -989,11 +989,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1066,11 +1066,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1145,11 +1145,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1222,11 +1222,11 @@
           "reason": "vendor `Guzzlehttp\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Repositories/Daemon/BaseRepository.php:6",
-          "app/Contracts/Repository/Daemon/BaseRepositoryInterface.php:4",
-          "app/Http/Middleware/VerifyReCaptcha.php:7",
-          "app/Services/Helpers/SoftwareVersionService.php:14",
-          "app/Http/Controllers/Server/Files/RemoteRequestController.php:8",
+          "app/Services/DaemonKeys/DaemonKeyDeletionService.php:30",
+          "app/Services/DaemonKeys/RevokeMultipleDaemonKeysService.php:6",
+          "app/Services/Servers/ServerDeletionService.php:13",
+          "app/Services/Servers/BuildModificationService.php:6",
+          "app/Services/Servers/ServerCreationService.php:11",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -1916,11 +1916,11 @@
           "reason": "vendor `League\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Transformers/Daemon/ApiKeyTransformer.php:8",
-          "app/Transformers/Api/Application/BaseTransformer.php:9",
+          "app/Extensions/League/Fractal/Serializers/PterodactylSerializer.php:4",
           "app/Extensions/Spatie/Fractalistic/Fractal.php:4",
-          "app/Transformers/Api/Application/ServerDatabaseTransformer.php:7",
-          "app/Http/Controllers/Api/Remote/ValidateKeyController.php:32",
+          "app/Transformers/Api/Application/BaseTransformer.php:9",
+          "app/Transformers/Daemon/ApiKeyTransformer.php:8",
+          "app/Extensions/Spatie/Fractalistic/Fractal.php:8",
           "... (+2 more)"
         ],
         "verdict": "imported"
@@ -1978,7 +1978,7 @@
       "dep_name": "maximebf/debugbar",
       "dep_version": "v1.15.0",
       "ecosystem": "Packagist",
-      "epss": 0.02443,
+      "epss": 0.01532,
       "exploit_evidence": {
         "edb_ids": [
           52141
@@ -1991,7 +1991,7 @@
       "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.15.0:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
       "purl": "pkg:composer/maximebf/debugbar@v1.15.0",
-      "raptor_risk_estimate": 11.162639972514325,
+      "raptor_risk_estimate": 11.036614099078758,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2006,10 +2006,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.411766629,
+        "epss_multiplier": 0.407117796,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 11.162639972514325,
+        "final": 11.036614099078758,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2120,7 +2120,7 @@
       "dep_name": "nesbot/carbon",
       "dep_version": "1.36.1",
       "ecosystem": "Packagist",
-      "epss": 0.00095,
+      "epss": 0.00129,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2131,7 +2131,7 @@
       "finding_id": "sca:vuln:Packagist:nesbot/carbon:1.36.1:GHSA-j3f9-p6hm-5w6q",
       "in_kev": false,
       "purl": "pkg:composer/nesbot/carbon@1.36.1",
-      "raptor_risk_estimate": 4.896062116882433,
+      "raptor_risk_estimate": 4.898186951546672,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2146,10 +2146,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399784785,
+        "epss_multiplier": 0.39995828699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.896062116882433,
+        "final": 4.898186951546672,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2193,7 +2193,7 @@
       "dep_name": "phpunit/phpunit",
       "dep_version": "7.4.4",
       "ecosystem": "Packagist",
-      "epss": 0.00162,
+      "epss": 0.00236,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2204,7 +2204,7 @@
       "finding_id": "sca:vuln:Packagist:phpunit/phpunit:7.4.4:GHSA-vvj3-c3rp-c85p",
       "in_kev": false,
       "purl": "pkg:composer/phpunit/phpunit@7.4.4",
-      "raptor_risk_estimate": 9.555486117593768,
+      "raptor_risk_estimate": 9.564504165889346,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2213,10 +2213,10 @@
         },
         "evidence": [
           "tests/Integration/Api/Application/ApplicationApiIntegrationTestCase.php:6",
-          "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4",
-          "tests/Assertions/CommandAssertionsTrait.php:11",
           "tests/Assertions/ControllerAssertionsTrait.php:14",
-          "tests/Assertions/NestedObjectAssertionsTrait.php:11"
+          "tests/Assertions/CommandAssertionsTrait.php:11",
+          "tests/Assertions/NestedObjectAssertionsTrait.php:11",
+          "tests/Assertions/MiddlewareAttributeAssertionsTrait.php:4"
         ],
         "verdict": "not_reachable"
       },
@@ -2225,10 +2225,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400126686,
+        "epss_multiplier": 0.400504308,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.555486117593768,
+        "final": 9.564504165889346,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2413,7 +2413,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 0.06657,
+      "epss": 0.06307,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2424,7 +2424,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v4.1.7:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v4.1.7",
-      "raptor_risk_estimate": 9.990734243755124,
+      "raptor_risk_estimate": 9.949549940061374,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2433,10 +2433,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2446,10 +2446,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.433270671,
+        "epss_multiplier": 0.43148462099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.990734243755124,
+        "final": 9.949549940061374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2511,10 +2511,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2591,10 +2591,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2670,10 +2670,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2751,10 +2751,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2830,10 +2830,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2908,10 +2908,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -2968,7 +2968,7 @@
       "dep_name": "symfony/process",
       "dep_version": "v4.1.7",
       "ecosystem": "Packagist",
-      "epss": 9e-05,
+      "epss": 0.00012,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2979,7 +2979,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/process:v4.1.7:GHSA-r39x-jcww-82v6",
       "in_kev": false,
       "purl": "pkg:composer/symfony/process@v4.1.7",
-      "raptor_risk_estimate": 7.947033865540873,
+      "raptor_risk_estimate": 7.947338516554497,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2988,10 +2988,10 @@
         },
         "evidence": [
           ".sami.php:4",
-          "app/Http/Middleware/AdminAuthenticate.php:14",
-          "app/Http/Middleware/DaemonAuthenticate.php:15",
-          "app/Http/Middleware/Server/AccessingValidServer.php:13",
-          "app/Http/Middleware/Server/AuthenticateAsSubuser.php:16",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
           "... (+27 more)"
         ],
         "verdict": "imported"
@@ -3001,10 +3001,310 @@
         "cvss_base": 63.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399345927,
+        "epss_multiplier": 0.399361236,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.947033865540873,
+        "final": 7.947338516554497,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45065"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-72xp-p242-47p9",
+        "modified": "2026-05-27T17:00:09.216591+00:00",
+        "published": "2026-05-27T16:55:16+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-72xp-p242-47p9",
+          "https://github.com/symfony/symfony/commit/bcf487c22f3240ba994124e0e0fe8616f3cfc47a",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/routing/CVE-2026-45065.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45065.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation \u2192 Off-Site //host URL Injection"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/routing",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/routing:v4.1.7:GHSA-72xp-p242-47p9",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/routing@v4.1.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45304"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-4qpc-3hr4-r2p4",
+        "modified": "2026-05-27T21:45:20.121302+00:00",
+        "published": "2026-05-27T21:33:50+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-4qpc-3hr4-r2p4",
+          "https://github.com/symfony/symfony/commit/e77391b2e4f18821198f010d573674c8ed4a970a",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45304.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45304.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony's YAML Parser Vulnerable to Exponential Memory Allocation via Recursive Collection-Alias Expansion (\"Billion Laughs\")"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-4qpc-3hr4-r2p4",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v4.1.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45305"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-9frc-8383-795m",
+        "modified": "2026-05-27T21:45:20.956231+00:00",
+        "published": "2026-05-27T21:34:35+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-9frc-8383-795m",
+          "https://github.com/symfony/symfony/commit/9749cd43c5e09b3735093623670b21b9d8a056cb",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45305.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45305.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony's YAML Parser has a ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-9frc-8383-795m",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v4.1.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45133"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-c2p3-7m5p-cv8x",
+        "modified": "2026-05-27T21:45:20.337516+00:00",
+        "published": "2026-05-27T21:33:07+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-c2p3-7m5p-cv8x",
+          "https://github.com/symfony/symfony/commit/914f427ed9630ddb3904dafba763e53d9f133fe3",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45133.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45133.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony hardened the parser when handling untrusted input"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v4.1.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v4.1.7:GHSA-c2p3-7m5p-cv8x",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v4.1.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          ".sami.php:4",
+          "bootstrap/tests.php:4",
+          "app/Exceptions/Handler.php:15",
+          "app/Http/Middleware/Api/AuthenticateKey.php:11",
+          "app/Http/Middleware/Api/Daemon/DaemonAuthenticate.php:7",
+          "... (+27 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

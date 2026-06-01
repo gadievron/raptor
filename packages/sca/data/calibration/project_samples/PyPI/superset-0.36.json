@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:48:27Z",
+    "fetched_at": "2026-06-01T11:42:37Z",
     "git_ref": "0.36.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of superset-0.36",
@@ -556,8 +556,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/sql_lab.py:29",
           "superset/extensions.py:24",
+          "superset/sql_lab.py:29",
           "superset/config.py:33",
           "superset/tasks/cache.py:25",
           "superset/sql_lab.py:29",
@@ -613,7 +613,7 @@
       "dep_name": "cryptography",
       "dep_version": "2.8",
       "ecosystem": "PyPI",
-      "epss": 0.00855,
+      "epss": 0.00879,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -624,7 +624,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:2.8:GHSA-3ww4-gg4f-jr7f",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@2.8",
-      "raptor_risk_estimate": 20.94584406108758,
+      "raptor_risk_estimate": 20.952199062662594,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -646,10 +646,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403663065,
+        "epss_multiplier": 0.40378553699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.94584406108758,
+        "final": 20.952199062662594,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -759,7 +759,7 @@
       "dep_name": "cryptography",
       "dep_version": "2.8",
       "ecosystem": "PyPI",
-      "epss": 0.00231,
+      "epss": 0.00238,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -770,7 +770,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:2.8:GHSA-9v9h-cgj8-h64p",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@2.8",
-      "raptor_risk_estimate": 9.93938304376875,
+      "raptor_risk_estimate": 9.940269594337499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -792,10 +792,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400478793,
+        "epss_multiplier": 0.400514514,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.93938304376875,
+        "final": 9.940269594337499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1278,7 +1278,7 @@
       "dep_name": "cryptography",
       "dep_version": "2.8",
       "ecosystem": "PyPI",
-      "epss": 0.88452,
+      "epss": 0.88334,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1289,7 +1289,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:2.8:GHSA-x4qr-2fvf-3mr5",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@2.8",
-      "raptor_risk_estimate": 28.406016541229995,
+      "raptor_risk_estimate": 28.385909113785,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1311,10 +1311,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.850670556,
+        "epss_multiplier": 0.850068402,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 28.406016541229995,
+        "final": 28.385909113785,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1373,11 +1373,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1450,11 +1450,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1528,11 +1528,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1605,11 +1605,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1681,11 +1681,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1756,11 +1756,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1832,11 +1832,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1907,11 +1907,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -1982,11 +1982,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2059,11 +2059,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2136,11 +2136,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2212,11 +2212,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2289,11 +2289,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:23",
           "superset/forms.py:20",
           "superset/extensions.py:26",
+          "superset/app.py:23",
+          "superset/cli.py:28",
           "superset/config.py:35",
-          "superset/config.py:45",
           "... and 288 more"
         ],
         "verdict": "imported"
@@ -2416,7 +2416,7 @@
       "dep_name": "flask-cors",
       "dep_version": "3.0.7",
       "ecosystem": "PyPI",
-      "epss": 0.00081,
+      "epss": 0.00067,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2427,7 +2427,7 @@
       "finding_id": "sca:vuln:PyPI:flask-cors:3.0.7:GHSA-43qf-4rqw-9q2g",
       "in_kev": false,
       "purl": "pkg:pypi/flask-cors@3.0.7",
-      "raptor_risk_estimate": 20.740895260293417,
+      "raptor_risk_estimate": 20.737188176041325,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2444,10 +2444,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399713343,
+        "epss_multiplier": 0.39964190099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.740895260293417,
+        "final": 20.737188176041325,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2488,7 +2488,7 @@
       "dep_name": "flask-cors",
       "dep_version": "3.0.7",
       "ecosystem": "PyPI",
-      "epss": 0.00584,
+      "epss": 0.00487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2499,7 +2499,7 @@
       "finding_id": "sca:vuln:PyPI:flask-cors:3.0.7:GHSA-7rxf-gvfg-47g4",
       "in_kev": false,
       "purl": "pkg:pypi/flask-cors@3.0.7",
-      "raptor_risk_estimate": 20.874085501636394,
+      "raptor_risk_estimate": 20.848400703604053,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2516,10 +2516,10 @@
         "cvss_base": 43.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402280152,
+        "epss_multiplier": 0.401785161,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.874085501636394,
+        "final": 20.848400703604053,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2633,7 +2633,7 @@
       "dep_name": "flask-cors",
       "dep_version": "3.0.7",
       "ecosystem": "PyPI",
-      "epss": 0.00136,
+      "epss": 0.00114,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2644,7 +2644,7 @@
       "finding_id": "sca:vuln:PyPI:flask-cors:3.0.7:GHSA-8vgw-p6qm-5gr7",
       "in_kev": false,
       "purl": "pkg:pypi/flask-cors@3.0.7",
-      "raptor_risk_estimate": 27.625515670212987,
+      "raptor_risk_estimate": 27.617762038708005,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2661,10 +2661,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399994008,
+        "epss_multiplier": 0.399881742,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.625515670212987,
+        "final": 27.617762038708005,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2847,7 +2847,7 @@
       "dep_name": "flask",
       "dep_version": "1.1.1",
       "ecosystem": "PyPI",
-      "epss": 0.00018,
+      "epss": 0.00014,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2858,7 +2858,7 @@
       "finding_id": "sca:vuln:PyPI:flask:1.1.1:GHSA-68rp-wp8r-4726",
       "in_kev": false,
       "purl": "pkg:pypi/flask@1.1.1",
-      "raptor_risk_estimate": 7.2090229647,
+      "raptor_risk_estimate": 7.2086545280999985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2866,11 +2866,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:22",
           "superset/typing.py:19",
-          "superset/viz.py:42",
+          "superset/app.py:22",
+          "superset/cli.py:26",
+          "superset/cli.py:27",
           "superset/__init__.py:18",
-          "superset/jinja_context.py:22",
           "... and 45 more"
         ],
         "verdict": "imported"
@@ -2880,10 +2880,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399391854,
+        "epss_multiplier": 0.39937144199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2090229647,
+        "final": 7.2086545280999985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2925,7 +2925,7 @@
       "dep_name": "flask",
       "dep_version": "1.1.1",
       "ecosystem": "PyPI",
-      "epss": 0.00185,
+      "epss": 0.00221,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2936,7 +2936,7 @@
       "finding_id": "sca:vuln:PyPI:flask:1.1.1:GHSA-m2qf-hxjv-5gpq",
       "in_kev": false,
       "purl": "pkg:pypi/flask@1.1.1",
-      "raptor_risk_estimate": 13.545759736406248,
+      "raptor_risk_estimate": 13.55197710403125,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2944,11 +2944,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:22",
           "superset/typing.py:19",
-          "superset/viz.py:42",
+          "superset/app.py:22",
+          "superset/cli.py:26",
+          "superset/cli.py:27",
           "superset/__init__.py:18",
-          "superset/jinja_context.py:22",
           "... and 45 more"
         ],
         "verdict": "imported"
@@ -2958,10 +2958,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400244055,
+        "epss_multiplier": 0.400427763,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.545759736406248,
+        "final": 13.55197710403125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3002,7 +3002,7 @@
       "dep_name": "gevent",
       "dep_version": "1.4.0",
       "ecosystem": "PyPI",
-      "epss": 0.03972,
+      "epss": 0.03974,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3013,7 +3013,7 @@
       "finding_id": "sca:vuln:PyPI:gevent:1.4.0:GHSA-x7m3-jprg-wc5g",
       "in_kev": false,
       "purl": "pkg:pypi/gevent@1.4.0",
-      "raptor_risk_estimate": 12.648531229865727,
+      "raptor_risk_estimate": 12.648838904822744,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3028,10 +3028,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41956911599999996,
+        "epss_multiplier": 0.419579322,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.648531229865727,
+        "final": 12.648838904822744,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -4177,11 +4177,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
+          "superset/dataframe.py:21",
           "superset/viz.py:38",
           "superset/viz.py:46",
-          "superset/dataframe.py:21",
           "superset/result_set.py:26",
-          "superset/db_engine_specs/presto.py:28",
+          "superset/connectors/druid/models.py:29",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -4580,7 +4580,7 @@
       "dep_name": "pyjwt",
       "dep_version": "1.7.1",
       "ecosystem": "PyPI",
-      "epss": 0.00066,
+      "epss": 0.00163,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4591,7 +4591,7 @@
       "finding_id": "sca:vuln:PyPI:pyjwt:1.7.1:PYSEC-2025-183",
       "in_kev": false,
       "purl": "pkg:pypi/pyjwt@1.7.1",
-      "raptor_risk_estimate": 8.605458599147601,
+      "raptor_risk_estimate": 8.616117338730064,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4606,10 +4606,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399636798,
+        "epss_multiplier": 0.400131789,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.605458599147601,
+        "final": 8.616117338730064,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -4740,8 +4740,8 @@
         },
         "evidence": [
           "superset/cli.py:24",
-          "superset/datasets/api.py:19",
           "superset/views/base.py:24",
+          "superset/datasets/api.py:19",
           "superset/models/helpers.py:29"
         ],
         "verdict": "imported"
@@ -4815,8 +4815,8 @@
         },
         "evidence": [
           "superset/cli.py:24",
-          "superset/datasets/api.py:19",
           "superset/views/base.py:24",
+          "superset/datasets/api.py:19",
           "superset/models/helpers.py:29"
         ],
         "verdict": "imported"
@@ -5226,7 +5226,7 @@
       "dep_name": "selenium",
       "dep_version": "3.141.0",
       "ecosystem": "PyPI",
-      "epss": 0.00114,
+      "epss": 0.00117,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5237,7 +5237,7 @@
       "finding_id": "sca:vuln:PyPI:selenium:3.141.0:PYSEC-2023-206",
       "in_kev": false,
       "purl": "pkg:pypi/selenium@3.141.0",
-      "raptor_risk_estimate": 27.617762038708005,
+      "raptor_risk_estimate": 27.618819352095052,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5258,10 +5258,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399881742,
+        "epss_multiplier": 0.399897051,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.617762038708005,
+        "final": 27.618819352095052,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -5318,7 +5318,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -5394,7 +5394,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -5472,7 +5472,7 @@
           "superset/sql_parse.py:21",
           "superset/sql_parse.py:22",
           "superset/sql_parse.py:23",
-          "superset/db_engine_specs/base.py:38",
+          "superset/connectors/sqla/models.py:26",
           "... and 5 more"
         ],
         "verdict": "imported"
@@ -5590,7 +5590,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.25.8",
       "ecosystem": "PyPI",
-      "epss": 0.00216,
+      "epss": 0.00222,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5601,7 +5601,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.25.8:GHSA-34jh-p97f-mpxf",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.25.8",
-      "raptor_risk_estimate": 5.419505888425069,
+      "raptor_risk_estimate": 5.419920307754931,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5616,10 +5616,10 @@
         "cvss_base": 44.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40040224799999996,
+        "epss_multiplier": 0.400432866,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.419505888425069,
+        "final": 5.419920307754931,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -6072,7 +6072,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.25.8",
       "ecosystem": "PyPI",
-      "epss": 0.00976,
+      "epss": 0.0095,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6083,7 +6083,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.25.8:GHSA-v845-jxx5-vc9f",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.25.8",
-      "raptor_risk_estimate": 7.337453209293677,
+      "raptor_risk_estimate": 7.335045181823943,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6098,10 +6098,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404280528,
+        "epss_multiplier": 0.40414785,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.337453209293677,
+        "final": 7.335045181823943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -6226,10 +6226,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6304,10 +6304,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6379,10 +6379,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6451,10 +6451,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6523,10 +6523,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6600,10 +6600,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6677,10 +6677,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6747,10 +6747,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6805,7 +6805,7 @@
       "dep_name": "werkzeug",
       "dep_version": "0.16.0",
       "ecosystem": "PyPI",
-      "epss": 0.01065,
+      "epss": 0.00878,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6816,7 +6816,7 @@
       "finding_id": "sca:vuln:PyPI:werkzeug:0.16.0:PYSEC-2023-221",
       "in_kev": false,
       "purl": "pkg:pypi/werkzeug@0.16.0",
-      "raptor_risk_estimate": 13.69773983390625,
+      "raptor_risk_estimate": 13.665444063187499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6824,10 +6824,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "superset/app.py:546",
+          "docker/pythonpath_dev/superset_config.py:28",
           "superset/extensions.py:29",
+          "superset/app.py:546",
           "superset/__init__.py:19",
-          "superset/tasks/schedules.py:37",
           "superset/utils/url_map_converters.py:17",
           "... and 15 more"
         ],
@@ -6838,10 +6838,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404734695,
+        "epss_multiplier": 0.40378043399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.69773983390625,
+        "final": 13.665444063187499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8829,7 +8829,7 @@
       "dep_name": "bootstrap",
       "dep_version": "3.4.1",
       "ecosystem": "npm",
-      "epss": 0.00296,
+      "epss": 0.00247,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8840,7 +8840,7 @@
       "finding_id": "sca:vuln:npm:bootstrap:3.4.1:GHSA-q58r-hwc8-rm9j",
       "in_kev": false,
       "purl": "pkg:npm/bootstrap@3.4.1",
-      "raptor_risk_estimate": 20.797825482736236,
+      "raptor_risk_estimate": 20.78485068785392,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8857,10 +8857,10 @@
         "cvss_base": 55.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40081048799999996,
+        "epss_multiplier": 0.400560441,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.797825482736236,
+        "final": 20.78485068785392,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -10275,7 +10275,7 @@
       "dep_name": "debug",
       "dep_version": "3.2.6",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10286,7 +10286,7 @@
       "finding_id": "sca:vuln:npm:debug:3.2.6:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@3.2.6",
-      "raptor_risk_estimate": 4.52897307412004,
+      "raptor_risk_estimate": 4.529262114129512,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10301,10 +10301,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.52897307412004,
+        "final": 4.529262114129512,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10347,7 +10347,7 @@
       "dep_name": "debug",
       "dep_version": "4.1.0",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10358,7 +10358,7 @@
       "finding_id": "sca:vuln:npm:debug:4.1.0:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@4.1.0",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10373,10 +10373,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10419,7 +10419,7 @@
       "dep_name": "debug",
       "dep_version": "4.1.1",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10430,7 +10430,7 @@
       "finding_id": "sca:vuln:npm:debug:4.1.1:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@4.1.1",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10445,10 +10445,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10807,7 +10807,7 @@
           "3.3.2"
         ],
         "id": "GHSA-cj63-jhhr-wcxv",
-        "modified": "2026-04-07T18:44:12.020335+00:00",
+        "modified": "2026-05-29T21:46:57+00:00",
         "published": "2026-04-03T03:45:08+00:00",
         "references": [
           "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cj63-jhhr-wcxv",
@@ -10870,7 +10870,7 @@
           "3.3.2"
         ],
         "id": "GHSA-cjmm-f4jc-qw8r",
-        "modified": "2026-04-07T18:44:11.938759+00:00",
+        "modified": "2026-05-29T21:47:07+00:00",
         "published": "2026-04-03T03:46:07+00:00",
         "references": [
           "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cjmm-f4jc-qw8r",
@@ -12738,7 +12738,7 @@
       "dep_name": "flatted",
       "dep_version": "2.0.1",
       "ecosystem": "npm",
-      "epss": 0.00067,
+      "epss": 0.0007,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12749,7 +12749,7 @@
       "finding_id": "sca:vuln:npm:flatted:2.0.1:GHSA-rf6f-7fwh-wjgh",
       "in_kev": false,
       "purl": "pkg:npm/flatted@2.0.1",
-      "raptor_risk_estimate": 18.72713646620339,
+      "raptor_risk_estimate": 18.727853842763366,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12764,10 +12764,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39964190099999997,
+        "epss_multiplier": 0.39965721,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 18.72713646620339,
+        "final": 18.727853842763366,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -14192,9 +14192,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/App.jsx:23",
+          "superset-frontend/src/modules/utils.js:20",
           "superset-frontend/src/setup/setupApp.ts:20",
-          "superset-frontend/src/modules/utils.js:20"
+          "superset-frontend/src/SqlLab/components/App.jsx:23"
         ],
         "verdict": "imported"
       },
@@ -14269,9 +14269,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/App.jsx:23",
+          "superset-frontend/src/modules/utils.js:20",
           "superset-frontend/src/setup/setupApp.ts:20",
-          "superset-frontend/src/modules/utils.js:20"
+          "superset-frontend/src/SqlLab/components/App.jsx:23"
         ],
         "verdict": "imported"
       },
@@ -15882,10 +15882,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -15958,10 +15958,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -16033,10 +16033,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -16110,10 +16110,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -16186,10 +16186,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -16261,10 +16261,10 @@
         },
         "evidence": [
           "superset-frontend/src/reduxUtils.js:22",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:23",
-          "superset-frontend/src/SqlLab/actions/sqlLab.js:24",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:34",
-          "superset-frontend/src/SqlLab/components/SqlEditor.jsx:35",
+          "superset-frontend/src/utils/DebouncedMessageQueue.js:19",
+          "superset-frontend/src/explore/components/ControlPanelsContainer.jsx:25",
+          "superset-frontend/src/explore/components/controls/ColorSchemeControl.jsx:21",
+          "superset-frontend/src/explore/components/controls/withVerification.jsx:22",
           "... and 24 more"
         ],
         "verdict": "imported"
@@ -16593,7 +16593,7 @@
       "dep_name": "min-document",
       "dep_version": "2.19.0",
       "ecosystem": "npm",
-      "epss": 0.00148,
+      "epss": 0.00164,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16604,7 +16604,7 @@
       "finding_id": "sca:vuln:npm:min-document:2.19.0:GHSA-rx8g-88g5-qh64",
       "in_kev": false,
       "purl": "pkg:npm/min-document@2.19.0",
-      "raptor_risk_estimate": 4.899374359153157,
+      "raptor_risk_estimate": 4.900374281348094,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16619,10 +16619,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400055244,
+        "epss_multiplier": 0.40013689199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.899374359153157,
+        "final": 4.900374281348094,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17464,10 +17464,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -17540,10 +17540,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -17617,10 +17617,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -17693,10 +17693,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -17770,10 +17770,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -17846,10 +17846,10 @@
         },
         "evidence": [
           "superset-frontend/src/preamble.js:21",
-          "superset-frontend/src/SqlLab/components/QueryTable.jsx:21",
-          "superset-frontend/src/SqlLab/components/ExploreResultsButton.jsx:19",
+          "superset-frontend/src/modules/dates.js:19",
+          "superset-frontend/src/visualizations/TimeTable/TimeTable.jsx:26",
           "superset-frontend/src/explore/components/controls/DateFilterControl.jsx:39",
-          "superset-frontend/src/profile/components/CreatedContent.jsx:21",
+          "superset-frontend/src/chart/chartAction.js:21",
           "... and 12 more"
         ],
         "verdict": "imported"
@@ -21193,7 +21193,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -21204,7 +21204,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.2",
-      "raptor_risk_estimate": 4.527527874072671,
+      "raptor_risk_estimate": 4.525851442017724,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -21219,10 +21219,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.527527874072671,
+        "final": 4.525851442017724,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -21339,7 +21339,7 @@
       "dep_name": "qs",
       "dep_version": "6.7.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -21350,7 +21350,7 @@
       "finding_id": "sca:vuln:npm:qs:6.7.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.7.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -21365,10 +21365,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -22677,7 +22677,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.13",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -22688,7 +22688,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.13",
-      "raptor_risk_estimate": 10.107093611622146,
+      "raptor_risk_estimate": 10.107739266539266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -22703,10 +22703,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.107093611622146,
+        "final": 10.107739266539266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -23505,7 +23505,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.8",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -23516,7 +23516,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.8:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.8",
-      "raptor_risk_estimate": 10.107093611622146,
+      "raptor_risk_estimate": 10.107739266539266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -23531,10 +23531,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.107093611622146,
+        "final": 10.107739266539266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -24448,6 +24448,69 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-54798"
         ],
         "fixed_versions": [
@@ -24512,6 +24575,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.1.0",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.1.0:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.1.0",
+      "raptor_risk_estimate": 8.014881938024999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.014881938024999,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -25027,7 +25153,7 @@
       "dep_name": "underscore",
       "dep_version": "1.6.0",
       "ecosystem": "npm",
-      "epss": 0.01413,
+      "epss": 0.01452,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25038,7 +25164,7 @@
       "finding_id": "sca:vuln:npm:underscore:1.6.0:GHSA-cf4h-3jhx-xvhq",
       "in_kev": false,
       "purl": "pkg:npm/underscore@1.6.0",
-      "raptor_risk_estimate": 12.293878674845562,
+      "raptor_risk_estimate": 12.299897438487582,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -25053,10 +25179,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.406510539,
+        "epss_multiplier": 0.40670955599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.293878674845562,
+        "final": 12.299897438487582,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -25166,7 +25292,7 @@
       "dep_name": "underscore",
       "dep_version": "1.9.2",
       "ecosystem": "npm",
-      "epss": 0.01413,
+      "epss": 0.01452,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25177,7 +25303,7 @@
       "finding_id": "sca:vuln:npm:underscore:1.9.2:GHSA-cf4h-3jhx-xvhq",
       "in_kev": false,
       "purl": "pkg:npm/underscore@1.9.2",
-      "raptor_risk_estimate": 17.562683821207944,
+      "raptor_risk_estimate": 17.57128205498226,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -25192,10 +25318,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406510539,
+        "epss_multiplier": 0.40670955599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.562683821207944,
+        "final": 17.57128205498226,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -25324,8 +25450,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25395,8 +25521,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25467,8 +25593,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25539,8 +25665,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25610,8 +25736,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25682,8 +25808,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25754,8 +25880,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25827,8 +25953,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24",
-          "superset-frontend/src/explore/exploreUtils.js:20"
+          "superset-frontend/src/explore/exploreUtils.js:20",
+          "superset-frontend/src/SqlLab/components/TabbedSqlEditors.jsx:24"
         ],
         "verdict": "imported"
       },
@@ -25880,7 +26006,7 @@
       "dep_name": "url-parse",
       "dep_version": "1.4.7",
       "ecosystem": "npm",
-      "epss": 0.00032,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25891,7 +26017,7 @@
       "finding_id": "sca:vuln:npm:url-parse:1.4.7:GHSA-8v38-pw62-9cw2",
       "in_kev": false,
       "purl": "pkg:npm/url-parse@1.4.7",
-      "raptor_risk_estimate": 7.949703000264792,
+      "raptor_risk_estimate": 7.949398336471021,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -25906,10 +26032,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39946329599999997,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.949703000264792,
+        "final": 7.949398336471021,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -26723,7 +26849,7 @@
       "dep_name": "vega-functions",
       "dep_version": "5.5.1",
       "ecosystem": "npm",
-      "epss": 0.00232,
+      "epss": 0.00468,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -26734,7 +26860,7 @@
       "finding_id": "sca:vuln:npm:vega-functions:5.5.1:GHSA-963h-3v39-3pqf",
       "in_kev": false,
       "purl": "pkg:npm/vega-functions@5.5.1",
-      "raptor_risk_estimate": 4.904623950676571,
+      "raptor_risk_estimate": 4.919372803051877,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -26749,10 +26875,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400483896,
+        "epss_multiplier": 0.401688204,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.904623950676571,
+        "final": 4.919372803051877,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -27411,7 +27537,7 @@
       "dep_name": "vega",
       "dep_version": "5.9.2",
       "ecosystem": "npm",
-      "epss": 0.00232,
+      "epss": 0.00468,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27422,7 +27548,7 @@
       "finding_id": "sca:vuln:npm:vega:5.9.2:GHSA-963h-3v39-3pqf",
       "in_kev": false,
       "purl": "pkg:npm/vega@5.9.2",
-      "raptor_risk_estimate": 4.904623950676571,
+      "raptor_risk_estimate": 4.919372803051877,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -27437,10 +27563,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400483896,
+        "epss_multiplier": 0.401688204,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.904623950676571,
+        "final": 4.919372803051877,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

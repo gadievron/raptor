@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:49:22Z",
+    "fetched_at": "2026-06-01T11:44:13Z",
     "git_ref": "v1.0.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of firecracker-1.0",
@@ -234,11 +234,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/seccompiler/src/seccompiler_bin.rs:48",
-          "src/seccompiler/src/seccompiler_bin.rs:236",
+          "src/mmds/src/token.rs:6",
           "src/seccompiler/src/lib.rs:9",
           "src/seccompiler/src/lib.rs:11",
-          "src/mmds/src/token.rs:6"
+          "src/seccompiler/src/seccompiler_bin.rs:48",
+          "src/seccompiler/src/seccompiler_bin.rs:236"
         ],
         "verdict": "imported"
       },
@@ -501,11 +501,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/arch/src/x86_64/regs.rs:12",
-          "src/arch/src/x86_64/regs.rs:195",
-          "src/arch/src/x86_64/interrupts.rs:9",
-          "src/arch/src/x86_64/interrupts.rs:69",
-          "src/arch/src/x86_64/msr.rs:9",
+          "src/vmm/src/device_manager/mmio.rs:28",
+          "src/vmm/src/device_manager/legacy.rs:17",
+          "src/vmm/src/device_manager/persist.rs:28",
+          "src/vmm/src/vstate/vm.rs:24",
+          "src/vmm/src/vstate/system.rs:14",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -572,11 +572,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/arch/src/x86_64/regs.rs:12",
-          "src/arch/src/x86_64/regs.rs:195",
-          "src/arch/src/x86_64/interrupts.rs:9",
-          "src/arch/src/x86_64/interrupts.rs:69",
-          "src/arch/src/x86_64/msr.rs:9",
+          "src/vmm/src/device_manager/mmio.rs:28",
+          "src/vmm/src/device_manager/legacy.rs:17",
+          "src/vmm/src/device_manager/persist.rs:28",
+          "src/vmm/src/vstate/vm.rs:24",
+          "src/vmm/src/vstate/system.rs:14",
           "... (+34 more)"
         ],
         "verdict": "imported"
@@ -629,7 +629,7 @@
       "dep_name": "linux-loader",
       "dep_version": "0.4.0",
       "ecosystem": "Cargo",
-      "epss": 0.00045,
+      "epss": 0.00122,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -640,7 +640,7 @@
       "finding_id": "sca:vuln:Cargo:linux-loader:0.4.0:GHSA-52h2-m2cf-9jh6",
       "in_kev": false,
       "purl": "pkg:cargo/linux-loader@0.4.0",
-      "raptor_risk_estimate": 2.397827045656874,
+      "raptor_risk_estimate": 2.4001852701697497,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -648,11 +648,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/arch/src/x86_64/mod.rs:20",
-          "src/arch/src/x86_64/mod.rs:21",
-          "src/arch/src/x86_64/mod.rs:22",
-          "src/arch/src/x86_64/mod.rs:193",
           "src/vmm/src/builder.rs:28",
+          "src/vmm/src/builder.rs:30",
+          "src/vmm/src/builder.rs:49",
+          "src/vmm/src/builder.rs:50",
+          "src/vmm/src/builder.rs:986",
           "... (+6 more)"
         ],
         "verdict": "imported"
@@ -662,10 +662,10 @@
         "cvss_base": 19.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399529635,
+        "epss_multiplier": 0.399922566,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 2.397827045656874,
+        "final": 2.4001852701697497,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -988,11 +988,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
+          "src/snapshot/benches/version_map.rs:5",
           "src/snapshot/src/lib.rs:31",
           "src/snapshot/src/lib.rs:32",
           "src/snapshot/tests/test.rs:4",
-          "src/snapshot/benches/version_map.rs:5",
-          "src/devices/src/virtio/persist.rs:10",
+          "src/rate_limiter/src/persist.rs:8",
           "... (+18 more)"
         ],
         "verdict": "imported"
@@ -1046,7 +1046,7 @@
       "dep_name": "vm-memory",
       "dep_version": "0.1.0",
       "ecosystem": "Cargo",
-      "epss": 0.00018,
+      "epss": 0.00021,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1057,7 +1057,7 @@
       "finding_id": "sca:vuln:Cargo:vm-memory:0.1.0:GHSA-49hh-fprx-m68g",
       "in_kev": false,
       "purl": "pkg:cargo/vm-memory@0.1.0",
-      "raptor_risk_estimate": 3.1539475470562497,
+      "raptor_risk_estimate": 3.1540684403156245,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1065,11 +1065,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/io_uring/src/lib.rs:396",
-          "src/io_uring/src/operation/cqe.rs:6",
-          "src/io_uring/src/operation/sqe.rs:3",
-          "src/io_uring/src/queue/mmap.rs:7",
-          "src/io_uring/src/queue/submission.rs:12",
+          "src/vmm/src/memory_snapshot.rs:12",
+          "src/vmm/src/memory_snapshot.rs:212",
+          "src/vmm/src/lib.rs:69",
+          "src/vmm/src/builder.rs:57",
+          "src/vmm/src/builder.rs:988",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1079,10 +1079,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399391854,
+        "epss_multiplier": 0.399407163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1539475470562497,
+        "final": 3.1540684403156245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1143,11 +1143,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/io_uring/src/lib.rs:396",
-          "src/io_uring/src/operation/cqe.rs:6",
-          "src/io_uring/src/operation/sqe.rs:3",
-          "src/io_uring/src/queue/mmap.rs:7",
-          "src/io_uring/src/queue/submission.rs:12",
+          "src/vmm/src/memory_snapshot.rs:12",
+          "src/vmm/src/memory_snapshot.rs:212",
+          "src/vmm/src/lib.rs:69",
+          "src/vmm/src/builder.rs:57",
+          "src/vmm/src/builder.rs:988",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1201,7 +1201,7 @@
       "dep_name": "vm-memory",
       "dep_version": "0.7.0",
       "ecosystem": "Cargo",
-      "epss": 0.00018,
+      "epss": 0.00021,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1212,7 +1212,7 @@
       "finding_id": "sca:vuln:Cargo:vm-memory:0.7.0:GHSA-49hh-fprx-m68g",
       "in_kev": false,
       "purl": "pkg:cargo/vm-memory@0.7.0",
-      "raptor_risk_estimate": 3.1539475470562497,
+      "raptor_risk_estimate": 3.1540684403156245,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1220,11 +1220,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "src/io_uring/src/lib.rs:396",
-          "src/io_uring/src/operation/cqe.rs:6",
-          "src/io_uring/src/operation/sqe.rs:3",
-          "src/io_uring/src/queue/mmap.rs:7",
-          "src/io_uring/src/queue/submission.rs:12",
+          "src/vmm/src/memory_snapshot.rs:12",
+          "src/vmm/src/memory_snapshot.rs:212",
+          "src/vmm/src/lib.rs:69",
+          "src/vmm/src/builder.rs:57",
+          "src/vmm/src/builder.rs:988",
           "... (+70 more)"
         ],
         "verdict": "imported"
@@ -1234,10 +1234,10 @@
         "cvss_base": 25.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399391854,
+        "epss_multiplier": 0.399407163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1539475470562497,
+        "final": 3.1540684403156245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1348,7 +1348,7 @@
       "dep_name": "certifi",
       "dep_version": "2021.10.8",
       "ecosystem": "PyPI",
-      "epss": 0.25805,
+      "epss": 0.26297,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1359,7 +1359,7 @@
       "finding_id": "sca:vuln:PyPI:certifi:2021.10.8:GHSA-248v-346w-9cwc",
       "in_kev": false,
       "purl": "pkg:pypi/certifi@2021.10.8",
-      "raptor_risk_estimate": 4.573504256619741,
+      "raptor_risk_estimate": 4.595129410741683,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1374,10 +1374,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.5309829149999999,
+        "epss_multiplier": 0.5334935909999999,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.573504256619741,
+        "final": 4.595129410741683,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -1620,7 +1620,7 @@
       "dep_name": "idna",
       "dep_version": "3.3",
       "ecosystem": "PyPI",
-      "epss": 0.00657,
+      "epss": 0.00689,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1631,7 +1631,7 @@
       "finding_id": "sca:vuln:PyPI:idna:3.3:GHSA-jjg7-2v4v-x38h",
       "in_kev": false,
       "purl": "pkg:pypi/idna@3.3",
-      "raptor_risk_estimate": 5.3756479949540426,
+      "raptor_risk_estimate": 5.377828091792352,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -1646,10 +1646,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40265267099999996,
+        "epss_multiplier": 0.402815967,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.3756479949540426,
+        "final": 5.377828091792352,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2166,7 +2166,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00216,
+      "epss": 0.00222,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2177,7 +2177,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-34jh-p97f-mpxf",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 3.7936541218975477,
+      "raptor_risk_estimate": 3.7939442154284517,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2192,10 +2192,10 @@
         "cvss_base": 44.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40040224799999996,
+        "epss_multiplier": 0.400432866,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.7936541218975477,
+        "final": 3.7939442154284517,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -2578,7 +2578,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.26.8",
       "ecosystem": "PyPI",
-      "epss": 0.00976,
+      "epss": 0.0095,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2589,7 +2589,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.26.8:GHSA-v845-jxx5-vc9f",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.26.8",
-      "raptor_risk_estimate": 5.1362172465055735,
+      "raptor_risk_estimate": 5.134531627276759,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2604,10 +2604,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404280528,
+        "epss_multiplier": 0.40414785,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.1362172465055735,
+        "final": 5.134531627276759,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,

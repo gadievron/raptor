@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:49:51Z",
+    "fetched_at": "2026-06-01T11:44:51Z",
     "git_ref": "0.85.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of nushell-0.85",
@@ -2148,7 +2148,7 @@
       "dep_name": "mio",
       "dep_version": "0.8.8",
       "ecosystem": "Cargo",
-      "epss": 0.00937,
+      "epss": 0.00963,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2159,7 +2159,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.8:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.8",
-      "raptor_risk_estimate": 13.254622968017229,
+      "raptor_risk_estimate": 13.258975052481073,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2174,10 +2174,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404081511,
+        "epss_multiplier": 0.404214189,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.254622968017229,
+        "final": 13.258975052481073,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3319,11 +3319,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/random/dice.rs:7",
-          "crates/nu-command/src/random/integer.rs:7",
           "crates/nu-command/src/random/chars.rs:7",
-          "crates/nu-command/src/random/decimal.rs:7",
+          "crates/nu-command/src/random/float.rs:7",
           "crates/nu-command/src/random/bool.rs:7",
+          "crates/nu-command/src/random/integer.rs:7",
+          "crates/nu-command/src/random/dice.rs:7",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3392,11 +3392,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "crates/nu-command/src/random/dice.rs:7",
-          "crates/nu-command/src/random/integer.rs:7",
           "crates/nu-command/src/random/chars.rs:7",
-          "crates/nu-command/src/random/decimal.rs:7",
+          "crates/nu-command/src/random/float.rs:7",
           "crates/nu-command/src/random/bool.rs:7",
+          "crates/nu-command/src/random/integer.rs:7",
+          "crates/nu-command/src/random/dice.rs:7",
           "... (+3 more)"
         ],
         "verdict": "imported"
