@@ -157,11 +157,10 @@ _MASKING_FLAGS: Set[str] = {
 # NOT here because a literal ``getattr(obj, "foo")(...)`` records
 # ``"foo"`` in ``getattr_targets``; ``_file_masks_target`` checks
 # that list and taints only the matching target. Wildcard-import
-# (``from x import *``) is also outside this set — it has a
-# different per-target precision path via ``_wildcard_could_provide``
-# at the resolver layer (``function_called``); the entry-reachability
-# layer treats wildcard conservatively-blanket because it lacks the
-# target's module context.
+# (``from x import *``) is also outside this set — both ``function_called``
+# and ``_file_masks_target`` route it through ``_wildcard_could_provide``
+# to narrow per-target (the entry-reachability path derives the target's
+# module from its file path so the heuristic applies there too).
 _OPAQUE_MASKING_FLAGS: Set[str] = {
     INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
@@ -3302,6 +3301,7 @@ def _is_nested_function(
 
 def _file_masks_target(
     inventory: Dict[str, Any], file_path: str, target_name: str,
+    *, target_module: Optional[str] = None,
 ) -> bool:
     """Could dynamic dispatch in this file resolve to ``target_name``?
 
@@ -3317,8 +3317,11 @@ def _file_masks_target(
       - The file has a literal-string ``getattr`` AND ``target_name`` is
         one of those literals (the dispatch could hit this target).
       - The file has a wildcard-import that could plausibly bring
-        ``target_name`` in scope (delegated to
-        ``_wildcard_could_provide``).
+        ``target_name`` in scope. When ``target_module`` is supplied the
+        resolver layer's ``_wildcard_could_provide`` heuristic is used
+        to narrow per-target (drops the wildcard claim when no other
+        import in this file shares the target's module root). Without
+        ``target_module`` the wildcard is conservatively blanket.
       - The file's macro_call_targets list mentions ``target_name``
         (C/C++ macro-body dispatch — same per-target shape).
 
@@ -3337,12 +3340,17 @@ def _file_masks_target(
             and target_name in (cg.get("getattr_targets") or [])):
         return True
     if INDIRECTION_WILDCARD_IMPORT in flags:
-        # ``_wildcard_could_provide`` filters on target_module —
-        # the entry-reachability path doesn't have a module context
-        # (we know the file path and the target name only). Be
-        # conservative: any wildcard import in the file masks any
-        # target name; an unrelated-module wildcard is the cost.
-        return True
+        # When the caller supplies ``target_module`` (entry_reachability
+        # derives it from the target's file path) we narrow per-target
+        # — a ``from json import *`` in a file that doesn't import
+        # anything from the target's root package can't have brought
+        # the target into scope. Without ``target_module`` we stay
+        # conservative.
+        if target_module is None:
+            return True
+        imports = cg.get("imports") or {}
+        if _wildcard_could_provide(imports, target_module, target_name):
+            return True
     macro_targets = cg.get("macro_call_targets") or []
     if target_name in macro_targets:
         return True
@@ -3445,13 +3453,28 @@ def entry_reachability(
     # ``_file_masks_target`` is target-name aware: a file whose only
     # reflection is ``getattr(obj, "foo")`` does NOT mask an unrelated
     # ``bar`` — narrower than the previous "any masking flag → uncertain"
-    # check.
-    if _file_masks_target(inventory, target.file_path, target.name):
+    # check. ``target_module`` (derived from the target's path) narrows
+    # the wildcard-import branch via ``_wildcard_could_provide``: a
+    # ``from json import *`` in a file that doesn't otherwise import
+    # from the target's root package no longer masks every dead-island
+    # claim through that file.
+    #
+    # Note: ``_wildcard_could_provide`` was originally written for the
+    # resolver layer's ``function_called`` flow, where ``target_module``
+    # is the *dep being queried* (e.g. ``requests.utils``). Here we pass
+    # the target's *own file-derived module* (e.g. ``mypkg.helpers``).
+    # The heuristic answer-shape is the same — "does this file's import
+    # surface touch the target's root package" — but the semantic of
+    # ``target_module`` differs per caller; mind this if extending.
+    target_module = _file_path_to_module(target.file_path)
+    if _file_masks_target(inventory, target.file_path, target.name,
+                          target_module=target_module):
         return "uncertain"
     rc = reverse_closure(inventory, target, max_depth=max_depth)
     for fn in rc.nodes:
         if isinstance(fn, InternalFunction) and _file_masks_target(
             inventory, fn.file_path, target.name,
+            target_module=target_module,
         ):
             return "uncertain"
     return "no_path_from_entry"

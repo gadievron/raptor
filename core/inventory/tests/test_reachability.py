@@ -689,6 +689,54 @@ def test_python_literal_getattr_for_target_masks_uncertain():
     assert _er(inv, "m.py", "_orphan", 1) == "uncertain"
 
 
+def test_python_wildcard_import_from_unrelated_module_does_not_mask():
+    # File has ``from json import *`` (recorded as
+    # ``INDIRECTION_WILDCARD_IMPORT``) and otherwise imports nothing
+    # from the target's root package. The wildcard from ``json`` can't
+    # have brought our target into scope — claim no_path.
+    # ``_wildcard_could_provide`` makes the call: it looks for any
+    # other import in the file sharing the target module's root.
+    inv = _entry_inv(
+        "mypkg/helpers.py", "python", [_fn("_orphan", 1)], [],
+        indirection=["wildcard_import"],
+    )
+    # The target's module derives to "mypkg.helpers"; root = "mypkg".
+    # The file has no "mypkg.*" imports, so the wildcard from
+    # json is irrelevant.
+    assert _er(inv, "mypkg/helpers.py", "_orphan", 1) == "no_path_from_entry"
+
+
+def test_python_wildcard_import_from_same_root_masks():
+    # The file imports something from the target's root package
+    # AND has a wildcard import. ``_wildcard_could_provide`` treats
+    # the wildcard as plausible cover — uncertain.
+    inv = _entry_inv(
+        "mypkg/helpers.py", "python", [_fn("_orphan", 1)], [],
+        indirection=["wildcard_import"],
+    )
+    # Inject a same-root import into the call_graph.
+    inv["files"][0]["call_graph"]["imports"] = {
+        "x": "mypkg.something_else",
+    }
+    assert _er(inv, "mypkg/helpers.py", "_orphan", 1) == "uncertain"
+
+
+def test_python_wildcard_with_extensionless_path_stays_blanket():
+    # ``_file_path_to_module`` returns None for paths without an
+    # extension (extensionless scripts, Makefile-shaped artefacts).
+    # When target_module can't be derived, the wildcard branch must
+    # fall back to the conservative blanket-mask — anything else
+    # would be a FN. Pin that behavior explicitly so a future
+    # refactor doesn't accidentally drop the safe fallback.
+    inv = _entry_inv(
+        "noext_script", "python", [_fn("_orphan", 1)], [],
+        indirection=["wildcard_import"],
+    )
+    # path has no extension → _file_path_to_module returns None →
+    # target_module=None at the call site → wildcard stays blanket.
+    assert _er(inv, "noext_script", "_orphan", 1) == "uncertain"
+
+
 def test_python_opaque_getattr_masks_any_target():
     # ``getattr(obj, attr)`` with a variable second arg is genuinely
     # opaque — the resolver can't narrow to a tail name, so any
