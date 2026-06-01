@@ -27,12 +27,41 @@ from core.inventory.reach_witness import (
 from core.inventory.reachability import binary_oracle_absent
 
 
+@pytest.fixture(scope="module")
+def _synthetic_target_built(tmp_path_factory):
+    """Module-scoped: gcc-compile the synthetic dead-function project
+    ONCE, share across every test in this file. Previously each test
+    called ``_build_synthetic_target(tmp_path)`` and paid the gcc
+    compile cost (~25s on CI cold-start) per test — 4 tests = 100s of
+    redundant compile time. Now compiled once.
+
+    Yields ``(project_root, binary_path, inventory_template)``. The
+    inventory dict is a TEMPLATE — each test must deep-copy it via
+    ``_fresh_inventory`` before mutating, otherwise mutations leak
+    across tests.
+    """
+    work = tmp_path_factory.mktemp("synthetic_target")
+    return _build_synthetic_target(work)
+
+
+def _fresh_inventory(template: dict) -> dict:
+    """Deep-copy the module-scoped inventory template so each test
+    can mutate items[...].metadata etc. without cross-test leakage."""
+    import copy
+    return copy.deepcopy(template)
+
+
 def _build_synthetic_target(tmp_path: Path) -> tuple[Path, Path, dict]:
     """Build a small C project with a deliberately-dead function.
 
     Returns (project_root, binary_path, inventory_dict). The binary
     is compiled with -O2 -ffunction-sections -fdata-sections +
     -Wl,--gc-sections so the dead function is genuinely DCE'd.
+
+    Direct callers exist for tests that MUTATE the project dir
+    (planted-binary, LTO-rebuild) — those can't share the
+    module-fixture's read-only project. Most tests should use the
+    ``_synthetic_target_built`` fixture instead.
     """
     project = tmp_path / "myproj"
     project.mkdir()
@@ -102,11 +131,12 @@ def _alive_helper_line(inv: dict) -> int:
     raise AssertionError("alive_helper_0 not in inventory")
 
 
-def test_e2e_explicit_binary_flag_path(tmp_path: Path) -> None:
+def test_e2e_explicit_binary_flag_path(_synthetic_target_built) -> None:
     """The ``--binary`` explicit-path path: operator points at a
     binary; classifier finds the dead function absent and the
     chokepoint accessor confirms suppression eligibility."""
-    project, binary, inv = _build_synthetic_target(tmp_path)
+    project, binary, template = _synthetic_target_built
+    inv = _fresh_inventory(template)
     counts = enrich_inventory_with_binary_oracle(inv, (binary,))
     assert counts["classified"] == 12
     items = {it["name"]: it for it in inv["files"][0]["items"]}
@@ -138,11 +168,12 @@ def test_e2e_explicit_binary_flag_path(tmp_path: Path) -> None:
     assert spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is True
 
 
-def test_e2e_autodetect_finds_binary(tmp_path: Path) -> None:
+def test_e2e_autodetect_finds_binary(_synthetic_target_built) -> None:
     """The ``--binary-auto`` path: operator passes no explicit path;
     auto-detect walks the project tree and finds the binary under
     ``build/``."""
-    project, binary, inv = _build_synthetic_target(tmp_path)
+    project, binary, template = _synthetic_target_built
+    inv = _fresh_inventory(template)
     detected = detect_binaries(project, "application")
     # The built binary lives at build/myapp.
     assert any(p.name == "myapp" for p in detected), detected
@@ -151,11 +182,12 @@ def test_e2e_autodetect_finds_binary(tmp_path: Path) -> None:
     assert counts["classified"] == 12
 
 
-def test_e2e_chokepoint_helper_full_flow(tmp_path: Path) -> None:
+def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     """The shared ``reach_chokepoint`` helper that both /agentic and
     /codeql use: from a finding-shaped input through to the suppression
     decision, all on a real binary's enrichment output."""
-    project, binary, inv = _build_synthetic_target(tmp_path)
+    project, binary, template = _synthetic_target_built
+    inv = _fresh_inventory(template)
     enrich_inventory_with_binary_oracle(inv, (binary,))
     dead_line = _dead_helper_line(inv)
     alive_line = _alive_helper_line(inv)
