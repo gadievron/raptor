@@ -96,6 +96,74 @@ def _resolve(
         return None
 
 
+def _binary_oracle_tag(func: Dict[str, Any]) -> Dict[str, Any]:
+    """If the inventory function carries a binary_oracle classification
+    (operator passed ``--binary``), surface it on the annotation so the
+    researcher reading the map sees e.g. "this sink is absent from the
+    deployed binary — not an attack surface in this build."
+
+    Returns ``{}`` when no classification is present (no --binary,
+    non-native language, or stripped binary). Includes the per-binary
+    breakdown for hybrid targets (Phase 4) AND the evidence tier so
+    the researcher can tell full-DWARF evidence from the weaker
+    symbol-only fallback — without this tag, an annotation would
+    claim "absent" from symbol-only evidence while the chokepoint
+    correctly refuses to suppress it, producing inconsistent stories
+    across consumer surfaces (adversarial review P2-C-1)."""
+    if not isinstance(func, dict):
+        return {}
+    meta = func.get("metadata") or {}
+    bo = meta.get("binary_oracle") or {}
+    cls = bo.get("classification")
+    if not cls:
+        return {}
+    tag: Dict[str, Any] = {"binary_oracle": cls}
+    binaries = bo.get("binaries") or []
+    if binaries:
+        tag["binary_oracle_per_binary"] = [
+            {"path": b.get("path"),
+             "classification": b.get("classification"),
+             "tier": b.get("tier", "full")}
+            for b in binaries if isinstance(b, dict)
+        ]
+        # Top-level tier mirrors the chokepoint's gate: ``full`` when
+        # every contributing binary is full-DWARF; ``symbol_only``
+        # when ANY is symbol-only (the chokepoint refuses to fire on
+        # this case — readers should see the same caveat).
+        any_symbol_only = any(
+            b.get("tier") == "symbol_only"
+            for b in binaries if isinstance(b, dict)
+        )
+        tag["binary_oracle_tier"] = (
+            "symbol_only" if any_symbol_only else "full"
+        )
+    return tag
+
+
+def _binary_oracle_body_line(func: Dict[str, Any]) -> str:
+    """Researcher-facing body line for the annotation. Empty when no
+    classification is present. Downgrades the prose for symbol-only
+    evidence so the reader isn't misled into trusting an ``absent``
+    verdict the chokepoint itself refuses to act on."""
+    if not isinstance(func, dict):
+        return ""
+    bo = (func.get("metadata") or {}).get("binary_oracle") or {}
+    cls = bo.get("classification")
+    if not cls:
+        return ""
+    binaries = bo.get("binaries") or []
+    any_symbol_only = any(
+        isinstance(b, dict) and b.get("tier") == "symbol_only"
+        for b in binaries
+    )
+    if any_symbol_only:
+        return (
+            f"Binary oracle: {cls} (symbol-only evidence — stripped "
+            "binary, no DWARF; does NOT license suppression)"
+        )
+    return f"Binary oracle: {cls} (in deployed binary surface)"
+
+
 def _hash_metadata(
     repo_root: Path, file_path: str, func: Dict[str, Any],
 ) -> Dict[str, str]:
@@ -190,6 +258,11 @@ def _emit_entry_points(
         if ep.get("type"):
             metadata["type"] = _safe_meta(ep["type"])
         metadata.update(_hash_metadata(repo_root, file_path, func))
+        # Surface binary_oracle classification when --binary was passed.
+        metadata.update(_binary_oracle_tag(func))
+        bo_line = _binary_oracle_body_line(func)
+        if bo_line:
+            body_lines.append(bo_line)
         ann = Annotation(
             file=file_path, function=func["name"],
             body="\n\n".join(body_lines), metadata=metadata,
@@ -309,6 +382,12 @@ def _emit_sinks(
         if sink.get("type"):
             metadata["type"] = _safe_meta(sink["type"])
         metadata.update(_hash_metadata(repo_root, file_path, func))
+        # A sink ``absent`` from the deployed binary isn't reachable
+        # in this build — researcher can deprioritize tracing it.
+        metadata.update(_binary_oracle_tag(func))
+        bo_line = _binary_oracle_body_line(func)
+        if bo_line:
+            body_lines.append(bo_line)
         ann = Annotation(
             file=file_path, function=func["name"],
             body="\n\n".join(body_lines), metadata=metadata,

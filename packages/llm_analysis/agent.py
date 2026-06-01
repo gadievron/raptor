@@ -1776,6 +1776,10 @@ class AutonomousSecurityAgentV2:
         # tokens it saved.
         fixture_prep_outcomes = {"true": 0, "false": 0, "candidate": 0}
         fixture_skipped_llm_calls = 0
+        # Reachability-chokepoint LLM-call skips (binary_oracle_absent /
+        # module_aborts / lexical_dead). Counted separately so the operator
+        # can see the savings split across the two short-circuit paths.
+        reachability_skipped_llm_calls = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
@@ -1912,6 +1916,80 @@ class AutonomousSecurityAgentV2:
                 if fixture_skipped_this:
                     analyzed += 1
                     fixture_skipped_llm_calls += 1
+                    if emit_annotations:
+                        if self._emit_finding_annotation(vuln, checklist):
+                            annotations_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
+                # 0b. Reachability chokepoint — SOUND, corpus-earned
+                # dead witness (module_aborts / lexical_dead /
+                # binary_oracle_absent) on the finding's enclosing
+                # function means no exploit is reachable; skip the LLM
+                # call. Mirrors the codeql autonomous_analyzer
+                # suppression so semgrep findings get the same cost
+                # savings (Phase 3b). Uses the shared
+                # ``reach_chokepoint`` helper for path/module
+                # normalisation — copy-paste-reductionism in the prior
+                # implementation produced silent-drop bugs on absolute
+                # paths, file:// URIs, and non-Python languages where
+                # ``module`` was the literal path string (adversarial
+                # review P0-C-1 / P0-C-2).
+                reach_skipped_this = False
+                if checklist:
+                    try:
+                        from core.inventory.reach_chokepoint import (
+                            check_suppress,
+                        )
+                        rel = (finding.get("file_path")
+                               or finding.get("file") or "")
+                        fn = (finding.get("function")
+                              or (finding.get("metadata") or {}).get(
+                                  "function_name", ""))
+                        line_no = int(finding.get("line") or 0)
+                        decision = check_suppress(
+                            checklist=checklist,
+                            file_path=rel, function_name=fn,
+                            line=line_no,
+                            repo_root=Path(self.repo_path),
+                            allow_unreachable=getattr(
+                                self, "allow_unreachable", False),
+                            manual_override=finding.get("manual_override"),
+                        )
+                        if decision is not None:
+                            verdict, reason = decision
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": reason,
+                                "reachability_suppression": True,
+                                "reachability_verdict": verdict,
+                            }
+                            reach_skipped_this = True
+                            # Aggregate audit trail (Agent C P1-1) —
+                            # one-stop ``suppressions.jsonl`` so an
+                            # operator can ``jq`` / count instead of
+                            # walking each per-finding annotation.
+                            # Best-effort; never blocks.
+                            try:
+                                from core.inventory.reach_chokepoint \
+                                    import record_suppression
+                                record_suppression(
+                                    self.out_dir,
+                                    finding=finding,
+                                    verdict=verdict, reason=reason,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "reachability pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if reach_skipped_this:
+                    analyzed += 1
+                    reachability_skipped_llm_calls += 1
                     if emit_annotations:
                         if self._emit_finding_annotation(vuln, checklist):
                             annotations_emitted += 1

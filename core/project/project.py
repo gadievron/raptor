@@ -8,7 +8,7 @@ Output directories live wherever the user specifies (default: out/projects/<name
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -32,7 +32,21 @@ class Project:
     created: str = ""
     description: str = ""
     notes: str = ""
-    version: int = 1
+    # Schema version: bumped to 2 when the ``binaries`` field landed
+    # (adversarial review Agent D P1-7). v1 readers silently ignore
+    # the field, which would mean a project's per-binary-oracle config
+    # is dropped when the file round-trips through an older RAPTOR. A
+    # version bump makes the change EXPLICIT in the persisted file —
+    # older readers can still load the project (back-compat below) but
+    # operators inspecting the JSON see the v2 schema.
+    version: int = 2
+    # Operator-supplied debug binaries for binary_oracle reachability
+    # enrichment. Persisted across runs so the operator doesn't re-pass
+    # ``--binary`` every invocation. List for ``--target-kind=hybrid``
+    # deployments shipping multiple binaries (library + app). Loaded
+    # into ``RaptorConfig.BINARY_ORACLE_PATHS`` at /agentic / /codeql
+    # start; explicit ``--binary`` on the CLI is additive.
+    binaries: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         return {
@@ -43,10 +57,17 @@ class Project:
             "created": self.created,
             "description": self.description,
             "notes": self.notes,
+            "binaries": list(self.binaries),
         }
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Project":
+        binaries = data.get("binaries") or []
+        if not isinstance(binaries, list):
+            binaries = []
+        # Back-compat: load v1 files (no ``binaries``) as v2 — the
+        # field defaults to empty. The next save will upgrade the
+        # file's version to 2 with the empty list explicit.
         return cls(
             name=data.get("name", ""),
             target=data.get("target", ""),
@@ -54,7 +75,8 @@ class Project:
             created=data.get("created", ""),
             description=data.get("description", ""),
             notes=data.get("notes", ""),
-            version=data.get("version", 1),
+            version=data.get("version", 2),
+            binaries=[str(b) for b in binaries if isinstance(b, str)],
         )
 
     @property
@@ -228,13 +250,17 @@ class ProjectManager:
 
     def create(self, name: str, target: str, description: str = "",
                output_dir: str = None, resolve_target: bool = True,
-               created: str = None) -> Project:
+               created: str = None,
+               binaries: Optional[List[str]] = None) -> Project:
         """Create a new project.
 
         Args:
             resolve_target: If True (default), resolve target to absolute path.
                 Set to False for imports where the original path should be preserved.
             created: ISO timestamp override (for imports preserving original date).
+            binaries: optional list of debug binary paths for binary_oracle
+                enrichment. Persisted on the project; each is resolved to
+                an absolute path when ``resolve_target`` is True.
         """
         self._validate_name(name)
         project_file = self.projects_dir / f"{name}.json"
@@ -244,12 +270,20 @@ class ProjectManager:
         if not output_dir:
             output_dir = str((DEFAULT_OUTPUT_BASE / name).resolve())
 
+        resolved_binaries: List[str] = []
+        for b in (binaries or []):
+            if not isinstance(b, str) or not b.strip():
+                continue
+            resolved_binaries.append(
+                str(Path(b).resolve()) if resolve_target else b)
+
         project = Project(
             name=name,
             target=str(Path(target).resolve()) if resolve_target else target,
             output_dir=output_dir,
             created=created or datetime.now(timezone.utc).isoformat(),
             description=description,
+            binaries=resolved_binaries,
         )
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)

@@ -324,6 +324,8 @@ Examples:
             "raptor_agentic.py for detail."
         ),
     )
+    from core.inventory.binary_oracle_cli import add_binary_args
+    add_binary_args(parser)
     # ``--max-findings`` default 20 is intentionally HIGHER than
     # ``raptor_agentic.py``'s default 10: codeql-only mode does one
     # pass per finding (filter + summarise), while agentic does the
@@ -365,6 +367,13 @@ Examples:
     # 'auto' leaves it unset (per-target detection). See raptor_agentic.py.
     if getattr(args, "target_kind", "auto") != "auto":
         os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
+    # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
+    # lives in the shared CLI helper — explicit path validation,
+    # auto-detect walk, active-project binary layering, RaptorConfig
+    # mutation, and the no-leak-across-runs guarantee. raptor_agentic.py
+    # uses the same call site to keep behaviour aligned.
+    from core.inventory.binary_oracle_cli import apply_to_config
+    apply_to_config(args, Path(args.repo), parser=parser)
     # set_trust_override BEFORE apply_cli_args. apply_cli_args
     # may invoke trust-checks downstream (e.g. when validating
     # caller-supplied paths against project trust state). Pre-fix

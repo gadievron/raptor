@@ -44,6 +44,16 @@ def _validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if "created" in data and not isinstance(data["created"], str):
         errors.append("created must be a string")
 
+    if "binaries" in data:
+        binaries = data["binaries"]
+        if not isinstance(binaries, list):
+            errors.append("binaries must be a list")
+        else:
+            for i, b in enumerate(binaries):
+                if not isinstance(b, str) or not b.strip():
+                    errors.append(
+                        f"binaries[{i}] must be a non-empty string")
+
     return len(errors) == 0, errors
 
 

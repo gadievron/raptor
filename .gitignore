@@ -30,3 +30,4 @@ tuning.json
 .mcp.json
 .sage/
 *.sage.key
+*.gcov

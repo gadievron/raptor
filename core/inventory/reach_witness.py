@@ -39,6 +39,7 @@ class WitnessKind(str, Enum):
     # unreachable
     MODULE_ABORTS = "module_aborts"
     LEXICAL_DEAD = "lexical_dead"
+    BINARY_ORACLE_ABSENT = "binary_oracle_absent"
     BUILD_EXCLUDED = "build_excluded"
     NO_PATH_FROM_ENTRY = "no_path_from_entry"
     NOT_CALLED = "not_called"
@@ -47,6 +48,7 @@ class WitnessKind(str, Enum):
     FRAMEWORK_CALLABLE = "framework_callable"
     REGISTERED_VIA_CALL = "registered_via_call"
     REACHABLE_FROM_ENTRY = "reachable_from_entry"
+    BINARY_CALL_EDGE = "binary_call_edge"
     # uncertain
     UNCERTAIN = "uncertain"
 
@@ -155,6 +157,23 @@ VERDICTS: Dict[str, VerdictSpec] = {
             "Verdict: LEXICAL_DEAD — defined inside an always-false guard "
             "(if False / #[cfg(any())]); never binds"),
     ),
+    "binary_oracle_absent": VerdictSpec(
+        Reachability.UNREACHABLE, WitnessKind.BINARY_ORACLE_ABSENT,
+        Soundness.SOUND, earns_suppression=True,
+        summary=(
+            "classifier verdict ``absent`` on the analysed binary — "
+            "neither a standalone symbol nor an inlined-subroutine "
+            "instance was found at classification time"),
+        blocker_template=(
+            "reachability:binary_oracle_absent — entry function {fq} has no "
+            "symbol and no inlined-subroutine instance in the analysed binary "
+            "(--binary); the compiler/linker eliminated it from this build"),
+        prompt_verdict=(
+            "Verdict: BINARY_ORACLE_ABSENT — function eliminated from the "
+            "analysed binary by --gc-sections / DCE; no symbol present and no "
+            "inlined-subroutine instance survives. Build-specific (this "
+            "binary's build_id); not a universal source claim"),
+    ),
     "build_excluded": VerdictSpec(
         Reachability.UNREACHABLE, WitnessKind.BUILD_EXCLUDED,
         Soundness.HEURISTIC, earns_suppression=False,
@@ -199,6 +218,19 @@ VERDICTS: Dict[str, VerdictSpec] = {
         Reachability.REACHABLE, WitnessKind.REGISTERED_VIA_CALL,
         Soundness.HEURISTIC, earns_suppression=False,
         summary="passed as a framework registration argument"),
+    "binary_call_edge": VerdictSpec(
+        Reachability.REACHABLE, WitnessKind.BINARY_CALL_EDGE,
+        Soundness.HEURISTIC, earns_suppression=False,
+        summary=(
+            "binary call graph shows the function is called from another "
+            "binary-resident symbol (direct call edge — Inc 2b Tier 1)"),
+        prompt_verdict=(
+            "Verdict: BINARY_CALL_EDGE — the analysed binary's direct "
+            "call graph proves this function is invoked from another "
+            "binary-resident symbol. Source-graph extraction may have "
+            "missed this edge (header-inline, partial resolution); the "
+            "binary provides affirmative reachability evidence."),
+    ),
     "reachable": VerdictSpec(
         Reachability.REACHABLE, WitnessKind.REACHABLE_FROM_ENTRY,
         Soundness.HEURISTIC, earns_suppression=False,

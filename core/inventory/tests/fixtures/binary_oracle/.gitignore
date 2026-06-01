@@ -1,0 +1,3 @@
+# Build outputs from the fixture's Makefile.
+demo
+*.o

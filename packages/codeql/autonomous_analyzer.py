@@ -1115,6 +1115,39 @@ class AutonomousCodeQLAnalyzer:
                 "⏭️  Sink unreachable (%s — sound witness) — skipping "
                 "expensive analysis", reachability_verdict,
             )
+            # Aggregate audit trail (Agent C P1-1) — match the
+            # ``suppressions.jsonl`` /agentic emits so an operator
+            # can correlate suppressions across both consumers from
+            # a single per-run JSONL. Best-effort; never blocks.
+            try:
+                from core.inventory.reach_chokepoint import (
+                    record_suppression,
+                )
+                # The codeql analyzer's out_dir lives on the broader
+                # CodeQLAgent run; fall back to repo_path when not
+                # available (analyzer-as-library call shapes).
+                _out = getattr(self, "out_dir", None) or repo_path
+                _finding_dict = {
+                    "finding_id": getattr(finding, "id", "") or "",
+                    "rule_id": getattr(finding, "rule_id", "") or "",
+                    "file_path": getattr(finding, "file_path", "") or "",
+                    "line": getattr(finding, "start_line", None),
+                    "function": "",
+                }
+                record_suppression(
+                    Path(_out),
+                    finding=_finding_dict,
+                    verdict=reachability_verdict,
+                    reason=(
+                        f"CodeQL chokepoint: sink at "
+                        f"{_finding_dict['file_path']}:"
+                        f"{_finding_dict['line']} unreachable via "
+                        f"SOUND witness ({reachability_verdict}); "
+                        f"skipped expensive analysis."
+                    ),
+                )
+            except Exception:  # noqa: BLE001
+                pass
             return AutonomousAnalysisResult(
                 finding=finding,
                 analysis=None,
