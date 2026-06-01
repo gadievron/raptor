@@ -3133,6 +3133,39 @@ def _item_is_entry(item: Dict[str, Any], language: str,
 _ENTRY_SET_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset"]] = {}
 _ENTRY_SET_CACHE_MAX = 8
 
+_FILES_BY_PATH_CACHE: Dict[int, Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]] = {}
+_FILES_BY_PATH_CACHE_MAX = 8
+
+
+def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Path-keyed view of ``inventory["files"]`` — O(1) lookup per file.
+
+    Cached per-inventory by ``id``; identity-checked on read so a fresh
+    inventory at the same address rebuilds the index. Used by the
+    file-scoped helpers (``_file_language``, ``_file_python_exports``,
+    ``_file_masks_target``, ``_is_nested_function``) which were each
+    doing an O(files) linear scan per call — the entry-reachability
+    path walks the reverse closure and pays this cost per node.
+    """
+    inv_id = id(inventory)
+    cached = _FILES_BY_PATH_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    index: Dict[str, Dict[str, Any]] = {}
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict):
+            continue
+        path = (fr.get("path") or "").replace("\\", "/")
+        if path:
+            index[path] = fr
+    # FIFO eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
+    # drop the oldest entry when full, instead of wiping every entry —
+    # keeps the cache useful under multi-inventory pipelines.
+    if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
+        _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
+    _FILES_BY_PATH_CACHE[inv_id] = (inventory, index)
+    return index
+
 
 def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
     """Set of InternalFunction entry points (visibility/linkage model +
@@ -3219,11 +3252,8 @@ def _entry_reachable_set(
 
 
 def _file_language(inventory: Dict[str, Any], file_path: str) -> Optional[str]:
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if isinstance(fr, dict) and (fr.get("path") or "").replace("\\", "/") == norm:
-            return fr.get("language")
-    return None
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    return fr.get("language") if fr else None
 
 
 def _file_python_exports(
@@ -3234,15 +3264,13 @@ def _file_python_exports(
     "what is exported" signal — distinct from the leading-underscore
     convention, which is a fallback when ``__all__`` is absent.
     """
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        exports = fr.get("exports")
-        if exports is None:
-            return None
-        return frozenset(exports)
-    return None
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    if not fr:
+        return None
+    exports = fr.get("exports")
+    if exports is None:
+        return None
+    return frozenset(exports)
 
 
 def _is_nested_function(
@@ -3253,25 +3281,22 @@ def _is_nested_function(
     ``line_start`` falls strictly inside another item's
     ``[line_start, line_end]`` range is nested.
     """
-    norm = target.file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        items = fr.get("items", []) or []
-        if target.line <= 0:
-            return False
-        for other in items:
-            if not isinstance(other, dict):
-                continue
-            if other.get("kind", "function") != "function":
-                continue
-            ols = int(other.get("line_start") or 0)
-            ole = int(other.get("line_end") or 0)
-            if ols <= 0 or ole <= 0:
-                continue
-            if ols < target.line and target.line <= ole:
-                return True
+    if target.line <= 0:
         return False
+    fr = _files_by_path(inventory).get(target.file_path.replace("\\", "/"))
+    if not fr:
+        return False
+    for other in fr.get("items", []) or []:
+        if not isinstance(other, dict):
+            continue
+        if other.get("kind", "function") != "function":
+            continue
+        ols = int(other.get("line_start") or 0)
+        ole = int(other.get("line_end") or 0)
+        if ols <= 0 or ole <= 0:
+            continue
+        if ols < target.line and target.line <= ole:
+            return True
     return False
 
 
@@ -3301,28 +3326,26 @@ def _file_masks_target(
     than ``target_name``: the masking is real but doesn't affect this
     target, so an entry_reachability dead-island claim is safe.
     """
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        cg = fr.get("call_graph") or {}
-        flags = set(cg.get("indirection") or [])
-        if flags & _OPAQUE_MASKING_FLAGS:
-            return True
-        if (INDIRECTION_GETATTR in flags
-                and target_name in (cg.get("getattr_targets") or [])):
-            return True
-        if INDIRECTION_WILDCARD_IMPORT in flags:
-            # ``_wildcard_could_provide`` filters on target_module —
-            # the entry-reachability path doesn't have a module context
-            # (we know the file path and the target name only). Be
-            # conservative: any wildcard import in the file masks any
-            # target name; an unrelated-module wildcard is the cost.
-            return True
-        macro_targets = cg.get("macro_call_targets") or []
-        if target_name in macro_targets:
-            return True
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    if not fr:
         return False
+    cg = fr.get("call_graph") or {}
+    flags = set(cg.get("indirection") or [])
+    if flags & _OPAQUE_MASKING_FLAGS:
+        return True
+    if (INDIRECTION_GETATTR in flags
+            and target_name in (cg.get("getattr_targets") or [])):
+        return True
+    if INDIRECTION_WILDCARD_IMPORT in flags:
+        # ``_wildcard_could_provide`` filters on target_module —
+        # the entry-reachability path doesn't have a module context
+        # (we know the file path and the target name only). Be
+        # conservative: any wildcard import in the file masks any
+        # target name; an unrelated-module wildcard is the cost.
+        return True
+    macro_targets = cg.get("macro_call_targets") or []
+    if target_name in macro_targets:
+        return True
     return False
 
 
