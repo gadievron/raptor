@@ -316,17 +316,6 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
         file='packages/llm_analysis/agent.py',
         func_name='AutonomousSecurityAgentV2.generate_patch',
-        attr='rule_id',
-        expr_text='{vuln.rule_id}',
-        audit_note=(
-            'patch_content_formatted is markdown saved to disk for '
-            'operator review (.../patches/<id>_patch.md), not an LLM '
-            'prompt'
-        ),
-    ),
-    AllowlistEntry(
-        file='packages/llm_analysis/agent.py',
-        func_name='AutonomousSecurityAgentV2.generate_patch',
         attr='file_path',
         expr_text='{vuln.file_path}',
         audit_note='markdown for disk (operator review file), not LLM prompt',
