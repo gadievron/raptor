@@ -63,6 +63,43 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
 
+      - name: Install binary-analysis toolchain (radare2 + LLVM 21)
+        # The binary-oracle precision/edge corpora (core/inventory) are the
+        # only @pytest.mark.slow tests needing system tooling beyond the
+        # gcc/gcov ubuntu-latest already ships:
+        #   * radare2 (r2)        — direct-call-edge extraction
+        #   * LLVM 21 + clang-21  — snappy/leveldb LLVM source-based coverage
+        #                           (snappy's cmake calls plain clang/clang++
+        #                           with a clang-21 diagnostic flag) and the
+        #                           regex-rust llvm-cov/llvm-profdata path.
+        # continue-on-error: an apt / apt.llvm.org hiccup must not red-fail
+        # the nightly — the corpus tests skip themselves when a tool is
+        # absent (skipif guards), so a provisioning miss degrades to
+        # skipped-not-failed and shows up as a SKIP reason in the run log.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends radare2
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 21
+          # llvm-21 carries llvm-cov / llvm-profdata; clang-21 is the
+          # compiler. The drivers prefer the -21 suffixed binaries.
+          sudo apt-get install -y --no-install-recommends llvm-21 clang-21
+          # snappy's cmake invokes plain ``clang`` / ``clang++``.
+          sudo update-alternatives --install /usr/bin/clang clang \
+            /usr/bin/clang-21 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ \
+            /usr/bin/clang++-21 100
+          # Make the unsuffixed llvm-cov / llvm-profdata resolvable too.
+          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          # Sanity (non-fatal — the tests guard on presence regardless).
+          r2 -v || true
+          clang --version || true
+          /usr/lib/llvm-21/bin/llvm-cov --version || true
+          /usr/lib/llvm-21/bin/llvm-profdata --version || true
+
       - name: Run slow tests (deterministic — failure is a real regression)
         run: |
           source $VENV_PATH/bin/activate

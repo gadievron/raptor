@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:45:44Z",
+    "fetched_at": "2026-06-01T11:39:43Z",
     "git_ref": "v2.31.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of requests",
@@ -174,7 +174,7 @@
       "dep_name": "cryptography",
       "dep_version": "40.0.0",
       "ecosystem": "PyPI",
-      "epss": 0.00855,
+      "epss": 0.00879,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -185,7 +185,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-3ww4-gg4f-jr7f",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@40.0.0",
-      "raptor_risk_estimate": 20.94584406108758,
+      "raptor_risk_estimate": 20.952199062662594,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -193,8 +193,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -203,10 +203,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403663065,
+        "epss_multiplier": 0.40378553699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.94584406108758,
+        "final": 20.952199062662594,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -259,8 +259,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -313,7 +313,7 @@
       "dep_name": "cryptography",
       "dep_version": "40.0.0",
       "ecosystem": "PyPI",
-      "epss": 0.00425,
+      "epss": 0.00437,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -324,7 +324,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-6vqw-3v5j-54x4",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@40.0.0",
-      "raptor_risk_estimate": 13.58720885390625,
+      "raptor_risk_estimate": 13.589281309781247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -332,8 +332,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -342,10 +342,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401468775,
+        "epss_multiplier": 0.40153001099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.58720885390625,
+        "final": 13.589281309781247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -385,7 +385,7 @@
       "dep_name": "cryptography",
       "dep_version": "40.0.0",
       "ecosystem": "PyPI",
-      "epss": 0.00231,
+      "epss": 0.00238,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -396,7 +396,7 @@
       "finding_id": "sca:vuln:PyPI:cryptography:40.0.0:GHSA-9v9h-cgj8-h64p",
       "in_kev": false,
       "purl": "pkg:pypi/cryptography@40.0.0",
-      "raptor_risk_estimate": 9.93938304376875,
+      "raptor_risk_estimate": 9.940269594337499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -404,8 +404,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -414,10 +414,10 @@
         "cvss_base": 55.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400478793,
+        "epss_multiplier": 0.400514514,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.93938304376875,
+        "final": 9.940269594337499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -477,8 +477,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -542,8 +542,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -615,8 +615,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -682,8 +682,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -753,8 +753,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -821,8 +821,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },
@@ -885,8 +885,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "requests/help.py:30",
-          "requests/__init__.py:132"
+          "requests/__init__.py:132",
+          "requests/help.py:30"
         ],
         "verdict": "imported"
       },

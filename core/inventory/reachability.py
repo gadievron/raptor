@@ -2340,7 +2340,10 @@ def binary_call_edge_present(
     reachability uncertainty for upstream consumers (Inc 2b Tier 1).
 
     Path-keyed lookup via the shared inverse index (avoids the
-    O(N_files × N_items) walk per call)."""
+    O(N_files × N_items) walk per call). When ``line`` is provided
+    AND there are multiple same-name candidates, pick the item whose
+    line range CONTAINS the query line (production callers pass the
+    line OF THE FINDING, not the function's first line)."""
     if not file_path or not name:
         return False
     normalised = file_path.replace("\\", "/")
@@ -2351,9 +2354,21 @@ def binary_call_edge_present(
     candidates = by_name.get(name)
     if not candidates:
         return False
+    if line and len(candidates) > 1:
+        enclosing = [
+            it for it in candidates
+            if int(it.get("line_start") or 0) <= line
+            and (int(it.get("line_end") or 0) == 0
+                 or line <= int(it.get("line_end") or 0))
+        ]
+        if enclosing:
+            candidates = [max(
+                enclosing,
+                key=lambda it: int(it.get("line_start") or 0),
+            )]
+        else:
+            candidates = candidates[:1]
     for item in candidates:
-        if line and int(item.get("line_start") or 0) != line:
-            continue
         meta = item.get("metadata")
         if not isinstance(meta, dict):
             return False
@@ -2407,13 +2422,29 @@ def binary_oracle_absent(
     candidates = by_name.get(name)
     if not candidates:
         return False
+    # Line disambiguation: production callers (semgrep, codeql) pass
+    # the line OF THE FINDING, which is typically INSIDE the function,
+    # not at its first line. Pick the item whose range
+    # [line_start, line_end] contains the query line; when line_end
+    # isn't set on the inventory item, fall back to "function whose
+    # line_start is the closest <= query line" (the standard
+    # function-containing-line heuristic). This subsumes the
+    # name-collision disambiguation case AND interior-line queries.
+    if line and len(candidates) > 1:
+        enclosing = [
+            it for it in candidates
+            if int(it.get("line_start") or 0) <= line
+            and (int(it.get("line_end") or 0) == 0
+                 or line <= int(it.get("line_end") or 0))
+        ]
+        if enclosing:
+            candidates = [max(
+                enclosing,
+                key=lambda it: int(it.get("line_start") or 0),
+            )]
+        else:
+            candidates = candidates[:1]
     for item in candidates:
-        # Line disambiguation: name-collisions inside a file are
-        # real (static helpers, #if/#else, overloads). Skip non-
-        # matching items so the caller's (name, line) tuple
-        # actually identifies the function it intended.
-        if line and int(item.get("line_start") or 0) != line:
-            continue
         meta = item.get("metadata")
         if not isinstance(meta, dict):
             return False
@@ -2555,7 +2586,18 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "go":   ReachabilityProfile("go", "sound", "go_exported", has_go_init=True),
     "rust": ReachabilityProfile("rust", "sound", "rust_pub"),
     "java": ReachabilityProfile("java", "none", has_java_web=True),
-    "python":     ReachabilityProfile("python", "none", has_python_framework=True),
+    # Python's entry model is heuristic: module-level public functions
+    # (non-``_``-prefixed, no enclosing class) are external entries by
+    # convention, BUT reflection (``getattr`` / ``importlib`` / decorator
+    # registries that the static graph didn't capture) can mint an
+    # entry at runtime. The masking check in ``entry_reachability``
+    # already returns UNCERTAIN for any file in the reverse-closure
+    # that uses ``getattr``/``__import__``/etc., so the heuristic
+    # verdict fires ONLY on reflection-clean dead-island chains. The
+    # witness tier (HEURISTIC) keeps the verdict surface-only — no
+    # suppression — matching the strength of the evidence.
+    "python":     ReachabilityProfile("python", "heuristic", "python_public",
+                                       has_python_framework=True),
     "javascript": ReachabilityProfile("javascript", "none"),
     "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
     "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
@@ -2576,6 +2618,16 @@ def _profile(language: str) -> ReachabilityProfile:
 # frozenset for the entry_reachability soundness gate.
 _CLOSEABLE_ENTRY_LANGS = frozenset(
     lang for lang, p in PROFILES.items() if p.entry_model == "sound"
+)
+
+# Languages where entry_reachability MAY return ``no_path_from_entry``.
+# Sound languages above + heuristic languages whose verdict feeds through
+# as HEURISTIC-tier (surface-only, no suppression) per the witness table.
+# Without heuristic on this list, Python dead-island chains would always
+# fall through to UNCERTAIN even when reflection-clean.
+_REPORTABLE_ENTRY_LANGS = frozenset(
+    lang for lang, p in PROFILES.items()
+    if p.entry_model in ("sound", "heuristic")
 )
 
 # Java servlet / filter lifecycle methods — invoked by the container, no
@@ -2887,7 +2939,8 @@ def _python_framework_entry(name: str, item: Dict[str, Any]) -> bool:
     return False
 
 
-def _is_library_export(item: Dict[str, Any], language: str) -> bool:
+def _is_library_export(item: Dict[str, Any], language: str,
+                       nested_keys: "frozenset" = frozenset()) -> bool:
     """In LIBRARY mode, an exported / public symbol is an entry point — a
     library's public API is reachable by consumers even with no in-project
     caller. Opt-in (off by default): treating exports as entries would mask
@@ -2902,6 +2955,11 @@ def _is_library_export(item: Dict[str, Any], language: str) -> bool:
         return False
     vis = (item.get("metadata") or {}).get("visibility") or ""
     if language == "python":
+        # Nested closure (inner ``def`` extracted as a top-level item)
+        # is NOT a library export — it's only reachable via its
+        # enclosing function, never via consumer import.
+        if (name, int(item.get("line_start") or 0)) in nested_keys:
+            return False
         if name.startswith("__") and name.endswith("__"):
             return True  # dunder = public protocol (__init__, __call__, …)
         return not name.startswith("_")
@@ -2912,8 +2970,40 @@ def _is_library_export(item: Dict[str, Any], language: str) -> bool:
     return False
 
 
+def _nested_function_keys(items: List[Dict[str, Any]]) -> "frozenset":
+    """Return ``{(name, line_start), ...}`` for items whose line_start falls
+    INSIDE another item's [line_start, line_end] range — i.e. nested
+    closures, inner functions, lambdas extracted as separate items by
+    the extractor.
+
+    Used by ``_item_is_entry`` to keep nested closures out of the
+    Python heuristic-entry set: a nested ``def inner():`` inside a
+    decorator factory looks like a "module-level public" function to
+    the per-item check (no ``_`` prefix, no class_name) but is NOT
+    externally invocable — adversarial review P1-1.
+    """
+    fns = [(it.get("name") or "",
+            int(it.get("line_start") or 0),
+            int(it.get("line_end") or 0))
+           for it in items
+           if isinstance(it, dict)
+           and it.get("kind", "function") == "function"]
+    nested: set = set()
+    for name, ls, _le in fns:
+        if not ls:
+            continue
+        for _other_name, ols, ole in fns:
+            if ols <= 0 or ole <= 0:
+                continue
+            if ols < ls and ls <= ole:
+                nested.add((name, ls))
+                break
+    return frozenset(nested)
+
+
 def _item_is_entry(item: Dict[str, Any], language: str,
-                   library_mode: bool = False) -> bool:
+                   library_mode: bool = False,
+                   nested_keys: "frozenset" = frozenset()) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
     separately off the adjacency index.)
@@ -2967,7 +3057,7 @@ def _item_is_entry(item: Dict[str, Any], language: str,
     # Library mode (opt-in): a public/exported symbol is an entry — the
     # library's API surface is reachable by consumers. Off by default so an
     # application's dead public functions are still surfaced.
-    if library_mode and _is_library_export(item, language):
+    if library_mode and _is_library_export(item, language, nested_keys):
         return True
     # Visibility/linkage entry signal (only for languages whose model is a
     # closed signal; "" ⇒ a public symbol is NOT reliably an entry, so those
@@ -2987,6 +3077,23 @@ def _item_is_entry(item: Dict[str, Any], language: str,
         return vis == "exported" or name[:1].isupper()
     if p.visibility_entry == "rust_pub":
         return vis in ("public", "pub")
+    if p.visibility_entry == "python_public":
+        # Module-level public function entry detection is opt-in via
+        # ``library_mode`` (preserves the #84 design: an application's
+        # public functions with no in-project caller are surfaced as
+        # suspicious by default; library mode treats the public API as
+        # reachable by consumers). Without library_mode, the heuristic
+        # falls back to the 1-hop NOT_CALLED layer for public Python
+        # functions — same as before this change.
+        if not library_mode:
+            return False
+        if name.startswith("_"):
+            return False
+        if (item.get("metadata") or {}).get("class_name"):
+            return False
+        if (name, int(item.get("line_start") or 0)) in nested_keys:
+            return False
+        return True
     return False
 
 
@@ -3011,12 +3118,19 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
             continue
         lang = fr.get("language") or ""
         path = fr.get("path") or ""
-        for item in fr.get("items", []):
+        items = fr.get("items", []) or []
+        # Compute the set of nested-closure (name, line_start) tuples
+        # ONCE per file — passed to _item_is_entry so the python_public
+        # branch can reject nested defs that the extractor flattened
+        # into top-level items.
+        nested_keys = _nested_function_keys(items)
+        for item in items:
             if not isinstance(item, dict):
                 continue
             if item.get("kind", "function") != "function":
                 continue
-            if _item_is_entry(item, lang, library_mode=library_mode):
+            if _item_is_entry(item, lang, library_mode=library_mode,
+                              nested_keys=nested_keys):
                 entries.add(InternalFunction(
                     file_path=path, name=item.get("name") or "",
                     line=int(item.get("line_start") or 0),
@@ -3077,6 +3191,55 @@ def _file_language(inventory: Dict[str, Any], file_path: str) -> Optional[str]:
         if isinstance(fr, dict) and (fr.get("path") or "").replace("\\", "/") == norm:
             return fr.get("language")
     return None
+
+
+def _file_python_exports(
+    inventory: Dict[str, Any], file_path: str,
+) -> Optional[frozenset]:
+    """Return the frozenset of names in the file's module-level ``__all__``,
+    or ``None`` when the module doesn't declare ``__all__``. Authoritative
+    "what is exported" signal — distinct from the leading-underscore
+    convention, which is a fallback when ``__all__`` is absent.
+    """
+    norm = file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
+            continue
+        exports = fr.get("exports")
+        if exports is None:
+            return None
+        return frozenset(exports)
+    return None
+
+
+def _is_nested_function(
+    inventory: Dict[str, Any], target: InternalFunction,
+) -> bool:
+    """Is ``target`` a nested ``def`` that the extractor flattened to a
+    top-level item? Detected by line-range containment: an item whose
+    ``line_start`` falls strictly inside another item's
+    ``[line_start, line_end]`` range is nested.
+    """
+    norm = target.file_path.replace("\\", "/")
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
+            continue
+        items = fr.get("items", []) or []
+        if target.line <= 0:
+            return False
+        for other in items:
+            if not isinstance(other, dict):
+                continue
+            if other.get("kind", "function") != "function":
+                continue
+            ols = int(other.get("line_start") or 0)
+            ole = int(other.get("line_end") or 0)
+            if ols <= 0 or ole <= 0:
+                continue
+            if ols < target.line and target.line <= ole:
+                return True
+        return False
+    return False
 
 
 def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
@@ -3146,8 +3309,42 @@ def entry_reachability(
         return "uncertain"
     # Not reachable from any entry. Decide confident-dead vs uncertain.
     lang = _file_language(inventory, target.file_path)
-    if lang not in _CLOSEABLE_ENTRY_LANGS:
-        return "uncertain"          # fuzzy entry model (py/js/...) → don't claim
+    if lang not in _REPORTABLE_ENTRY_LANGS:
+        return "uncertain"          # entry model with no reportable signal
+    # Python is HEURISTIC tier. Leading underscore is a CONVENTION, not
+    # enforcement — so we treat it as a HINT, not an absolute. Three
+    # orthogonal signals can fire ``no_path_from_entry`` for Python:
+    #
+    #   1. Explicit contract: the module declares ``__all__`` and the
+    #      target is not in it. The author's authoritative declaration
+    #      that this name is internal.
+    #   2. Convention fallback: target name starts with ``_``. The
+    #      PEP 8 internal marker. Used only when ``__all__`` isn't
+    #      declared (the project gave us no explicit contract).
+    #   3. Structural: the target is a nested ``def`` flattened to the
+    #      top-level by the extractor — only reachable via its enclosing
+    #      function, never via consumer import. Always internal.
+    #
+    # Public names in a module with no ``__all__`` could be library
+    # API, externally-imported helpers, or reflection-dispatched —
+    # without a stronger signal we return UNCERTAIN so the 1-hop
+    # NOT_CALLED layer surfaces them instead of an over-confident
+    # dead verdict. The witness tier stays HEURISTIC; no suppression
+    # is licensed by any signal.
+    if lang == "python":
+        is_nested = _is_nested_function(inventory, target)
+        if not is_nested:
+            exports = _file_python_exports(inventory, target.file_path)
+            if exports is not None:
+                # Explicit ``__all__`` contract. Author declared what's
+                # exported; anything in ``__all__`` may be reached
+                # externally even with no in-project caller.
+                if target.name in exports:
+                    return "uncertain"
+            elif not target.name.startswith("_"):
+                # No ``__all__`` AND public-named AND not nested —
+                # no signal fires; can't claim dead.
+                return "uncertain"
     # Call-masking indirection (reflection / func-like macros) in the
     # target's file, or in any function that transitively calls it, could
     # hide an entry edge the static graph didn't capture → don't claim

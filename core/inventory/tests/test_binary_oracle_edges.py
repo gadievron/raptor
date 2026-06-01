@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -306,6 +307,11 @@ def test_cache_round_trips_edges_under_build_id(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    shutil.which("r2") is None,
+    reason="radare2 (r2) not installed — direct-edge extraction returns an "
+    "empty index by design, so there is nothing to assert",
+)
 def test_extract_direct_call_edges_on_synthetic_fixture(
     tmp_path: Path,
 ) -> None:

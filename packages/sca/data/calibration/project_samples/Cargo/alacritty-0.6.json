@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:49:47Z",
+    "fetched_at": "2026-06-01T11:44:30Z",
     "git_ref": "v0.6.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of alacritty-0.6",
@@ -3125,7 +3125,7 @@
       "dep_name": "time",
       "dep_version": "0.1.44",
       "ecosystem": "Cargo",
-      "epss": 0.00696,
+      "epss": 0.00499,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3136,7 +3136,7 @@
       "finding_id": "sca:vuln:Cargo:time:0.1.44:GHSA-wcg3-cvx6-7396",
       "in_kev": false,
       "purl": "pkg:cargo/time@0.1.44",
-      "raptor_risk_estimate": 5.352979538347741,
+      "raptor_risk_estimate": 5.339621515250453,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3151,10 +3151,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.402851688,
+        "epss_multiplier": 0.40184639699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.352979538347741,
+        "final": 5.339621515250453,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

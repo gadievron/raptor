@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:47:16Z",
+    "fetched_at": "2026-06-01T11:41:21Z",
     "git_ref": "v7.1.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of rails",
@@ -729,7 +729,7 @@
       "dep_name": "actionview",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.00025,
+      "epss": 0.00026,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -740,7 +740,7 @@
       "finding_id": "sca:vuln:RubyGems:actionview:7.1.2:GHSA-v55j-83pf-r9cq",
       "in_kev": false,
       "purl": "pkg:gem/actionview@7.1.2",
-      "raptor_risk_estimate": 3.4241812200957105,
+      "raptor_risk_estimate": 3.4242249666917393,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -755,10 +755,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399427575,
+        "epss_multiplier": 0.399432678,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4241812200957105,
+        "final": 3.4242249666917393,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -796,7 +796,7 @@
       "dep_name": "activerecord",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.00319,
+      "epss": 0.00346,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -807,7 +807,7 @@
       "finding_id": "sca:vuln:RubyGems:activerecord:7.1.2:GHSA-76r7-hhxj-r776",
       "in_kev": false,
       "purl": "pkg:gem/activerecord@7.1.2",
-      "raptor_risk_estimate": 3.4370427193280753,
+      "raptor_risk_estimate": 3.438223877420844,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -822,10 +822,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400927857,
+        "epss_multiplier": 0.401065638,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4370427193280753,
+        "final": 3.438223877420844,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -863,7 +863,7 @@
       "dep_name": "activestorage",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.00028,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -874,7 +874,7 @@
       "finding_id": "sca:vuln:RubyGems:activestorage:7.1.2:GHSA-73f9-jhhh-hr5m",
       "in_kev": false,
       "purl": "pkg:gem/activestorage@7.1.2",
-      "raptor_risk_estimate": 3.424312459883796,
+      "raptor_risk_estimate": 3.4243562064798247,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -889,10 +889,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399442884,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.424312459883796,
+        "final": 3.4243562064798247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -930,7 +930,7 @@
       "dep_name": "activestorage",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.00036,
+      "epss": 0.00037,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -941,7 +941,7 @@
       "finding_id": "sca:vuln:RubyGems:activestorage:7.1.2:GHSA-9xrj-h377-fr87",
       "in_kev": false,
       "purl": "pkg:gem/activestorage@7.1.2",
-      "raptor_risk_estimate": 3.4246624326520236,
+      "raptor_risk_estimate": 3.4247061792480515,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -956,10 +956,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399483708,
+        "epss_multiplier": 0.399488811,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4246624326520236,
+        "final": 3.4247061792480515,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1135,7 +1135,7 @@
       "dep_name": "activestorage",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.00023,
+      "epss": 0.00024,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1146,7 +1146,7 @@
       "finding_id": "sca:vuln:RubyGems:activestorage:7.1.2:GHSA-r46p-8f7g-vvvg",
       "in_kev": false,
       "purl": "pkg:gem/activestorage@7.1.2",
-      "raptor_risk_estimate": 3.4240937269036538,
+      "raptor_risk_estimate": 3.4241374734996817,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1161,10 +1161,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39941736899999997,
+        "epss_multiplier": 0.399422472,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4240937269036538,
+        "final": 3.4241374734996817,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1270,7 +1270,7 @@
       "dep_name": "activesupport",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.0003,
+      "epss": 0.00032,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1281,7 +1281,7 @@
       "finding_id": "sca:vuln:RubyGems:activesupport:7.1.2:GHSA-2j26-frm8-cmj9",
       "in_kev": false,
       "purl": "pkg:gem/activesupport@7.1.2",
-      "raptor_risk_estimate": 3.424399953075853,
+      "raptor_risk_estimate": 3.4244874462679094,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1296,10 +1296,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39945309,
+        "epss_multiplier": 0.39946329599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.424399953075853,
+        "final": 3.4244874462679094,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1337,7 +1337,7 @@
       "dep_name": "activesupport",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.0001,
+      "epss": 0.00011,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1348,7 +1348,7 @@
       "finding_id": "sca:vuln:RubyGems:activesupport:7.1.2:GHSA-89vf-4333-qx8v",
       "in_kev": false,
       "purl": "pkg:gem/activesupport@7.1.2",
-      "raptor_risk_estimate": 3.4235250211552843,
+      "raptor_risk_estimate": 3.4235687677513127,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1363,10 +1363,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39935103,
+        "epss_multiplier": 0.399356133,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4235250211552843,
+        "final": 3.4235687677513127,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1404,7 +1404,7 @@
       "dep_name": "activesupport",
       "dep_version": "7.1.2",
       "ecosystem": "RubyGems",
-      "epss": 0.0002,
+      "epss": 0.00021,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1415,7 +1415,7 @@
       "finding_id": "sca:vuln:RubyGems:activesupport:7.1.2:GHSA-cg4j-q9v8-6v38",
       "in_kev": false,
       "purl": "pkg:gem/activesupport@7.1.2",
-      "raptor_risk_estimate": 3.4239624871155683,
+      "raptor_risk_estimate": 3.424006233711597,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1430,10 +1430,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39940206,
+        "epss_multiplier": 0.399407163,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4239624871155683,
+        "final": 3.424006233711597,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1541,7 +1541,7 @@
       "dep_name": "aws-sdk-s3",
       "dep_version": "1.117.2",
       "ecosystem": "RubyGems",
-      "epss": 7e-05,
+      "epss": 8e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1552,7 +1552,7 @@
       "finding_id": "sca:vuln:RubyGems:aws-sdk-s3:1.117.2:GHSA-2xgq-q749-89fq",
       "in_kev": false,
       "purl": "pkg:gem/aws-sdk-s3@1.117.2",
-      "raptor_risk_estimate": 5.1853743371849985,
+      "raptor_risk_estimate": 5.185440599639999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1569,10 +1569,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399335721,
+        "epss_multiplier": 0.399340824,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.1853743371849985,
+        "final": 5.185440599639999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1700,11 +1700,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "railties/lib/rails/info.rb:2",
-          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
-          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
           "actionview/lib/action_view/helpers/form_helper.rb:2",
-          "actionview/lib/action_view/helpers/form_options_helper.rb:2"
+          "actionview/lib/action_view/helpers/form_options_helper.rb:2",
+          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
+          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
+          "railties/lib/rails/info.rb:2"
         ],
         "verdict": "imported"
       },
@@ -1777,11 +1777,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "railties/lib/rails/info.rb:2",
-          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
-          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
           "actionview/lib/action_view/helpers/form_helper.rb:2",
-          "actionview/lib/action_view/helpers/form_options_helper.rb:2"
+          "actionview/lib/action_view/helpers/form_options_helper.rb:2",
+          "actionview/lib/action_view/helpers/form_tag_helper.rb:2",
+          "activesupport/lib/active_support/core_ext/object/to_query.rb:2",
+          "railties/lib/rails/info.rb:2"
         ],
         "verdict": "imported"
       },
@@ -2529,11 +2529,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2599,11 +2599,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2670,11 +2670,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2744,11 +2744,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2814,11 +2814,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2885,11 +2885,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -2953,11 +2953,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3024,11 +3024,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3095,11 +3095,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
           "actiontext/lib/action_text.rb:8",
-          "activesupport/lib/active_support/xml_mini/nokogiri.rb:4",
-          "activesupport/lib/active_support/xml_mini/nokogirisax.rb:4",
-          "guides/rails_guides/epub_packer.rb:3",
+          "actionpack/lib/action_dispatch/testing/request_encoder.rb:2",
+          "guides/rails_guides/epub.rb:3",
+          "guides/rails_guides/generator.rb:5",
+          "guides/rails_guides/markdown.rb:4",
           "... (+3 more)"
         ],
         "verdict": "imported"
@@ -3521,11 +3521,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3597,11 +3597,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3675,11 +3675,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3753,11 +3753,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3830,11 +3830,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3889,7 +3889,7 @@
       "dep_name": "rack",
       "dep_version": "3.0.8",
       "ecosystem": "RubyGems",
-      "epss": 0.01416,
+      "epss": 0.01854,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3900,7 +3900,7 @@
       "finding_id": "sca:vuln:RubyGems:rack:3.0.8:GHSA-7wqh-767x-r66v",
       "in_kev": false,
       "purl": "pkg:gem/rack@3.0.8",
-      "raptor_risk_estimate": 7.469912456999998,
+      "raptor_risk_estimate": 7.5109826767499985,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3908,11 +3908,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -3922,10 +3922,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40652584799999997,
+        "epss_multiplier": 0.408760962,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.469912456999998,
+        "final": 7.5109826767499985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3982,11 +3982,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4059,11 +4059,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4135,11 +4135,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4213,11 +4213,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4290,11 +4290,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4368,11 +4368,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4445,11 +4445,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4522,11 +4522,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4598,11 +4598,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4675,11 +4675,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4753,11 +4753,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4830,11 +4830,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4906,11 +4906,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -4983,11 +4983,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -5061,11 +5061,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -5138,11 +5138,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -5211,11 +5211,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
+          "actioncable/lib/action_cable/server/configuration.rb:2",
           "actionpack/lib/action_dispatch.rb:31",
           "actionpack/lib/action_controller/test_case.rb:2",
           "actionpack/lib/action_controller/metal/request_forgery_protection.rb:2",
           "actionpack/lib/action_controller/metal/strong_parameters.rb:9",
-          "actionpack/lib/action_dispatch/constants.rb:2",
           "... (+26 more)"
         ],
         "verdict": "imported"
@@ -5283,8 +5283,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -5352,8 +5352,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -5421,8 +5421,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -5490,8 +5490,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -5559,8 +5559,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "actionview/lib/action_view/helpers/sanitize_helper.rb:2",
+          "actiontext/app/helpers/action_text/content_helper.rb:2",
           "guides/rails_guides/markdown.rb:7"
         ],
         "verdict": "imported"
@@ -5635,11 +5635,11 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "actionpack/lib/action_controller/railtie.rb:2",
-          "activerecord/lib/rails/generators/active_record.rb:2",
-          "activerecord/lib/rails/generators/active_record.rb:4",
-          "activerecord/lib/rails/generators/active_record.rb:5",
-          "activerecord/lib/rails/generators/active_record/migration.rb:2",
+          "actionview/lib/action_view/railtie.rb:4",
+          "actioncable/lib/action_cable/engine.rb:2",
+          "activemodel/lib/active_model/railtie.rb:4",
+          "actiontext/lib/action_text/engine.rb:2",
+          "actionmailbox/lib/generators/action_mailbox/install/install_generator.rb:2",
           "... (+148 more)"
         ],
         "verdict": "imported"
@@ -5695,7 +5695,7 @@
       "dep_name": "rdoc",
       "dep_version": "6.5.0",
       "ecosystem": "RubyGems",
-      "epss": 0.02273,
+      "epss": 0.02433,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5706,7 +5706,7 @@
       "finding_id": "sca:vuln:RubyGems:rdoc:6.5.0:GHSA-592j-995h-p23j",
       "in_kev": false,
       "purl": "pkg:gem/rdoc@6.5.0",
-      "raptor_risk_estimate": 11.57611765248109,
+      "raptor_risk_estimate": 11.599120058920656,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -5723,10 +5723,10 @@
         "cvss_base": 45.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410899119,
+        "epss_multiplier": 0.411715599,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.57611765248109,
+        "final": 11.599120058920656,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -5857,8 +5857,8 @@
           "reason": "`require` found in non-test Ruby source"
         },
         "evidence": [
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11",
-          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8"
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:8",
+          "activejob/lib/active_job/queue_adapters/resque_adapter.rb:11"
         ],
         "verdict": "imported"
       },
@@ -6051,7 +6051,7 @@
       "dep_name": "rexml",
       "dep_version": "3.2.5",
       "ecosystem": "RubyGems",
-      "epss": 0.08335,
+      "epss": 0.07595,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6062,7 +6062,7 @@
       "finding_id": "sca:vuln:RubyGems:rexml:3.2.5:GHSA-4xqq-m2hx-25v8",
       "in_kev": false,
       "purl": "pkg:gem/rexml@3.2.5",
-      "raptor_risk_estimate": 3.1581782419964854,
+      "raptor_risk_estimate": 3.131186228701812,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6077,10 +6077,10 @@
         "cvss_base": 43.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44183350499999996,
+        "epss_multiplier": 0.43805728499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1581782419964854,
+        "final": 3.131186228701812,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -6120,7 +6120,7 @@
       "dep_name": "rexml",
       "dep_version": "3.2.5",
       "ecosystem": "RubyGems",
-      "epss": 0.00661,
+      "epss": 0.00679,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6131,7 +6131,7 @@
       "finding_id": "sca:vuln:RubyGems:rexml:3.2.5:GHSA-5866-49gr-22v4",
       "in_kev": false,
       "purl": "pkg:gem/rexml@3.2.5",
-      "raptor_risk_estimate": 5.020227504055811,
+      "raptor_risk_estimate": 5.021372671181763,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6146,10 +6146,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.402673083,
+        "epss_multiplier": 0.402764937,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.020227504055811,
+        "final": 5.021372671181763,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -6189,7 +6189,7 @@
       "dep_name": "rexml",
       "dep_version": "3.2.5",
       "ecosystem": "RubyGems",
-      "epss": 0.00232,
+      "epss": 0.00239,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6200,7 +6200,7 @@
       "finding_id": "sca:vuln:RubyGems:rexml:3.2.5:GHSA-r55c-59qm-vjw6",
       "in_kev": false,
       "purl": "pkg:gem/rexml@3.2.5",
-      "raptor_risk_estimate": 4.99293435422061,
+      "raptor_risk_estimate": 4.993379696991813,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6215,10 +6215,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400483896,
+        "epss_multiplier": 0.400519617,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.99293435422061,
+        "final": 4.993379696991813,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -6327,7 +6327,7 @@
       "dep_name": "rexml",
       "dep_version": "3.2.5",
       "ecosystem": "RubyGems",
-      "epss": 0.01135,
+      "epss": 0.01167,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6338,7 +6338,7 @@
       "finding_id": "sca:vuln:RubyGems:rexml:3.2.5:GHSA-vmwr-mc7x-5vc3",
       "in_kev": false,
       "purl": "pkg:gem/rexml@3.2.5",
-      "raptor_risk_estimate": 3.9729684097419695,
+      "raptor_risk_estimate": 3.974569947174414,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6353,10 +6353,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405091905,
+        "epss_multiplier": 0.405255201,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.9729684097419695,
+        "final": 3.974569947174414,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.67849,
@@ -8529,7 +8529,7 @@
       "dep_name": "flatted",
       "dep_version": "2.0.2",
       "ecosystem": "npm",
-      "epss": 0.00067,
+      "epss": 0.0007,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8540,7 +8540,7 @@
       "finding_id": "sca:vuln:npm:flatted:2.0.2:GHSA-rf6f-7fwh-wjgh",
       "in_kev": false,
       "purl": "pkg:npm/flatted@2.0.2",
-      "raptor_risk_estimate": 13.108995526342374,
+      "raptor_risk_estimate": 13.109497689934356,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8555,10 +8555,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39964190099999997,
+        "epss_multiplier": 0.39965721,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.108995526342374,
+        "final": 13.109497689934356,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8873,7 +8873,7 @@
       "dep_name": "jquery",
       "dep_version": "2.2.4",
       "ecosystem": "npm",
-      "epss": 0.02443,
+      "epss": 0.01532,
       "exploit_evidence": {
         "edb_ids": [
           52141
@@ -8886,7 +8886,7 @@
       "finding_id": "sca:vuln:npm:jquery:2.2.4:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
       "purl": "pkg:npm/jquery@2.2.4",
-      "raptor_risk_estimate": 11.162639972514325,
+      "raptor_risk_estimate": 11.036614099078758,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8894,11 +8894,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -8908,10 +8908,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.411766629,
+        "epss_multiplier": 0.407117796,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 11.162639972514325,
+        "final": 11.036614099078758,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -8975,11 +8975,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -9055,11 +9055,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -9133,11 +9133,11 @@
           "reason": "dep referenced only by test code"
         },
         "evidence": [
-          "actionview/test/ujs/public/test/settings.js:1 [test]",
-          "actionview/test/ujs/public/test/data-method.js:1 [test]",
-          "actionview/test/ujs/public/test/data-confirm.js:1 [test]",
+          "actionview/test/ujs/public/test/csrf-token.js:1 [test]",
+          "actionview/test/ujs/public/test/call-ajax.js:1 [test]",
+          "actionview/test/ujs/public/test/call-remote.js:1 [test]",
           "actionview/test/ujs/public/test/data-disable-with.js:1 [test]",
-          "actionview/test/ujs/public/test/csrf-refresh.js:1 [test]",
+          "actionview/test/ujs/public/test/settings.js:1 [test]",
           "... and 7 more"
         ],
         "verdict": "not_reachable"
@@ -10436,7 +10436,7 @@
       "dep_name": "qs",
       "dep_version": "6.11.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10447,7 +10447,7 @@
       "finding_id": "sca:vuln:npm:qs:6.11.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.11.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10462,10 +10462,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10573,7 +10573,7 @@
       "dep_name": "qs",
       "dep_version": "6.11.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10584,7 +10584,7 @@
       "finding_id": "sca:vuln:npm:qs:6.11.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.11.2",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10599,10 +10599,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -10779,7 +10779,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.3",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10790,7 +10790,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.3:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.3",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10805,10 +10805,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -11336,7 +11336,7 @@
       "dep_name": "socket.io-parser",
       "dep_version": "3.2.0",
       "ecosystem": "npm",
-      "epss": 0.0006,
+      "epss": 0.00051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11347,7 +11347,7 @@
       "finding_id": "sca:vuln:npm:socket.io-parser:3.2.0:GHSA-677m-j7p3-52f9",
       "in_kev": false,
       "purl": "pkg:npm/socket.io-parser@3.2.0",
-      "raptor_risk_estimate": 3.4257123509567067,
+      "raptor_risk_estimate": 3.42531863159245,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11362,10 +11362,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39960618,
+        "epss_multiplier": 0.399560253,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4257123509567067,
+        "final": 3.42531863159245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -11795,6 +11795,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },

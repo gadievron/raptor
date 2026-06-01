@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:48:55Z",
+    "fetched_at": "2026-06-01T11:43:40Z",
     "git_ref": "v3.6.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of strapi-3",
@@ -107,7 +107,7 @@
       "dep_name": "@babel/plugin-transform-modules-systemjs",
       "dep_version": "7.13.8",
       "ecosystem": "npm",
-      "epss": null,
+      "epss": 0.0002,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -118,7 +118,7 @@
       "finding_id": "sca:vuln:npm:@babel/plugin-transform-modules-systemjs:7.13.8:GHSA-fv7c-fp4j-7gwp",
       "in_kev": false,
       "purl": "pkg:npm/@babel/plugin-transform-modules-systemjs@7.13.8",
-      "raptor_risk_estimate": 11.501355581065873,
+      "raptor_risk_estimate": 7.019123098586916,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -133,10 +133,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.39940206,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.501355581065873,
+        "final": 7.019123098586916,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -408,9 +408,9 @@
         },
         "evidence": [
           "packages/strapi-admin/services/permission/engine.js:18",
-          "packages/strapi-admin/services/permission/permissions-manager/query-builers.js:4",
           "packages/strapi-admin/services/permission/permissions-manager/index.js:4",
-          "packages/strapi-admin/services/permission/permissions-manager/index.js:5"
+          "packages/strapi-admin/services/permission/permissions-manager/index.js:5",
+          "packages/strapi-admin/services/permission/permissions-manager/query-builers.js:4"
         ],
         "verdict": "imported"
       },
@@ -1677,8 +1677,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/target.js:14",
+          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/helpers/file/index.js:12"
         ],
         "verdict": "imported"
@@ -1751,8 +1751,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/target.js:14",
+          "packages/strapi-generate/lib/generate.js:13",
           "packages/strapi-generate/lib/helpers/file/index.js:12"
         ],
         "verdict": "imported"
@@ -1843,6 +1843,80 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44495"
+        ],
+        "fixed_versions": [
+          "1.15.2",
+          "0.31.1"
+        ],
+        "id": "GHSA-3g43-6gmg-66jw",
+        "modified": "2026-05-29T16:15:52.575987+00:00",
+        "published": "2026-05-29T16:07:31+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-3g43-6gmg-66jw",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "summary": "axios Vulnerable to Credential Theft and Response Hijacking via Prototype Pollution Gadget in Config Merge"
+      },
+      "cvss_score": 7.0,
+      "dep_name": "axios",
+      "dep_version": "0.21.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.1:GHSA-3g43-6gmg-66jw",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.1",
+      "raptor_risk_estimate": 14.470707562499996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
+          "... and 4 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.470707562499996,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-62718"
         ],
         "fixed_versions": [
@@ -1889,11 +1963,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -1967,11 +2041,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2042,11 +2116,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2118,11 +2192,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2194,11 +2268,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2220,6 +2294,81 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44490"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-898c-q2cr-xwhg",
+        "modified": "2026-05-29T16:00:11.639985+00:00",
+        "published": "2026-05-29T15:54:57+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-898c-q2cr-xwhg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 4.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
+        },
+        "summary": "axios has DoS & Header Injection via Prototype Pollution Read-Side Gadgets in axios merge functions"
+      },
+      "cvss_score": 4.8,
+      "dep_name": "axios",
+      "dep_version": "0.21.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.1:GHSA-898c-q2cr-xwhg",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.1",
+      "raptor_risk_estimate": 9.9227709,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
+          "... and 4 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 48.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 9.9227709,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -2271,11 +2420,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2348,11 +2497,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2422,11 +2571,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2498,11 +2647,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2574,11 +2723,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2597,6 +2746,81 @@
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44492"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-pjwm-pj3p-43mv",
+        "modified": "2026-05-29T16:15:52.668986+00:00",
+        "published": "2026-05-29T15:59:30+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-pjwm-pj3p-43mv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "axios's shouldBypassProxy does not recognize IPv4-mapped IPv6 addresses, allowing NO_PROXY bypass (incomplete fix for CVE-2025-62718)"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "axios",
+      "dep_version": "0.21.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:0.21.1:GHSA-pjwm-pj3p-43mv",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@0.21.1",
+      "raptor_risk_estimate": 17.778297862499997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
+          "... and 4 more"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 17.778297862499997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
@@ -2650,11 +2874,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2726,11 +2950,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2802,11 +3026,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2880,11 +3104,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -2956,11 +3180,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -3032,11 +3256,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/index.js:6",
           "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/index.js:2",
-          "packages/strapi-plugin-upload/admin/src/utils/createNewFilesToDownloadArray.js:1",
-          "packages/strapi-admin/admin/src/containers/Admin/index.js:9",
+          "packages/strapi-plugin-upload/admin/src/components/EditForm/index.js:12",
+          "packages/strapi-admin/admin/src/containers/HomePage/hooks.js:2",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -4364,10 +4588,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -4422,7 +4646,7 @@
       "dep_name": "debug",
       "dep_version": "2.2.0",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4433,7 +4657,7 @@
       "finding_id": "sca:vuln:npm:debug:2.2.0:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 4.672553982938624,
+      "raptor_risk_estimate": 4.672852186311749,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4441,10 +4665,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -4453,10 +4677,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.672553982938624,
+        "final": 4.672852186311749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4499,7 +4723,7 @@
       "dep_name": "debug",
       "dep_version": "4.1.1",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4510,7 +4734,7 @@
       "finding_id": "sca:vuln:npm:debug:4.1.1:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@4.1.1",
-      "raptor_risk_estimate": 4.672553982938624,
+      "raptor_risk_estimate": 4.672852186311749,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4518,10 +4742,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi/lib/services/webhook-runner.js:6",
-          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi-database/lib/migration-manager.js:2",
           "packages/strapi-database/lib/lifecycle-manager.js:2",
-          "packages/strapi-database/lib/migration-manager.js:2"
+          "packages/strapi/lib/services/worker-queue.js:6",
+          "packages/strapi/lib/services/webhook-runner.js:6"
         ],
         "verdict": "imported"
       },
@@ -4530,10 +4754,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.672553982938624,
+        "final": 4.672852186311749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6076,7 +6300,7 @@
       "dep_name": "flatted",
       "dep_version": "3.1.1",
       "ecosystem": "npm",
-      "epss": 0.00067,
+      "epss": 0.0007,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6087,7 +6311,7 @@
       "finding_id": "sca:vuln:npm:flatted:3.1.1:GHSA-rf6f-7fwh-wjgh",
       "in_kev": false,
       "purl": "pkg:npm/flatted@3.1.1",
-      "raptor_risk_estimate": 13.108995526342374,
+      "raptor_risk_estimate": 13.109497689934356,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6102,10 +6326,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39964190099999997,
+        "epss_multiplier": 0.39965721,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.108995526342374,
+        "final": 13.109497689934356,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7887,9 +8111,9 @@
         "evidence": [
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/reducer.js:1",
           "packages/strapi-plugin-i18n/admin/src/hooks/reducers.js:1",
-          "packages/strapi-admin/ee/admin/containers/Roles/ListPage/reducer.js:2",
-          "packages/strapi-admin/ee/admin/hooks/useAuthProviders/reducer.js:2",
-          "packages/strapi-admin/admin/src/components/Roles/Permissions/reducer.js:1",
+          "packages/strapi-plugin-content-manager/admin/src/containers/EditViewLayoutManager/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/Main/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/RBACManager/reducer.js:6",
           "... and 31 more"
         ],
         "verdict": "imported"
@@ -7962,9 +8186,9 @@
         "evidence": [
           "packages/strapi-plugin-upload/admin/src/containers/InputModalStepperProvider/reducer.js:1",
           "packages/strapi-plugin-i18n/admin/src/hooks/reducers.js:1",
-          "packages/strapi-admin/ee/admin/containers/Roles/ListPage/reducer.js:2",
-          "packages/strapi-admin/ee/admin/hooks/useAuthProviders/reducer.js:2",
-          "packages/strapi-admin/admin/src/components/Roles/Permissions/reducer.js:1",
+          "packages/strapi-plugin-content-manager/admin/src/containers/EditViewLayoutManager/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/Main/reducer.js:6",
+          "packages/strapi-plugin-content-manager/admin/src/containers/RBACManager/reducer.js:6",
           "... and 31 more"
         ],
         "verdict": "imported"
@@ -8038,11 +8262,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/FormModal/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/utils/createModifiedDataSchema.js:1",
-          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/HomePage/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/SettingsPage/reducer.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
           "... and 22 more"
         ],
         "verdict": "imported"
@@ -8116,11 +8340,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/FormModal/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/reducer.js:1",
-          "packages/strapi-plugin-content-type-builder/admin/src/containers/DataManagerProvider/utils/createModifiedDataSchema.js:1",
-          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/HomePage/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/ModalStepper/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/containers/SettingsPage/reducer.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:1",
+          "packages/strapi-plugin-upload/admin/src/components/VideoPreview/reducer.js:1",
           "... and 22 more"
         ],
         "verdict": "imported"
@@ -8857,7 +9081,7 @@
       "dep_name": "jsonwebtoken",
       "dep_version": "8.5.1",
       "ecosystem": "npm",
-      "epss": 0.00073,
+      "epss": 0.00082,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8868,7 +9092,7 @@
       "finding_id": "sca:vuln:npm:jsonwebtoken:8.5.1:GHSA-8cf7-32gw-wr33",
       "in_kev": false,
       "purl": "pkg:npm/jsonwebtoken@8.5.1",
-      "raptor_risk_estimate": 10.225971112069123,
+      "raptor_risk_estimate": 10.227146194550247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -8876,9 +9100,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -8887,10 +9111,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399672519,
+        "epss_multiplier": 0.399718446,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.225971112069123,
+        "final": 10.227146194550247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -8949,9 +9173,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -9022,9 +9246,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/services/token.js:5",
           "packages/strapi-plugin-users-permissions/services/Providers.js:15",
-          "packages/strapi-plugin-users-permissions/services/Jwt.js:10"
+          "packages/strapi-plugin-users-permissions/services/Jwt.js:10",
+          "packages/strapi-admin/services/token.js:5"
         ],
         "verdict": "imported"
       },
@@ -10782,11 +11006,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -10858,11 +11082,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -10933,11 +11157,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -11009,11 +11233,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -11084,11 +11308,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -11159,11 +11383,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -11235,11 +11459,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -11310,11 +11534,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-hook-redis/lib/index.js:12",
-          "packages/strapi-plugin-graphql/services/schema-generator.js:11",
-          "packages/strapi-plugin-graphql/services/resolvers-builder.js:7",
-          "packages/strapi-plugin-graphql/services/type-builder.js:9",
-          "packages/strapi-plugin-graphql/services/schema-definitions.js:7",
+          "packages/strapi-generate-api/json/routes.json.js:11",
+          "packages/strapi-generate-api/lib/before.js:8",
+          "packages/strapi-generate-plugin/json/package.json.js:8",
+          "packages/strapi-generate-plugin/lib/before.js:10",
+          "packages/strapi-generate/lib/target.js:13",
           "... and 586 more"
         ],
         "verdict": "imported"
@@ -12646,10 +12870,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/utils/formatFilter.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:3",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/utils/filtersForm.js:2",
-          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersList/utils/formatFilter.js:1",
           "... and 7 more"
         ],
@@ -12722,10 +12946,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
+          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/utils/formatFilter.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/reducer.js:3",
           "packages/strapi-plugin-upload/admin/src/components/FiltersPicker/FiltersCard/utils/filtersForm.js:2",
-          "packages/strapi-plugin-upload/admin/src/components/Duration/utils/formatDuration.js:1",
           "packages/strapi-plugin-upload/admin/src/components/FiltersList/utils/formatFilter.js:1",
           "... and 7 more"
         ],
@@ -12948,11 +13172,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13027,11 +13251,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13105,11 +13329,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13185,11 +13409,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13264,11 +13488,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13344,11 +13568,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13423,11 +13647,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13502,11 +13726,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13580,11 +13804,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13660,11 +13884,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13739,11 +13963,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -13819,11 +14043,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/mount-models.js:4",
           "packages/strapi-connector-mongoose/lib/index.js:12",
+          "packages/strapi-connector-mongoose/lib/queries.js:11",
           "packages/strapi-connector-mongoose/lib/relations.js:9",
-          "packages/strapi-connector-mongoose/lib/utils/connectivity.js:4",
+          "packages/strapi-connector-mongoose/lib/utils/index.js:4",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -14447,10 +14671,10 @@
         },
         "evidence": [
           "packages/create-strapi-starter/utils/fetch-github.js:4",
+          "packages/strapi/lib/utils/openBrowser.js:14",
+          "packages/strapi/lib/utils/success.js:7",
           "packages/strapi/lib/services/webhook-runner.js:8",
           "packages/strapi/lib/services/metrics/sender.js:7",
-          "packages/strapi/lib/utils/success.js:7",
-          "packages/strapi/lib/utils/openBrowser.js:14",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -16643,7 +16867,7 @@
       "dep_name": "nodemailer",
       "dep_version": "6.5.0",
       "ecosystem": "npm",
-      "epss": 0.00155,
+      "epss": 0.00219,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16654,7 +16878,7 @@
       "finding_id": "sca:vuln:npm:nodemailer:6.5.0:GHSA-rcmh-qjqh-p98v",
       "in_kev": false,
       "purl": "pkg:npm/nodemailer@6.5.0",
-      "raptor_risk_estimate": 19.342548391831645,
+      "raptor_risk_estimate": 19.35833760507815,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -16671,10 +16895,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40009096499999997,
+        "epss_multiplier": 0.400417557,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.342548391831645,
+        "final": 19.35833760507815,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -17338,7 +17562,7 @@
       "dep_name": "parse-path",
       "dep_version": "4.0.3",
       "ecosystem": "npm",
-      "epss": 0.00126,
+      "epss": 0.00159,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17349,7 +17573,7 @@
       "finding_id": "sca:vuln:npm:parse-path:4.0.3:GHSA-3j8f-xvm3-ffx4",
       "in_kev": false,
       "purl": "pkg:npm/parse-path@4.0.3",
-      "raptor_risk_estimate": 6.257194317987617,
+      "raptor_risk_estimate": 6.25982895673343,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17364,10 +17588,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399942978,
+        "epss_multiplier": 0.400111377,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.257194317987617,
+        "final": 6.25982895673343,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -19557,7 +19781,7 @@
       "dep_name": "qs",
       "dep_version": "6.10.1",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19568,7 +19792,7 @@
       "finding_id": "sca:vuln:npm:qs:6.10.1:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.10.1",
-      "raptor_risk_estimate": 6.67294709439,
+      "raptor_risk_estimate": 6.670476266441249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -19576,11 +19800,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19590,10 +19814,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.67294709439,
+        "final": 6.670476266441249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -19660,11 +19884,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19736,11 +19960,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19793,7 +20017,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19804,7 +20028,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.2",
-      "raptor_risk_estimate": 6.67294709439,
+      "raptor_risk_estimate": 6.670476266441249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -19812,11 +20036,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19826,10 +20050,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.67294709439,
+        "final": 6.670476266441249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -19896,11 +20120,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19953,7 +20177,7 @@
       "dep_name": "qs",
       "dep_version": "6.7.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -19964,7 +20188,7 @@
       "finding_id": "sca:vuln:npm:qs:6.7.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.7.0",
-      "raptor_risk_estimate": 6.67294709439,
+      "raptor_risk_estimate": 6.670476266441249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -19972,11 +20196,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -19986,10 +20210,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.67294709439,
+        "final": 6.670476266441249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -20056,11 +20280,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -20132,11 +20356,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi/lib/middlewares/parser/index.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/addCommonFieldsToInitialDataMiddleware.js:4",
           "packages/strapi-plugin-i18n/admin/src/middlewares/utils/addLocaleToLinksSearch.js:2",
-          "packages/strapi-admin/admin/src/containers/LeftMenu/utils/generateModelsLinks.js:2",
-          "packages/strapi/lib/middlewares/parser/index.js:4",
+          "packages/strapi-plugin-i18n/admin/src/components/CMEditViewLocalePicker/index.js:10",
+          "packages/strapi-plugin-content-manager/admin/src/containers/ListView/index.js:11",
           "... and 6 more"
         ],
         "verdict": "imported"
@@ -20566,9 +20790,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -20642,9 +20866,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -20718,9 +20942,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -20794,9 +21018,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -20870,9 +21094,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -20946,9 +21170,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1",
           "packages/strapi/lib/utils/update-notifier/index.js:6",
-          "packages/strapi-connector-mongoose/lib/buildQuery.js:5"
+          "packages/strapi-connector-mongoose/lib/buildQuery.js:5",
+          "packages/strapi-admin/admin/src/utils/checkLatestStrapiVersion.js:1"
         ],
         "verdict": "imported"
       },
@@ -22913,7 +23137,7 @@
       "dep_name": "sqlite3",
       "dep_version": "5.0.0",
       "ecosystem": "npm",
-      "epss": 0.00408,
+      "epss": 0.0025,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -22924,7 +23148,7 @@
       "finding_id": "sca:vuln:npm:sqlite3:5.0.0:GHSA-9qrh-qjmc-5w2p",
       "in_kev": false,
       "purl": "pkg:npm/sqlite3@5.0.0",
-      "raptor_risk_estimate": 6.45175531195239,
+      "raptor_risk_estimate": 6.43879538287896,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -22939,10 +23163,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.401382024,
+        "epss_multiplier": 0.40057575,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.45175531195239,
+        "final": 6.43879538287896,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -22982,7 +23206,7 @@
       "dep_name": "sqlite3",
       "dep_version": "5.0.0",
       "ecosystem": "npm",
-      "epss": 0.06759,
+      "epss": 0.06854,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -22993,7 +23217,7 @@
       "finding_id": "sca:vuln:npm:sqlite3:5.0.0:GHSA-jqv5-7xpx-qj74",
       "in_kev": false,
       "purl": "pkg:npm/sqlite3@5.0.0",
-      "raptor_risk_estimate": 7.530510865446368,
+      "raptor_risk_estimate": 7.538926616857341,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -23008,10 +23232,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.433791177,
+        "epss_multiplier": 0.43427596199999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.530510865446368,
+        "final": 7.538926616857341,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -23139,9 +23363,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23216,9 +23440,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23293,9 +23517,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23365,9 +23589,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23419,7 +23643,7 @@
       "dep_name": "strapi",
       "dep_version": "3.6.0",
       "ecosystem": "npm",
-      "epss": 0.00477,
+      "epss": 0.00647,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -23430,7 +23654,7 @@
       "finding_id": "sca:vuln:npm:strapi:3.6.0:GHSA-f6fm-r26q-p747",
       "in_kev": false,
       "purl": "pkg:npm/strapi@3.6.0",
-      "raptor_risk_estimate": 15.952862342009999,
+      "raptor_risk_estimate": 15.987311164110002,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -23440,9 +23664,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23452,10 +23676,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401734131,
+        "epss_multiplier": 0.402601641,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.952862342009999,
+        "final": 15.987311164110002,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -23513,9 +23737,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23588,9 +23812,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23664,9 +23888,9 @@
         "evidence": [
           "packages/strapi-plugin-graphql/hooks/graphql/load-config.js:4",
           "packages/strapi-admin/index.js:11",
-          "packages/strapi-admin/ee/services/passport.js:4",
+          "packages/strapi-admin/ee/validation/user.js:5",
+          "packages/strapi-admin/ee/validation/role.js:5",
           "packages/strapi-admin/ee/config/functions/bootstrap.js:4",
-          "packages/strapi-admin/ee/middlewares/features-routes/index.js:4",
           "... and 2 more"
         ],
         "verdict": "imported"
@@ -23994,7 +24218,7 @@
       "dep_name": "tar-fs",
       "dep_version": "2.1.1",
       "ecosystem": "npm",
-      "epss": 0.0003,
+      "epss": 0.00033,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -24005,7 +24229,7 @@
       "finding_id": "sca:vuln:npm:tar-fs:2.1.1:GHSA-vj76-c3g6-qr5v",
       "in_kev": false,
       "purl": "pkg:npm/tar-fs@2.1.1",
-      "raptor_risk_estimate": 3.424399953075853,
+      "raptor_risk_estimate": 3.424531192863938,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -24020,10 +24244,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39945309,
+        "epss_multiplier": 0.399468399,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.424399953075853,
+        "final": 3.424531192863938,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -24062,7 +24286,7 @@
       "dep_name": "tar",
       "dep_version": "2.2.2",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -24073,7 +24297,7 @@
       "finding_id": "sca:vuln:npm:tar:2.2.2:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@2.2.2",
-      "raptor_risk_estimate": 14.896451843980234,
+      "raptor_risk_estimate": 14.897403449629715,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -24091,10 +24315,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.896451843980234,
+        "final": 14.897403449629715,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -24703,7 +24927,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.13",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -24714,7 +24938,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.13:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.13",
-      "raptor_risk_estimate": 14.896451843980234,
+      "raptor_risk_estimate": 14.897403449629715,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -24732,10 +24956,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.896451843980234,
+        "final": 14.897403449629715,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -25567,7 +25791,7 @@
       "dep_name": "tar",
       "dep_version": "6.1.0",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25578,7 +25802,7 @@
       "finding_id": "sca:vuln:npm:tar:6.1.0:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@6.1.0",
-      "raptor_risk_estimate": 14.896451843980234,
+      "raptor_risk_estimate": 14.897403449629715,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -25596,10 +25820,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.896451843980234,
+        "final": 14.897403449629715,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -26616,6 +26840,69 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-54798"
         ],
         "fixed_versions": [
@@ -26686,6 +26973,69 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.1.0",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.1.0:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.1.0",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-54798"
         ],
         "fixed_versions": [
@@ -26750,6 +27100,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.2.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.2.1:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.2.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -27682,7 +28095,7 @@
       "dep_name": "url-parse",
       "dep_version": "1.5.1",
       "ecosystem": "npm",
-      "epss": 0.00032,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -27693,7 +28106,7 @@
       "finding_id": "sca:vuln:npm:url-parse:1.5.1:GHSA-8v38-pw62-9cw2",
       "in_kev": false,
       "purl": "pkg:npm/url-parse@1.5.1",
-      "raptor_risk_estimate": 5.564792100185354,
+      "raptor_risk_estimate": 5.564578835529716,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -27708,10 +28121,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39946329599999997,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.564792100185354,
+        "final": 5.564578835529716,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -28048,8 +28461,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -28123,8 +28536,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -28198,8 +28611,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },
@@ -28273,8 +28686,8 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11",
-          "packages/strapi-generate-new/lib/index.js:8"
+          "packages/strapi-generate-new/lib/index.js:8",
+          "packages/strapi-plugin-users-permissions/config/functions/bootstrap.js:11"
         ],
         "verdict": "imported"
       },

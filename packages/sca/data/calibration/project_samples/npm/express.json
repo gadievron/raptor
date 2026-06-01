@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:45:48Z",
+    "fetched_at": "2026-06-01T11:39:50Z",
     "git_ref": "4.18.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express",
@@ -820,7 +820,7 @@
       "dep_name": "qs",
       "dep_version": "6.11.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -831,7 +831,7 @@
       "finding_id": "sca:vuln:npm:qs:6.11.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.11.0",
-      "raptor_risk_estimate": 6.67294709439,
+      "raptor_risk_estimate": 6.670476266441249,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -849,10 +849,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.67294709439,
+        "final": 6.670476266441249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

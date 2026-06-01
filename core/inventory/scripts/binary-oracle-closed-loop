@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Closed-loop suppression test: real scanner findings + binary-oracle
+chokepoint internal-consistency check.
+
+For each finding semgrep emits on the source tree, ask the substrate:
+
+  1. What's binary-oracle's classification for the function containing
+     the finding? (absent / inlined / symbol_present / folded)
+  2. Does the shared chokepoint helper decide to suppress this finding?
+
+Then check the consumer-side contract:
+
+  * classifier ``absent`` + earns_suppression → chokepoint MUST suppress
+  * classifier ``inlined`` / ``symbol_present`` → chokepoint MUST NOT suppress
+  * no binary_oracle metadata on the function          → chokepoint MUST NOT
+                                                          suppress on
+                                                          binary_oracle_absent
+                                                          grounds
+
+Any disagreement is a real consumer-side bug — the substrate said one
+thing, the chokepoint did another.
+
+Usage::
+
+    core/inventory/scripts/binary-oracle-closed-loop \\
+        --source /path/to/project \\
+        --binary /path/to/project/build/app
+
+Built for ad-hoc operator runs and as the regression for the
+production-fidelity bugs the synthetic E2E driver can't catch
+(real scanner output shapes, real path normalisation paths).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# Resolve repo root from this script's location, drop into sys.path
+# the way other libexec/* scripts do.
+RAPTOR = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(RAPTOR))
+os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
+
+from core.config import RaptorConfig                    # noqa: E402
+from core.inventory.builder import build_inventory      # noqa: E402
+from core.inventory.lookup import lookup_function       # noqa: E402
+from core.inventory.reach_chokepoint import check_suppress  # noqa: E402
+
+
+def _run_semgrep(src_root: Path, configs: list[str]) -> list[dict]:
+    """Run semgrep on ``src_root`` and return findings as a list."""
+    cmd = ["semgrep", "scan", "--json", "--no-git-ignore"]
+    for c in configs:
+        cmd += ["--config", c]
+    cmd.append(str(src_root))
+    print(f"  semgrep ({', '.join(configs)}) against {src_root} ...")
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          timeout=900, check=False)
+    if not proc.stdout.strip():
+        print(f"  semgrep stderr: {proc.stderr[:500]}")
+        return []
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        print(f"  semgrep JSON parse failed: {e}")
+        return []
+    return data.get("results") or []
+
+
+def _resolve_function(inv: dict, file_path: str, line: int) -> str | None:
+    try:
+        func = lookup_function(inv, file_path, line, repo_root=None)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(func, dict):
+        return None
+    name = func.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def _classification_for(inv: dict, rel: str, fn: str) -> str | None:
+    for f in inv.get("files", []) or []:
+        if f.get("path") != rel:
+            continue
+        for it in f.get("items") or []:
+            if it.get("name") != fn:
+                continue
+            meta = it.get("metadata") or {}
+            bo = meta.get("binary_oracle") or {}
+            return bo.get("classification")
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="binary-oracle-closed-loop",
+        description=(
+            "Run semgrep against a source tree, classify each finding's "
+            "function via binary-oracle, then verify the chokepoint's "
+            "suppression decision matches the classifier verdict."),
+    )
+    p.add_argument("--source", required=True, type=Path,
+                   help="Source tree to scan (passed to semgrep + "
+                        "build_inventory).")
+    p.add_argument("--binary", required=True, type=Path,
+                   help="Debug binary built from the source tree.")
+    p.add_argument("--config", action="append", default=None,
+                   help=("Semgrep --config flag (repeatable). Default: "
+                         "r/c.lang.security + r/cpp.lang.security."))
+    args = p.parse_args(argv)
+
+    src_root = args.source.resolve()
+    binary = args.binary.resolve()
+    if not src_root.is_dir():
+        print(f"--source not a directory: {src_root}", file=sys.stderr)
+        return 2
+    if not binary.is_file():
+        print(f"--binary not a file: {binary}", file=sys.stderr)
+        return 2
+    configs = args.config or [
+        "r/c.lang.security", "r/cpp.lang.security"]
+
+    print("=== Building inventory with --binary ===")
+    with tempfile.TemporaryDirectory() as outdir:
+        RaptorConfig.BINARY_ORACLE_PATHS = (str(binary),)
+        try:
+            inv = build_inventory(str(src_root), outdir)
+        finally:
+            RaptorConfig.BINARY_ORACLE_PATHS = ()
+    bo = inv.get("binary_oracle") or {}
+    counts = bo.get("counts") or {}
+    print(f"  inventory: {len(inv.get('files', []))} files; "
+          f"binary_oracle counts: {counts}; "
+          f"earns_suppression={bo.get('earns_suppression')}")
+
+    print("\n=== Running semgrep ===")
+    findings = _run_semgrep(src_root, configs)
+    print(f"  {len(findings)} findings")
+    if not findings:
+        print("  (no findings — semgrep emitted nothing on this corpus; "
+              "try a different --config rule pack)")
+        return 0
+
+    print("\n=== Internal-consistency check ===")
+    by_path: dict[str, str] = {}
+    for f in inv.get("files", []) or []:
+        if isinstance(f, dict):
+            by_path[f.get("path", "")] = (f.get("language") or "").lower()
+
+    classified = {"absent": 0, "inlined": 0, "symbol_present": 0,
+                  "folded": 0, "no_metadata": 0, "no_function": 0,
+                  "non_native": 0, "file_not_in_inv": 0}
+    suppressed_correct = 0
+    suppressed_wrong = 0
+    unsuppressed_correct = 0
+    unsuppressed_wrong = 0
+    suppressed_no_classify = 0
+    examples: list[dict] = []
+
+    for finding in findings:
+        path_full = finding.get("path") or ""
+        try:
+            rel = str(Path(path_full).resolve().relative_to(src_root))
+        except ValueError:
+            rel = path_full
+        line = (finding.get("start") or {}).get("line", 0)
+
+        lang = by_path.get(rel)
+        if lang is None:
+            classified["file_not_in_inv"] += 1
+            continue
+        if lang and lang not in ("c", "cpp", "c++", "rust", "go"):
+            classified["non_native"] += 1
+            continue
+
+        fn = _resolve_function(inv, rel, line)
+        if not fn:
+            classified["no_function"] += 1
+            continue
+
+        cls = _classification_for(inv, rel, fn)
+        if cls is None:
+            classified["no_metadata"] += 1
+        else:
+            classified[cls] = classified.get(cls, 0) + 1
+
+        decision = check_suppress(
+            checklist=inv, file_path=rel, function_name=fn,
+            line=line, repo_root=src_root,
+        )
+        suppressed = decision is not None
+
+        if cls == "absent":
+            if suppressed:
+                suppressed_correct += 1
+            else:
+                unsuppressed_wrong += 1
+                if len(examples) < 5:
+                    examples.append({
+                        "kind": "ABSENT_NOT_SUPPRESSED",
+                        "rel": rel, "line": line, "fn": fn,
+                    })
+        elif cls in ("inlined", "symbol_present", "folded"):
+            if suppressed:
+                suppressed_wrong += 1
+                if len(examples) < 5:
+                    examples.append({
+                        "kind": "ALIVE_SUPPRESSED",
+                        "rel": rel, "line": line, "fn": fn,
+                        "classification": cls,
+                    })
+            else:
+                unsuppressed_correct += 1
+        else:
+            if suppressed:
+                suppressed_no_classify += 1
+                if len(examples) < 5:
+                    examples.append({
+                        "kind": "NO_CLASSIFY_SUPPRESSED",
+                        "rel": rel, "line": line, "fn": fn,
+                    })
+
+    total = sum(classified.values())
+    print(f"  classification breakdown of {len(findings)} findings"
+          f" ({total} bucketed):")
+    for k, v in sorted(classified.items()):
+        if v:
+            print(f"    {k}: {v}")
+
+    print("\n  internal consistency:")
+    print(f"    absent + suppressed (good):       {suppressed_correct}")
+    print(f"    alive + not suppressed (good):    {unsuppressed_correct}")
+    print(f"    absent + NOT suppressed (missed): {unsuppressed_wrong}")
+    print(f"    alive + suppressed (BUG):         {suppressed_wrong}")
+    print(f"    no_classify + suppressed (BUG):   {suppressed_no_classify}")
+
+    bugs = suppressed_wrong + suppressed_no_classify
+    print(f"\n  CONSUMER-SIDE BUGS: {bugs}")
+    missed = unsuppressed_wrong
+    if missed:
+        print(f"  MISSED SAVES (absent not suppressed): {missed}")
+    if examples:
+        print("\n  examples:")
+        for e in examples:
+            print(f"    {e}")
+
+    return 0 if bugs == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:38Z",
+    "fetched_at": "2026-06-01T11:45:40Z",
     "git_ref": "v1.30.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of deno-1.30",
@@ -99,7 +99,7 @@
       "dep_name": "aes-gcm",
       "dep_version": "0.10.1",
       "ecosystem": "Cargo",
-      "epss": 0.00017,
+      "epss": 0.00016,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -110,7 +110,7 @@
       "finding_id": "sca:vuln:Cargo:aes-gcm:0.10.1:GHSA-423w-p2w9-r7vq",
       "in_kev": false,
       "purl": "pkg:cargo/aes-gcm@0.10.1",
-      "raptor_risk_estimate": 14.5067640125987,
+      "raptor_risk_estimate": 14.506578658386095,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -118,11 +118,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/decrypt.rs:6",
-          "ext/crypto/decrypt.rs:7",
-          "ext/crypto/decrypt.rs:8",
-          "ext/crypto/decrypt.rs:9",
-          "ext/crypto/decrypt.rs:10",
+          "ext/crypto/encrypt.rs:7",
+          "ext/crypto/encrypt.rs:8",
+          "ext/crypto/encrypt.rs:9",
+          "ext/crypto/encrypt.rs:10",
+          "ext/crypto/encrypt.rs:11",
           "... (+13 more)"
         ],
         "verdict": "imported"
@@ -132,10 +132,10 @@
         "cvss_base": 47.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.399381648,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.5067640125987,
+        "final": 14.506578658386095,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -855,7 +855,7 @@
       "dep_name": "deno",
       "dep_version": "1.30.0",
       "ecosystem": "Cargo",
-      "epss": 0.00194,
+      "epss": 0.00263,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -866,7 +866,7 @@
       "finding_id": "sca:vuln:Cargo:deno:1.30.0:GHSA-f27p-cmv8-xhm6",
       "in_kev": false,
       "purl": "pkg:cargo/deno@1.30.0",
-      "raptor_risk_estimate": 9.864954008316772,
+      "raptor_risk_estimate": 9.873631515916767,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -881,10 +881,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400289982,
+        "epss_multiplier": 0.400642089,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.864954008316772,
+        "final": 9.873631515916767,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1615,7 +1615,7 @@
       "dep_name": "deno_fetch",
       "dep_version": "0.110.0",
       "ecosystem": "Cargo",
-      "epss": 0.00194,
+      "epss": 0.00263,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1626,7 +1626,7 @@
       "finding_id": "sca:vuln:Cargo:deno_fetch:0.110.0:GHSA-f27p-cmv8-xhm6",
       "in_kev": false,
       "purl": "pkg:cargo/deno_fetch@0.110.0",
-      "raptor_risk_estimate": 14.539571708229703,
+      "raptor_risk_estimate": 14.552361148899417,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1646,10 +1646,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400289982,
+        "epss_multiplier": 0.400642089,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.539571708229703,
+        "final": 14.552361148899417,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1711,11 +1711,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/proc_state.rs:55",
-          "cli/proc_state.rs:56",
-          "cli/proc_state.rs:57",
-          "cli/proc_state.rs:58",
-          "cli/proc_state.rs:59",
+          "cli/standalone.rs:29",
+          "cli/standalone.rs:30",
+          "cli/standalone.rs:31",
+          "cli/standalone.rs:32",
+          "cli/standalone.rs:33",
           "... (+170 more)"
         ],
         "verdict": "imported"
@@ -2732,7 +2732,7 @@
       "dep_name": "mio",
       "dep_version": "0.8.4",
       "ecosystem": "Cargo",
-      "epss": 0.00937,
+      "epss": 0.00963,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2743,7 +2743,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.4:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.4",
-      "raptor_risk_estimate": 19.53547284118738,
+      "raptor_risk_estimate": 19.541887209068776,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2751,11 +2751,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/flash/socket.rs:12",
           "ext/flash/lib.rs:33",
           "ext/flash/lib.rs:34",
           "ext/flash/lib.rs:35",
           "ext/flash/lib.rs:36",
+          "ext/flash/lib.rs:37",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -2765,10 +2765,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.404081511,
+        "epss_multiplier": 0.404214189,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.53547284118738,
+        "final": 19.541887209068776,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2887,8 +2887,8 @@
           "cli/tools/test.rs:42",
           "cli/tools/test.rs:43",
           "cli/tools/test.rs:44",
-          "ext/crypto/x25519.rs:9",
-          "ext/crypto/x25519.rs:10",
+          "ext/crypto/encrypt.rs:23",
+          "ext/crypto/lib.rs:22",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -2960,8 +2960,8 @@
           "cli/tools/test.rs:42",
           "cli/tools/test.rs:43",
           "cli/tools/test.rs:44",
-          "ext/crypto/x25519.rs:9",
-          "ext/crypto/x25519.rs:10",
+          "ext/crypto/encrypt.rs:23",
+          "ext/crypto/lib.rs:22",
           "... (+9 more)"
         ],
         "verdict": "imported"
@@ -3125,7 +3125,7 @@
           "0.17.12"
         ],
         "id": "GHSA-4p46-pwfr-66x6",
-        "modified": "2026-02-04T03:33:19.024195+00:00",
+        "modified": "2026-05-29T20:59:15.779360+00:00",
         "published": "2025-03-07T16:23:50+00:00",
         "references": [
           "https://nvd.nist.gov/vuln/detail/CVE-2025-4432",
@@ -3164,7 +3164,7 @@
           "cli/util/checksum.rs:2",
           "cli/util/checksum.rs:4",
           "cli/npm/tarball.rs:36",
-          "test_util/src/npm.rs:65",
+          "ext/crypto/import_key.rs:8",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -3233,7 +3233,7 @@
           "cli/util/checksum.rs:2",
           "cli/util/checksum.rs:4",
           "cli/npm/tarball.rs:36",
-          "test_util/src/npm.rs:65",
+          "ext/crypto/import_key.rs:8",
           "... (+22 more)"
         ],
         "verdict": "imported"
@@ -3305,11 +3305,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/lib.rs:37",
-          "ext/crypto/lib.rs:38",
-          "ext/crypto/lib.rs:39",
-          "ext/crypto/lib.rs:40",
-          "ext/crypto/lib.rs:202",
+          "ext/crypto/encrypt.rs:24",
+          "ext/crypto/encrypt.rs:25",
+          "ext/crypto/encrypt.rs:26",
+          "ext/crypto/export_key.rs:11",
+          "ext/crypto/import_key.rs:9",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -3376,11 +3376,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "ext/crypto/lib.rs:37",
-          "ext/crypto/lib.rs:38",
-          "ext/crypto/lib.rs:39",
-          "ext/crypto/lib.rs:40",
-          "ext/crypto/lib.rs:202",
+          "ext/crypto/encrypt.rs:24",
+          "ext/crypto/encrypt.rs:25",
+          "ext/crypto/encrypt.rs:26",
+          "ext/crypto/export_key.rs:11",
+          "ext/crypto/import_key.rs:9",
           "... (+19 more)"
         ],
         "verdict": "imported"
@@ -3499,7 +3499,7 @@
       "dep_name": "rustls",
       "dep_version": "0.20.6",
       "ecosystem": "Cargo",
-      "epss": 0.00054,
+      "epss": 0.00056,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3510,7 +3510,7 @@
       "finding_id": "sca:vuln:Cargo:rustls:0.20.6:RUSTSEC-2024-0336",
       "in_kev": false,
       "purl": "pkg:cargo/rustls@0.20.6",
-      "raptor_risk_estimate": 9.466194798506248,
+      "raptor_risk_estimate": 9.466436585024999,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3518,11 +3518,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "test_util/src/lib.rs:21",
-          "test_util/src/lib.rs:22",
           "ext/tls/lib.rs:2",
           "ext/tls/lib.rs:14",
           "ext/tls/lib.rs:16",
+          "ext/tls/lib.rs:17",
+          "ext/tls/lib.rs:18",
           "... (+10 more)"
         ],
         "verdict": "imported"
@@ -3532,10 +3532,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399575562,
+        "epss_multiplier": 0.399585768,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.466194798506248,
+        "final": 9.466436585024999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3543,6 +3543,73 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [],
+        "fixed_versions": [
+          "0.4.46"
+        ],
+        "id": "GHSA-3pv8-6f4r-ffg2",
+        "modified": "2026-06-01T10:59:10.816473+00:00",
+        "published": "2026-05-29T19:16:12+00:00",
+        "references": [
+          "https://github.com/composefs/tar-rs/security/advisories/GHSA-3pv8-6f4r-ffg2",
+          "https://github.com/composefs/tar-rs/pull/454",
+          "https://github.com/composefs/tar-rs/commit/bab14dd84b411ac16ecb56d4f2d2f7bfb88a9838",
+          "https://github.com/composefs/tar-rs",
+          "https://github.com/composefs/tar-rs/releases/tag/0.4.46"
+        ],
+        "severity": null,
+        "summary": "tar has a PAX header desynchronization issue"
+      },
+      "cvss_score": null,
+      "dep_name": "tar",
+      "dep_version": "0.4.38",
+      "ecosystem": "Cargo",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-3pv8-6f4r-ffg2",
+      "in_kev": false,
+      "purl": "pkg:cargo/tar@0.4.38",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "`use`/`extern crate` found in non-test source"
+        },
+        "evidence": [
+          "cli/npm/tarball.rs:11",
+          "cli/npm/tarball.rs:12",
+          "test_util/src/npm.rs:12"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3576,7 +3643,7 @@
       "dep_name": "tar",
       "dep_version": "0.4.38",
       "ecosystem": "Cargo",
-      "epss": 0.00017,
+      "epss": 0.00019,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3587,7 +3654,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-gchp-q4r4-x4ff",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 19.58413141700824,
+      "raptor_risk_estimate": 19.584631873382275,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3606,10 +3673,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 19.58413141700824,
+        "final": 19.584631873382275,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3651,7 +3718,7 @@
       "dep_name": "tar",
       "dep_version": "0.4.38",
       "ecosystem": "Cargo",
-      "epss": 0.00017,
+      "epss": 0.00019,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3662,7 +3729,7 @@
       "finding_id": "sca:vuln:Cargo:tar:0.4.38:GHSA-j4xf-2g29-59ph",
       "in_kev": false,
       "purl": "pkg:cargo/tar@0.4.38",
-      "raptor_risk_estimate": 8.200158848188124,
+      "raptor_risk_estimate": 8.200368396504375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -3681,10 +3748,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399386751,
+        "epss_multiplier": 0.399396957,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.200158848188124,
+        "final": 8.200368396504375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3805,11 +3872,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/util/file_watcher.rs:21",
-          "cli/util/file_watcher.rs:22",
-          "cli/util/file_watcher.rs:23",
-          "cli/util/file_watcher.rs:24",
-          "cli/lsp/tsc.rs:60",
+          "cli/lsp/diagnostics.rs:38",
+          "cli/lsp/diagnostics.rs:39",
+          "cli/lsp/diagnostics.rs:40",
+          "cli/lsp/parent_process_checker.rs:2",
+          "cli/lsp/parent_process_checker.rs:4",
           "... (+97 more)"
         ],
         "verdict": "imported"
@@ -3879,11 +3946,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "cli/util/file_watcher.rs:21",
-          "cli/util/file_watcher.rs:22",
-          "cli/util/file_watcher.rs:23",
-          "cli/util/file_watcher.rs:24",
-          "cli/lsp/tsc.rs:60",
+          "cli/lsp/diagnostics.rs:38",
+          "cli/lsp/diagnostics.rs:39",
+          "cli/lsp/diagnostics.rs:40",
+          "cli/lsp/parent_process_checker.rs:2",
+          "cli/lsp/parent_process_checker.rs:4",
           "... (+97 more)"
         ],
         "verdict": "imported"
@@ -4077,7 +4144,7 @@
       "dep_name": "tungstenite",
       "dep_version": "0.16.0",
       "ecosystem": "Cargo",
-      "epss": 0.03217,
+      "epss": 0.04501,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4088,7 +4155,7 @@
       "finding_id": "sca:vuln:Cargo:tungstenite:0.16.0:GHSA-9mcr-873m-xcxp",
       "in_kev": false,
       "purl": "pkg:cargo/tungstenite@0.16.0",
-      "raptor_risk_estimate": 6.682163164909731,
+      "raptor_risk_estimate": 6.787483094848223,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4103,10 +4170,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.415716351,
+        "epss_multiplier": 0.42226860299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.682163164909731,
+        "final": 6.787483094848223,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

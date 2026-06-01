@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:49:42Z",
+    "fetched_at": "2026-06-01T11:44:24Z",
     "git_ref": "3.1.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of identityserver4-3.1",
@@ -9,6 +9,84 @@
     "url": "https://github.com/IdentityServer/IdentityServer4.git"
   },
   "findings": [
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-32933"
+        ],
+        "fixed_versions": [
+          "16.1.1",
+          "15.1.1"
+        ],
+        "id": "GHSA-rvv3-g6hj-g44x",
+        "modified": "2026-05-26T18:29:26.398153+00:00",
+        "published": "2026-03-13T20:57:07+00:00",
+        "references": [
+          "https://github.com/LuckyPennySoftware/AutoMapper/security/advisories/GHSA-rvv3-g6hj-g44x",
+          "https://nvd.nist.gov/vuln/detail/CVE-2026-32933",
+          "https://github.com/LuckyPennySoftware/AutoMapper/commit/0afaf1e91648fca1a57512e94dd00a76ee016816",
+          "https://github.com/LuckyPennySoftware/AutoMapper",
+          "https://github.com/LuckyPennySoftware/AutoMapper/discussions/4624"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "AutoMapper Vulnerable to Denial of Service (DoS) via Uncontrolled Recursion"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "AutoMapper",
+      "dep_version": "9.0.0",
+      "ecosystem": "NuGet",
+      "epss": 0.00027,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:AutoMapper:9.0.0:GHSA-rvv3-g6hj-g44x",
+      "in_kev": false,
+      "purl": "pkg:nuget/AutoMapper@9.0.0",
+      "raptor_risk_estimate": 20.72659650674964,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/EntityFramework.Storage/src/Mappers/IdentityResourceMappers.cs:3",
+          "src/EntityFramework.Storage/src/Mappers/ApiResourceMappers.cs:3",
+          "src/EntityFramework.Storage/src/Mappers/IdentityResourceMapperProfile.cs:6",
+          "src/EntityFramework.Storage/src/Mappers/PersistedGrantMappers.cs:3",
+          "src/EntityFramework.Storage/src/Mappers/ApiResourceMapperProfile.cs:6",
+          "... (+3 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.399437781,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.72659650674964,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
     {
       "advisory": {
         "aliases": [],
@@ -52,11 +130,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:4",
-          "src/EntityFramework/src/TokenCleanupHost.cs:6",
-          "src/EntityFramework/src/IdentityServerEntityFrameworkBuilderExtensions.cs:12",
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:5",
-          "src/EntityFramework.Storage/src/TokenCleanup/IOperationalStoreNotification.cs:7",
+          "src/AspNetIdentity/host/Startup.cs:9",
+          "src/AspNetIdentity/host/Quickstart/Home/ErrorViewModel.cs:3",
+          "src/AspNetIdentity/host/Quickstart/Consent/ConsentController.cs:6",
+          "src/AspNetIdentity/host/Quickstart/Device/DeviceController.cs:10",
+          "src/AspNetIdentity/host/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"
@@ -132,11 +210,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:4",
-          "src/EntityFramework/src/TokenCleanupHost.cs:6",
-          "src/EntityFramework/src/IdentityServerEntityFrameworkBuilderExtensions.cs:12",
-          "src/EntityFramework/host/TestOperationalStoreNotification.cs:5",
-          "src/EntityFramework.Storage/src/TokenCleanup/IOperationalStoreNotification.cs:7",
+          "src/AspNetIdentity/host/Startup.cs:9",
+          "src/AspNetIdentity/host/Quickstart/Home/ErrorViewModel.cs:3",
+          "src/AspNetIdentity/host/Quickstart/Consent/ConsentController.cs:6",
+          "src/AspNetIdentity/host/Quickstart/Device/DeviceController.cs:10",
+          "src/AspNetIdentity/host/Quickstart/Account/AccountController.cs:8",
           "... (+947 more)"
         ],
         "verdict": "imported"
@@ -150,6 +228,233 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 8.48391405842625,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-aspnet-core-2021-34532",
+          "CVE-2021-34532"
+        ],
+        "fixed_versions": [
+          "2.1.29",
+          "3.1.18",
+          "5.0.9"
+        ],
+        "id": "GHSA-q7cg-43mg-qp69",
+        "modified": "2024-11-28T05:39:51.985058+00:00",
+        "published": "2021-08-25T14:45:28+00:00",
+        "references": [
+          "https://github.com/dotnet/aspnetcore/security/advisories/GHSA-q7cg-43mg-qp69",
+          "https://nvd.nist.gov/vuln/detail/CVE-2021-34532",
+          "https://github.com/dotnet/aspnetcore",
+          "https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2021-34532"
+        ],
+        "severity": {
+          "score": 5.5,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+        },
+        "summary": "ASP.NET Core Information Disclosure Vulnerability"
+      },
+      "cvss_score": 5.5,
+      "dep_name": "Microsoft.AspNetCore.Authentication.JwtBearer",
+      "dep_version": "3.0.0",
+      "ecosystem": "NuGet",
+      "epss": 0.00266,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:Microsoft.AspNetCore.Authentication.JwtBearer:3.0.0:GHSA-q7cg-43mg-qp69",
+      "in_kev": false,
+      "purl": "pkg:nuget/Microsoft.AspNetCore.Authentication.JwtBearer@3.0.0",
+      "raptor_risk_estimate": 6.746779579843617,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no `using Microsoft.AspNetCore.Authentication.JwtBearer` (or sub-namespace) found in non-test source"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 55.00000000000001,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.400657398,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 6.746779579843617,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2024-21907"
+        ],
+        "fixed_versions": [
+          "13.0.1"
+        ],
+        "id": "GHSA-5crp-9r3c-p9vr",
+        "modified": "2026-02-04T04:31:41.201349+00:00",
+        "published": "2022-06-22T15:08:47+00:00",
+        "references": [
+          "https://github.com/JamesNK/Newtonsoft.Json/issues/2457",
+          "https://github.com/JamesNK/Newtonsoft.Json/pull/2462",
+          "https://github.com/JamesNK/Newtonsoft.Json/commit/7e77bbe1beccceac4fc7b174b53abfefac278b66",
+          "https://alephsecurity.com/2018/10/22/StackOverflowException",
+          "https://alephsecurity.com/vulns/aleph-2018004"
+        ],
+        "severity": {
+          "score": 7.5,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "summary": "Improper Handling of Exceptional Conditions in Newtonsoft.Json"
+      },
+      "cvss_score": 7.5,
+      "dep_name": "Newtonsoft.Json",
+      "dep_version": "12.0.2",
+      "ecosystem": "NuGet",
+      "epss": 0.02228,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:12.0.2:GHSA-5crp-9r3c-p9vr",
+      "in_kev": false,
+      "purl": "pkg:nuget/Newtonsoft.Json@12.0.2",
+      "raptor_risk_estimate": 28.362815538777472,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/AspNetIdentity/host/Quickstart/Diagnostics/DiagnosticsViewModel.cs:7",
+          "src/IdentityServer4/host/Quickstart/Diagnostics/DiagnosticsViewModel.cs:7",
+          "src/IdentityServer4/src/Infrastructure/NameValueCollectionConverter.cs:3",
+          "src/IdentityServer4/src/Infrastructure/ObjectSerializer.cs:6",
+          "src/IdentityServer4/src/Logging/LogSerializer.cs:3",
+          "... (+63 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 75.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.410669484,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 28.362815538777472,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "BIT-dotnet-2024-21319",
+          "BIT-dotnet-sdk-2024-21319",
+          "CVE-2024-21319"
+        ],
+        "fixed_versions": [
+          "5.7.0",
+          "6.34.0",
+          "7.1.2"
+        ],
+        "id": "GHSA-59j7-ghrg-fj52",
+        "modified": "2026-02-04T04:35:39.671320+00:00",
+        "published": "2024-01-09T19:35:02+00:00",
+        "references": [
+          "https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/security/advisories/GHSA-8g9c-28fc-mcx2",
+          "https://github.com/dotnet/aspnetcore/security/advisories/GHSA-59j7-ghrg-fj52",
+          "https://github.com/dotnet/announcements/issues/290",
+          "https://github.com/dotnet/aspnetcore"
+        ],
+        "severity": {
+          "score": 6.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:C/C:N/I:N/A:H"
+        },
+        "summary": "Microsoft ASP.NET Core project templates vulnerable to denial of service"
+      },
+      "cvss_score": 6.8,
+      "dep_name": "System.IdentityModel.Tokens.Jwt",
+      "dep_version": "5.6.0",
+      "ecosystem": "NuGet",
+      "epss": 0.00593,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:NuGet:System.IdentityModel.Tokens.Jwt:5.6.0:GHSA-59j7-ghrg-fj52",
+      "in_kev": false,
+      "purl": "pkg:nuget/System.IdentityModel.Tokens.Jwt@5.6.0",
+      "raptor_risk_estimate": 12.345375734114999,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "namespace prefix matches package id"
+        },
+        "evidence": [
+          "src/IdentityServer4/src/Services/Default/DefaultTokenCreationService.cs:14",
+          "src/IdentityServer4/src/Validation/Default/TokenValidator.cs:15",
+          "src/IdentityServer4/src/Validation/Default/JwtRequestValidator.cs:7",
+          "src/IdentityServer4/src/Validation/Default/PrivateKeyJwtSecretValidator.cs:7",
+          "src/IdentityServer4/src/Validation/Default/JwtBearerClientAssertionSecretParser.cs:8",
+          "... (+19 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 68.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.402326079,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 12.345375734114999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

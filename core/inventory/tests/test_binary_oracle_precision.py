@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from core.inventory.binary_oracle import BinaryOracleWitness
+from core.inventory.binary_oracle_corpora.snappy import (
+    _LLVM_COV_CANDIDATES,
+    _LLVM_PROFDATA_CANDIDATES,
+)
 from core.inventory.binary_oracle_precision import (
     CorpusReport,
     FunctionMeasurement,
@@ -15,6 +20,41 @@ from core.inventory.binary_oracle_precision import (
     _cross_tab_synthetic,
     run_corpus,
     write_report,
+)
+
+
+# ---------------------------------------------------------------------------
+# Toolchain availability — the ``*_driver_end_to_end_via_harness`` tests
+# clone + build real projects, so they need system tooling beyond the
+# Python deps. They are @pytest.mark.slow (nightly-only); the skipif guards
+# below make a missing toolchain degrade to SKIP-with-reason rather than a
+# red FAIL that looks like a precision regression. The nightly workflow
+# provisions radare2 + LLVM 21 so these actually run there.
+# ---------------------------------------------------------------------------
+def _which_any(candidates: tuple) -> bool:
+    return any(shutil.which(c) for c in candidates)
+
+
+_HAVE_LLVM = _which_any(_LLVM_COV_CANDIDATES) and _which_any(
+    _LLVM_PROFDATA_CANDIDATES)
+_HAVE_CLANG = bool(shutil.which("clang") and shutil.which("clang++"))
+_HAVE_CMAKE = shutil.which("cmake") is not None
+_HAVE_CARGO = shutil.which("cargo") is not None
+_HAVE_GCOV = shutil.which("gcov") is not None
+_HAVE_MAKE = shutil.which("make") is not None
+
+_NEED_LLVM_CXX = pytest.mark.skipif(
+    not (_HAVE_CLANG and _HAVE_CMAKE and _HAVE_LLVM),
+    reason="needs clang/clang++ + cmake + LLVM coverage tools "
+    "(llvm-cov / llvm-profdata)",
+)
+_NEED_LLVM_RUST = pytest.mark.skipif(
+    not (_HAVE_CARGO and _HAVE_LLVM),
+    reason="needs cargo + LLVM coverage tools (llvm-cov / llvm-profdata)",
+)
+_NEED_GCOV_BUILD = pytest.mark.skipif(
+    not (_HAVE_GCOV and _HAVE_MAKE),
+    reason="needs gcc/gcov + make",
 )
 
 
@@ -415,6 +455,7 @@ def test_snappy_stdlib_helpers_filtered_out() -> None:
 
 
 @pytest.mark.slow
+@_NEED_LLVM_CXX
 def test_snappy_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → CMake build (clang+LLVM coverage) → ctest →
     llvm-cov export → classify → cross-tab. Marked ``slow`` so CI
@@ -509,6 +550,7 @@ def test_regex_rust_strips_crate_hash_from_demangled_names() -> None:
 
 
 @pytest.mark.slow
+@_NEED_LLVM_RUST
 def test_regex_rust_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → cargo build (release + coverage + DWARF) → run test
     binary → llvm-cov export → classify. Slow (cargo build ~3 min)."""
@@ -527,6 +569,7 @@ def test_regex_rust_driver_end_to_end_via_harness(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@_NEED_GCOV_BUILD
 def test_libsodium_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → autogen → configure × 2 → build × 2 → make check ×
     2 → targeted single-test rerun → gcov → classify. Slow."""
@@ -540,6 +583,7 @@ def test_libsodium_driver_end_to_end_via_harness(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@_NEED_LLVM_CXX
 def test_leveldb_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → patch CMake → CMake build (clang+LLVM coverage) →
     ctest → llvm-cov → classify. Slow."""
@@ -553,6 +597,7 @@ def test_leveldb_driver_end_to_end_via_harness(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+@_NEED_GCOV_BUILD
 def test_zlib_driver_end_to_end_via_harness(tmp_path: Path) -> None:
     """Full clone → build (×2) → test → gcov → classify → cross-tab.
     Marked ``slow`` so CI doesn't try to run it. The measurement itself

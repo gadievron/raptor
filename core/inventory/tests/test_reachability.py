@@ -518,14 +518,21 @@ def test_directly_called_beats_macro_masking():
 # directly so the dead-island / entry logic is exercised on any CI.
 
 
-def _entry_inv(path, language, items, calls, indirection=None):
+def _entry_inv(path, language, items, calls, indirection=None,
+               library_mode=False, exports=None):
     cg = {"imports": {}, "calls": calls}
     if indirection:
         cg["indirection"] = indirection
-    return {"files": [{
+    file_record: Dict[str, Any] = {
         "path": path, "language": language,
         "items": items, "call_graph": cg,
-    }]}
+    }
+    if exports is not None:
+        file_record["exports"] = sorted(exports)
+    inv: Dict[str, Any] = {"files": [file_record]}
+    if library_mode:
+        inv["treat_exports_as_entries"] = True
+    return inv
 
 
 def _fn(name, line, vis=None):
@@ -584,11 +591,110 @@ def test_masking_indirection_forces_uncertain():
     assert _er(inv, "app.c", "maybe", 1) == "uncertain"
 
 
-def test_non_closeable_language_is_uncertain():
-    # Python's entry model isn't a closed signal (a public fn may be dead
-    # app code, not a library API) → uncertain (caller falls back to its
-    # 1-hop NOT_CALLED logic), never a confident no_path verdict.
+def test_python_private_dead_island_no_path_from_entry():
+    # Python is HEURISTIC tier: leading underscore is the PEP 8 internal
+    # convention. With no ``__all__`` declared and no in-project caller
+    # and no file-level reflection, ``_helper`` is a dead-island —
+    # ``no_path_from_entry`` (heuristic, surface-only).
     inv = _entry_inv("m.py", "python", [_fn("_helper", 1)], [])
+    assert _er(inv, "m.py", "_helper", 1) == "no_path_from_entry"
+
+
+def test_python_public_no_all_is_uncertain():
+    # Public name (no leading underscore), no ``__all__`` declared, no
+    # in-project caller. Neither hint signal fires — could be library
+    # API, externally imported, or reflection-dispatched — so we don't
+    # claim dead. UNCERTAIN falls through to the 1-hop NOT_CALLED layer.
+    inv = _entry_inv("m.py", "python", [_fn("api", 1)], [])
+    assert _er(inv, "m.py", "api", 1) == "uncertain"
+
+
+def test_python_public_module_level_entry_in_library_mode():
+    # Library mode (opt-in): a public module-level function is an
+    # entry — the API surface is reachable by consumers.
+    inv = _entry_inv("m.py", "python", [_fn("api", 1)], [],
+                     library_mode=True)
+    assert _er(inv, "m.py", "api", 1) == "reachable"
+
+
+def test_python_public_chain_reaches_dead_helper_in_library_mode():
+    # Library mode: public ``api`` is an entry, transitively making
+    # the private helper it calls reachable too.
+    inv = _entry_inv(
+        "m.py", "python",
+        [_fn("api", 1), _fn("_step", 5)],
+        [{"caller": "api", "chain": ["_step"], "line": 2}],
+        library_mode=True,
+    )
+    assert _er(inv, "m.py", "_step", 5) == "reachable"
+
+
+def test_python_nested_closure_is_not_an_entry_in_library_mode():
+    # Python extractors flatten nested ``def`` statements to top-level
+    # items. A nested closure HAS no class_name and HAS no leading
+    # underscore, but it ISN'T an external entry. Nested detection
+    # uses line-range containment: an item whose line_start falls
+    # inside another item's [line_start, line_end] range is nested.
+    inv = _entry_inv(
+        "m.py", "python",
+        [
+            {**_fn("outer", 1), "line_end": 10},   # public entry
+            {**_fn("inner", 3), "line_end": 9},    # nested inside outer
+        ],
+        [],
+        library_mode=True,
+    )
+    assert _er(inv, "m.py", "outer", 1) == "reachable"
+    assert _er(inv, "m.py", "inner", 3) == "no_path_from_entry"
+
+
+def test_python_dunder_all_excludes_public_name_claims_no_path():
+    # Explicit-contract path: module declares ``__all__ = ["api"]``;
+    # ``helper`` is public-named but NOT in ``__all__``. The author
+    # declared it internal — ``__all__`` is the authoritative signal.
+    # No caller, no masking → ``no_path_from_entry``.
+    inv = _entry_inv(
+        "m.py", "python",
+        [_fn("api", 1), _fn("helper", 5)],
+        [],
+        exports=["api"],
+    )
+    assert _er(inv, "m.py", "helper", 5) == "no_path_from_entry"
+
+
+def test_python_dunder_all_includes_underscore_name_is_uncertain():
+    # ``__all__`` overrides the underscore convention: a leading-``_``
+    # name listed in ``__all__`` is explicitly exported by the author.
+    # No caller, but the explicit contract says "external" → UNCERTAIN.
+    inv = _entry_inv(
+        "m.py", "python",
+        [_fn("_dunder", 1)],
+        [],
+        exports=["_dunder"],
+    )
+    assert _er(inv, "m.py", "_dunder", 1) == "uncertain"
+
+
+def test_python_no_path_from_entry_witness_stays_heuristic():
+    """Guardrail: ``no_path_from_entry`` MUST stay HEURISTIC-tier with
+    earns_suppression=False. The Python heuristic-entry change relies
+    on this — if a future commit bumps it to SOUND, Python verdicts
+    would silently start earning suppression on dead-islands without
+    operator opt-in. Pin the tier explicitly."""
+    from core.inventory.reach_witness import VERDICTS, Soundness
+    spec = VERDICTS["no_path_from_entry"]
+    assert spec.soundness is Soundness.HEURISTIC
+    assert spec.earns_suppression is False
+
+
+def test_python_dead_island_with_masking_is_uncertain():
+    # File uses reflection (``getattr`` / ``importlib``) which could
+    # construct an entry the static graph didn't capture → uncertain
+    # rather than ``no_path_from_entry`` even on a private fn.
+    inv = _entry_inv(
+        "m.py", "python", [_fn("_helper", 1)], [],
+        indirection=["reflect"],
+    )
     assert _er(inv, "m.py", "_helper", 1) == "uncertain"
 
 
@@ -655,16 +761,22 @@ def test_deep_chain_not_truncated_to_no_path():
 
 def test_closeable_langs_derived_from_profiles():
     # _CLOSEABLE_ENTRY_LANGS is derived from PROFILES (entry_model=="sound"),
-    # not hand-maintained — pin the membership + the per-language entry rules.
-    from core.inventory.reachability import _CLOSEABLE_ENTRY_LANGS, PROFILES
+    # _REPORTABLE_ENTRY_LANGS extends to heuristic — pin both, plus the
+    # per-language entry rules.
+    from core.inventory.reachability import (
+        _CLOSEABLE_ENTRY_LANGS, _REPORTABLE_ENTRY_LANGS, PROFILES,
+    )
     assert _CLOSEABLE_ENTRY_LANGS == frozenset({"c", "cpp", "go", "rust"})
+    assert _REPORTABLE_ENTRY_LANGS == frozenset(
+        {"c", "cpp", "go", "rust", "python"})
     for lang in ("c", "cpp", "go", "rust"):
         assert PROFILES[lang].entry_model == "sound", lang
     assert PROFILES["c"].visibility_entry == "non_static"
     assert PROFILES["go"].has_go_init and PROFILES["go"].visibility_entry == "go_exported"
     assert PROFILES["rust"].visibility_entry == "rust_pub"
     assert PROFILES["java"].entry_model == "none" and PROFILES["java"].has_java_web
-    assert PROFILES["python"].entry_model == "none"
+    assert PROFILES["python"].entry_model == "heuristic"
+    assert PROFILES["python"].visibility_entry == "python_public"
 
 
 def test_unknown_language_profile_has_no_entry_signal():

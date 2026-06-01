@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:15Z",
+    "fetched_at": "2026-06-01T11:45:07Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of marten-6.2",
@@ -58,11 +58,11 @@
           "reason": "namespace prefix matches package id"
         },
         "evidence": [
-          "src/Marten.Testing/Documents/StringDoc.cs:1",
-          "src/Marten.Testing/Documents/Target.cs:4",
-          "src/EventSourcingTests/SchemaChange/SimpleMappings.cs:3",
-          "src/DocumentDbTests/Reading/Linq/recognizing_json_names_from_attributes.cs:3",
-          "src/Marten/Linq/QueryPlan.cs:1",
+          "src/EventSourcingTests/Bugs/Bug_2465_make_event_serialization_strategy_be_lazy.cs:1",
+          "src/EventSourcingTests/SchemaChange/Upcasters.cs:4",
+          "src/EventSourcingTests/SchemaChange/MultipleVersions/Classes/SystemTextJsonUpcastConfiguration.cs:3",
+          "src/Marten/Services/SystemTextJsonSerializer.cs:5",
+          "src/Marten/Services/Json/SnakeCaseNamingPolicy.cs:4",
           "... (+15 more)"
         ],
         "verdict": "imported"
@@ -1608,7 +1608,7 @@
           "3.3.2"
         ],
         "id": "GHSA-cj63-jhhr-wcxv",
-        "modified": "2026-04-07T18:44:12.020335+00:00",
+        "modified": "2026-05-29T21:46:57+00:00",
         "published": "2026-04-03T03:45:08+00:00",
         "references": [
           "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cj63-jhhr-wcxv",
@@ -1669,7 +1669,7 @@
           "3.3.2"
         ],
         "id": "GHSA-cjmm-f4jc-qw8r",
-        "modified": "2026-04-07T18:44:11.938759+00:00",
+        "modified": "2026-05-29T21:47:07+00:00",
         "published": "2026-04-03T03:46:07+00:00",
         "references": [
           "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cjmm-f4jc-qw8r",
@@ -4080,7 +4080,7 @@
       "dep_name": "mermaid",
       "dep_version": "8.14.0",
       "ecosystem": "npm",
-      "epss": null,
+      "epss": 0.00045,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4091,7 +4091,7 @@
       "finding_id": "sca:vuln:npm:mermaid:8.14.0:GHSA-6m6c-36f7-fhxh",
       "in_kev": false,
       "purl": "pkg:npm/mermaid@8.14.0",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 18.72187570476358,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4106,14 +4106,15 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.399529635,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 18.72187570476358,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
-        "ssvc_automatable_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.331,
+        "ssvc_poc_multiplier": 1.4399,
         "version_match_confidence": 0.95
       },
       "severity": "medium",
@@ -4146,7 +4147,7 @@
       "dep_name": "mermaid",
       "dep_version": "8.14.0",
       "ecosystem": "npm",
-      "epss": null,
+      "epss": 0.00047,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4157,7 +4158,7 @@
       "finding_id": "sca:vuln:npm:mermaid:8.14.0:GHSA-87f9-hvmw-gh4p",
       "in_kev": false,
       "purl": "pkg:npm/mermaid@8.14.0",
-      "raptor_risk_estimate": 8.014881938024999,
+      "raptor_risk_estimate": 4.893062350297624,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4172,10 +4173,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.65445,
+        "epss_multiplier": 0.399539841,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.014881938024999,
+        "final": 4.893062350297624,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4212,7 +4213,7 @@
       "dep_name": "mermaid",
       "dep_version": "8.14.0",
       "ecosystem": "npm",
-      "epss": 0.00045,
+      "epss": 0.00059,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4223,7 +4224,7 @@
       "finding_id": "sca:vuln:npm:mermaid:8.14.0:GHSA-ghcm-xqfw-q4vr",
       "in_kev": false,
       "purl": "pkg:npm/mermaid@8.14.0",
-      "raptor_risk_estimate": 14.066022317628535,
+      "raptor_risk_estimate": 14.068537537222733,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4238,10 +4239,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399529635,
+        "epss_multiplier": 0.39960107699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.066022317628535,
+        "final": 14.068537537222733,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -4415,7 +4416,7 @@
       "dep_name": "mermaid",
       "dep_version": "8.14.0",
       "ecosystem": "npm",
-      "epss": 0.00056,
+      "epss": 0.00074,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4426,7 +4427,7 @@
       "finding_id": "sca:vuln:npm:mermaid:8.14.0:GHSA-xcj9-5m2h-648r",
       "in_kev": false,
       "purl": "pkg:npm/mermaid@8.14.0",
-      "raptor_risk_estimate": 4.8936248065322765,
+      "raptor_risk_estimate": 4.894749719001578,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4441,10 +4442,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399585768,
+        "epss_multiplier": 0.399677622,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.8936248065322765,
+        "final": 4.894749719001578,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6642,7 +6643,7 @@
       "dep_name": "qs",
       "dep_version": "6.11.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6653,7 +6654,7 @@
       "finding_id": "sca:vuln:npm:qs:6.11.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.11.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6668,10 +6669,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7479,7 +7480,7 @@
       "dep_name": "tar",
       "dep_version": "6.1.11",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7490,7 +7491,7 @@
       "finding_id": "sca:vuln:npm:tar:6.1.11:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@6.1.11",
-      "raptor_risk_estimate": 10.107093611622146,
+      "raptor_risk_estimate": 10.107739266539266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -7505,10 +7506,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.107093611622146,
+        "final": 10.107739266539266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7995,6 +7996,69 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2025-54798"
         ],
         "fixed_versions": [
@@ -8059,6 +8123,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.2.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.2.1:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.2.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -9241,7 +9368,7 @@
       "dep_name": "vite",
       "dep_version": "4.3.5",
       "ecosystem": "npm",
-      "epss": 0.05145,
+      "epss": 0.04736,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9252,7 +9379,7 @@
       "finding_id": "sca:vuln:npm:vite:4.3.5:GHSA-xcj6-pq6g-qj4x",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.3.5",
-      "raptor_risk_estimate": 10.487596618861255,
+      "raptor_risk_estimate": 10.436160378159846,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9267,10 +9394,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.42555493499999997,
+        "epss_multiplier": 0.423467808,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.487596618861255,
+        "final": 10.436160378159846,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

@@ -1984,9 +1984,9 @@ class TestLibraryEntryMode:
         v = self._verds(tmp_path, files, True)
         assert v["public_api"] == "reachable"     # public top-level
         assert v["_helper"] == "reachable"         # reachable FROM the API
-        assert v["_orphan"] == "not_called"        # private + unreachable -> dead
+        assert v["_orphan"] == "no_path_from_entry"  # private + unreachable: dead-island fires
         assert v["method"] == "reachable"          # public method
-        assert v["_priv"] == "not_called"          # private method stays dead
+        assert v["_priv"] == "no_path_from_entry"  # private method: dead-island fires
 
     def test_ts_export_and_java_php_public(self, tmp_path):
         for grammar in ("tree_sitter_typescript", "tree_sitter_java",

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:45:50Z",
+    "fetched_at": "2026-06-01T11:39:53Z",
     "git_ref": "tokio-1.35.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of tokio",
@@ -114,7 +114,7 @@
       "dep_name": "mio",
       "dep_version": "0.8.9",
       "ecosystem": "Cargo",
-      "epss": 0.00937,
+      "epss": 0.00963,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -125,7 +125,7 @@
       "finding_id": "sca:vuln:Cargo:mio:0.8.9:GHSA-r8w9-5wcg-vfj7",
       "in_kev": false,
       "purl": "pkg:cargo/mio@0.8.9",
-      "raptor_risk_estimate": 27.907818344553405,
+      "raptor_risk_estimate": 27.91698172724111,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -133,11 +133,11 @@
           "reason": "`use`/`extern crate` found in non-test source"
         },
         "evidence": [
-          "tokio/src/net/unix/pipe.rs:5",
-          "tokio/src/signal/unix.rs:14",
-          "tokio/src/io/async_fd.rs:4",
-          "tokio/src/io/poll_evented.rs:4",
-          "tokio/src/io/bsd/poll_aio.rs:6",
+          "tokio/src/process/unix/mod.rs:35",
+          "tokio/src/process/unix/mod.rs:37",
+          "tokio/src/runtime/signal/mod.rs:7",
+          "tokio/src/runtime/io/driver.rs:12",
+          "tokio/src/runtime/io/registration.rs:6",
           "... (+8 more)"
         ],
         "verdict": "imported"
@@ -147,10 +147,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404081511,
+        "epss_multiplier": 0.404214189,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.907818344553405,
+        "final": 27.91698172724111,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

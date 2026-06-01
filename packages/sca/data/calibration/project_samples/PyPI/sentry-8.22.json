@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:48:03Z",
+    "fetched_at": "2026-06-01T11:42:24Z",
     "git_ref": "8.22.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of sentry-8.22",
@@ -560,8 +560,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/social_auth/backends/__init__.py:33",
-          "src/social_auth/backends/utils.py:3"
+          "src/social_auth/backends/utils.py:3",
+          "src/social_auth/backends/__init__.py:33"
         ],
         "verdict": "imported"
       },
@@ -633,8 +633,8 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "src/social_auth/backends/__init__.py:33",
-          "src/social_auth/backends/utils.py:3"
+          "src/social_auth/backends/utils.py:3",
+          "src/social_auth/backends/__init__.py:33"
         ],
         "verdict": "imported"
       },
@@ -759,7 +759,7 @@
       "dep_name": "selenium",
       "dep_version": "3.4.3",
       "ecosystem": "PyPI",
-      "epss": 0.00114,
+      "epss": 0.00117,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -770,7 +770,7 @@
       "finding_id": "sca:vuln:PyPI:selenium:3.4.3:PYSEC-2023-206",
       "in_kev": false,
       "purl": "pkg:pypi/selenium@3.4.3",
-      "raptor_risk_estimate": 27.617762038708005,
+      "raptor_risk_estimate": 27.618819352095052,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -792,10 +792,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399881742,
+        "epss_multiplier": 0.399897051,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.617762038708005,
+        "final": 27.618819352095052,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3014,7 +3014,7 @@
       "dep_name": "debug",
       "dep_version": "0.7.4",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3025,7 +3025,7 @@
       "finding_id": "sca:vuln:npm:debug:0.7.4:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@0.7.4",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3040,10 +3040,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3156,7 +3156,7 @@
       "dep_name": "debug",
       "dep_version": "2.6.7",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3167,7 +3167,7 @@
       "finding_id": "sca:vuln:npm:debug:2.6.7:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.6.7",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3182,10 +3182,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3298,7 +3298,7 @@
       "dep_name": "debug",
       "dep_version": "2.6.8",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3309,7 +3309,7 @@
       "finding_id": "sca:vuln:npm:debug:2.6.8:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.6.8",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3324,10 +3324,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6213,7 +6213,7 @@
       "dep_name": "hawk",
       "dep_version": "3.1.3",
       "ecosystem": "npm",
-      "epss": 0.00126,
+      "epss": 0.00133,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6224,7 +6224,7 @@
       "finding_id": "sca:vuln:npm:hawk:3.1.3:GHSA-44pw-h2cw-w3vq",
       "in_kev": false,
       "purl": "pkg:npm/hawk@3.1.3",
-      "raptor_risk_estimate": 6.342909308644981,
+      "raptor_risk_estimate": 6.34347582706355,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6239,10 +6239,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399942978,
+        "epss_multiplier": 0.399978699,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.342909308644981,
+        "final": 6.34347582706355,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7116,7 +7116,7 @@
       "dep_name": "jquery",
       "dep_version": "2.1.4",
       "ecosystem": "npm",
-      "epss": 0.02443,
+      "epss": 0.01532,
       "exploit_evidence": {
         "edb_ids": [
           52141
@@ -7129,7 +7129,7 @@
       "finding_id": "sca:vuln:npm:jquery:2.1.4:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
       "purl": "pkg:npm/jquery@2.1.4",
-      "raptor_risk_estimate": 23.50311505278386,
+      "raptor_risk_estimate": 23.23776558256203,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -7137,11 +7137,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -7151,10 +7151,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.411766629,
+        "epss_multiplier": 0.407117796,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 23.50311505278386,
+        "final": 23.23776558256203,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -7218,11 +7218,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -7298,11 +7298,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -7376,11 +7376,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/index.js:2",
+          "src/sentry/static/sentry/app/api.jsx:1",
           "src/sentry/static/sentry/app/stores/eventStore.jsx:1",
           "src/sentry/static/sentry/app/mixins/tooltip.jsx:2",
-          "src/sentry/static/sentry/app/components/autoSelectText.jsx:3",
+          "src/sentry/static/sentry/app/views/app.jsx:5",
           "... and 29 more"
         ],
         "verdict": "imported"
@@ -7450,8 +7450,8 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:13",
-          "src/sentry/static/sentry/app/views/stream.jsx:5",
-          "src/sentry/static/sentry/app/views/app.jsx:6"
+          "src/sentry/static/sentry/app/views/app.jsx:6",
+          "src/sentry/static/sentry/app/views/stream.jsx:5"
         ],
         "verdict": "imported"
       },
@@ -9351,10 +9351,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9423,10 +9423,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9498,10 +9498,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9574,10 +9574,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9653,10 +9653,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9730,10 +9730,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9806,10 +9806,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9882,10 +9882,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -9954,10 +9954,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10029,10 +10029,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10105,10 +10105,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10184,10 +10184,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10261,10 +10261,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10337,10 +10337,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10413,10 +10413,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10488,10 +10488,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/options.jsx:2",
-          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/api.jsx:2",
+          "src/sentry/static/sentry/app/locale.jsx:5",
           "src/sentry/static/sentry/app/utils.jsx:1",
-          "src/sentry/static/sentry/app/stores/projectStore.jsx:2",
+          "src/sentry/static/sentry/app/utils/stream.jsx:1",
           "... and 41 more"
         ],
         "verdict": "imported"
@@ -10632,9 +10632,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -10705,9 +10705,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -10774,9 +10774,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -10848,9 +10848,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -10921,9 +10921,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -10993,9 +10993,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11066,9 +11066,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11139,9 +11139,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11208,9 +11208,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11282,9 +11282,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11354,9 +11354,9 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "src/sentry/static/sentry/app/components/activity/item.jsx:4",
+          "src/sentry/static/sentry/app/utils/marked.jsx:1",
           "src/sentry/static/sentry/app/components/activity/noteInput.jsx:3",
-          "src/sentry/static/sentry/app/utils/marked.jsx:1"
+          "src/sentry/static/sentry/app/components/activity/item.jsx:4"
         ],
         "verdict": "imported"
       },
@@ -11886,7 +11886,7 @@
       "dep_name": "min-document",
       "dep_version": "2.19.0",
       "ecosystem": "npm",
-      "epss": 0.00148,
+      "epss": 0.00164,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11897,7 +11897,7 @@
       "finding_id": "sca:vuln:npm:min-document:2.19.0:GHSA-rx8g-88g5-qh64",
       "in_kev": false,
       "purl": "pkg:npm/min-document@2.19.0",
-      "raptor_risk_estimate": 3.42956205140721,
+      "raptor_risk_estimate": 3.4302619969436656,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11912,10 +11912,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400055244,
+        "epss_multiplier": 0.40013689199999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.42956205140721,
+        "final": 3.4302619969436656,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12673,10 +12673,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -12749,10 +12749,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -12825,10 +12825,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -12901,10 +12901,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -12977,10 +12977,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -13053,10 +13053,10 @@
         },
         "evidence": [
           "src/sentry/static/sentry/app/index.js:3",
-          "src/sentry/static/sentry/app/components/stackedBarChart.jsx:3",
-          "src/sentry/static/sentry/app/components/dateTime.jsx:3",
-          "src/sentry/static/sentry/app/components/timeSince.jsx:3",
-          "src/sentry/static/sentry/app/components/onboardingWizard/toDoItem.jsx:1",
+          "src/sentry/static/sentry/app/views/organizationContext.jsx:4",
+          "src/sentry/static/sentry/app/views/adminUsers.jsx:4",
+          "src/sentry/static/sentry/app/views/adminProjects.jsx:4",
+          "src/sentry/static/sentry/app/views/projectFilters.jsx:5",
           "... and 9 more"
         ],
         "verdict": "imported"
@@ -15272,7 +15272,7 @@
       "dep_name": "qs",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15283,7 +15283,7 @@
       "finding_id": "sca:vuln:npm:qs:4.0.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@4.0.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15298,10 +15298,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -15490,7 +15490,7 @@
       "dep_name": "qs",
       "dep_version": "6.3.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15501,7 +15501,7 @@
       "finding_id": "sca:vuln:npm:qs:6.3.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.3.2",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15516,10 +15516,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -15636,7 +15636,7 @@
       "dep_name": "qs",
       "dep_version": "6.4.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15647,7 +15647,7 @@
       "finding_id": "sca:vuln:npm:qs:6.4.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.4.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15662,10 +15662,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -16859,7 +16859,7 @@
       "dep_name": "tar",
       "dep_version": "2.2.1",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16870,7 +16870,7 @@
       "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@2.2.1",
-      "raptor_risk_estimate": 10.107093611622146,
+      "raptor_risk_estimate": 10.107739266539266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16885,10 +16885,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.107093611622146,
+        "final": 10.107739266539266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -17588,6 +17588,69 @@
     {
       "advisory": {
         "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.0.33",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.0.33:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.0.33",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
           "CVE-2021-3777"
         ],
         "fixed_versions": [
@@ -18227,7 +18290,7 @@
       "dep_name": "url-parse",
       "dep_version": "1.0.5",
       "ecosystem": "npm",
-      "epss": 0.00032,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18238,7 +18301,7 @@
       "finding_id": "sca:vuln:npm:url-parse:1.0.5:GHSA-8v38-pw62-9cw2",
       "in_kev": false,
       "purl": "pkg:npm/url-parse@1.0.5",
-      "raptor_risk_estimate": 5.564792100185354,
+      "raptor_risk_estimate": 5.564578835529716,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -18253,10 +18316,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39946329599999997,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.564792100185354,
+        "final": 5.564578835529716,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -18779,7 +18842,7 @@
       "dep_name": "url-parse",
       "dep_version": "1.1.9",
       "ecosystem": "npm",
-      "epss": 0.00032,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18790,7 +18853,7 @@
       "finding_id": "sca:vuln:npm:url-parse:1.1.9:GHSA-8v38-pw62-9cw2",
       "in_kev": false,
       "purl": "pkg:npm/url-parse@1.1.9",
-      "raptor_risk_estimate": 5.564792100185354,
+      "raptor_risk_estimate": 5.564578835529716,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -18805,10 +18868,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39946329599999997,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.564792100185354,
+        "final": 5.564578835529716,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

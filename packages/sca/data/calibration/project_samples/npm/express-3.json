@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:46:11Z",
+    "fetched_at": "2026-06-01T11:40:20Z",
     "git_ref": "3.21.2",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of express-3",
@@ -180,7 +180,7 @@
       "dep_name": "debug",
       "dep_version": "2.2.0",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -191,7 +191,7 @@
       "finding_id": "sca:vuln:npm:debug:2.2.0:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 6.675077118483749,
+      "raptor_risk_estimate": 6.675503123302499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -209,10 +209,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.675077118483749,
+        "final": 6.675503123302499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

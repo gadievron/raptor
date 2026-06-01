@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:46:04Z",
+    "fetched_at": "2026-06-01T11:40:16Z",
     "git_ref": "4.17.21",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of lodash",
@@ -1321,7 +1321,7 @@
       "dep_name": "debug",
       "dep_version": "2.2.0",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1332,7 +1332,7 @@
       "finding_id": "sca:vuln:npm:debug:2.2.0:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.2.0",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1347,10 +1347,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -1463,7 +1463,7 @@
       "dep_name": "debug",
       "dep_version": "2.5.1",
       "ecosystem": "npm",
-      "epss": 0.00097,
+      "epss": 0.00102,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1474,7 +1474,7 @@
       "finding_id": "sca:vuln:npm:debug:2.5.1:GHSA-gxpj-cx7g-858c",
       "in_kev": false,
       "purl": "pkg:npm/debug@2.5.1",
-      "raptor_risk_estimate": 3.1702811518840277,
+      "raptor_risk_estimate": 3.1704834798906583,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1489,10 +1489,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399794991,
+        "epss_multiplier": 0.39982050599999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1702811518840277,
+        "final": 3.1704834798906583,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5171,7 +5171,7 @@
       "dep_name": "hawk",
       "dep_version": "1.1.1",
       "ecosystem": "npm",
-      "epss": 0.00126,
+      "epss": 0.00133,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5182,7 +5182,7 @@
       "finding_id": "sca:vuln:npm:hawk:1.1.1:GHSA-44pw-h2cw-w3vq",
       "in_kev": false,
       "purl": "pkg:npm/hawk@1.1.1",
-      "raptor_risk_estimate": 9.061299012349975,
+      "raptor_risk_estimate": 9.0621083243765,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5197,10 +5197,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399942978,
+        "epss_multiplier": 0.399978699,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.061299012349975,
+        "final": 9.0621083243765,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -5310,7 +5310,7 @@
       "dep_name": "hawk",
       "dep_version": "3.1.3",
       "ecosystem": "npm",
-      "epss": 0.00126,
+      "epss": 0.00133,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5321,7 +5321,7 @@
       "finding_id": "sca:vuln:npm:hawk:3.1.3:GHSA-44pw-h2cw-w3vq",
       "in_kev": false,
       "purl": "pkg:npm/hawk@3.1.3",
-      "raptor_risk_estimate": 6.342909308644981,
+      "raptor_risk_estimate": 6.34347582706355,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -5336,10 +5336,10 @@
         "cvss_base": 74.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399942978,
+        "epss_multiplier": 0.399978699,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.342909308644981,
+        "final": 6.34347582706355,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -6146,7 +6146,7 @@
       "dep_name": "jquery",
       "dep_version": "3.1.1",
       "ecosystem": "npm",
-      "epss": 0.02443,
+      "epss": 0.01532,
       "exploit_evidence": {
         "edb_ids": [
           52141
@@ -6159,7 +6159,7 @@
       "finding_id": "sca:vuln:npm:jquery:3.1.1:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
       "purl": "pkg:npm/jquery@3.1.1",
-      "raptor_risk_estimate": 15.946628532163322,
+      "raptor_risk_estimate": 15.766591570112514,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6174,10 +6174,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.411766629,
+        "epss_multiplier": 0.407117796,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 15.946628532163322,
+        "final": 15.766591570112514,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -7801,11 +7801,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -7873,11 +7873,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -7948,11 +7948,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8024,11 +8024,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8103,11 +8103,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8180,11 +8180,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8256,11 +8256,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8332,11 +8332,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8407,11 +8407,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8484,11 +8484,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8560,11 +8560,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8635,11 +8635,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8711,11 +8711,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8787,11 +8787,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8862,11 +8862,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -8938,11 +8938,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9013,11 +9013,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9089,11 +9089,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9165,11 +9165,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9237,11 +9237,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9312,11 +9312,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9388,11 +9388,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9467,11 +9467,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9544,11 +9544,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9620,11 +9620,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9696,11 +9696,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -9771,11 +9771,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "lib/fp/build-dist.js:3",
           "lib/fp/build-doc.js:3",
+          "lib/fp/build-dist.js:3",
           "lib/fp/build-modules.js:3",
-          "lib/main/build-site.js:3",
           "lib/main/build-doc.js:3",
+          "lib/main/build-modules.js:3",
           "... and 4 more"
         ],
         "verdict": "imported"
@@ -11385,7 +11385,7 @@
       "dep_name": "qs",
       "dep_version": "1.2.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11396,7 +11396,7 @@
       "finding_id": "sca:vuln:npm:qs:1.2.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@1.2.2",
-      "raptor_risk_estimate": 4.527527874072671,
+      "raptor_risk_estimate": 4.525851442017724,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11411,10 +11411,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.527527874072671,
+        "final": 4.525851442017724,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -11603,7 +11603,7 @@
       "dep_name": "qs",
       "dep_version": "6.2.1",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11614,7 +11614,7 @@
       "finding_id": "sca:vuln:npm:qs:6.2.1:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.2.1",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11629,10 +11629,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -11821,7 +11821,7 @@
       "dep_name": "qs",
       "dep_version": "6.3.0",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -11832,7 +11832,7 @@
       "finding_id": "sca:vuln:npm:qs:6.3.0:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.3.0",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -11847,10 +11847,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12039,7 +12039,7 @@
       "dep_name": "qs",
       "dep_version": "6.3.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12050,7 +12050,7 @@
       "finding_id": "sca:vuln:npm:qs:6.3.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.3.2",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12065,10 +12065,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -12185,7 +12185,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -12196,7 +12196,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.2",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -12211,10 +12211,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13241,7 +13241,7 @@
       "dep_name": "tar",
       "dep_version": "2.2.1",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13252,7 +13252,7 @@
       "finding_id": "sca:vuln:npm:tar:2.2.1:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@2.2.1",
-      "raptor_risk_estimate": 10.107093611622146,
+      "raptor_risk_estimate": 10.107739266539266,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13267,10 +13267,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.107093611622146,
+        "final": 10.107739266539266,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -13925,7 +13925,7 @@
       "dep_name": "tar",
       "dep_version": "4.4.10",
       "ecosystem": "npm",
-      "epss": 0.00022,
+      "epss": 0.00027,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13936,7 +13936,7 @@
       "finding_id": "sca:vuln:npm:tar:4.4.10:GHSA-34x7-hfp2-rc4v",
       "in_kev": false,
       "purl": "pkg:npm/tar@4.4.10",
-      "raptor_risk_estimate": 14.438705159460211,
+      "raptor_risk_estimate": 14.439627523627523,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -13951,10 +13951,10 @@
         "cvss_base": 82.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.399437781,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.438705159460211,
+        "final": 14.439627523627523,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -15094,7 +15094,7 @@
       "dep_name": "underscore",
       "dep_version": "1.6.0",
       "ecosystem": "npm",
-      "epss": 0.01413,
+      "epss": 0.01452,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15105,7 +15105,7 @@
       "finding_id": "sca:vuln:npm:underscore:1.6.0:GHSA-cf4h-3jhx-xvhq",
       "in_kev": false,
       "purl": "pkg:npm/underscore@1.6.0",
-      "raptor_risk_estimate": 17.562683821207944,
+      "raptor_risk_estimate": 17.57128205498226,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -15120,10 +15120,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406510539,
+        "epss_multiplier": 0.40670955599999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.562683821207944,
+        "final": 17.57128205498226,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,

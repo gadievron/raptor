@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:30Z",
+    "fetched_at": "2026-06-01T11:45:33Z",
     "git_ref": "2.3.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of ktor-2.3",
@@ -870,7 +870,7 @@
       "dep_name": "flatted",
       "dep_version": "3.2.7",
       "ecosystem": "npm",
-      "epss": 0.00067,
+      "epss": 0.0007,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -881,7 +881,7 @@
       "finding_id": "sca:vuln:npm:flatted:3.2.7:GHSA-rf6f-7fwh-wjgh",
       "in_kev": false,
       "purl": "pkg:npm/flatted@3.2.7",
-      "raptor_risk_estimate": 13.108995526342374,
+      "raptor_risk_estimate": 13.109497689934356,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -896,10 +896,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39964190099999997,
+        "epss_multiplier": 0.39965721,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.108995526342374,
+        "final": 13.109497689934356,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2141,7 +2141,7 @@
       "dep_name": "qs",
       "dep_version": "6.9.6",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2152,7 +2152,7 @@
       "finding_id": "sca:vuln:npm:qs:6.9.6:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.9.6",
-      "raptor_risk_estimate": 3.1692695118508696,
+      "raptor_risk_estimate": 3.168096009412406,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2167,10 +2167,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.1692695118508696,
+        "final": 3.168096009412406,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2765,7 +2765,7 @@
       "dep_name": "socket.io-parser",
       "dep_version": "4.2.1",
       "ecosystem": "npm",
-      "epss": 0.0006,
+      "epss": 0.00051,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2776,7 +2776,7 @@
       "finding_id": "sca:vuln:npm:socket.io-parser:4.2.1:GHSA-677m-j7p3-52f9",
       "in_kev": false,
       "purl": "pkg:npm/socket.io-parser@4.2.1",
-      "raptor_risk_estimate": 3.4257123509567067,
+      "raptor_risk_estimate": 3.42531863159245,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2791,10 +2791,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39960618,
+        "epss_multiplier": 0.399560253,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.4257123509567067,
+        "final": 3.42531863159245,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3113,7 +3113,7 @@
       "dep_name": "tar-fs",
       "dep_version": "2.1.1",
       "ecosystem": "npm",
-      "epss": 0.0003,
+      "epss": 0.00033,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3124,7 +3124,7 @@
       "finding_id": "sca:vuln:npm:tar-fs:2.1.1:GHSA-vj76-c3g6-qr5v",
       "in_kev": false,
       "purl": "pkg:npm/tar-fs@2.1.1",
-      "raptor_risk_estimate": 3.424399953075853,
+      "raptor_risk_estimate": 3.424531192863938,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3139,10 +3139,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39945309,
+        "epss_multiplier": 0.399468399,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.424399953075853,
+        "final": 3.424531192863938,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -3220,6 +3220,69 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44705"
+        ],
+        "fixed_versions": [
+          "0.2.6"
+        ],
+        "id": "GHSA-ph9p-34f9-6g65",
+        "modified": "2026-05-27T17:44:20.173426+00:00",
+        "published": "2026-05-27T00:34:06+00:00",
+        "references": [
+          "https://github.com/raszi/node-tmp/security/advisories/GHSA-ph9p-34f9-6g65",
+          "https://github.com/raszi/node-tmp/commit/efa4a06f24374797ae32ab2b6ae39b7a611ae429",
+          "https://github.com/raszi/node-tmp"
+        ],
+        "severity": null,
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape"
+      },
+      "cvss_score": null,
+      "dep_name": "tmp",
+      "dep_version": "0.2.1",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:tmp:0.2.1:GHSA-ph9p-34f9-6g65",
+      "in_kev": false,
+      "purl": "pkg:npm/tmp@0.2.1",
+      "raptor_risk_estimate": 5.610417356617499,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "no import/require for 'tmp' found"
+        },
+        "evidence": [],
+        "verdict": "not_reachable"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 5.610417356617499,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 0.67849,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },

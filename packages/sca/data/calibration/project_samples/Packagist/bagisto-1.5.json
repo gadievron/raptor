@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:50:00Z",
+    "fetched_at": "2026-06-01T11:44:53Z",
     "git_ref": "v1.5.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of bagisto-1.5",
@@ -103,7 +103,7 @@
       "dep_name": "enshrined/svg-sanitize",
       "dep_version": "0.16.0",
       "ecosystem": "Packagist",
-      "epss": 0.00073,
+      "epss": 0.00079,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -114,7 +114,7 @@
       "finding_id": "sca:vuln:Packagist:enshrined/svg-sanitize:0.16.0:GHSA-22wq-q86m-83fh",
       "in_kev": false,
       "purl": "pkg:composer/enshrined/svg-sanitize@0.16.0",
-      "raptor_risk_estimate": 14.07105275681694,
+      "raptor_risk_estimate": 14.072130708071594,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -129,10 +129,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399672519,
+        "epss_multiplier": 0.399703137,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.07105275681694,
+        "final": 14.072130708071594,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -191,8 +191,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sanctum.php:2",
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
+          "config/sanctum.php:2"
         ],
         "verdict": "imported"
       },
@@ -269,8 +269,8 @@
           "reason": "vendor `Laravel\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sanctum.php:2",
-          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7"
+          "packages/Webkul/SocialLogin/src/Http/Controllers/LoginController.php:7",
+          "config/sanctum.php:2"
         ],
         "verdict": "imported"
       },
@@ -523,7 +523,7 @@
       "dep_name": "league/commonmark",
       "dep_version": "2.4.0",
       "ecosystem": "Packagist",
-      "epss": 0.00013,
+      "epss": 0.00015,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -534,7 +534,7 @@
       "finding_id": "sca:vuln:Packagist:league/commonmark:2.4.0:GHSA-hh8v-hgvp-g3f5",
       "in_kev": false,
       "purl": "pkg:composer/league/commonmark@2.4.0",
-      "raptor_risk_estimate": 5.045993693264999,
+      "raptor_risk_estimate": 5.046122646074998,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -551,10 +551,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399366339,
+        "epss_multiplier": 0.39937654499999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.045993693264999,
+        "final": 5.046122646074998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -599,7 +599,7 @@
       "dep_name": "maximebf/debugbar",
       "dep_version": "v1.18.2",
       "ecosystem": "Packagist",
-      "epss": 0.02443,
+      "epss": 0.01532,
       "exploit_evidence": {
         "edb_ids": [
           52141
@@ -612,7 +612,7 @@
       "finding_id": "sca:vuln:Packagist:maximebf/debugbar:v1.18.2:GHSA-6c3j-c64m-qhgq",
       "in_kev": false,
       "purl": "pkg:composer/maximebf/debugbar@v1.18.2",
-      "raptor_risk_estimate": 11.162639972514325,
+      "raptor_risk_estimate": 11.036614099078758,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -627,10 +627,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.411766629,
+        "epss_multiplier": 0.407117796,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 11.162639972514325,
+        "final": 11.036614099078758,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -741,7 +741,7 @@
       "dep_name": "nesbot/carbon",
       "dep_version": "2.66.0",
       "ecosystem": "Packagist",
-      "epss": 0.00095,
+      "epss": 0.00129,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -752,7 +752,7 @@
       "finding_id": "sca:vuln:Packagist:nesbot/carbon:2.66.0:GHSA-j3f9-p6hm-5w6q",
       "in_kev": false,
       "purl": "pkg:composer/nesbot/carbon@2.66.0",
-      "raptor_risk_estimate": 3.427243481817703,
+      "raptor_risk_estimate": 3.42873086608267,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -767,10 +767,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399784785,
+        "epss_multiplier": 0.39995828699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.427243481817703,
+        "final": 3.42873086608267,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -813,7 +813,7 @@
       "dep_name": "paragonie/sodium_compat",
       "dep_version": "v1.19.0",
       "ecosystem": "Packagist",
-      "epss": 8e-05,
+      "epss": 5e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -824,7 +824,7 @@
       "finding_id": "sca:vuln:Packagist:paragonie/sodium_compat:v1.19.0:GHSA-mrfv-m5wm-5w6w",
       "in_kev": false,
       "purl": "pkg:composer/paragonie/sodium_compat@v1.19.0",
-      "raptor_risk_estimate": 3.851367218958631,
+      "raptor_risk_estimate": 3.8512195741970343,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -839,10 +839,10 @@
         "cvss_base": 45.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399340824,
+        "epss_multiplier": 0.39932551499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.851367218958631,
+        "final": 3.8512195741970343,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2090,7 +2090,7 @@
       "dep_name": "phpoffice/phpspreadsheet",
       "dep_version": "1.28.0",
       "ecosystem": "Packagist",
-      "epss": 0.00167,
+      "epss": 0.00226,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2101,7 +2101,7 @@
       "finding_id": "sca:vuln:Packagist:phpoffice/phpspreadsheet:1.28.0:GHSA-q4q6-r8wh-5cgh",
       "in_kev": false,
       "purl": "pkg:composer/phpoffice/phpspreadsheet@1.28.0",
-      "raptor_risk_estimate": 13.12573431274178,
+      "raptor_risk_estimate": 13.13561019671743,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2116,10 +2116,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.400152201,
+        "epss_multiplier": 0.40045327799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.12573431274178,
+        "final": 13.13561019671743,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2809,7 +2809,7 @@
       "dep_name": "phpunit/phpunit",
       "dep_version": "10.1.2",
       "ecosystem": "Packagist",
-      "epss": 0.00162,
+      "epss": 0.00236,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2820,7 +2820,7 @@
       "finding_id": "sca:vuln:Packagist:phpunit/phpunit:10.1.2:GHSA-vvj3-c3rp-c85p",
       "in_kev": false,
       "purl": "pkg:composer/phpunit/phpunit@10.1.2",
-      "raptor_risk_estimate": 9.555486117593768,
+      "raptor_risk_estimate": 9.564504165889346,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2835,10 +2835,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400126686,
+        "epss_multiplier": 0.400504308,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.555486117593768,
+        "final": 9.564504165889346,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -2968,11 +2968,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3045,11 +3045,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3122,11 +3122,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3198,11 +3198,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3272,11 +3272,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3349,11 +3349,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3426,11 +3426,11 @@
           "reason": "vendor `Spatie\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "config/sitemap.php:4",
-          "packages/Webkul/Sitemap/src/Models/CmsPage.php:4",
-          "packages/Webkul/Sitemap/src/Models/Product.php:4",
-          "packages/Webkul/Sitemap/src/Models/Category.php:4",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:6",
+          "packages/Webkul/Sitemap/src/Repositories/SitemapRepository.php:7",
+          "packages/Webkul/Sitemap/src/Models/Product.php:6",
           "packages/Webkul/Sitemap/src/Models/CmsPage.php:6",
+          "packages/Webkul/Sitemap/src/Models/Category.php:6",
           "... (+4 more)"
         ],
         "verdict": "imported"
@@ -3452,6 +3452,81 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45071"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-x6g4-fwcc-jj8w",
+        "modified": "2026-05-27T21:15:09.609992+00:00",
+        "published": "2026-05-27T21:09:44+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-x6g4-fwcc-jj8w",
+          "https://github.com/symfony/symfony/commit/eea5fd7488cbdc241da4ce242344b7d9a3ecdf3d",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/dom-crawler/CVE-2026-45071.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45071.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony has XXE (Local File Disclosure) in DomCrawler::addXmlContent() via validateOnParse = true"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/dom-crawler",
+      "dep_version": "v6.2.9",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/dom-crawler:v6.2.9:GHSA-x6g4-fwcc-jj8w",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/dom-crawler@v6.2.9",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3486,7 +3561,7 @@
       "dep_name": "symfony/http-foundation",
       "dep_version": "v6.2.8",
       "ecosystem": "Packagist",
-      "epss": 0.06657,
+      "epss": 0.06307,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3497,7 +3572,7 @@
       "finding_id": "sca:vuln:Packagist:symfony/http-foundation:v6.2.8:GHSA-3rg7-wf37-54rm",
       "in_kev": false,
       "purl": "pkg:composer/symfony/http-foundation@v6.2.8",
-      "raptor_risk_estimate": 9.990734243755124,
+      "raptor_risk_estimate": 9.949549940061374,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -3505,11 +3580,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3519,10 +3594,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.433270671,
+        "epss_multiplier": 0.43148462099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.990734243755124,
+        "final": 9.949549940061374,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3583,11 +3658,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3608,6 +3683,303 @@
         "version_match_confidence": 0.95
       },
       "severity": "low",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45068"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-xx3c-qf5g-hc39",
+        "modified": "2026-05-27T21:00:09.172080+00:00",
+        "published": "2026-05-27T20:46:05+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-xx3c-qf5g-hc39",
+          "https://github.com/symfony/symfony/commit/c45144862dc289d03952f41f6078174089a3afc6",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mailer/CVE-2026-45068.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45068.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony has an Argument Injection in SendmailTransport via Dash-Prefixed Recipient Address"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/mailer",
+      "dep_version": "v6.2.8",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/mailer:v6.2.8:GHSA-xx3c-qf5g-hc39",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/mailer@v6.2.8",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45067"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-qpmx-3rfj-7rhv",
+        "modified": "2026-05-27T20:45:09.108430+00:00",
+        "published": "2026-05-27T20:42:07+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-qpmx-3rfj-7rhv",
+          "https://github.com/symfony/symfony/commit/dc2dbd29211eb4ddc451373fa1374fb926e94604",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mime/CVE-2026-45067.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45067.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony has Email Header / SMTP Command Injection via CRLF in Symfony\\Component\\Mime\\Address"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/mime",
+      "dep_version": "v6.2.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/mime:v6.2.7:GHSA-qpmx-3rfj-7rhv",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/mime@v6.2.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45070"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-vqc8-7275-q272",
+        "modified": "2026-05-27T21:15:09.562598+00:00",
+        "published": "2026-05-27T21:09:12+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-vqc8-7275-q272",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/mime/CVE-2026-45070.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45070.yaml",
+          "https://github.com/symfony/symfony",
+          "https://symfony.com/cve-2026-45070"
+        ],
+        "severity": null,
+        "summary": "Symfony has Email Header Injection via Non-Token Characters in Mime Parameter Names"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/mime",
+      "dep_version": "v6.2.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/mime:v6.2.7:GHSA-vqc8-7275-q272",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/mime@v6.2.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-46644"
+        ],
+        "fixed_versions": [
+          "1.38.1"
+        ],
+        "id": "GHSA-2xf4-cg6j-vhgq",
+        "modified": "2026-05-28T20:00:09.468446+00:00",
+        "published": "2026-05-28T19:52:36+00:00",
+        "references": [
+          "https://github.com/symfony/polyfill/security/advisories/GHSA-2xf4-cg6j-vhgq",
+          "https://github.com/symfony/polyfill/commit/1be936e2491ccebe152bd736dfc91eb1422c8bec",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/polyfill-intl-idn/CVE-2026-46644.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/polyfill/CVE-2026-46644.yaml",
+          "https://github.com/symfony/polyfill"
+        ],
+        "severity": null,
+        "summary": "symfony/polyfill-intl-idn: xn-- labels with ASCII-only Punycode payloads are treated as equivalent to their decoded form"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/polyfill-intl-idn",
+      "dep_version": "v1.27.0",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/polyfill-intl-idn:v1.27.0:GHSA-2xf4-cg6j-vhgq",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/polyfill-intl-idn@v1.27.0",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -3661,11 +4033,11 @@
           "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
         },
         "evidence": [
-          "app/Http/Middleware/RedirectIfAuthenticated.php:9",
-          "packages/Webkul/Category/src/Models/Category.php:11",
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
           "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
           "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
-          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Category/src/Models/Category.php:11",
           "... (+1 more)"
         ],
         "verdict": "imported"
@@ -3679,6 +4051,452 @@
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 10.700845102741498,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45065"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-72xp-p242-47p9",
+        "modified": "2026-05-27T17:00:09.216591+00:00",
+        "published": "2026-05-27T16:55:16+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-72xp-p242-47p9",
+          "https://github.com/symfony/symfony/commit/bcf487c22f3240ba994124e0e0fe8616f3cfc47a",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/routing/CVE-2026-45065.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45065.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony has a UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation \u2192 Off-Site //host URL Injection"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/routing",
+      "dep_version": "v6.2.8",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/routing:v6.2.8:GHSA-72xp-p242-47p9",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/routing@v6.2.8",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45304"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-4qpc-3hr4-r2p4",
+        "modified": "2026-05-27T21:45:20.121302+00:00",
+        "published": "2026-05-27T21:33:50+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-4qpc-3hr4-r2p4",
+          "https://github.com/symfony/symfony/commit/e77391b2e4f18821198f010d573674c8ed4a970a",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45304.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45304.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony's YAML Parser Vulnerable to Exponential Memory Allocation via Recursive Collection-Alias Expansion (\"Billion Laughs\")"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v6.2.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-4qpc-3hr4-r2p4",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v6.2.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45305"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-9frc-8383-795m",
+        "modified": "2026-05-27T21:45:20.956231+00:00",
+        "published": "2026-05-27T21:34:35+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-9frc-8383-795m",
+          "https://github.com/symfony/symfony/commit/9749cd43c5e09b3735093623670b21b9d8a056cb",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45305.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45305.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony's YAML Parser has a ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v6.2.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-9frc-8383-795m",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v6.2.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-45133"
+        ],
+        "fixed_versions": [
+          "5.4.52",
+          "6.4.40",
+          "7.4.12",
+          "8.0.12"
+        ],
+        "id": "GHSA-c2p3-7m5p-cv8x",
+        "modified": "2026-05-27T21:45:20.337516+00:00",
+        "published": "2026-05-27T21:33:07+00:00",
+        "references": [
+          "https://github.com/symfony/symfony/security/advisories/GHSA-c2p3-7m5p-cv8x",
+          "https://github.com/symfony/symfony/commit/914f427ed9630ddb3904dafba763e53d9f133fe3",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/symfony/CVE-2026-45133.yaml",
+          "https://github.com/FriendsOfPHP/security-advisories/blob/master/symfony/yaml/CVE-2026-45133.yaml",
+          "https://github.com/symfony/symfony"
+        ],
+        "severity": null,
+        "summary": "Symfony hardened the parser when handling untrusted input"
+      },
+      "cvss_score": null,
+      "dep_name": "symfony/yaml",
+      "dep_version": "v6.2.7",
+      "ecosystem": "Packagist",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Packagist:symfony/yaml:v6.2.7:GHSA-c2p3-7m5p-cv8x",
+      "in_kev": false,
+      "purl": "pkg:composer/symfony/yaml@v6.2.7",
+      "raptor_risk_estimate": 8.268975749999997,
+      "reachability": {
+        "confidence": {
+          "level": "low",
+          "numeric": 0.3,
+          "reason": "vendor `Symfony\\...` referenced; pkg-segment match unconfirmed"
+        },
+        "evidence": [
+          "packages/Webkul/Core/src/Exceptions/Handler.php:9",
+          "packages/Webkul/Core/src/Http/Middleware/CheckForMaintenanceMode.php:9",
+          "packages/Webkul/Core/src/Providers/EnvValidatorServiceProvider.php:8",
+          "packages/Webkul/Core/src/Events/ComposerEvents.php:4",
+          "packages/Webkul/Category/src/Models/Category.php:11",
+          "... (+1 more)"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 0.7,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 8.268975749999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44494"
+        ],
+        "fixed_versions": [
+          "1.16.0"
+        ],
+        "id": "GHSA-35jp-ww65-95wh",
+        "modified": "2026-05-29T16:15:52.606713+00:00",
+        "published": "2026-05-29T16:04:00+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-35jp-ww65-95wh",
+          "https://github.com/advisories/GHSA-fvcv-3m26-pcqx",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 8.7,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:N"
+        },
+        "summary": "axios Vulnerable to Full Man-in-the-Middle via Prototype Pollution Gadget in `config.proxy`"
+      },
+      "cvss_score": 8.7,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-35jp-ww65-95wh",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 25.692888937499994,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.99999999999999,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 25.692888937499994,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44495"
+        ],
+        "fixed_versions": [
+          "1.15.2",
+          "0.31.1"
+        ],
+        "id": "GHSA-3g43-6gmg-66jw",
+        "modified": "2026-05-29T16:15:52.575987+00:00",
+        "published": "2026-05-29T16:07:31+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-3g43-6gmg-66jw",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 7.0,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "summary": "axios Vulnerable to Credential Theft and Response Hijacking via Prototype Pollution Gadget in Config Merge"
+      },
+      "cvss_score": 7.0,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-3g43-6gmg-66jw",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 20.672439374999996,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 70.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 20.672439374999996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -3738,11 +4556,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3812,11 +4630,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3889,11 +4707,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -3962,11 +4780,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4020,7 +4838,7 @@
       "dep_name": "axios",
       "dep_version": "1.1.2",
       "ecosystem": "npm",
-      "epss": 0.00157,
+      "epss": 0.00257,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4031,7 +4849,7 @@
       "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-4hjh-wcwx-xvwj",
       "in_kev": false,
       "purl": "pkg:npm/axios@1.1.2",
-      "raptor_risk_estimate": 27.632916863922283,
+      "raptor_risk_estimate": 27.668160643490378,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -4039,11 +4857,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4052,10 +4870,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400101171,
+        "epss_multiplier": 0.400611471,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.632916863922283,
+        "final": 27.668160643490378,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -4114,11 +4932,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4189,11 +5007,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4264,11 +5082,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4289,6 +5107,80 @@
         "version_match_confidence": 0.95
       },
       "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44490"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-898c-q2cr-xwhg",
+        "modified": "2026-05-29T16:00:11.639985+00:00",
+        "published": "2026-05-29T15:54:57+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-898c-q2cr-xwhg",
+          "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 4.8,
+          "severity": "medium",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L"
+        },
+        "summary": "axios has DoS & Header Injection via Prototype Pollution Read-Side Gadgets in axios merge functions"
+      },
+      "cvss_score": 4.8,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-898c-q2cr-xwhg",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 14.175386999999997,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 48.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 14.175386999999997,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
       "ssvc_automatable": null,
       "ssvc_exploitation": null
     },
@@ -4341,11 +5233,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4414,11 +5306,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4489,11 +5381,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4564,11 +5456,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4586,6 +5478,80 @@
         "reachability_multiplier": 1.0,
         "ssvc_automatable_multiplier": 1.0,
         "ssvc_poc_multiplier": 1.4399,
+        "version_match_confidence": 0.95
+      },
+      "severity": "high",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2026-44492"
+        ],
+        "fixed_versions": [
+          "1.16.0",
+          "0.32.0"
+        ],
+        "id": "GHSA-pjwm-pj3p-43mv",
+        "modified": "2026-05-29T16:15:52.668986+00:00",
+        "published": "2026-05-29T15:59:30+00:00",
+        "references": [
+          "https://github.com/axios/axios/security/advisories/GHSA-pjwm-pj3p-43mv",
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
+          "https://github.com/axios/axios"
+        ],
+        "severity": {
+          "score": 8.6,
+          "severity": "high",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
+        },
+        "summary": "axios's shouldBypassProxy does not recognize IPv4-mapped IPv6 addresses, allowing NO_PROXY bypass (incomplete fix for CVE-2025-62718)"
+      },
+      "cvss_score": 8.6,
+      "dep_name": "axios",
+      "dep_version": "1.1.2",
+      "ecosystem": "npm",
+      "epss": null,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:npm:axios:1.1.2:GHSA-pjwm-pj3p-43mv",
+      "in_kev": false,
+      "purl": "pkg:npm/axios@1.1.2",
+      "raptor_risk_estimate": 25.397568375,
+      "reachability": {
+        "confidence": {
+          "level": "high",
+          "numeric": 0.95,
+          "reason": "import/require found in non-test source"
+        },
+        "evidence": [
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 86.0,
+        "cvss_source": "numeric",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.65445,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 25.397568375,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
         "version_match_confidence": 0.95
       },
       "severity": "high",
@@ -4639,11 +5605,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4715,11 +5681,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4790,11 +5756,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4865,11 +5831,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -4942,11 +5908,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5017,11 +5983,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5092,11 +6058,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "resources/assets/js/bootstrap.js:7",
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:5",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:12"
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:2",
+          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:2",
+          "resources/assets/js/bootstrap.js:7"
         ],
         "verdict": "imported"
       },
@@ -5173,11 +6139,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -5253,11 +6219,11 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/bootstrap.js:3",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:1",
+          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
+          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.min.js:8",
           "packages/Webkul/Admin/publishable/assets/js/tinyMCE/plugins/mention/plugin.js:8",
-          "packages/Webkul/Velocity/src/Resources/assets/js/bootstrap.js:3",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:33",
           "... and 1 more"
         ],
         "verdict": "imported"
@@ -6487,7 +7453,7 @@
       "dep_name": "vite",
       "dep_version": "4.0.0",
       "ecosystem": "npm",
-      "epss": 0.05145,
+      "epss": 0.04736,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6498,7 +7464,7 @@
       "finding_id": "sca:vuln:npm:vite:4.0.0:GHSA-xcj6-pq6g-qj4x",
       "in_kev": false,
       "purl": "pkg:npm/vite@4.0.0",
-      "raptor_risk_estimate": 22.08180059262113,
+      "raptor_risk_estimate": 21.97350077411362,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6515,10 +7481,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.42555493499999997,
+        "epss_multiplier": 0.423467808,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 22.08180059262113,
+        "final": 21.97350077411362,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6642,10 +7608,10 @@
           "reason": "import/require found in non-test source"
         },
         "evidence": [
-          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4",
-          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2",
           "packages/Webkul/Velocity/src/Resources/assets/js/app-core.js:4",
-          "packages/Webkul/Shop/src/Resources/assets/js/app.js:2"
+          "packages/Webkul/Velocity/src/Resources/assets/js/app.js:5",
+          "packages/Webkul/Admin/src/Resources/assets/js/app.js:4"
         ],
         "verdict": "imported"
       },

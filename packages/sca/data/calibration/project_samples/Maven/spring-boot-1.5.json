@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:47:15Z",
+    "fetched_at": "2026-06-01T11:41:35Z",
     "git_ref": "v1.5.10.RELEASE",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot-1.5",
@@ -57,9 +57,9 @@
           "reason": "Java imports under 'ch.qos.logback.classic' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "DefaultLogbackConfiguration.java:21",
-          "ColorConverter.java:22",
-          "LogbackLoggingSystem.java:26"
+          "SpringBootJoranConfigurator.java:18",
+          "LogbackLoggingSystem.java:29",
+          "ExtendedWhitespaceThrowableProxyConverter.java:18"
         ],
         "verdict": "imported"
       },
@@ -132,9 +132,9 @@
           "reason": "Java imports under 'ch.qos.logback.classic' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "DefaultLogbackConfiguration.java:21",
-          "ColorConverter.java:22",
-          "LogbackLoggingSystem.java:26"
+          "SpringBootJoranConfigurator.java:18",
+          "LogbackLoggingSystem.java:29",
+          "ExtendedWhitespaceThrowableProxyConverter.java:18"
         ],
         "verdict": "imported"
       },
@@ -202,9 +202,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -275,9 +275,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -345,9 +345,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -415,9 +415,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -484,9 +484,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -557,9 +557,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -632,9 +632,9 @@
           "reason": "Java imports under 'ch.qos.logback.core' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringProfileAction.java:21",
-          "SpringPropertyAction.java:18",
-          "SpringProfileAction.java:23"
+          "SpringBootJoranConfigurator.java:20",
+          "SpringBootJoranConfigurator.java:21",
+          "SpringBootJoranConfigurator.java:22"
         ],
         "verdict": "imported"
       },
@@ -688,7 +688,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.00018,
+      "epss": 0.00075,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -699,7 +699,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-288c-cq4h-88gq",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 7.338825317249999,
+      "raptor_risk_estimate": 7.3441700718749985,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -707,7 +707,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -718,10 +718,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399391854,
+        "epss_multiplier": 0.39968272499999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.338825317249999,
+        "final": 7.3441700718749985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -763,7 +763,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.03461,
+      "epss": 0.03554,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -774,7 +774,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-4gq5-ch57-c2mg",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.011245206829999,
+      "raptor_risk_estimate": 10.02263984862,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -782,7 +782,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -793,10 +793,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41696148299999997,
+        "epss_multiplier": 0.417436062,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.011245206829999,
+        "final": 10.02263984862,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -839,7 +839,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.07911,
+      "epss": 0.08109,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -850,7 +850,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-4w82-r329-3q67",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.55647269033,
+      "raptor_risk_estimate": 10.58073225027,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -858,7 +858,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -869,10 +869,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.439669833,
+        "epss_multiplier": 0.440680227,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.55647269033,
+        "final": 10.58073225027,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -913,7 +913,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.00474,
+      "epss": 0.00487,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -924,7 +924,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-57j2-w4cx-62h2",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 7.381583354249999,
+      "raptor_risk_estimate": 7.3828023333749995,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -932,7 +932,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -943,10 +943,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401718822,
+        "epss_multiplier": 0.401785161,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.381583354249999,
+        "final": 7.3828023333749995,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1007,7 +1007,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1080,7 +1080,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1137,7 +1137,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.15179,
+      "epss": 0.15522,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1148,7 +1148,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-5ww9-j83m-q7qx",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.760436279875,
+      "raptor_risk_estimate": 8.792598575249999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1156,7 +1156,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1167,10 +1167,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.476758437,
+        "epss_multiplier": 0.478508766,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.760436279875,
+        "final": 8.792598575249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1213,7 +1213,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.14515,
+      "epss": 0.14845,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1224,7 +1224,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-645p-88qh-w398",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 11.36561478045,
+      "raptor_risk_estimate": 11.40604738035,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1232,7 +1232,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1243,10 +1243,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.473370045,
+        "epss_multiplier": 0.475054035,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.36561478045,
+        "final": 11.40604738035,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1288,7 +1288,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.01444,
+      "epss": 0.01467,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1299,7 +1299,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-6fpp-rgj9-8rwc",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.76411625532,
+      "raptor_risk_estimate": 9.76693428501,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1307,7 +1307,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1318,10 +1318,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406668732,
+        "epss_multiplier": 0.406786101,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.76411625532,
+        "final": 9.76693428501,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1363,7 +1363,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.04812,
+      "epss": 0.04938,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1374,7 +1374,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-6wqp-v4v6-c87c",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 7.788347311499998,
+      "raptor_risk_estimate": 7.8001620322499985,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1382,7 +1382,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1393,10 +1393,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.423855636,
+        "epss_multiplier": 0.424498614,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.788347311499998,
+        "final": 7.8001620322499985,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1438,7 +1438,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.00876,
+      "epss": 0.00669,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1449,7 +1449,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-85cw-hj65-qqv9",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.69452317428,
+      "raptor_risk_estimate": 9.669160907070001,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1457,7 +1457,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1468,10 +1468,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403770228,
+        "epss_multiplier": 0.402713907,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.69452317428,
+        "final": 9.669160907070001,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1512,7 +1512,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02725,
+      "epss": 0.0295,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1523,7 +1523,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-89qr-369f-5m5x",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.200066620374999,
+      "raptor_risk_estimate": 8.222852153249999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1531,7 +1531,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1542,10 +1542,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413205675,
+        "epss_multiplier": 0.41435384999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.200066620374999,
+        "final": 8.222852153249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1586,7 +1586,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02725,
+      "epss": 0.03194,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1597,7 +1597,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-8c4j-34r4-xr8g",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.200066620374999,
+      "raptor_risk_estimate": 8.24756179779,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1605,7 +1605,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1616,10 +1616,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413205675,
+        "epss_multiplier": 0.415598982,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.200066620374999,
+        "final": 8.24756179779,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1659,7 +1659,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02725,
+      "epss": 0.0295,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1670,7 +1670,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-8w26-6f25-cm9x",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.200066620374999,
+      "raptor_risk_estimate": 8.222852153249999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1678,7 +1678,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1689,10 +1689,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413205675,
+        "epss_multiplier": 0.41435384999999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.200066620374999,
+        "final": 8.222852153249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1733,7 +1733,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.60256,
+      "epss": 0.61883,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1744,7 +1744,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-9gph-22xh-8x98",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 14.026175472959999,
+      "raptor_risk_estimate": 14.190940192904998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1752,7 +1752,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1763,10 +1763,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.7067863679999999,
+        "epss_multiplier": 0.715088949,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.026175472959999,
+        "final": 14.190940192904998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1807,7 +1807,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02084,
+      "epss": 0.02241,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1818,7 +1818,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-9m6f-7xcq-8vf8",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.135153168939999,
+      "raptor_risk_estimate": 8.151052407435,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1826,7 +1826,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1837,10 +1837,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.409934652,
+        "epss_multiplier": 0.410735823,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.135153168939999,
+        "final": 8.151052407435,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1882,7 +1882,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.09436,
+      "epss": 0.09667,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1893,7 +1893,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-9mxf-g3x6-wv74",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.962571745999998,
+      "raptor_risk_estimate": 10.991452174499997,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1901,7 +1901,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1912,10 +1912,10 @@
         "cvss_base": 100.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.447451908,
+        "epss_multiplier": 0.44863070099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.962571745999998,
+        "final": 10.991452174499997,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -1958,7 +1958,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.04124,
+      "epss": 0.04233,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1969,7 +1969,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-c8hm-7hpq-7jhg",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.09247797572,
+      "raptor_risk_estimate": 10.10583298599,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1977,7 +1977,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -1988,10 +1988,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.420344772,
+        "epss_multiplier": 0.420900999,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.09247797572,
+        "final": 10.10583298599,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2033,7 +2033,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.00742,
+      "epss": 0.00897,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2044,7 +2044,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-cf6r-3wgc-h863",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 7.406713077749999,
+      "raptor_risk_estimate": 7.421247059624998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2052,7 +2052,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2063,10 +2063,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403086426,
+        "epss_multiplier": 0.403877391,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.406713077749999,
+        "final": 7.421247059624998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2128,7 +2128,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2184,7 +2184,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.03035,
+      "epss": 0.03117,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2195,7 +2195,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-cjjf-94ff-43w7",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 7.621722241874999,
+      "raptor_risk_estimate": 7.629411187124999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2203,7 +2203,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2214,10 +2214,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.414787605,
+        "epss_multiplier": 0.41520605099999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.621722241874999,
+        "final": 7.629411187124999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2279,7 +2279,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2334,7 +2334,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.0543,
+      "epss": 0.05862,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2345,7 +2345,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-cvm9-fjm9-3572",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.473999360049998,
+      "raptor_risk_estimate": 8.51774758317,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2353,7 +2353,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2364,10 +2364,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.42700929,
+        "epss_multiplier": 0.429213786,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.473999360049998,
+        "final": 8.51774758317,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2408,7 +2408,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.01604,
+      "epss": 0.01228,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2419,7 +2419,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-f3j5-rmmp-3fc5",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.783719940120001,
+      "raptor_risk_estimate": 9.73765128084,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2427,7 +2427,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2438,10 +2438,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407485212,
+        "epss_multiplier": 0.405566484,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.783719940120001,
+        "final": 9.73765128084,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2483,7 +2483,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.06658,
+      "epss": 0.06827,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2494,7 +2494,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-f9hv-mg5h-xcw9",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.402951333739999,
+      "raptor_risk_estimate": 10.42365772581,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2502,7 +2502,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2513,10 +2513,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.433275774,
+        "epss_multiplier": 0.434138181,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.402951333739999,
+        "final": 10.42365772581,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2557,7 +2557,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.09537,
+      "epss": 0.10179,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2568,7 +2568,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-f9xh-2qgp-cq57",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.889911286795,
+      "raptor_risk_estimate": 8.954926007264998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2576,7 +2576,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2587,10 +2587,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.447967311,
+        "epss_multiplier": 0.45124343699999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.889911286795,
+        "final": 8.954926007264998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2632,7 +2632,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.01379,
+      "epss": 0.01891,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2643,7 +2643,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-fmmc-742q-jg75",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.75615225837,
+      "raptor_risk_estimate": 9.818884049729999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2651,7 +2651,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2662,10 +2662,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406337037,
+        "epss_multiplier": 0.40894977299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.75615225837,
+        "final": 9.818884049729999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2706,7 +2706,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.20473,
+      "epss": 0.20898,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2717,7 +2717,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-fqwf-pjwf-7vqv",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.861361381640002,
+      "raptor_risk_estimate": 10.90812017064,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2725,7 +2725,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2736,10 +2736,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.503773719,
+        "epss_multiplier": 0.505942494,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.861361381640002,
+        "final": 10.90812017064,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2781,7 +2781,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.01203,
+      "epss": 0.01223,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2792,7 +2792,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-gjmw-vf9h-g25v",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.73458820509,
+      "raptor_risk_estimate": 9.73703866569,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2800,7 +2800,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2811,10 +2811,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405438909,
+        "epss_multiplier": 0.405540969,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.73458820509,
+        "final": 9.73703866569,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2857,7 +2857,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.10145,
+      "epss": 0.10392,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2868,7 +2868,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-gwp4-hfv6-p7hw",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.288410055624999,
+      "raptor_risk_estimate": 8.311570659,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2876,7 +2876,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2887,10 +2887,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.451069935,
+        "epss_multiplier": 0.452330376,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.288410055624999,
+        "final": 8.311570659,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -2933,7 +2933,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.01863,
+      "epss": 0.01914,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2944,7 +2944,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-gww7-p5w4-wrfv",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.81545340489,
+      "raptor_risk_estimate": 9.82170207942,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -2952,7 +2952,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -2963,10 +2963,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.408806889,
+        "epss_multiplier": 0.409067142,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.81545340489,
+        "final": 9.82170207942,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3006,7 +3006,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02686,
+      "epss": 0.02908,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3017,7 +3017,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-h3cw-g4mq-c5x2",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.196117128009998,
+      "raptor_risk_estimate": 8.218598853779998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3025,7 +3025,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3036,10 +3036,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41300665799999997,
+        "epss_multiplier": 0.414139524,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.196117128009998,
+        "final": 8.218598853779998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3082,7 +3082,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.07697,
+      "epss": 0.07891,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3093,7 +3093,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-h592-38cm-4ggp",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.53025276191,
+      "raptor_risk_estimate": 10.55402222973,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3101,7 +3101,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3112,10 +3112,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.438577791,
+        "epss_multiplier": 0.439567773,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.53025276191,
+        "final": 10.55402222973,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3157,7 +3157,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.06292,
+      "epss": 0.06454,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3168,7 +3168,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-h822-r4r5-v8jg",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 10.358107904759999,
+      "raptor_risk_estimate": 10.37795663562,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3176,7 +3176,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3187,10 +3187,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.431408076,
+        "epss_multiplier": 0.432234762,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.358107904759999,
+        "final": 10.37795663562,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3250,7 +3250,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3304,7 +3304,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.06983,
+      "epss": 0.07471,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3315,7 +3315,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-m6x4-97wx-4q27",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.631270171404998,
+      "raptor_risk_estimate": 8.680689460484999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3323,7 +3323,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3334,10 +3334,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.434934249,
+        "epss_multiplier": 0.43742451299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.631270171404998,
+        "final": 8.680689460484999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3399,7 +3399,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3455,7 +3455,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.00415,
+      "epss": 0.00426,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3466,7 +3466,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-mx7p-6679-8g3q",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.63804005745,
+      "raptor_risk_estimate": 9.63938781078,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3474,7 +3474,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3485,10 +3485,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401417745,
+        "epss_multiplier": 0.401473878,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.63804005745,
+        "final": 9.63938781078,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3530,7 +3530,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02435,
+      "epss": 0.02501,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3541,7 +3541,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-mx9v-gmh4-mgqw",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.885536578049999,
+      "raptor_risk_estimate": 9.89362309803,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3549,7 +3549,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3560,10 +3560,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.411725805,
+        "epss_multiplier": 0.41206260299999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.885536578049999,
+        "final": 9.89362309803,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3605,7 +3605,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.57602,
+      "epss": 0.62015,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3616,7 +3616,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-p43x-xfjf-5jhr",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 16.644764574059998,
+      "raptor_risk_estimate": 17.185458705450003,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3624,7 +3624,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3635,10 +3635,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.6932430059999999,
+        "epss_multiplier": 0.715762545,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 16.644764574059998,
+        "final": 17.185458705450003,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3699,7 +3699,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3754,7 +3754,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.0202,
+      "epss": 0.02052,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3765,7 +3765,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-qjw2-hr98-qgfh",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.1286719507,
+      "raptor_risk_estimate": 8.131912559819998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3773,7 +3773,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3784,10 +3784,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40960806,
+        "epss_multiplier": 0.409771356,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.1286719507,
+        "final": 8.131912559819998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3829,7 +3829,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.15904,
+      "epss": 0.12722,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3840,7 +3840,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-qr7j-h6gg-jmgc",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 11.535799269120002,
+      "raptor_risk_estimate": 11.14593098766,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3848,7 +3848,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3859,10 +3859,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.480458112,
+        "epss_multiplier": 0.464220366,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.535799269120002,
+        "final": 11.14593098766,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3902,7 +3902,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.05713,
+      "epss": 0.06186,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3913,7 +3913,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-r3gr-cxrf-hg25",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.502658496954998,
+      "raptor_risk_estimate": 8.55055875051,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3921,7 +3921,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -3932,10 +3932,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.428453439,
+        "epss_multiplier": 0.430867158,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.502658496954998,
+        "final": 8.55055875051,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -3975,7 +3975,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02155,
+      "epss": 0.02335,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -3986,7 +3986,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-r695-7vr9-jgc2",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.142343270425,
+      "raptor_risk_estimate": 8.160571696724999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -3994,7 +3994,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4005,10 +4005,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410296965,
+        "epss_multiplier": 0.411215505,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.142343270425,
+        "final": 8.160571696724999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4069,7 +4069,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4143,7 +4143,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4197,7 +4197,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.08883,
+      "epss": 0.09009,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4208,7 +4208,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-rpr3-cw39-3pxh",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 12.705218758449409,
+      "raptor_risk_estimate": 12.723591736169968,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4216,7 +4216,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4227,10 +4227,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.44462994899999997,
+        "epss_multiplier": 0.445272927,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.705218758449409,
+        "final": 12.723591736169968,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4271,7 +4271,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.02422,
+      "epss": 0.02623,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4282,7 +4282,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-v585-23hc-c647",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.16938210277,
+      "raptor_risk_estimate": 8.189737178804998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4290,7 +4290,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4301,10 +4301,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.411659466,
+        "epss_multiplier": 0.41268516899999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.16938210277,
+        "final": 8.189737178804998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4345,7 +4345,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.03985,
+      "epss": 0.04276,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4356,7 +4356,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-vfqx-33qm-g869",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.327665604475,
+      "raptor_risk_estimate": 8.35713489366,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4364,7 +4364,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4375,10 +4375,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.419635455,
+        "epss_multiplier": 0.421120428,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.327665604475,
+        "final": 8.35713489366,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4439,7 +4439,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4493,7 +4493,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.03916,
+      "epss": 0.04249,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4504,7 +4504,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-wh8g-3j2c-rqj5",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 8.320678041059999,
+      "raptor_risk_estimate": 8.354400629714998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4512,7 +4512,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4523,10 +4523,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.419283348,
+        "epss_multiplier": 0.420982647,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.320678041059999,
+        "final": 8.354400629714998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4568,7 +4568,7 @@
       "dep_name": "com.fasterxml.jackson.core:jackson-databind",
       "dep_version": "2.8.10",
       "ecosystem": "Maven",
-      "epss": 0.03348,
+      "epss": 0.03437,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4579,7 +4579,7 @@
       "finding_id": "sca:vuln:Maven:com.fasterxml.jackson.core:jackson-databind:2.8.10:GHSA-x2w5-5m2g-7h5m",
       "in_kev": false,
       "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.8.10",
-      "raptor_risk_estimate": 9.997400104439999,
+      "raptor_risk_estimate": 10.00830465411,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -4587,7 +4587,7 @@
           "reason": "Java imports under 'com.fasterxml.jackson.databind' from 24 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "JerseyAutoConfiguration.java:31",
+          "JacksonJsonParser.java:23",
           "JerseyAutoConfiguration.java:33",
           "WebSocketMessagingAutoConfiguration.java:20"
         ],
@@ -4598,10 +4598,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.416384844,
+        "epss_multiplier": 0.416839011,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.997400104439999,
+        "final": 10.00830465411,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -4713,7 +4713,7 @@
       "dep_name": "com.google.code.gson:gson",
       "dep_version": "2.8.2",
       "ecosystem": "Maven",
-      "epss": 0.02798,
+      "epss": 0.02873,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4724,7 +4724,7 @@
       "finding_id": "sca:vuln:Maven:com.google.code.gson:gson:2.8.2:GHSA-4jrv-ppp4-jm57",
       "in_kev": false,
       "purl": "pkg:maven/com.google.code.gson/gson@2.8.2",
-      "raptor_risk_estimate": 5.318727447741476,
+      "raptor_risk_estimate": 5.323649394768588,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4739,10 +4739,10 @@
         "cvss_base": 77.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413578194,
+        "epss_multiplier": 0.413960919,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.318727447741476,
+        "final": 5.323649394768588,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -5726,7 +5726,7 @@
       "dep_name": "com.squareup.okhttp3:okhttp",
       "dep_version": "3.4.1",
       "ecosystem": "Maven",
-      "epss": 0.01425,
+      "epss": 0.01387,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5737,7 +5737,7 @@
       "finding_id": "sca:vuln:Maven:com.squareup.okhttp3:okhttp:3.4.1:GHSA-3cqm-mf7h-prrj",
       "in_kev": false,
       "purl": "pkg:maven/com.squareup.okhttp3/okhttp@3.4.1",
-      "raptor_risk_estimate": 6.56609312791146,
+      "raptor_risk_estimate": 6.562961436384653,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5752,10 +5752,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40657177499999997,
+        "epss_multiplier": 0.406377861,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.56609312791146,
+        "final": 6.562961436384653,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -6218,7 +6218,7 @@
       "dep_name": "io.netty:netty-all",
       "dep_version": "4.0.38.Final",
       "ecosystem": "Maven",
-      "epss": 0.14994,
+      "epss": 0.15334,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6229,7 +6229,7 @@
       "finding_id": "sca:vuln:Maven:io.netty:netty-all:4.0.38.Final:GHSA-p979-4mfw-53vg",
       "in_kev": false,
       "purl": "pkg:maven/io.netty/netty-all@4.0.38.Final",
-      "raptor_risk_estimate": 7.684354241785814,
+      "raptor_risk_estimate": 7.712374639657233,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -6244,10 +6244,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.475814382,
+        "epss_multiplier": 0.47754940199999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.684354241785814,
+        "final": 7.712374639657233,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -6303,9 +6303,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6357,7 +6357,7 @@
       "dep_name": "io.undertow:undertow-core",
       "dep_version": "1.4.22.Final",
       "ecosystem": "Maven",
-      "epss": 0.00266,
+      "epss": 0.00318,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6368,7 +6368,7 @@
       "finding_id": "sca:vuln:Maven:io.undertow:undertow-core:1.4.22.Final:GHSA-339q-62wm-c39w",
       "in_kev": false,
       "purl": "pkg:maven/io.undertow/undertow-core@1.4.22.Final",
-      "raptor_risk_estimate": 7.362079688249999,
+      "raptor_risk_estimate": 7.366955604749999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6376,9 +6376,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6387,10 +6387,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400657398,
+        "epss_multiplier": 0.400922754,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.362079688249999,
+        "final": 7.366955604749999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -6451,9 +6451,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6525,9 +6525,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6579,7 +6579,7 @@
       "dep_name": "io.undertow:undertow-core",
       "dep_version": "1.4.22.Final",
       "ecosystem": "Maven",
-      "epss": 0.00472,
+      "epss": 0.00494,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6590,7 +6590,7 @@
       "finding_id": "sca:vuln:Maven:io.undertow:undertow-core:1.4.22.Final:GHSA-3x3v-w654-m28m",
       "in_kev": false,
       "purl": "pkg:maven/io.undertow/undertow-core@1.4.22.Final",
-      "raptor_risk_estimate": 5.80669804428,
+      "raptor_risk_estimate": 5.808320849309999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -6598,9 +6598,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6609,10 +6609,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40170861599999996,
+        "epss_multiplier": 0.401820882,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.80669804428,
+        "final": 5.808320849309999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -6673,9 +6673,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6746,9 +6746,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6820,9 +6820,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6894,9 +6894,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -6968,9 +6968,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7042,9 +7042,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7116,9 +7116,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7187,9 +7187,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7261,9 +7261,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7335,9 +7335,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7409,9 +7409,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7480,9 +7480,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7554,9 +7554,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7627,9 +7627,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7701,9 +7701,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7774,9 +7774,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7848,9 +7848,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7921,9 +7921,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -7993,9 +7993,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8067,9 +8067,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8140,9 +8140,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8213,9 +8213,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8286,9 +8286,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8360,9 +8360,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8433,9 +8433,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8486,7 +8486,7 @@
       "dep_name": "io.undertow:undertow-core",
       "dep_version": "1.4.22.Final",
       "ecosystem": "Maven",
-      "epss": 0.00235,
+      "epss": 0.00242,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8497,7 +8497,7 @@
       "finding_id": "sca:vuln:Maven:io.undertow:undertow-core:1.4.22.Final:GHSA-vjxc-frw4-jmh5",
       "in_kev": false,
       "purl": "pkg:maven/io.undertow/undertow-core@1.4.22.Final",
-      "raptor_risk_estimate": 7.359172891874999,
+      "raptor_risk_estimate": 7.359829265249999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -8505,9 +8505,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8516,10 +8516,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40049920499999997,
+        "epss_multiplier": 0.400534926,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.359172891874999,
+        "final": 7.359829265249999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -8579,9 +8579,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8653,9 +8653,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8726,9 +8726,9 @@
           "reason": "Java imports under 'io.undertow' from 10 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "UndertowWebSocketContainerCustomizer.java:18",
+          "UndertowDeploymentInfoCustomizer.java:18",
           "UndertowEmbeddedServletContainerFactory.java:65",
-          "UndertowDeploymentInfoCustomizer.java:18"
+          "UndertowWebSocketContainerCustomizer.java:18"
         ],
         "verdict": "imported"
       },
@@ -8914,7 +8914,7 @@
       "dep_name": "log4j:log4j",
       "dep_version": "1.2.17",
       "ecosystem": "Maven",
-      "epss": 0.09457,
+      "epss": 0.09452,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8925,7 +8925,7 @@
       "finding_id": "sca:vuln:Maven:log4j:log4j:1.2.17:GHSA-65fg-84f6-3jq3",
       "in_kev": false,
       "purl": "pkg:maven/log4j/log4j@1.2.17",
-      "raptor_risk_estimate": 9.444630859644192,
+      "raptor_risk_estimate": 9.444092428469409,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -8940,10 +8940,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.447559071,
+        "epss_multiplier": 0.447533556,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.444630859644192,
+        "final": 9.444092428469409,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -8981,7 +8981,7 @@
       "dep_name": "log4j:log4j",
       "dep_version": "1.2.17",
       "ecosystem": "Maven",
-      "epss": 0.02673,
+      "epss": 0.02603,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8992,7 +8992,7 @@
       "finding_id": "sca:vuln:Maven:log4j:log4j:1.2.17:GHSA-f7vh-qwp3-x37m",
       "in_kev": false,
       "purl": "pkg:maven/log4j/log4j@1.2.17",
-      "raptor_risk_estimate": 8.714087441697092,
+      "raptor_risk_estimate": 8.706549405250115,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -9007,10 +9007,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.412940319,
+        "epss_multiplier": 0.412583109,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 8.714087441697092,
+        "final": 8.706549405250115,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -9116,7 +9116,7 @@
       "dep_name": "log4j:log4j",
       "dep_version": "1.2.17",
       "ecosystem": "Maven",
-      "epss": 0.00129,
+      "epss": 0.00125,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9127,7 +9127,7 @@
       "finding_id": "sca:vuln:Maven:log4j:log4j:1.2.17:GHSA-vp98-w2p3-mv35",
       "in_kev": false,
       "purl": "pkg:maven/log4j/log4j@1.2.17",
-      "raptor_risk_estimate": 6.459285964260404,
+      "raptor_risk_estimate": 6.4589563125207405,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -9142,10 +9142,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39995828699999997,
+        "epss_multiplier": 0.399937875,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.459285964260404,
+        "final": 6.4589563125207405,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -9183,7 +9183,7 @@
       "dep_name": "log4j:log4j",
       "dep_version": "1.2.17",
       "ecosystem": "Maven",
-      "epss": 0.00807,
+      "epss": 0.00785,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9194,7 +9194,7 @@
       "finding_id": "sca:vuln:Maven:log4j:log4j:1.2.17:GHSA-w9p3-5cr8-m3jj",
       "in_kev": false,
       "purl": "pkg:maven/log4j/log4j@1.2.17",
-      "raptor_risk_estimate": 7.644456669383202,
+      "raptor_risk_estimate": 7.642329316823239,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -9209,10 +9209,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40341812099999996,
+        "epss_multiplier": 0.403305855,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.644456669383202,
+        "final": 7.642329316823239,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -9593,7 +9593,7 @@
       "dep_name": "net.sourceforge.htmlunit:htmlunit",
       "dep_version": "2.21",
       "ecosystem": "Maven",
-      "epss": 0.02085,
+      "epss": 0.0164,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9604,7 +9604,7 @@
       "finding_id": "sca:vuln:Maven:net.sourceforge.htmlunit:htmlunit:2.21:GHSA-5mh9-r3rr-9597",
       "in_kev": false,
       "purl": "pkg:maven/net.sourceforge.htmlunit/htmlunit@2.21",
-      "raptor_risk_estimate": 7.150124518152456,
+      "raptor_risk_estimate": 7.110516861631855,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -9619,10 +9619,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.40993975499999996,
+        "epss_multiplier": 0.40766892,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.150124518152456,
+        "final": 7.110516861631855,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -9682,9 +9682,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -9756,9 +9756,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -9830,9 +9830,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -9904,9 +9904,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -9960,7 +9960,7 @@
       "dep_name": "org.apache.activemq:activemq-broker",
       "dep_version": "5.14.5",
       "ecosystem": "Maven",
-      "epss": 0.70075,
+      "epss": 0.84653,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -9971,7 +9971,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.activemq:activemq-broker:5.14.5:GHSA-rxpj-7qvf-xv32",
       "in_kev": true,
       "purl": "pkg:maven/org.apache.activemq/activemq-broker@5.14.5",
-      "raptor_risk_estimate": 31.537176993951086,
+      "raptor_risk_estimate": 34.63682228993346,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -9979,9 +9979,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -9990,10 +9990,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.7568927249999999,
+        "epss_multiplier": 0.831284259,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 31.537176993951086,
+        "final": 34.63682228993346,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -10052,9 +10052,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10126,9 +10126,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10205,9 +10205,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10279,9 +10279,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10352,9 +10352,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10425,9 +10425,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10504,9 +10504,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10580,9 +10580,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10654,9 +10654,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10733,9 +10733,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10812,9 +10812,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10886,9 +10886,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -10959,9 +10959,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -11032,9 +11032,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -11106,9 +11106,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -11177,9 +11177,9 @@
           "reason": "Java imports under 'org.apache.activemq' from 15 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ActiveMQConnectionFactoryCustomizer.java:18",
-          "ActiveMQXAConnectionFactoryConfiguration.java:23",
-          "ActiveMQConnectionFactoryFactory.java:22"
+          "ArtemisConnectionFactoryFactory.java:22",
+          "ArtemisEmbeddedConfigurationFactory.java:20",
+          "ArtemisConnectionFactoryFactory.java:24"
         ],
         "verdict": "imported"
       },
@@ -11671,9 +11671,9 @@
           "reason": "Java imports under 'org.apache.http' from 6 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SendGridAutoConfiguration.java:20",
-          "JestAutoConfiguration.java:25",
-          "RestTemplateProxyCustomizationExample.java:20"
+          "RestTemplateProxyCustomizationExample.java:22",
+          "RestTemplateProxyCustomizationExample.java:23",
+          "SendGridAutoConfiguration.java:21"
         ],
         "verdict": "imported"
       },
@@ -11887,9 +11887,9 @@
           "reason": "Java imports under 'org.apache.logging.log4j' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ColorConverter.java:23",
-          "Log4J2LoggingSystem.java:26",
-          "ColorConverter.java:25"
+          "SpringBootConfigurationFactory.java:18",
+          "Log4J2LoggingSystem.java:33",
+          "SpringBootConfigurationFactory.java:20"
         ],
         "verdict": "imported"
       },
@@ -11966,9 +11966,9 @@
           "reason": "Java imports under 'org.apache.logging.log4j' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ColorConverter.java:23",
-          "Log4J2LoggingSystem.java:26",
-          "ColorConverter.java:25"
+          "SpringBootConfigurationFactory.java:18",
+          "Log4J2LoggingSystem.java:33",
+          "SpringBootConfigurationFactory.java:20"
         ],
         "verdict": "imported"
       },
@@ -12041,9 +12041,9 @@
           "reason": "Java imports under 'org.apache.logging.log4j' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ColorConverter.java:23",
-          "Log4J2LoggingSystem.java:26",
-          "ColorConverter.java:25"
+          "SpringBootConfigurationFactory.java:18",
+          "Log4J2LoggingSystem.java:33",
+          "SpringBootConfigurationFactory.java:20"
         ],
         "verdict": "imported"
       },
@@ -12115,9 +12115,9 @@
           "reason": "Java imports under 'org.apache.maven' from 23 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "AbstractRunMojo.java:30",
-          "AbstractDependencyFilterMojo.java:23",
-          "IncludeFilter.java:20"
+          "DependencyManagementBomTransformation.java:31",
+          "SpringBootDependenciesDependencyManagement.java:20",
+          "MavenModelDependencyManagement.java:23"
         ],
         "verdict": "imported"
       },
@@ -13049,7 +13049,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.09547,
+      "epss": 0.10908,
       "exploit_evidence": {
         "edb_ids": [
           52318
@@ -13062,7 +13062,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-3p2h-wqq4-wf4h",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 9.46481733044489,
+      "raptor_risk_estimate": 9.611540985272919,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13077,10 +13077,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.448018341,
+        "epss_multiplier": 0.454963524,
         "exploit_evidence_multiplier": 1.5839,
         "exposure_multiplier": 0.5,
-        "final": 9.46481733044489,
+        "final": 9.611540985272919,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -13123,7 +13123,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.11721,
+      "epss": 0.13337,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13134,7 +13134,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-46j3-r4pj-4835",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 5.750949245500461,
+      "raptor_risk_estimate": 5.854246211679861,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13149,10 +13149,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45911226299999996,
+        "epss_multiplier": 0.467358711,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.750949245500461,
+        "final": 5.854246211679861,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -13626,7 +13626,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.08448,
+      "epss": 0.09047,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -13637,7 +13637,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-6v52-mj5r-7j2m",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 4.3594978351071845,
+      "raptor_risk_estimate": 4.3896184463427135,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13652,10 +13652,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.442410144,
+        "epss_multiplier": 0.445466841,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.3594978351071845,
+        "final": 4.3896184463427135,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -13771,7 +13771,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.94136,
+      "epss": 0.9413,
       "exploit_evidence": {
         "edb_ids": [
           52134
@@ -13786,7 +13786,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-83qj-6fr2-vhqg",
       "in_kev": true,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 25.296197550190563,
+      "raptor_risk_estimate": 25.29531709082877,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -13801,10 +13801,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.8796760079999999,
+        "epss_multiplier": 0.87964539,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 25.296197550190563,
+        "final": 25.29531709082877,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -13993,7 +13993,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.0326,
+      "epss": 0.04359,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14004,7 +14004,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-9xcj-c8cr-8c3c",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 5.210110365027749,
+      "raptor_risk_estimate": 5.2803599725965364,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -14019,10 +14019,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41593578,
+        "epss_multiplier": 0.421543977,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.210110365027749,
+        "final": 5.2803599725965364,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -14928,7 +14928,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.00355,
+      "epss": 0.00481,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -14939,7 +14939,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-hh3j-x4mc-g48r",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 4.689457478707575,
+      "raptor_risk_estimate": 4.696974634167163,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -14954,10 +14954,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401111565,
+        "epss_multiplier": 0.40175454299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.689457478707575,
+        "final": 4.696974634167163,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -15289,7 +15289,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.18551,
+      "epss": 0.19427,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15300,7 +15300,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-m59c-jpc8-m2x4",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 6.1875323389443375,
+      "raptor_risk_estimate": 6.2435274765514865,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -15315,10 +15315,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.493965753,
+        "epss_multiplier": 0.498435981,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.1875323389443375,
+        "final": 6.2435274765514865,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -15362,7 +15362,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.00207,
+      "epss": 0.0029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15373,7 +15373,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-p22x-g9px-3945",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 5.014958361472237,
+      "raptor_risk_estimate": 5.020263836839124,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -15388,10 +15388,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400356321,
+        "epss_multiplier": 0.40077987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.014958361472237,
+        "final": 5.020263836839124,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -15670,7 +15670,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.9445,
+      "epss": 0.944,
       "exploit_evidence": {
         "edb_ids": [
           52426
@@ -15683,7 +15683,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-qppj-fm5r-hxr3",
       "in_kev": true,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 25.031961352966608,
+      "raptor_risk_estimate": 25.024714034410323,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -15698,10 +15698,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.88127835,
+        "epss_multiplier": 0.8810232,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 25.031961352966608,
+        "final": 25.024714034410323,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -15812,7 +15812,7 @@
       "dep_name": "org.apache.tomcat.embed:tomcat-embed-core",
       "dep_version": "8.5.27",
       "ecosystem": "Maven",
-      "epss": 0.01366,
+      "epss": 0.01382,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -15823,7 +15823,7 @@
       "finding_id": "sca:vuln:Maven:org.apache.tomcat.embed:tomcat-embed-core:8.5.27:GHSA-qxf4-chvg-4r8r",
       "in_kev": false,
       "purl": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@8.5.27",
-      "raptor_risk_estimate": 3.256987681560816,
+      "raptor_risk_estimate": 3.257642236594031,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -15838,10 +15838,10 @@
         "cvss_base": 48.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406270698,
+        "epss_multiplier": 0.406352346,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 3.256987681560816,
+        "final": 3.257642236594031,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 0.6817,
@@ -16451,7 +16451,7 @@
       "dep_name": "org.assertj:assertj-core",
       "dep_version": "2.6.0",
       "ecosystem": "Maven",
-      "epss": 0.00014,
+      "epss": 0.00029,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -16462,7 +16462,7 @@
       "finding_id": "sca:vuln:Maven:org.assertj:assertj-core:2.6.0:GHSA-rqfh-9r24-8c9r",
       "in_kev": false,
       "purl": "pkg:maven/org.assertj/assertj-core@2.6.0",
-      "raptor_risk_estimate": 5.046058169669999,
+      "raptor_risk_estimate": 5.047025315744999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -16479,10 +16479,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.39937144199999997,
+        "epss_multiplier": 0.399447987,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.046058169669999,
+        "final": 5.047025315744999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -16754,8 +16754,8 @@
         },
         "evidence": [
           "ArchiveCommand.java:35",
-          "GroovyCompiler.java:31",
-          "DependencyAutoConfigurationTransformation.java:20"
+          "GroovyBeansTransformation.java:21",
+          "GenericBomAstTransformation.java:23"
         ],
         "verdict": "imported"
       },
@@ -16829,8 +16829,8 @@
         },
         "evidence": [
           "ArchiveCommand.java:35",
-          "GroovyCompiler.java:31",
-          "DependencyAutoConfigurationTransformation.java:20"
+          "GroovyBeansTransformation.java:21",
+          "GenericBomAstTransformation.java:23"
         ],
         "verdict": "imported"
       },
@@ -16901,9 +16901,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:21",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -16974,9 +16974,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:21",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -17045,9 +17045,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:21",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -17118,9 +17118,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:21",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -17192,9 +17192,9 @@
           "reason": "Java imports under 'org.codehaus.plexus' from 2 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RunArguments.java:21",
           "RepositoryConfigurationFactory.java:26",
-          "RepositoryConfigurationFactory.java:27"
+          "RepositoryConfigurationFactory.java:27",
+          "RepositoryConfigurationFactory.java:28"
         ],
         "verdict": "imported"
       },
@@ -17345,7 +17345,7 @@
       "dep_name": "org.eclipse.jetty.http2:http2-common",
       "dep_version": "9.4.8.v20171121",
       "ecosystem": "Maven",
-      "epss": 0.9445,
+      "epss": 0.944,
       "exploit_evidence": {
         "edb_ids": [
           52426
@@ -17358,7 +17358,7 @@
       "finding_id": "sca:vuln:Maven:org.eclipse.jetty.http2:http2-common:9.4.8.v20171121:GHSA-qppj-fm5r-hxr3",
       "in_kev": true,
       "purl": "pkg:maven/org.eclipse.jetty.http2/http2-common@9.4.8.v20171121",
-      "raptor_risk_estimate": 32.27335017293195,
+      "raptor_risk_estimate": 32.26400630865045,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -17373,10 +17373,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.88127835,
+        "epss_multiplier": 0.8810232,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 32.27335017293195,
+        "final": 32.26400630865045,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -17587,7 +17587,7 @@
       "dep_name": "org.eclipse.jetty.http2:http2-server",
       "dep_version": "9.4.8.v20171121",
       "ecosystem": "Maven",
-      "epss": 0.9445,
+      "epss": 0.944,
       "exploit_evidence": {
         "edb_ids": [
           52426
@@ -17600,7 +17600,7 @@
       "finding_id": "sca:vuln:Maven:org.eclipse.jetty.http2:http2-server:9.4.8.v20171121:GHSA-qppj-fm5r-hxr3",
       "in_kev": true,
       "purl": "pkg:maven/org.eclipse.jetty.http2/http2-server@9.4.8.v20171121",
-      "raptor_risk_estimate": 32.27335017293195,
+      "raptor_risk_estimate": 32.26400630865045,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -17615,10 +17615,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.88127835,
+        "epss_multiplier": 0.8810232,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 32.27335017293195,
+        "final": 32.26400630865045,
         "kev_multiplier": 1.7569,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -17750,9 +17750,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -17826,9 +17826,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -17883,7 +17883,7 @@
       "dep_name": "org.eclipse.jetty:jetty-http",
       "dep_version": "9.4.8.v20171121",
       "ecosystem": "Maven",
-      "epss": 0.04959,
+      "epss": 0.04696,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -17894,7 +17894,7 @@
       "finding_id": "sca:vuln:Maven:org.eclipse.jetty:jetty-http:9.4.8.v20171121:GHSA-hmr7-m48g-48f6",
       "in_kev": false,
       "purl": "pkg:maven/org.eclipse.jetty/jetty-http@9.4.8.v20171121",
-      "raptor_risk_estimate": 7.108484539923373,
+      "raptor_risk_estimate": 7.086016124690998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -17902,9 +17902,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -17913,10 +17913,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.424605777,
+        "epss_multiplier": 0.42326368799999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.108484539923373,
+        "final": 7.086016124690998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -17975,9 +17975,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18050,9 +18050,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18127,9 +18127,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18203,9 +18203,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18278,9 +18278,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18353,9 +18353,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18408,7 +18408,7 @@
       "dep_name": "org.eclipse.jetty:jetty-server",
       "dep_version": "9.4.8.v20171121",
       "ecosystem": "Maven",
-      "epss": 0.08324,
+      "epss": 0.08531,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -18419,7 +18419,7 @@
       "finding_id": "sca:vuln:Maven:org.eclipse.jetty:jetty-server:9.4.8.v20171121:GHSA-84q7-p226-4x5w",
       "in_kev": false,
       "purl": "pkg:maven/org.eclipse.jetty/jetty-server@9.4.8.v20171121",
-      "raptor_risk_estimate": 10.465982053537497,
+      "raptor_risk_estimate": 10.491006958228121,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -18427,9 +18427,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18438,10 +18438,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.441777372,
+        "epss_multiplier": 0.442833693,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.465982053537497,
+        "final": 10.491006958228121,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -18502,9 +18502,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18576,9 +18576,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18652,9 +18652,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18726,9 +18726,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18804,9 +18804,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18879,9 +18879,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -18952,9 +18952,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19028,9 +19028,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19100,9 +19100,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19175,9 +19175,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19250,9 +19250,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19325,9 +19325,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19401,9 +19401,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19476,9 +19476,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19553,9 +19553,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19629,9 +19629,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19703,9 +19703,9 @@
           "reason": "Java imports under 'org.eclipse.jetty' from 11 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "WebSocketAutoConfiguration.java:23",
-          "JettyWebSocketContainerCustomizer.java:23",
-          "JettyWebSocketContainerCustomizer.java:18"
+          "JettyServerCustomizer.java:18",
+          "JettyEmbeddedServletContainerFactory.java:49",
+          "JettyEmbeddedServletContainer.java:27"
         ],
         "verdict": "imported"
       },
@@ -19777,8 +19777,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -19850,8 +19850,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -19924,8 +19924,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -19999,8 +19999,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20072,8 +20072,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20146,8 +20146,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20220,8 +20220,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20293,8 +20293,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20368,8 +20368,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20442,8 +20442,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20516,8 +20516,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20588,8 +20588,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20660,8 +20660,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20735,8 +20735,8 @@
           "reason": "Java imports under 'org.elasticsearch' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchRepositoriesAutoConfiguration.java:18",
+          "ElasticsearchDataAutoConfiguration.java:18",
           "ElasticsearchAutoConfiguration.java:26"
         ],
         "verdict": "imported"
@@ -20877,7 +20877,7 @@
         "evidence": [
           "PluginFeatures.java:18",
           "SpringBootPluginExtension.java:24",
-          "DeprecatedSpringBootPlugin.java:18"
+          "DependencyManagementPluginFeatures.java:23"
         ],
         "verdict": "imported"
       },
@@ -20950,9 +20950,9 @@
           "reason": "Java imports under 'org.hibernate' from 14 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringImplicitNamingStrategy.java:18",
+          "SpringJtaPlatform.java:21",
           "SpringPhysicalNamingStrategy.java:20",
-          "SpringImplicitNamingStrategy.java:20"
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -21024,9 +21024,9 @@
           "reason": "Java imports under 'org.hibernate' from 14 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringImplicitNamingStrategy.java:18",
+          "SpringJtaPlatform.java:21",
           "SpringPhysicalNamingStrategy.java:20",
-          "SpringImplicitNamingStrategy.java:20"
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -21098,9 +21098,9 @@
           "reason": "Java imports under 'org.hibernate' from 14 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringImplicitNamingStrategy.java:18",
+          "SpringJtaPlatform.java:21",
           "SpringPhysicalNamingStrategy.java:20",
-          "SpringImplicitNamingStrategy.java:20"
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -21173,9 +21173,9 @@
           "reason": "Java imports under 'org.hibernate' from 14 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringImplicitNamingStrategy.java:18",
+          "SpringJtaPlatform.java:21",
           "SpringPhysicalNamingStrategy.java:20",
-          "SpringImplicitNamingStrategy.java:20"
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -21245,9 +21245,9 @@
           "reason": "Java imports under 'org.hibernate' from 14 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringImplicitNamingStrategy.java:18",
+          "SpringJtaPlatform.java:21",
           "SpringPhysicalNamingStrategy.java:20",
-          "SpringImplicitNamingStrategy.java:20"
+          "SpringImplicitNamingStrategy.java:18"
         ],
         "verdict": "imported"
       },
@@ -21677,8 +21677,8 @@
         },
         "evidence": [
           "JsonJsonParser.java:23",
-          "JsonReader.java:26",
-          "InitializrServiceMetadata.java:24"
+          "InitializrServiceMetadata.java:24",
+          "JsonReader.java:26"
         ],
         "verdict": "imported"
       },
@@ -21751,8 +21751,8 @@
         },
         "evidence": [
           "JsonJsonParser.java:23",
-          "JsonReader.java:26",
-          "InitializrServiceMetadata.java:24"
+          "InitializrServiceMetadata.java:24",
+          "JsonReader.java:26"
         ],
         "verdict": "imported"
       },
@@ -22184,9 +22184,9 @@
           "reason": "Java imports under 'org.slf4j' from 18 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "EmbeddedMongoAutoConfiguration.java:47",
-          "LogbackLoggingSystem.java:37",
-          "DeprecatedSpringBootPlugin.java:20"
+          "Slf4JLoggingSystem.java:18",
+          "LogbackLoggingSystem.java:36",
+          "LogbackInitializer.java:20"
         ],
         "verdict": "imported"
       },
@@ -22258,9 +22258,9 @@
           "reason": "Java imports under 'org.springframework.amqp' from 8 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "RabbitAutoConfiguration.java:20",
-          "RabbitAutoConfiguration.java:22",
-          "RabbitAutoConfiguration.java:23"
+          "SimpleRabbitListenerContainerFactoryConfigurer.java:18",
+          "SimpleRabbitListenerContainerFactoryConfigurer.java:20",
+          "RabbitAnnotationDrivenConfiguration.java:21"
         ],
         "verdict": "imported"
       },
@@ -22329,9 +22329,9 @@
           "reason": "Java imports under 'org.springframework.batch' from 6 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "BasicBatchConfigurer.java:25",
+          "BatchAutoConfiguration.java:21",
           "BatchAutoConfiguration.java:23",
-          "BasicBatchConfigurer.java:27"
+          "BasicBatchConfigurer.java:25"
         ],
         "verdict": "imported"
       },
@@ -22404,9 +22404,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22480,9 +22480,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22533,7 +22533,7 @@
       "dep_name": "org.springframework.boot:spring-boot-devtools",
       "dep_version": "1.5.10.RELEASE",
       "ecosystem": "Maven",
-      "epss": 0.00043,
+      "epss": 0.00058,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -22544,7 +22544,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot-devtools:1.5.10.RELEASE:GHSA-56v8-86gj-66jp",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot-devtools@1.5.10.RELEASE",
-      "raptor_risk_estimate": 9.464864972653123,
+      "raptor_risk_estimate": 9.466678371543749,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -22552,9 +22552,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22563,10 +22563,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 0.7,
-        "epss_multiplier": 0.399519429,
+        "epss_multiplier": 0.39959597399999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.464864972653123,
+        "final": 9.466678371543749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -22624,9 +22624,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22702,9 +22702,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22774,9 +22774,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22847,9 +22847,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22900,7 +22900,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "1.5.10.RELEASE",
       "ecosystem": "Maven",
-      "epss": 7e-05,
+      "epss": 9e-05,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -22911,7 +22911,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:1.5.10.RELEASE:GHSA-wwpq-f5c3-7hvx",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@1.5.10.RELEASE",
-      "raptor_risk_estimate": 6.848607615149998,
+      "raptor_risk_estimate": 6.848782648049999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -22919,9 +22919,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 815 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SpringBootApplication.java:25",
-          "SampleServletApplication.java:28",
-          "SampleAtmosphereApplication.java:28"
+          "ImageBanner.java:30",
+          "ImageBanner.java:32",
+          "SpringBootBanner.java:20"
         ],
         "verdict": "imported"
       },
@@ -22930,10 +22930,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399335721,
+        "epss_multiplier": 0.399345927,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 6.848607615149998,
+        "final": 6.848782648049999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -22991,9 +22991,9 @@
           "reason": "Java imports under 'org.springframework.data' from 98 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MongoSessionConfiguration.java:24",
           "RedisSessionConfiguration.java:25",
-          "RedisAutoConfiguration.java:39"
+          "RedisAutoConfiguration.java:39",
+          "RedisHealthIndicator.java:24"
         ],
         "verdict": "imported"
       },
@@ -23062,9 +23062,9 @@
           "reason": "Java imports under 'org.springframework.data' from 98 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MongoSessionConfiguration.java:24",
           "RedisSessionConfiguration.java:25",
-          "RedisAutoConfiguration.java:39"
+          "RedisAutoConfiguration.java:39",
+          "RedisHealthIndicator.java:24"
         ],
         "verdict": "imported"
       },
@@ -23133,9 +23133,9 @@
           "reason": "Java imports under 'org.springframework.data' from 98 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MongoSessionConfiguration.java:24",
           "RedisSessionConfiguration.java:25",
-          "RedisAutoConfiguration.java:39"
+          "RedisAutoConfiguration.java:39",
+          "RedisHealthIndicator.java:24"
         ],
         "verdict": "imported"
       },
@@ -23282,9 +23282,9 @@
           "reason": "Java imports under 'org.springframework.integration' from 9 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "IntegrationAutoConfiguration.java:36",
-          "IntegrationAutoConfiguration.java:37",
-          "PublicMetricsAutoConfiguration.java:58"
+          "IntegrationAutoConfigurationScanRegistrar.java:30",
+          "IntegrationAutoConfigurationScanRegistrar.java:31",
+          "IntegrationAutoConfiguration.java:36"
         ],
         "verdict": "imported"
       },
@@ -23794,9 +23794,9 @@
           "reason": "Java imports under 'org.springframework.security' from 58 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "H2ConsoleAutoConfiguration.java:36",
-          "AuthenticationManagerConfiguration.java:44",
-          "RemoteDevToolsAutoConfiguration.java:56"
+          "UnauthenticatedAccessExample.java:20",
+          "CloudFoundryIgnorePathsExample.java:20",
+          "H2ConsoleAutoConfiguration.java:37"
         ],
         "verdict": "imported"
       },
@@ -23872,9 +23872,9 @@
           "reason": "Java imports under 'org.springframework.security' from 58 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "H2ConsoleAutoConfiguration.java:36",
-          "AuthenticationManagerConfiguration.java:44",
-          "RemoteDevToolsAutoConfiguration.java:56"
+          "UnauthenticatedAccessExample.java:20",
+          "CloudFoundryIgnorePathsExample.java:20",
+          "H2ConsoleAutoConfiguration.java:37"
         ],
         "verdict": "imported"
       },
@@ -23947,9 +23947,9 @@
           "reason": "Java imports under 'org.springframework.security' from 58 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "H2ConsoleAutoConfiguration.java:36",
-          "AuthenticationManagerConfiguration.java:44",
-          "RemoteDevToolsAutoConfiguration.java:56"
+          "UnauthenticatedAccessExample.java:20",
+          "CloudFoundryIgnorePathsExample.java:20",
+          "H2ConsoleAutoConfiguration.java:37"
         ],
         "verdict": "imported"
       },
@@ -24022,9 +24022,9 @@
           "reason": "Java imports under 'org.springframework.security' from 58 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "H2ConsoleAutoConfiguration.java:36",
-          "AuthenticationManagerConfiguration.java:44",
-          "RemoteDevToolsAutoConfiguration.java:56"
+          "UnauthenticatedAccessExample.java:20",
+          "CloudFoundryIgnorePathsExample.java:20",
+          "H2ConsoleAutoConfiguration.java:37"
         ],
         "verdict": "imported"
       },
@@ -24094,9 +24094,9 @@
           "reason": "Java imports under 'org.springframework.security' from 58 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "H2ConsoleAutoConfiguration.java:36",
-          "AuthenticationManagerConfiguration.java:44",
-          "RemoteDevToolsAutoConfiguration.java:56"
+          "UnauthenticatedAccessExample.java:20",
+          "CloudFoundryIgnorePathsExample.java:20",
+          "H2ConsoleAutoConfiguration.java:37"
         ],
         "verdict": "imported"
       },
@@ -24167,9 +24167,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24241,9 +24241,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24315,9 +24315,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24389,9 +24389,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24463,9 +24463,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24538,9 +24538,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24612,9 +24612,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24686,9 +24686,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24762,9 +24762,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24836,9 +24836,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24910,9 +24910,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -24984,9 +24984,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25059,9 +25059,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25134,9 +25134,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25207,9 +25207,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25280,9 +25280,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25354,9 +25354,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25410,7 +25410,7 @@
       "dep_name": "org.springframework:spring-web",
       "dep_version": "4.3.14.RELEASE",
       "ecosystem": "Maven",
-      "epss": 0.59593,
+      "epss": 0.60124,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25421,7 +25421,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-web:4.3.14.RELEASE:GHSA-ccgv-vj62-xf9h",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-web@4.3.14.RELEASE",
-      "raptor_risk_estimate": 13.959034102754996,
+      "raptor_risk_estimate": 14.012807960339996,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -25429,9 +25429,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25440,10 +25440,10 @@
         "cvss_base": 81.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.7034030789999999,
+        "epss_multiplier": 0.706112772,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.959034102754996,
+        "final": 14.012807960339996,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -25504,9 +25504,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25582,9 +25582,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25635,7 +25635,7 @@
       "dep_name": "org.springframework:spring-webmvc",
       "dep_version": "4.3.14.RELEASE",
       "ecosystem": "Maven",
-      "epss": 0.00057,
+      "epss": 0.00067,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25646,7 +25646,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-webmvc:4.3.14.RELEASE:GHSA-6p4f-wcwh-5vvm",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-webmvc@4.3.14.RELEASE",
-      "raptor_risk_estimate": 5.188687459934999,
+      "raptor_risk_estimate": 5.189350084484999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -25654,9 +25654,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25665,10 +25665,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399590871,
+        "epss_multiplier": 0.39964190099999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.188687459934999,
+        "final": 5.189350084484999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.7,
         "reachability_multiplier": 1.0,
@@ -25727,9 +25727,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25781,7 +25781,7 @@
       "dep_name": "org.springframework:spring-webmvc",
       "dep_version": "4.3.14.RELEASE",
       "ecosystem": "Maven",
-      "epss": 0.00065,
+      "epss": 0.00083,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -25800,9 +25800,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25811,7 +25811,7 @@
         "cvss_base": 0.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399631695,
+        "epss_multiplier": 0.399723549,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
         "final": 0.0,
@@ -25872,9 +25872,9 @@
           "reason": "Java imports under 'org.springframework' from 1303 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "MessageSourceAutoConfiguration.java:18",
-          "MessageSourceAutoConfiguration.java:31",
-          "YamlConfigurationFactory.java:33"
+          "ApplicationHome.java:30",
+          "EnvironmentConverter.java:28",
+          "BeanDefinitionLoader.java:45"
         ],
         "verdict": "imported"
       },
@@ -25943,9 +25943,9 @@
           "reason": "Java imports under 'org.thymeleaf' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SocialWebAutoConfiguration.java:20",
-          "ThymeleafAutoConfiguration.java:31",
-          "DeviceDelegatingViewResolverAutoConfiguration.java:18"
+          "DeviceDelegatingViewResolverAutoConfiguration.java:18",
+          "ThymeleafAutoConfiguration.java:33",
+          "AbstractThymeleafViewResolverConfiguration.java:22"
         ],
         "verdict": "imported"
       },
@@ -26014,9 +26014,9 @@
           "reason": "Java imports under 'org.thymeleaf' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SocialWebAutoConfiguration.java:20",
-          "ThymeleafAutoConfiguration.java:31",
-          "DeviceDelegatingViewResolverAutoConfiguration.java:18"
+          "DeviceDelegatingViewResolverAutoConfiguration.java:18",
+          "ThymeleafAutoConfiguration.java:33",
+          "AbstractThymeleafViewResolverConfiguration.java:22"
         ],
         "verdict": "imported"
       },
@@ -26085,9 +26085,9 @@
           "reason": "Java imports under 'org.thymeleaf' from 5 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SocialWebAutoConfiguration.java:20",
-          "ThymeleafAutoConfiguration.java:31",
-          "DeviceDelegatingViewResolverAutoConfiguration.java:18"
+          "DeviceDelegatingViewResolverAutoConfiguration.java:18",
+          "ThymeleafAutoConfiguration.java:33",
+          "AbstractThymeleafViewResolverConfiguration.java:22"
         ],
         "verdict": "imported"
       },
@@ -26644,9 +26644,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -26717,9 +26717,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -26790,9 +26790,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -26864,9 +26864,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -26937,9 +26937,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -27012,9 +27012,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -27085,9 +27085,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -27158,9 +27158,9 @@
           "reason": "Java imports under 'org.yaml' from 4 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "YamlJavaBeanPropertyConstructor.java:22",
-          "YamlConfigurationFactory.java:28",
-          "YamlJavaBeanPropertyConstructor.java:24"
+          "YamlJsonParser.java:21",
+          "YamlPropertySourceLoader.java:26",
+          "YamlConfigurationFactory.java:27"
         ],
         "verdict": "imported"
       },
@@ -27231,8 +27231,8 @@
           "reason": "Java imports under 'org.zeroturnaround' only from test files"
         },
         "evidence": [
-          "TestJarFile.java:30",
-          "RepackagerTests.java:36"
+          "RepackagerTests.java:36",
+          "TestJarFile.java:30"
         ],
         "verdict": "imported"
       },

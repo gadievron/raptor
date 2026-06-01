@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-26T23:47:37Z",
+    "fetched_at": "2026-06-01T11:42:16Z",
     "git_ref": "2.10.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of saleor-2.10",
@@ -318,7 +318,7 @@
       "dep_name": "cairosvg",
       "dep_version": "2.4.2",
       "ecosystem": "PyPI",
-      "epss": 0.00123,
+      "epss": 0.00138,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -329,7 +329,7 @@
       "finding_id": "sca:vuln:PyPI:cairosvg:2.4.2:GHSA-hq37-853p-g5cf",
       "in_kev": false,
       "purl": "pkg:pypi/cairosvg@2.4.2",
-      "raptor_risk_estimate": 9.226844980929869,
+      "raptor_risk_estimate": 9.228610972392355,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -344,10 +344,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399927669,
+        "epss_multiplier": 0.40000421399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.226844980929869,
+        "final": 9.228610972392355,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -764,11 +764,11 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/product/filters.py:9",
-          "saleor/core/filters.py:2",
+          "saleor/graphql/discount/filters.py:3",
           "saleor/graphql/menu/filters.py:1",
-          "saleor/graphql/page/filters.py:1",
           "saleor/graphql/account/filters.py:1",
+          "saleor/graphql/account/deprecated/filters.py:1",
+          "saleor/graphql/page/filters.py:1",
           "... and 10 more"
         ],
         "verdict": "imported"
@@ -824,7 +824,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.00812,
+      "epss": 0.00571,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -835,7 +835,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-2m34-jcjv-45xf",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 11.105290385444999,
+      "raptor_risk_estimate": 11.071437970091248,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -844,10 +844,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -857,10 +857,10 @@
         "cvss_base": 61.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403443636,
+        "epss_multiplier": 0.402213813,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.105290385444999,
+        "final": 11.071437970091248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -924,10 +924,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -984,7 +984,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.00041,
+      "epss": 0.00054,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -995,7 +995,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-6w2r-r2m5-xq5w",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 20.730303591001725,
+      "raptor_risk_estimate": 20.733745883521525,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1004,10 +1004,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1017,10 +1017,10 @@
         "cvss_base": 71.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39950922299999997,
+        "epss_multiplier": 0.399575562,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 20.730303591001725,
+        "final": 20.733745883521525,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1085,10 +1085,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1144,7 +1144,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.00914,
+      "epss": 0.01374,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1155,7 +1155,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-8x94-hmjh-97hq",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 16.041416078819996,
+      "raptor_risk_estimate": 16.134630538619998,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1164,10 +1164,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1177,10 +1177,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40396414199999997,
+        "epss_multiplier": 0.406311522,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 16.041416078819996,
+        "final": 16.134630538619998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1224,7 +1224,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.0329,
+      "epss": 0.02755,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1235,7 +1235,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-fr28-569j-53c4",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 14.082007694062499,
+      "raptor_risk_estimate": 13.98961070296875,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1244,10 +1244,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1257,10 +1257,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41608887,
+        "epss_multiplier": 0.413358765,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.082007694062499,
+        "final": 13.98961070296875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1326,10 +1326,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1406,10 +1406,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1466,7 +1466,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.03426,
+      "epss": 0.02869,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1477,7 +1477,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-m6gj-h9gm-gw44",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 14.105495527312497,
+      "raptor_risk_estimate": 14.00929903378125,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1486,10 +1486,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1499,10 +1499,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41678287799999997,
+        "epss_multiplier": 0.413940507,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.105495527312497,
+        "final": 14.00929903378125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1546,7 +1546,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.00034,
+      "epss": 0.00038,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1557,7 +1557,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-p99v-5w3c-jqq9",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 13.519681333312498,
+      "raptor_risk_estimate": 13.520372151937499,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -1566,10 +1566,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1579,10 +1579,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399473502,
+        "epss_multiplier": 0.399493914,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.519681333312498,
+        "final": 13.520372151937499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1646,10 +1646,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1725,10 +1725,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1805,10 +1805,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1885,10 +1885,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -1964,10 +1964,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -2044,10 +2044,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -2103,7 +2103,7 @@
       "dep_name": "django",
       "dep_version": "3.0.6",
       "ecosystem": "PyPI",
-      "epss": 0.90367,
+      "epss": 0.909,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2114,7 +2114,7 @@
       "finding_id": "sca:vuln:PyPI:django:3.0.6:GHSA-xpfp-f569-q3p2",
       "in_kev": false,
       "purl": "pkg:pypi/django@3.0.6",
-      "raptor_risk_estimate": 38.05093176722251,
+      "raptor_risk_estimate": 38.17121250075,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -2123,10 +2123,10 @@
         },
         "evidence": [
           "manage.py:8",
-          "saleor/settings.py:12",
-          "saleor/settings.py:13",
-          "saleor/settings.py:370",
+          "saleor/celeryconf.py:4",
           "saleor/urls.py:1",
+          "saleor/urls.py:2",
+          "saleor/urls.py:3",
           "... and 2517 more"
         ],
         "verdict": "imported"
@@ -2136,10 +2136,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.860442801,
+        "epss_multiplier": 0.8631627,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 38.05093176722251,
+        "final": 38.17121250075,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -2380,7 +2380,7 @@
       "dep_name": "idna",
       "dep_version": "2.9",
       "ecosystem": "PyPI",
-      "epss": 0.00657,
+      "epss": 0.00689,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -2391,7 +2391,7 @@
       "finding_id": "sca:vuln:PyPI:idna:2.9:GHSA-jjg7-2v4v-x38h",
       "in_kev": false,
       "purl": "pkg:pypi/idna@2.9",
-      "raptor_risk_estimate": 7.679497135648632,
+      "raptor_risk_estimate": 7.682611559703361,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -2406,10 +2406,10 @@
         "cvss_base": 62.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40265267099999996,
+        "epss_multiplier": 0.402815967,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.679497135648632,
+        "final": 7.682611559703361,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -4270,7 +4270,7 @@
       "dep_name": "pillow",
       "dep_version": "7.1.2",
       "ecosystem": "PyPI",
-      "epss": 0.01428,
+      "epss": 0.02197,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -4281,7 +4281,7 @@
       "finding_id": "sca:vuln:PyPI:pillow:7.1.2:GHSA-9j59-75qj-795w",
       "in_kev": false,
       "purl": "pkg:pypi/pillow@7.1.2",
-      "raptor_risk_estimate": 11.381656635641425,
+      "raptor_risk_estimate": 11.491507583688708,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -4296,10 +4296,10 @@
         "cvss_base": 90.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.406587084,
+        "epss_multiplier": 0.410511291,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.381656635641425,
+        "final": 11.491507583688708,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -5386,13 +5386,14 @@
       "advisory": {
         "aliases": [
           "BIT-pillow-2026-42308",
-          "CVE-2026-42308"
+          "CVE-2026-42308",
+          "PYSEC-2026-165"
         ],
         "fixed_versions": [
           "12.2.0"
         ],
         "id": "GHSA-wjx4-4jcj-g98j",
-        "modified": "2026-05-13T13:54:15.361204+00:00",
+        "modified": "2026-05-27T13:56:18.230226+00:00",
         "published": "2026-05-04T20:18:45+00:00",
         "references": [
           "https://github.com/python-pillow/Pillow/security/advisories/GHSA-wjx4-4jcj-g98j",
@@ -5748,7 +5749,7 @@
       "dep_name": "protobuf",
       "dep_version": "3.11.3",
       "ecosystem": "PyPI",
-      "epss": 0.00021,
+      "epss": 0.00016,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5759,7 +5760,7 @@
       "finding_id": "sca:vuln:PyPI:protobuf:3.11.3:GHSA-8qvm-5x2c-j2w7",
       "in_kev": false,
       "purl": "pkg:pypi/protobuf@3.11.3",
-      "raptor_risk_estimate": 4.914579327458655,
+      "raptor_risk_estimate": 4.914265373420879,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5774,10 +5775,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399407163,
+        "epss_multiplier": 0.399381648,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.914579327458655,
+        "final": 4.914265373420879,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -5813,7 +5814,7 @@
       "dep_name": "protobuf",
       "dep_version": "3.11.3",
       "ecosystem": "PyPI",
-      "epss": 0.0015,
+      "epss": 0.00138,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -5824,7 +5825,7 @@
       "finding_id": "sca:vuln:PyPI:protobuf:3.11.3:PYSEC-2022-48",
       "in_kev": false,
       "purl": "pkg:pypi/protobuf@3.11.3",
-      "raptor_risk_estimate": 4.922679341633249,
+      "raptor_risk_estimate": 4.921925851942589,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -5839,10 +5840,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40006545,
+        "epss_multiplier": 0.40000421399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.922679341633249,
+        "final": 4.921925851942589,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -6228,7 +6229,7 @@
       "dep_name": "pyjwt",
       "dep_version": "1.7.1",
       "ecosystem": "PyPI",
-      "epss": 0.00066,
+      "epss": 0.00163,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -6239,7 +6240,7 @@
       "finding_id": "sca:vuln:PyPI:pyjwt:1.7.1:PYSEC-2025-183",
       "in_kev": false,
       "purl": "pkg:pypi/pyjwt@1.7.1",
-      "raptor_risk_estimate": 12.623527356825,
+      "raptor_risk_estimate": 12.6391628850375,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -6256,10 +6257,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399636798,
+        "epss_multiplier": 0.400131789,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.623527356825,
+        "final": 12.6391628850375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -6457,10 +6458,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -6533,10 +6534,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -6609,10 +6610,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -6686,10 +6687,10 @@
           "reason": "import found in non-test source"
         },
         "evidence": [
-          "saleor/plugins/webhook/tasks.py:3",
-          "saleor/plugins/webhook/tasks.py:4",
           "saleor/plugins/avatax/__init__.py:9",
           "saleor/plugins/avatax/__init__.py:13",
+          "saleor/plugins/webhook/tasks.py:3",
+          "saleor/plugins/webhook/tasks.py:4",
           "saleor/app/management/commands/create_app.py:4",
           "... and 4 more"
         ],
@@ -6940,7 +6941,7 @@
           "1.45.1"
         ],
         "id": "GHSA-g92j-qhmh-64v2",
-        "modified": "2025-06-06T22:46:43.363804+00:00",
+        "modified": "2026-06-01T09:45:19.672358+00:00",
         "published": "2024-07-18T17:18:46+00:00",
         "references": [
           "https://github.com/getsentry/sentry-python/security/advisories/GHSA-g92j-qhmh-64v2",
@@ -7977,7 +7978,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.25.9",
       "ecosystem": "PyPI",
-      "epss": 0.00216,
+      "epss": 0.00222,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -7988,7 +7989,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.25.9:GHSA-34jh-p97f-mpxf",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.25.9",
-      "raptor_risk_estimate": 5.419505888425069,
+      "raptor_risk_estimate": 5.419920307754931,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -8003,10 +8004,10 @@
         "cvss_base": 44.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40040224799999996,
+        "epss_multiplier": 0.400432866,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.419505888425069,
+        "final": 5.419920307754931,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -8459,7 +8460,7 @@
       "dep_name": "urllib3",
       "dep_version": "1.25.9",
       "ecosystem": "PyPI",
-      "epss": 0.00976,
+      "epss": 0.0095,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -8470,7 +8471,7 @@
       "finding_id": "sca:vuln:PyPI:urllib3:1.25.9:GHSA-v845-jxx5-vc9f",
       "in_kev": false,
       "purl": "pkg:pypi/urllib3@1.25.9",
-      "raptor_risk_estimate": 7.337453209293677,
+      "raptor_risk_estimate": 7.335045181823943,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -8485,10 +8486,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.404280528,
+        "epss_multiplier": 0.40414785,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.337453209293677,
+        "final": 7.335045181823943,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -10833,7 +10834,7 @@
       "dep_name": "qs",
       "dep_version": "6.5.2",
       "ecosystem": "npm",
-      "epss": 0.00072,
+      "epss": 0.00043,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -10844,7 +10845,7 @@
       "finding_id": "sca:vuln:npm:qs:6.5.2:GHSA-6rw7-vpxm-498p",
       "in_kev": false,
       "purl": "pkg:npm/qs@6.5.2",
-      "raptor_risk_estimate": 4.527527874072671,
+      "raptor_risk_estimate": 4.525851442017724,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -10859,10 +10860,10 @@
         "cvss_base": 37.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399667416,
+        "epss_multiplier": 0.399519429,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.527527874072671,
+        "final": 4.525851442017724,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
