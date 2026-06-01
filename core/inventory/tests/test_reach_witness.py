@@ -128,6 +128,58 @@ def test_binary_oracle_absent_line_disambiguates_name_collisions():
     assert rv_dead.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
 
 
+def test_binary_oracle_absent_fires_on_interior_finding_line():
+    """Production scanners (semgrep, codeql) emit findings at the
+    line WHERE THE ISSUE IS, not at the function's first line.
+    The accessor must accept any line inside the function's range —
+    the strict ``line == line_start`` check the closed-loop test
+    surfaced was silently refusing to suppress every interior-line
+    finding on a dead function."""
+    inv = {"files": [{
+        "path": "lib.c", "language": "c",
+        "items": [{
+            "name": "dead_helper", "kind": "function",
+            "line_start": 140, "line_end": 180,
+            "metadata": {"binary_oracle": {
+                "classification": "absent",
+                "binaries": [{"tier": "full"}]}},
+        }],
+    }]}
+    # Finding emitted at line 154 (inside the function body).
+    rv = resolve_reachability(inv, "lib.c", "dead_helper", 154, "lib")
+    assert rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
+    # Single-candidate path with no line_end set works too — the
+    # function-containing-line heuristic accepts any line >= line_start.
+    inv["files"][0]["items"][0]["line_end"] = None
+    rv = resolve_reachability(inv, "lib.c", "dead_helper", 154, "lib")
+    assert rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
+
+
+def test_binary_oracle_absent_picks_innermost_enclosing_on_collision():
+    """When two same-name items both enclose the query line (line_end
+    missing on both), pick the one whose line_start is the LATEST
+    <= query line — the standard ``function containing this line''
+    heuristic."""
+    inv = {"files": [{
+        "path": "lib.c", "language": "c",
+        "items": [
+            # Outer (e.g. a top-level dead function)
+            {"name": "helper", "kind": "function", "line_start": 10,
+             "metadata": {"binary_oracle": {
+                 "classification": "absent",
+                 "binaries": [{"tier": "full"}]}}},
+            # Inner (e.g. a live namesake later in the file)
+            {"name": "helper", "kind": "function", "line_start": 100},
+        ],
+    }]}
+    # Query inside the second (live) helper — must NOT pick the dead one.
+    rv = resolve_reachability(inv, "lib.c", "helper", 150, "lib")
+    assert rv.witness.kind is not WitnessKind.BINARY_ORACLE_ABSENT
+    # Query inside the first (dead) helper — must pick that one.
+    rv = resolve_reachability(inv, "lib.c", "helper", 20, "lib")
+    assert rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
+
+
 def test_binary_oracle_inlined_does_not_demote_function():
     """An ``inlined`` classification is REACHABLE evidence (function ran,
     just merged into its caller). The accessor must NOT return absent for

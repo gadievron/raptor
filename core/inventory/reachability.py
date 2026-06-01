@@ -2340,7 +2340,10 @@ def binary_call_edge_present(
     reachability uncertainty for upstream consumers (Inc 2b Tier 1).
 
     Path-keyed lookup via the shared inverse index (avoids the
-    O(N_files × N_items) walk per call)."""
+    O(N_files × N_items) walk per call). When ``line`` is provided
+    AND there are multiple same-name candidates, pick the item whose
+    line range CONTAINS the query line (production callers pass the
+    line OF THE FINDING, not the function's first line)."""
     if not file_path or not name:
         return False
     normalised = file_path.replace("\\", "/")
@@ -2351,9 +2354,21 @@ def binary_call_edge_present(
     candidates = by_name.get(name)
     if not candidates:
         return False
+    if line and len(candidates) > 1:
+        enclosing = [
+            it for it in candidates
+            if int(it.get("line_start") or 0) <= line
+            and (int(it.get("line_end") or 0) == 0
+                 or line <= int(it.get("line_end") or 0))
+        ]
+        if enclosing:
+            candidates = [max(
+                enclosing,
+                key=lambda it: int(it.get("line_start") or 0),
+            )]
+        else:
+            candidates = candidates[:1]
     for item in candidates:
-        if line and int(item.get("line_start") or 0) != line:
-            continue
         meta = item.get("metadata")
         if not isinstance(meta, dict):
             return False
@@ -2407,13 +2422,29 @@ def binary_oracle_absent(
     candidates = by_name.get(name)
     if not candidates:
         return False
+    # Line disambiguation: production callers (semgrep, codeql) pass
+    # the line OF THE FINDING, which is typically INSIDE the function,
+    # not at its first line. Pick the item whose range
+    # [line_start, line_end] contains the query line; when line_end
+    # isn't set on the inventory item, fall back to "function whose
+    # line_start is the closest <= query line" (the standard
+    # function-containing-line heuristic). This subsumes the
+    # name-collision disambiguation case AND interior-line queries.
+    if line and len(candidates) > 1:
+        enclosing = [
+            it for it in candidates
+            if int(it.get("line_start") or 0) <= line
+            and (int(it.get("line_end") or 0) == 0
+                 or line <= int(it.get("line_end") or 0))
+        ]
+        if enclosing:
+            candidates = [max(
+                enclosing,
+                key=lambda it: int(it.get("line_start") or 0),
+            )]
+        else:
+            candidates = candidates[:1]
     for item in candidates:
-        # Line disambiguation: name-collisions inside a file are
-        # real (static helpers, #if/#else, overloads). Skip non-
-        # matching items so the caller's (name, line) tuple
-        # actually identifies the function it intended.
-        if line and int(item.get("line_start") or 0) != line:
-            continue
         meta = item.get("metadata")
         if not isinstance(meta, dict):
             return False
