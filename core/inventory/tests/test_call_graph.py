@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from core.inventory.call_graph import (
     FileCallGraph,
+    INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_GETATTR,
     INDIRECTION_IMPORTLIB,
@@ -165,14 +166,67 @@ def test_getattr_string_dispatch_flagged():
     assert INDIRECTION_GETATTR in g.indirection
 
 
-def test_getattr_with_non_constant_not_flagged():
-    """``getattr(obj, attr)`` with a variable second arg isn't the
-    string-dispatch pattern we care about."""
+def test_getattr_aliased_via_import_flagged():
+    """``from builtins import getattr as g; g(obj, "x")()`` — the
+    alias resolves to ``builtins.getattr``. Without alias resolution
+    a project that does this (lint workaround, deobfuscation,
+    pattern-hiding) would slip past the masking signal."""
+    from core.inventory.call_graph import INDIRECTION_GETATTR_OPAQUE
+    g = extract_call_graph_python(
+        "from builtins import getattr as g\n"
+        "def f(obj, attr):\n"
+        "    g(obj, attr)()\n"
+        "    g(obj, 'literal')()\n"
+    )
+    assert INDIRECTION_GETATTR in g.indirection         # literal path
+    assert "literal" in g.getattr_targets
+    assert INDIRECTION_GETATTR_OPAQUE in g.indirection  # opaque path
+
+
+def test_getattr_dotted_builtins_flagged():
+    """``import builtins; builtins.getattr(obj, "x")``"""
+    from core.inventory.call_graph import INDIRECTION_GETATTR_OPAQUE
+    g = extract_call_graph_python(
+        "import builtins\n"
+        "def f(obj, attr):\n"
+        "    builtins.getattr(obj, attr)()\n"
+        "    builtins.getattr(obj, 'foo')()\n"
+    )
+    assert INDIRECTION_GETATTR in g.indirection
+    assert "foo" in g.getattr_targets
+    assert INDIRECTION_GETATTR_OPAQUE in g.indirection
+
+
+def test_bracket_dispatch_flagged():
+    """``HANDLERS[key]()`` dict-of-functions dispatch in Python — same
+    opaque-dispatch semantic as JS ``obj[key]()``. Pre-fix the
+    Subscript callee was returned-early and no flag fired; a function
+    only reachable via this dispatch could be wrongly claimed dead."""
+    g = extract_call_graph_python(
+        "HANDLERS = {'a': handler_a, 'b': handler_b}\n"
+        "def f(key):\n"
+        "    HANDLERS[key]()\n"
+    )
+    assert INDIRECTION_BRACKET_DISPATCH in g.indirection
+
+
+def test_getattr_with_non_constant_flagged_opaque():
+    """``getattr(obj, attr)`` with a variable second arg IS the
+    truly-opaque dispatch case — the resolver can't narrow to a
+    specific tail name, so any target in the file's reverse closure
+    could be the runtime callee. Flagged distinctly from literal-
+    string ``getattr`` so masking can be applied per-target precisely
+    in the literal case but blanket in the opaque case."""
+    from core.inventory.call_graph import INDIRECTION_GETATTR_OPAQUE
     g = extract_call_graph_python(
         "def f(obj, attr):\n"
         "    getattr(obj, attr)()\n"
     )
+    # The literal-string flag stays off (no string name captured).
     assert INDIRECTION_GETATTR not in g.indirection
+    # The opaque variant fires.
+    assert INDIRECTION_GETATTR_OPAQUE in g.indirection
+    assert not g.getattr_targets  # no literal name to record
 
 
 def test_importlib_import_module_flagged():

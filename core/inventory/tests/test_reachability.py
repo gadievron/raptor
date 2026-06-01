@@ -519,10 +519,12 @@ def test_directly_called_beats_macro_masking():
 
 
 def _entry_inv(path, language, items, calls, indirection=None,
-               library_mode=False, exports=None):
+               library_mode=False, exports=None, getattr_targets=None):
     cg = {"imports": {}, "calls": calls}
     if indirection:
         cg["indirection"] = indirection
+    if getattr_targets:
+        cg["getattr_targets"] = sorted(getattr_targets)
     file_record: Dict[str, Any] = {
         "path": path, "language": language,
         "items": items, "call_graph": cg,
@@ -660,6 +662,42 @@ def test_python_dunder_all_excludes_public_name_claims_no_path():
         exports=["api"],
     )
     assert _er(inv, "m.py", "helper", 5) == "no_path_from_entry"
+
+
+def test_python_literal_getattr_for_other_name_does_not_mask_target():
+    # File has ``getattr(obj, "handle")()`` — literal-string. The
+    # captured ``getattr_targets`` says only "handle" could be the
+    # runtime callee via reflection. An unrelated ``_orphan`` in the
+    # same file is NOT masked by that getattr — claim no_path.
+    # Pre-refinement: any masking flag tainted every target in the
+    # file's reverse closure, so _orphan read UNCERTAIN. Now narrower.
+    inv = _entry_inv(
+        "m.py", "python", [_fn("_orphan", 1)], [],
+        indirection=["getattr"], getattr_targets={"handle"},
+    )
+    assert _er(inv, "m.py", "_orphan", 1) == "no_path_from_entry"
+
+
+def test_python_literal_getattr_for_target_masks_uncertain():
+    # File has ``getattr(obj, "_orphan")()`` — literal-string with
+    # the target's own tail name. The dispatch COULD resolve to the
+    # target, so we must read uncertain.
+    inv = _entry_inv(
+        "m.py", "python", [_fn("_orphan", 1)], [],
+        indirection=["getattr"], getattr_targets={"_orphan"},
+    )
+    assert _er(inv, "m.py", "_orphan", 1) == "uncertain"
+
+
+def test_python_opaque_getattr_masks_any_target():
+    # ``getattr(obj, attr)`` with a variable second arg is genuinely
+    # opaque — the resolver can't narrow to a tail name, so any
+    # target in the reverse closure could be the runtime callee.
+    inv = _entry_inv(
+        "m.py", "python", [_fn("_orphan", 1)], [],
+        indirection=["getattr_opaque"],
+    )
+    assert _er(inv, "m.py", "_orphan", 1) == "uncertain"
 
 
 def test_python_dunder_all_includes_underscore_name_is_uncertain():

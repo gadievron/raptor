@@ -44,6 +44,16 @@ later")
     as ``mypkg.helpers.ezp`` won't be matched on the
     ``mypkg.helpers.ezp`` qualified name unless the inventory
     captures the re-export — and at first cut, it doesn't.
+  * Cross-file string-literal ``getattr`` dispatch. ``file_a.py``
+    holds ``getattr(obj, "foo")(...)`` where ``obj`` is an instance
+    of a class in ``file_b.py``. The masking signal is per-file,
+    and ``file_a.py`` is not in the static reverse closure of
+    ``file_b.py::Klass.foo`` (the getattr call site isn't a
+    resolved edge), so the dead-island claim against ``Klass.foo``
+    can't see ``file_a``'s confounding dispatch. UNCERTAIN-safe
+    only when ``Klass.foo`` is reachable through some non-getattr
+    edge; pure-getattr-only consumers of an internal API are the
+    blind spot.
 
 If the consumer cares about any of those, CodeQL's call-graph
 queries are the right tool — at the cost of a ~30s DB build.
@@ -77,6 +87,7 @@ from .call_graph import (
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
     INDIRECTION_GETATTR,
+    INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_REFLECT,
     INDIRECTION_WILDCARD_IMPORT,
@@ -130,9 +141,31 @@ _TEST_FILE_PATTERN = re.compile(
 # also mentions the target tail name.
 _MASKING_FLAGS: Set[str] = {
     INDIRECTION_GETATTR,
+    INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_WILDCARD_IMPORT,
+    INDIRECTION_BRACKET_DISPATCH,
+    INDIRECTION_DYNAMIC_IMPORT,
+    INDIRECTION_EVAL,
+    INDIRECTION_REFLECT,
+}
+
+# Subset of ``_MASKING_FLAGS`` whose dispatcher has no recorded tail
+# name — the runtime target is genuinely unknown and could be ANY
+# function in the file's reverse closure. ``INDIRECTION_GETATTR`` is
+# NOT here because a literal ``getattr(obj, "foo")(...)`` records
+# ``"foo"`` in ``getattr_targets``; ``_file_masks_target`` checks
+# that list and taints only the matching target. Wildcard-import
+# (``from x import *``) is also outside this set — it has a
+# different per-target precision path via ``_wildcard_could_provide``
+# at the resolver layer (``function_called``); the entry-reachability
+# layer treats wildcard conservatively-blanket because it lacks the
+# target's module context.
+_OPAQUE_MASKING_FLAGS: Set[str] = {
+    INDIRECTION_GETATTR_OPAQUE,
+    INDIRECTION_IMPORTLIB,
+    INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
@@ -3242,15 +3275,52 @@ def _is_nested_function(
     return False
 
 
-def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
+def _file_masks_target(
+    inventory: Dict[str, Any], file_path: str, target_name: str,
+) -> bool:
+    """Could dynamic dispatch in this file resolve to ``target_name``?
+
+    Refines the older "any masking flag → True" check (which over-tainted
+    every reverse-closure path through a file with any reflection) by
+    asking the more precise question: is there a dispatcher in this file
+    whose runtime target COULD be ``target_name``?
+
+    Returns ``True`` when:
+      - The file carries any OPAQUE masking flag (variable-arg getattr,
+        importlib, eval, bracket-dispatch, …) — the dispatcher's name is
+        unknown, so any target is possible.
+      - The file has a literal-string ``getattr`` AND ``target_name`` is
+        one of those literals (the dispatch could hit this target).
+      - The file has a wildcard-import that could plausibly bring
+        ``target_name`` in scope (delegated to
+        ``_wildcard_could_provide``).
+      - The file's macro_call_targets list mentions ``target_name``
+        (C/C++ macro-body dispatch — same per-target shape).
+
+    Returns ``False`` when all dispatchers resolve to literal names other
+    than ``target_name``: the masking is real but doesn't affect this
+    target, so an entry_reachability dead-island claim is safe.
+    """
     norm = file_path.replace("\\", "/")
     for fr in inventory.get("files", []):
         if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
             continue
         cg = fr.get("call_graph") or {}
-        if set(cg.get("indirection") or []) & _MASKING_FLAGS:
+        flags = set(cg.get("indirection") or [])
+        if flags & _OPAQUE_MASKING_FLAGS:
             return True
-        if cg.get("macro_call_targets"):
+        if (INDIRECTION_GETATTR in flags
+                and target_name in (cg.get("getattr_targets") or [])):
+            return True
+        if INDIRECTION_WILDCARD_IMPORT in flags:
+            # ``_wildcard_could_provide`` filters on target_module —
+            # the entry-reachability path doesn't have a module context
+            # (we know the file path and the target name only). Be
+            # conservative: any wildcard import in the file masks any
+            # target name; an unrelated-module wildcard is the cost.
+            return True
+        macro_targets = cg.get("macro_call_targets") or []
+        if target_name in macro_targets:
             return True
         return False
     return False
@@ -3349,12 +3419,16 @@ def entry_reachability(
     # target's file, or in any function that transitively calls it, could
     # hide an entry edge the static graph didn't capture → don't claim
     # dead. This reverse walk only runs for the not-reachable minority.
-    if _file_has_masking(inventory, target.file_path):
+    # ``_file_masks_target`` is target-name aware: a file whose only
+    # reflection is ``getattr(obj, "foo")`` does NOT mask an unrelated
+    # ``bar`` — narrower than the previous "any masking flag → uncertain"
+    # check.
+    if _file_masks_target(inventory, target.file_path, target.name):
         return "uncertain"
     rc = reverse_closure(inventory, target, max_depth=max_depth)
     for fn in rc.nodes:
-        if isinstance(fn, InternalFunction) and _file_has_masking(
-            inventory, fn.file_path,
+        if isinstance(fn, InternalFunction) and _file_masks_target(
+            inventory, fn.file_path, target.name,
         ):
             return "uncertain"
     return "no_path_from_entry"
