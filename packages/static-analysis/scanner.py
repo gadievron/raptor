@@ -11,6 +11,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -36,6 +37,71 @@ from core.hash import sha256_bytes, sha256_tree
 from packages import semgrep as semgrep_pkg
 
 logger = get_logger()
+
+
+def _sarif_result_uri(result: dict) -> str:
+    """Extract the file URI from a SARIF result, or empty string when
+    the structure is missing the expected nesting."""
+    locs = result.get("locations") or []
+    if not locs:
+        return ""
+    phys = locs[0].get("physicalLocation") or {}
+    return (phys.get("artifactLocation") or {}).get("uri") or ""
+
+
+def filter_sarif_by_exclude_globs(
+    sarif: dict, exclude_globs: Optional[List[str]],
+) -> Tuple[dict, int]:
+    """Return ``(filtered_sarif, dropped_count)`` — a copy of ``sarif``
+    with every result whose file URI matches any of ``exclude_globs``
+    removed from ``runs[*].results``. Order-preserving. No-op when
+    ``exclude_globs`` is None/empty.
+
+    Operator escape hatch for vendored / test / generated paths the
+    structural filters can't cover. Applied at the combined-SARIF
+    layer in /scan so the downstream metrics + /agentic consumption
+    see the filtered set; individual per-tool SARIFs stay unfiltered
+    as a forensic record of what each tool actually emitted.
+
+    Results without a usable URI (malformed location block) are kept
+    defensively — operator excludes shouldn't accidentally drop
+    findings whose metadata is broken.
+    """
+    if not exclude_globs:
+        return sarif, 0
+    import copy
+    import fnmatch as _fnmatch
+    out = copy.deepcopy(sarif)
+    dropped = 0
+    for run in out.get("runs", []):
+        kept: list = []
+        for r in run.get("results", []):
+            uri = _sarif_result_uri(r)
+            if uri and any(_fnmatch.fnmatch(uri, g) for g in exclude_globs):
+                dropped += 1
+                continue
+            kept.append(r)
+        run["results"] = kept
+    return out, dropped
+
+
+def _sanitize_pack_name(name: str) -> str:
+    """Strict allowlist: alphanumeric + dash + underscore + dot.
+
+    ``name`` is the policy-pack name from
+    ``RaptorConfig.BASELINE_SEMGREP_PACKS`` /
+    ``POLICY_GROUP_TO_SEMGREP_PACK`` (operator can extend via
+    ``--policy-groups``), and the sanitised result becomes part of an
+    output FILE PATH. Any other shell / filesystem-special character
+    (``*``, ``?``, ``[``, ``]``, ``\\``, space, NUL, newline, control
+    bytes) would otherwise flow straight into
+    ``out_dir / f"semgrep_{suffix}.sarif"``. Concrete failure: a
+    custom policy pack named with a space produced an output path with
+    embedded whitespace that subsequent ``find`` / ``glob`` calls
+    mishandled. Preserves the legacy ``/`` → ``_`` and ``:`` → ``_``
+    mapping (both in the disallowed set, so they get replaced anyway).
+    """
+    return re.sub(r'[^A-Za-z0-9._-]', '_', name)
 
 
 def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
@@ -210,30 +276,7 @@ def run_single_semgrep(
     Returns:
         Tuple of (sarif_path, success)
     """
-    def sanitize_name(name: str) -> str:
-        # Strict allowlist: alphanumeric + dash + underscore +
-        # dot. Pre-fix only `/` and `:` were replaced — but
-        # `name` is the policy-pack name from
-        # `RaptorConfig.BASELINE_SEMGREP_PACKS` /
-        # `POLICY_GROUP_TO_SEMGREP_PACK` (operator can extend
-        # via `--policy-groups`), and the sanitised result
-        # becomes part of an output FILE PATH. Any other shell
-        # / filesystem-special character (`*`, `?`, `[`, `]`,
-        # `\\`, space, NUL, newline, control bytes) flowed
-        # straight into `out_dir / f"semgrep_{suffix}.sarif"`.
-        # Concrete failure: a custom policy pack named with a
-        # space (e.g. `--policy-groups "my pack"`) produced
-        # `semgrep_my pack.sarif` — a path with embedded
-        # whitespace that subsequent `find` / `glob` calls
-        # mishandled (split on whitespace, missing the second
-        # half).
-        import re as _re
-        # Replace any non-allowed char with underscore. Preserve
-        # the legacy `/` → `_` and `:` → `_` mapping (those are
-        # both in the disallowed set, so they get replaced anyway).
-        return _re.sub(r'[^A-Za-z0-9._-]', '_', name)
-
-    suffix = sanitize_name(name)
+    suffix = _sanitize_pack_name(name)
     sarif = out_dir / f"semgrep_{suffix}.sarif"
     json_out = out_dir / f"semgrep_{suffix}.json"
     stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
@@ -384,7 +427,7 @@ def semgrep_scan_parallel(
     out_dir: Path,
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
     progress_callback: Optional[Callable] = None
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     """
     Run Semgrep scans in parallel for improved performance.
 
@@ -396,7 +439,15 @@ def semgrep_scan_parallel(
         progress_callback: Optional callback for progress updates
 
     Returns:
-        List of SARIF file paths
+        (sarif_paths, failed_pack_names). Callers MUST surface the
+        failed list — silent-failure on parallel pack dispatch (a
+        submitted pack producing no SARIF on disk while
+        ``failed_scans`` records nothing) had no operator-visible
+        signal pre-fix: the survivor's SARIF was the only artifact
+        and the coverage record read like a complete run. Returning
+        the failed list from the dispatcher closes that gap; the
+        caller renders the summary line and writes it into the
+        coverage record.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -473,11 +524,34 @@ def semgrep_scan_parallel(
                 logger.error(f"Semgrep scan '{name}' raised exception: {exc}")
                 failed_scans.append(name)
 
+    # Detect the missing-SARIF case (worker returned success + a
+    # SARIF path, but no file actually exists on disk). Pre-fix,
+    # silently-dropped packs left no ``failed_scans`` entry —
+    # ``failure_count`` was 0, operators saw a clean run, the missing
+    # SARIFs went unnoticed. Check actual file presence (not the
+    # returned-path string) so any drop between worker-return and
+    # file-landing — filesystem error, sandbox teardown, race —
+    # registers as a failure.
+    submitted_names = {name for name, _ in configs}
+    silently_dropped = []
+    for name in submitted_names:
+        suffix = _sanitize_pack_name(name)
+        sarif_expected = out_dir / f"semgrep_{suffix}.sarif"
+        if not sarif_expected.is_file():
+            if name not in failed_scans:
+                silently_dropped.append(name)
+                failed_scans.append(name)
+    if silently_dropped:
+        logger.warning(
+            f"Silently-dropped packs (submitted, no SARIF on disk): "
+            f"{', '.join(silently_dropped)}"
+        )
+
     if failed_scans:
         logger.warning(f"Failed scans: {', '.join(failed_scans)}")
 
     logger.info(f"Completed {len(sarif_paths)} scans ({len(failed_scans)} failed)")
-    return sarif_paths
+    return sarif_paths, failed_scans
 
 
 def semgrep_scan_sequential(
@@ -485,10 +559,19 @@ def semgrep_scan_sequential(
     rules_dirs: List[str],
     out_dir: Path,
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT
-) -> List[str]:
-    """Sequential scanning fallback for debugging."""
+) -> Tuple[List[str], List[str]]:
+    """Sequential scanning fallback for debugging.
+
+    Returns ``(sarif_paths, failed_pack_names)`` — same contract as
+    ``semgrep_scan_parallel``. The sequential path is the
+    ``--sequential`` debug fallback; parallelism isn't the source of
+    the silent-drop class but the worker can still claim success
+    while no SARIF lands (filesystem error, sandbox teardown), so
+    the same cross-check + reporting apply.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     sarif_paths: List[str] = []
+    failed_scans: List[str] = []
 
     # Build config list with BOTH local rules AND standard packs for each category
     configs: List[Tuple[str, str]] = []
@@ -521,8 +604,28 @@ def semgrep_scan_sequential(
         logger.info(f"Running scan {idx}/{len(configs)}: {name}")
         sarif_path, success = run_single_semgrep(name, config, repo_path, out_dir, timeout)
         sarif_paths.append(sarif_path)
+        if not success:
+            failed_scans.append(name)
 
-    return sarif_paths
+    # Detect silent drops the same way semgrep_scan_parallel does —
+    # worker may report success while no SARIF actually exists on
+    # disk. Cross-check submitted names against on-disk files.
+    submitted_names = {name for name, _ in configs}
+    silently_dropped = []
+    for name in submitted_names:
+        suffix = _sanitize_pack_name(name)
+        sarif_expected = out_dir / f"semgrep_{suffix}.sarif"
+        if not sarif_expected.is_file():
+            if name not in failed_scans:
+                silently_dropped.append(name)
+                failed_scans.append(name)
+    if silently_dropped:
+        logger.warning(
+            f"Silently-dropped packs (submitted, no SARIF on disk): "
+            f"{', '.join(silently_dropped)}"
+        )
+
+    return sarif_paths, failed_scans
 
 
 def run_codeql(
@@ -1078,6 +1181,18 @@ def main():
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
+    ap.add_argument(
+        "--exclude-dir", action="append", default=None, metavar="GLOB",
+        dest="exclude_dir",
+        help=(
+            "Drop SARIF results whose file URI matches GLOB. Repeatable "
+            "(OR semantics). Applied post-merge to the combined.sarif + "
+            "scan_metrics; individual per-tool SARIFs stay unfiltered as "
+            "forensic record of what each tool actually emitted. Operator "
+            "escape hatch for vendored / test / generated paths. Example: "
+            "``--exclude-dir 'vendor/*' --exclude-dir '**/tests/*'``"
+        ),
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -1170,9 +1285,25 @@ def main():
         if args.sequential:
             # Fallback to sequential for debugging
             logger.warning("Sequential scanning enabled (slower)")
-            semgrep_sarifs = semgrep_scan_sequential(repo_path, rules_dirs, out_dir)
+            semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
+                repo_path, rules_dirs, out_dir,
+            )
         else:
-            semgrep_sarifs = semgrep_scan_parallel(repo_path, rules_dirs, out_dir)
+            semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
+                repo_path, rules_dirs, out_dir,
+            )
+
+        # Surface failed-pack count on stderr — at scan-level so the
+        # operator sees it without trawling the run's log file. The
+        # logger.warning inside semgrep_scan_parallel writes to the
+        # configured log handler (DEBUG/INFO level depending on -v);
+        # the stderr line below is unconditional and operator-facing.
+        if semgrep_failed:
+            print(
+                f"⚠️  semgrep: {len(semgrep_failed)} pack(s) failed or "
+                f"produced no SARIF: {', '.join(semgrep_failed)}",
+                file=sys.stderr,
+            )
 
         # CodeQL stage (optional). --no-codeql takes precedence —
         # script-friendly so a default-flip from "off" to "on" can
@@ -1204,19 +1335,45 @@ def main():
         # Merge SARIFs if more than one
         sarif_inputs = semgrep_sarifs + codeql_sarifs + cocci_sarifs
         merged = out_dir / "combined.sarif"
+        exclude_globs = args.exclude_dir
+        excluded_count = 0
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
             try:
                 merged_data = merge_sarif([str(p) for p in sarif_inputs])
+                # Operator --exclude-dir: post-merge filter so
+                # combined.sarif + downstream metrics see only the
+                # non-excluded set. Per-tool SARIFs stay unfiltered
+                # (forensic record of what each tool emitted).
+                merged_data, excluded_count = filter_sarif_by_exclude_globs(
+                    merged_data, exclude_globs,
+                )
+                if excluded_count:
+                    logger.info(
+                        f"--exclude-dir dropped {excluded_count} results "
+                        f"from combined.sarif ({exclude_globs})"
+                    )
                 save_json(merged, merged_data)
                 logger.info(f"Merged SARIF created: {merged}")
             except Exception as e:
                 logger.warning(f"SARIF merge failed, using individual files: {e}")
                 (out_dir / "sarif_merge.stderr.log").write_text(str(e))
 
-        # Generate metrics
+        # Generate metrics. When --exclude-dir filtered the combined
+        # SARIF, metrics should reflect the filtered set — read from
+        # the just-written combined.sarif rather than the unfiltered
+        # individual inputs.
         logger.info("Generating scan metrics...")
-        metrics = generate_scan_metrics(sarif_inputs)
+        if excluded_count and merged.exists():
+            metrics = generate_scan_metrics([str(merged)])
+        else:
+            metrics = generate_scan_metrics(sarif_inputs)
+        # Record per-engine failure surfaces so downstream readers
+        # can distinguish a clean run from one where N packs silently
+        # dropped. Empty list is intentional (positive marker — "we
+        # tracked this, nothing failed") rather than absent-key
+        # (couldn't-be-bothered).
+        metrics["semgrep_failed_packs"] = semgrep_failed
         save_json(out_dir / "scan_metrics.json", metrics)
 
         logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")

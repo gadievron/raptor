@@ -59,7 +59,6 @@ to compliance ship a tighter policy.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -937,20 +936,11 @@ def _spdx_from_pypi(meta: Optional[dict]) -> Optional[str]:
     return None
 
 
-_SPDX_EXPR_RE = re.compile(
-    r"^[A-Za-z0-9.+\-]+(?:\s+(?:AND|OR|WITH)\s+[A-Za-z0-9.+\-]+)+$"
-)
-
-
-def _looks_like_spdx_expression(text: str) -> bool:
-    """True when ``text`` matches the SPDX-2.0 compound expression
-    grammar: ``<id> (AND|OR|WITH) <id> ...``.
-
-    Permissive: doesn't validate that the ids are real SPDX
-    identifiers, just that the *shape* is right. Aim is to accept
-    forms like ``"Apache-2.0 AND MIT"`` while still rejecting
-    free-text descriptions like ``"see LICENSE file"``."""
-    return bool(_SPDX_EXPR_RE.match(text.strip()))
+# Compound-SPDX validator extracted to ``core/license/spdx.py`` —
+# shared with ``core/license/detector.py`` (target-license
+# detection of compound LICENSE-file headers). Local alias kept so
+# existing call sites in this module don't need touching.
+from core.license.spdx import looks_like_spdx_expression as _looks_like_spdx_expression  # noqa: E402
 
 
 def _spdx_from_trove(classifier: str) -> Optional[str]:

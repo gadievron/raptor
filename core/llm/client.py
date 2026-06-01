@@ -53,6 +53,14 @@ logger = get_logger()
 # spamming the log after a few thousand subsequent writes.
 _CACHE_WRITE_FAILURE_THRESHOLD = 3
 
+# Per-call budget reservation amount. Acquired before each provider
+# call to close the check-then-act window that lets concurrent
+# dispatchers individually pass the cap and collectively overshoot.
+# Reconciled to the actual response cost on success; released on
+# exception. The value is small relative to a real call so the
+# pre-debit doesn't materially shorten the effective cap.
+_BUDGET_RESERVATION = 0.10
+
 
 def _sanitize_log_message(msg: str) -> str:
     """
@@ -827,7 +835,14 @@ class LLMClient:
             try:
                 import sys as _sys
                 avg_ms = (tot_lat_ms // tot_calls) if tot_calls else 0
-                cost_s = f"${tot_cost:.4f}" if tot_cost else "$0"
+                # Four-decimal format always: preserves sub-penny
+                # detail for small runs (cache-heavy / cheap-tier
+                # short-circuit) so a "$0.0042" run is visibly
+                # distinct from a truly-zero "$0.0000" one. Trailing
+                # zeros on larger numbers (``$3.4900``) read as
+                # mild noise but the consistent shape wins for
+                # log-grepping across runs.
+                cost_s = f"${tot_cost:.4f}"
                 models_s = ", ".join(
                     f"{a} {agg[a]['calls']}c"
                     for a in sorted(agg, key=lambda k: -agg[k]['calls'])
@@ -1079,7 +1094,11 @@ class LLMClient:
         self._maybe_evict_cache()
 
     def _check_budget(self, estimated_cost: float = 0.1) -> bool:
-        """Check if we're within budget (thread-safe)."""
+        """Read-only budget check (thread-safe). Returns whether ``estimated_cost``
+        would fit under the cap RIGHT NOW. Does not reserve — concurrent callers
+        may all pass this check and then collectively overshoot the cap as their
+        actual costs land. Use ``_acquire_budget`` for the atomic
+        check-and-reserve required by parallel dispatch."""
         if not self.config.enable_cost_tracking:
             return True
 
@@ -1089,6 +1108,41 @@ class LLMClient:
                 return False
 
         return True
+
+    def _acquire_budget(self, reservation: float) -> bool:
+        """Atomically check + pre-debit ``reservation`` against the budget.
+        Returns True if the reservation was held, False if it would breach.
+
+        Pre-debiting under the same lock prevents the check-then-act race
+        that lets N concurrent callers each see (total_cost + estimate) < cap
+        and then collectively spend N × actual. After this returns True,
+        callers MUST eventually reconcile to the actual cost (by adding
+        ``actual − reservation``) or release the reservation
+        (``_release_budget(reservation)``) so the held amount doesn't
+        strand on the running total.
+        """
+        if not self.config.enable_cost_tracking:
+            return True
+
+        with self._stats_lock:
+            if self.total_cost + reservation > self.config.max_cost_per_scan:
+                logger.error(
+                    f"Budget exceeded: ${self.total_cost:.2f} + "
+                    f"${reservation:.2f} > ${self.config.max_cost_per_scan:.2f}"
+                )
+                return False
+            self.total_cost += reservation
+            return True
+
+    def _release_budget(self, reservation: float) -> None:
+        """Atomically undo a previously-held reservation. Call on the failure
+        path so the held amount doesn't strand on the running total.
+        Idempotent only in the sense that callers must not call it twice
+        for the same acquire — that would under-count actual spend."""
+        if not self.config.enable_cost_tracking:
+            return
+        with self._stats_lock:
+            self.total_cost -= reservation
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  task_type: Optional[str] = None, **kwargs) -> LLMResponse:
@@ -1246,15 +1300,42 @@ class LLMClient:
                             logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                         provider = self._get_provider(model)
+                        # Acquire budget reservation immediately before the
+                        # provider call. The pre-debit closes the
+                        # check-then-act window so concurrent dispatchers
+                        # see this one's pending spend instead of all
+                        # reading the same baseline and individually
+                        # passing the cap. Reconciled to actual cost
+                        # below; released on exception.
+                        if not self._acquire_budget(_BUDGET_RESERVATION):
+                            raise RuntimeError(
+                                f"LLM budget exceeded: ${self.total_cost:.4f} spent > "
+                                f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
+                                f"with: LLMConfig(max_cost_per_scan="
+                                f"{self.config.max_cost_per_scan * 2:.1f})"
+                            )
                         # monotonic() — wall clock can jump under NTP/DST,
                         # producing negative durations or fake-fast calls.
                         t_start = time.monotonic()
-                        response = provider.generate(prompt, system_prompt, **kwargs)
+                        try:
+                            response = provider.generate(prompt, system_prompt, **kwargs)
+                        except Exception:
+                            self._release_budget(_BUDGET_RESERVATION)
+                            raise
                         duration = time.monotonic() - t_start
 
-                        # Track cost (thread-safe)
+                        # Reconcile: cancel the reservation pre-debit and
+                        # add the actual cost. Net effect on total_cost
+                        # is +response.cost. When cost-tracking is
+                        # disabled, _acquire_budget was a no-op so the
+                        # reservation cancellation must also be skipped —
+                        # otherwise total_cost drifts negative by the
+                        # reservation amount per call.
                         with self._stats_lock:
-                            self.total_cost += response.cost
+                            if self.config.enable_cost_tracking:
+                                self.total_cost += response.cost - _BUDGET_RESERVATION
+                            else:
+                                self.total_cost += response.cost
                             self.request_count += 1
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + response.cost
@@ -1479,24 +1560,43 @@ class LLMClient:
 
                         provider = self._get_provider(model)
 
+                        # See `generate` for the acquire/reconcile rationale —
+                        # same race shape applies to structured calls.
+                        if not self._acquire_budget(_BUDGET_RESERVATION):
+                            raise RuntimeError(
+                                f"LLM budget exceeded: ${self.total_cost:.4f} spent > "
+                                f"${self.config.max_cost_per_scan:.4f} limit. Increase budget "
+                                f"with: LLMConfig(max_cost_per_scan="
+                                f"{self.config.max_cost_per_scan * 2:.1f})"
+                            )
+
                         # Capture cost before call
                         cost_before = provider.total_cost
                         tokens_before = provider.total_tokens
 
                         # monotonic() — wall clock can jump under NTP/DST.
                         t_start = time.monotonic()
-                        result_tuple = provider.generate_structured(
-                            prompt, schema, system_prompt, **kwargs,
-                        )
+                        try:
+                            result_tuple = provider.generate_structured(
+                                prompt, schema, system_prompt, **kwargs,
+                            )
+                        except Exception:
+                            self._release_budget(_BUDGET_RESERVATION)
+                            raise
                         duration = time.monotonic() - t_start
 
                         # Calculate cost delta
                         cost_delta = provider.total_cost - cost_before
                         tokens_delta = provider.total_tokens - tokens_before
 
-                        # Track at client level (thread-safe)
+                        # Reconcile reservation → actual. Skip the
+                        # reservation cancel when cost-tracking is
+                        # disabled (see ``generate`` for the rationale).
                         with self._stats_lock:
-                            self.total_cost += cost_delta
+                            if self.config.enable_cost_tracking:
+                                self.total_cost += cost_delta - _BUDGET_RESERVATION
+                            else:
+                                self.total_cost += cost_delta
                             self.request_count += 1
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta

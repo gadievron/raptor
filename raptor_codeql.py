@@ -186,9 +186,10 @@ def run_autonomous_workflow(args):
         findings_to_analyze = results[:args.max_findings]
         logger.info(f"Analyzing {len(findings_to_analyze)} findings...")
 
+        from core.reporting.formatting import display_rule_id
         for i, result in enumerate(findings_to_analyze, 1):
             rule_id = result.get("ruleId", "unknown")
-            logger.info(f"\n[{i}/{len(findings_to_analyze)}] {rule_id}")
+            logger.info(f"\n[{i}/{len(findings_to_analyze)}] {display_rule_id(rule_id)}")
 
             try:
                 analysis = autonomous_analyzer.analyze_finding_autonomous(

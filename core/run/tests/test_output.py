@@ -7,7 +7,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.run.output import get_output_dir, TargetMismatchError, unique_run_suffix
+from core.run.output import (
+    get_output_dir,
+    resolve_default_target,
+    TargetMismatchError,
+    unique_run_suffix,
+)
 
 # Mock that disables project resolution — for testing standalone (no project) mode.
 _NO_SYMLINK = patch("core.run.output._resolve_active_project", return_value=None)
@@ -210,6 +215,38 @@ class TestUniqueRunSuffix(unittest.TestCase):
             with patch("os.getpid", return_value=22222):
                 b = unique_run_suffix("_")
             self.assertNotEqual(a, b)
+
+
+class TestResolveDefaultTarget(unittest.TestCase):
+    """CLAUDE.md DEFAULT TARGET DIRECTORY resolution chain — active
+    project → ``RAPTOR_CALLER_DIR`` → None."""
+
+    def test_active_project_target_wins(self):
+        with TemporaryDirectory() as d:
+            with _mock_project(d, target="/path/to/project/target"):
+                with patch.dict(os.environ,
+                                {"RAPTOR_CALLER_DIR": "/path/from/env"}):
+                    self.assertEqual(resolve_default_target(),
+                                     "/path/to/project/target")
+
+    def test_falls_back_to_caller_dir_when_no_project(self):
+        with _NO_SYMLINK:
+            with patch.dict(os.environ,
+                            {"RAPTOR_CALLER_DIR": "/path/from/env"}):
+                self.assertEqual(resolve_default_target(), "/path/from/env")
+
+    def test_returns_none_when_neither_signal_present(self):
+        with _NO_SYMLINK:
+            env = {k: v for k, v in os.environ.items()
+                   if k != "RAPTOR_CALLER_DIR"}
+            with patch.dict(os.environ, env, clear=True):
+                self.assertIsNone(resolve_default_target())
+
+    def test_empty_caller_dir_returns_none(self):
+        # Empty-string env var is "not set" in CLAUDE.md's semantics.
+        with _NO_SYMLINK:
+            with patch.dict(os.environ, {"RAPTOR_CALLER_DIR": ""}):
+                self.assertIsNone(resolve_default_target())
 
 
 if __name__ == "__main__":

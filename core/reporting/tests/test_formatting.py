@@ -3,8 +3,71 @@
 
 import unittest
 from core.reporting.formatting import (
-    get_display_status, title_case_type, truncate_path, format_elapsed,
+    display_rule_id,
+    format_elapsed,
+    get_display_status,
+    title_case_type,
+    truncate_path,
 )
+
+
+class TestDisplayRuleId(unittest.TestCase):
+    """Operator-facing short form of SARIF rule ids."""
+
+    def test_strips_registry_cache_prefix(self):
+        long = (
+            "engine.semgrep.rules.registry-cache.c.lang.security."
+            "insecure-use-string-copy-fn.insecure-use-string-copy-fn"
+        )
+        # Prefix gone AND trailing leaf-duplication collapsed.
+        self.assertEqual(
+            display_rule_id(long),
+            "c.lang.security.insecure-use-string-copy-fn",
+        )
+
+    def test_collapses_leaf_duplication_only(self):
+        # Trailing `.foo.foo` collapses to `.foo`.
+        self.assertEqual(
+            display_rule_id("ns.path.foo.foo"),
+            "ns.path.foo",
+        )
+
+    def test_no_duplication_unchanged(self):
+        # When the leaf isn't duplicated, no collapse.
+        self.assertEqual(
+            display_rule_id("ns.path.foo.bar"),
+            "ns.path.foo.bar",
+        )
+
+    def test_codeql_rule_id_unchanged(self):
+        # CodeQL ids are already short (lang/rule-id).
+        self.assertEqual(display_rule_id("cpp/uncontrolled-format-string"),
+                         "cpp/uncontrolled-format-string")
+
+    def test_coccinelle_rule_id_unchanged(self):
+        # Cocci ids are already short (snake_case).
+        self.assertEqual(display_rule_id("lock_imbalance"), "lock_imbalance")
+
+    def test_none_returns_unknown(self):
+        self.assertEqual(display_rule_id(None), "unknown")
+
+    def test_empty_returns_unknown(self):
+        self.assertEqual(display_rule_id(""), "unknown")
+
+    def test_prefix_only_handles_gracefully(self):
+        # Degenerate input: just the prefix. Don't crash; leaf
+        # collapse is a no-op since there's no trailing dup.
+        result = display_rule_id(
+            "engine.semgrep.rules.registry-cache.x"
+        )
+        self.assertEqual(result, "x")
+
+    def test_does_not_overcollapse_substrings(self):
+        # The leaf-dup collapse must split on '.', not substring.
+        # `foo.foobar` is NOT a leaf-dup (the segments differ).
+        self.assertEqual(
+            display_rule_id("ns.foo.foobar"), "ns.foo.foobar",
+        )
 
 
 class TestGetDisplayStatus(unittest.TestCase):

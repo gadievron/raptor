@@ -51,7 +51,7 @@ from pathlib import Path
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core.run.output import get_output_dir, TargetMismatchError
+from core.run.output import get_output_dir, resolve_default_target, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
 from core.run.safe_io import safe_run_mkdir
 
@@ -195,6 +195,18 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     """
     target = _extract_target(args)
 
+    # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
+    # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
+    # an explicit target. Pre-fix, scanner.py's `--repo required=True`
+    # crashed with "required: --repo" even when a project was active —
+    # the dispatcher resolved the output dir correctly but never
+    # forwarded the target into the downstream script's args.
+    # Explicit --repo from args always wins (per the override pattern).
+    if target is None:
+        target = resolve_default_target()
+        if target is not None:
+            args = args + ["--repo", target]
+
     try:
         out_dir = get_output_dir(command, target_path=target)
     except TargetMismatchError as e:
@@ -223,6 +235,51 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             args, target_identity = res
 
     start_run(out_dir, command, target=target, target_identity=target_identity)
+    # Mirror libexec/raptor-run-lifecycle's sentinel so direct
+    # `python3 raptor.py <mode>` invocation honours the OUTPUT_DIR=<path>
+    # contract documented in CLAUDE.md. Downstream tooling that greps
+    # stdout for the sentinel works on both invocation paths.
+    print(f"OUTPUT_DIR={out_dir}", flush=True)
+
+    # Surface the target's license at lifecycle start, BEFORE any
+    # tool actually runs — operators about to use CodeQL get the
+    # license-terms warning in time to Ctrl-C, not after they've
+    # incurred LLM cost / DB-build time. Strictly informational —
+    # RAPTOR doesn't gate the run on the result (operator may have
+    # a CodeQL commercial license, may be authorised on first-party
+    # code without a LICENSE file, etc.). Terse operator-line only;
+    # the HOW (source file, confidence, additional files) lives at
+    # debug-log level via log_license_details.
+    #
+    # CodeQL-use detection: only fires the codeql-terms warning when
+    # this run is ACTUALLY going to invoke CodeQL — the ``codeql``
+    # mode itself, or scan/agentic with ``--codeql`` /
+    # ``--codeql-only``. Plain /agentic (no --codeql) doesn't reach
+    # CodeQL, so the operator doesn't need the warning.
+    if target:
+        try:
+            from core.license import (
+                detect_target_license,
+                format_license_summary,
+                log_license_details,
+            )
+            _lic = detect_target_license(Path(target))
+            log_license_details(_lic)
+            _will_run_codeql = (
+                command == "codeql"
+                or "--codeql" in args
+                or "--codeql-only" in args
+            )
+            _summary = format_license_summary(
+                _lic, command="codeql" if _will_run_codeql else command,
+            )
+            if _summary:
+                print(_summary, flush=True)
+        except Exception as e:
+            # License detection is non-essential; never fail the
+            # lifecycle on a detector bug.
+            print(f"  (license-detect skipped: {e})",
+                  file=sys.stderr, flush=True)
 
     # SAGE: Pre-scan recall
     try:
@@ -913,6 +970,27 @@ def main():
         )
         if suggestion:
             print(f"  Did you mean '{suggestion[0]}'?", file=sys.stderr)
+        # Slash-command hint when one exists — that's the
+        # user-facing surface (operator types ``python3 raptor.py
+        # project`` and we point them at the ``/project`` slash-
+        # command in Claude Code). Automated callers (LLMs, skills,
+        # CLAUDE.md procedures) invoke libexec scripts directly; the
+        # libexec→mode mapping is arbitrary (``/project`` →
+        # ``raptor-project-manager``, but ``/validate`` has no
+        # libexec entry point — ``raptor-validate-schema`` is a
+        # specialised JSON-schema helper), so we don't try to
+        # auto-suggest libexec paths. The LLM context reads the
+        # skill / CLAUDE.md for the canonical invocation.
+        _slash = Path(__file__).parent / ".claude" / "commands" / f"{mode}.md"
+        if _slash.is_file():
+            print(
+                f"\n  '{mode}' isn't a raptor.py mode — for the "
+                f"operator-facing surface, run /{mode} in Claude "
+                f"Code. Automated callers should read "
+                f".claude/commands/{mode}.md for the canonical "
+                f"invocation.",
+                file=sys.stderr,
+            )
         print(f"\nAvailable modes: {', '.join(mode_handlers.keys())}", file=sys.stderr)
         print("\nRun 'python3 raptor.py --help' for more information", file=sys.stderr)
         return 1

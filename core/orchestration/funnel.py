@@ -38,25 +38,41 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
     ``is_true_positive`` key at all are not counted (pre-existing
     "not analysed" semantics preserved).
 
+    Self-contradictory findings (where ``check_self_consistency`` in
+    ``packages/llm_analysis/validation.py`` flagged the LLM's structured
+    fields or reasoning text as internally inconsistent post-retry) are
+    EXCLUDED from ``exploitable`` and counted in ``inconsistent``
+    instead. Pre-fix the same finding could appear in both buckets, so
+    the headline "Exploitable: N" disagreed with the per-finding table's
+    "X Exploitable, Y FP" totals in the same output — an accounting bug
+    visible to anyone reading the report carefully.
+
     Returns a dict with keys:
       - ``true_positives``    (int)
       - ``false_positives``   (int)
       - ``unverdicted``       (int)
-      - ``exploitable``       (int)
+      - ``exploitable``       (int — excludes ``inconsistent``)
+      - ``inconsistent``      (int — self_contradictory verdicts needing
+        human review; never overlaps with ``exploitable``)
       - ``failed``            (int)
       - ``blocked``           (int)
       - ``severity_mismatches`` (list[dict] — full result dicts for
         scanner-error findings the LLM ruled false-positive; the
         caller surfaces these for review)
+      - ``inconsistent_findings`` (list[dict] — full result dicts for
+        the ``inconsistent`` bucket above so callers can render the
+        per-finding list operator-side without re-filtering)
     """
     buckets: dict[str, Any] = {
         "true_positives": 0,
         "false_positives": 0,
         "unverdicted": 0,
         "exploitable": 0,
+        "inconsistent": 0,
         "failed": 0,
         "blocked": 0,
         "severity_mismatches": [],
+        "inconsistent_findings": [],
     }
     for r in results:
         if "error" in r:
@@ -77,5 +93,9 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
         else:
             buckets["unverdicted"] += 1
         if r.get("is_exploitable"):
-            buckets["exploitable"] += 1
+            if r.get("self_contradictory"):
+                buckets["inconsistent"] += 1
+                buckets["inconsistent_findings"].append(r)
+            else:
+                buckets["exploitable"] += 1
     return buckets

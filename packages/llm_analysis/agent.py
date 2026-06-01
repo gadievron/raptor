@@ -38,6 +38,62 @@ from core.llm.providers import ClaudeCodeProvider
 logger = get_logger()
 
 
+def _file_matches_globs(file_path: str, globs: List[str]) -> bool:
+    """True if ``file_path`` matches any glob in ``globs`` (fnmatch OR)."""
+    import fnmatch as _fnmatch
+    return any(_fnmatch.fnmatch(file_path or "", g) for g in globs)
+
+
+def apply_prefer_globs(
+    findings: List[Dict[str, Any]],
+    prefer_globs: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    """Re-bucket findings: matches sort to the front, others keep their
+    relative order. Stable within each bucket so existing ordering
+    (dataflow-prioritised, then SARIF-order) survives — operator can
+    tell from a diff which findings shifted positions on a re-run.
+
+    No-op when ``prefer_globs`` is None/empty. Findings with no
+    ``file_path`` are treated as non-matching and end up in the
+    ``others`` bucket — the empty-string fnmatch against any non-empty
+    glob returns False, so they stay where they were.
+    """
+    if not prefer_globs:
+        return findings
+    preferred: List[Dict[str, Any]] = []
+    others: List[Dict[str, Any]] = []
+    for f in findings:
+        if _file_matches_globs(f.get("file_path", ""), prefer_globs):
+            preferred.append(f)
+        else:
+            others.append(f)
+    return preferred + others
+
+
+def apply_exclude_dir_globs(
+    findings: List[Dict[str, Any]],
+    exclude_globs: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    """Drop findings whose ``file_path`` matches any glob in
+    ``exclude_globs``. Order-preserving. Operator escape hatch for
+    cases the structural filters (binary-oracle, dataflow priority)
+    can't help with: vendored third-party code in the target tree,
+    test fixtures, generated dirs.
+
+    No-op when ``exclude_globs`` is None/empty. Findings with no
+    ``file_path`` are kept (defensively — operator excludes shouldn't
+    accidentally drop findings whose path metadata is malformed; if
+    that happens the operator wants to see them, not have them
+    silently filtered).
+    """
+    if not exclude_globs:
+        return findings
+    return [
+        f for f in findings
+        if not _file_matches_globs(f.get("file_path", ""), exclude_globs)
+    ]
+
+
 def _enrich_finding_with_ast_view(
     finding: Dict[str, Any], repo_path: Path,
 ) -> None:
@@ -1545,7 +1601,8 @@ class AutonomousSecurityAgentV2:
             patch_file = self.out_dir / "patches" / f"{vuln.finding_id}_patch.md"
             patch_file.parent.mkdir(exist_ok=True, parents=True)
 
-            patch_content_formatted = f"""# Security Patch for {vuln.rule_id}
+            from core.reporting.formatting import display_rule_id
+            patch_content_formatted = f"""# Security Patch for {display_rule_id(vuln.rule_id)}
 
 **File:** {vuln.file_path}
 **Lines:** {vuln.start_line}-{vuln.end_line}
@@ -1666,7 +1723,9 @@ class AutonomousSecurityAgentV2:
 
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
                          max_findings: int = 10, checklist: Dict[str, Any] = None,
-                         emit_annotations: bool = True) -> Dict[str, Any]:
+                         emit_annotations: bool = True,
+                         prefer_globs: Optional[List[str]] = None,
+                         exclude_globs: Optional[List[str]] = None) -> Dict[str, Any]:
         """Process findings with full LLM-powered autonomous workflow.
 
         ``emit_annotations``: when False, skip the per-finding
@@ -1674,6 +1733,21 @@ class AutonomousSecurityAgentV2:
         for operators who want analysis without the side effect of
         modifying the annotation tree (e.g. CI runs that compare
         scanner output rather than persist review state).
+
+        ``prefer_globs``: optional list of fnmatch globs against each
+        finding's ``file_path``. Matching findings sort to the front
+        of the analysis queue (before ``max_findings`` caps the set),
+        so a low cap reaches attack-surface code first instead of
+        analysing in arbitrary file-order. Stable within each bucket —
+        existing dataflow-then-SARIF order survives for non-matching
+        findings (and for ties among matches).
+
+        ``exclude_globs``: optional list of fnmatch globs; findings
+        whose ``file_path`` matches any glob are dropped before
+        analysis. Operator escape hatch for vendored / test /
+        generated paths the structural filters can't cover. Applied
+        BEFORE prefer + cap so excluded paths don't push attack-
+        surface candidates out of the captured set.
         """
         start_time = time.time()
 
@@ -1696,12 +1770,46 @@ class AutonomousSecurityAgentV2:
 
             unique_findings = deduplicate_findings(all_findings)
 
+        # Operator-controlled exclusion: --exclude-dir GLOB drops
+        # findings whose file_path matches any glob before any of the
+        # prioritisation/cap steps. Applied first so excluded paths
+        # never compete for slots in the captured set.
+        if exclude_globs:
+            before = len(unique_findings)
+            unique_findings = apply_exclude_dir_globs(
+                unique_findings, exclude_globs,
+            )
+            dropped = before - len(unique_findings)
+            if dropped and not is_prep_only:
+                logger.info(
+                    f"--exclude-dir filtered {dropped} of {before} "
+                    f"findings ({exclude_globs})"
+                )
+
         # Prioritize findings with dataflow paths (for better validation coverage)
         findings_with_dataflow = [f for f in unique_findings if f.get('has_dataflow')]
         findings_without_dataflow = [f for f in unique_findings if not f.get('has_dataflow')]
 
         # Put dataflow findings first, then others
         prioritized_findings = findings_with_dataflow + findings_without_dataflow
+
+        # Operator-controlled attack-surface ordering: --prefer GLOB
+        # sorts matching findings to the front before the cap fires.
+        if prefer_globs:
+            total_before = len(prioritized_findings)
+            prioritized_findings = apply_prefer_globs(
+                prioritized_findings, prefer_globs,
+            )
+            matched = sum(
+                1 for f in prioritized_findings
+                if _file_matches_globs(f.get("file_path", ""), prefer_globs)
+            )
+            if matched and not is_prep_only:
+                logger.info(
+                    f"--prefer reordered: {matched} of {total_before} "
+                    f"findings match {prefer_globs} (sorted to front)"
+                )
+
         if not is_prep_only:
             # Cap in sequential mode — in prep mode, Phase 4 enforces the cap
             prioritized_findings = prioritized_findings[:max_findings]
@@ -2197,6 +2305,25 @@ def main() -> None:
     ap.add_argument("--findings", help="Validated findings.json from exploitability validation pipeline")
     ap.add_argument("--out", help="Output directory")
     ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
+    ap.add_argument(
+        "--prefer", action="append", default=None, metavar="GLOB",
+        help=(
+            "Prioritise findings whose file_path matches GLOB. Repeatable for "
+            "multiple patterns (OR semantics). Sorts matching findings to the "
+            "front before --max-findings caps; stable within each bucket."
+        ),
+    )
+    ap.add_argument(
+        "--exclude-dir", action="append", default=None, metavar="GLOB",
+        dest="exclude_dir",
+        help=(
+            "Drop findings whose file_path matches GLOB before analysis. "
+            "Repeatable (OR semantics). Operator escape hatch for vendored "
+            "code, test fixtures, generated dirs the structural filters "
+            "can't cover. Example: ``--exclude-dir 'vendor/*' "
+            "--exclude-dir '**/tests/*'``"
+        ),
+    )
     ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
     ap.add_argument(
         "--no-annotations",
@@ -2354,11 +2481,15 @@ def main() -> None:
     if args.findings:
         report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
                                         checklist=checklist,
-                                        emit_annotations=emit_annotations)
+                                        emit_annotations=emit_annotations,
+                                        prefer_globs=args.prefer,
+                                        exclude_globs=args.exclude_dir)
     else:
         report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
                                         checklist=checklist,
-                                        emit_annotations=emit_annotations)
+                                        emit_annotations=emit_annotations,
+                                        prefer_globs=args.prefer,
+                                        exclude_globs=args.exclude_dir)
 
     # Orchestrated path: role flags → prep then parallel dispatch
     if _has_role_flags and report.get("mode") == "prep_only":

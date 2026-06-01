@@ -437,3 +437,144 @@ class TestBudgetChecking:
         client = LLMClient(config)
         client.total_cost = 999.0
         assert client._check_budget(estimated_cost=100.0) is True
+
+
+class TestBudgetReservationConcurrency:
+    """Atomic acquire-and-reserve closes the check-then-act race that
+    let N concurrent callers each see (cost + estimate) < cap and pass,
+    then collectively breach the cap as their actual costs landed.
+    """
+
+    def _client(self, cap: float):
+        with patch("core.llm.config.detect_llm_availability") as mock_detect:
+            mock_detect.return_value = MagicMock(
+                external_llm=True, claude_code=False, llm_available=True
+            )
+            config = LLMConfig(
+                primary_model=ModelConfig(
+                    provider="openai", model_name="gpt-5.2", api_key="sk-test"
+                ),
+                fallback_models=[],
+                max_cost_per_scan=cap,
+                enable_cost_tracking=True,
+            )
+            return LLMClient(config)
+
+    def test_acquire_atomically_pre_debits(self):
+        # First acquire succeeds and pre-debits; second sees the
+        # pre-debit reflected in total_cost.
+        client = self._client(cap=1.0)
+        assert client._acquire_budget(0.5) is True
+        assert client.total_cost == 0.5
+        assert client._acquire_budget(0.5) is True
+        assert client.total_cost == 1.0
+        # Third would breach the cap (1.0 + 0.5 > 1.0) → refused.
+        assert client._acquire_budget(0.5) is False
+        assert client.total_cost == 1.0  # no debit on refusal
+
+    def test_release_undoes_pre_debit(self):
+        client = self._client(cap=1.0)
+        assert client._acquire_budget(0.5) is True
+        client._release_budget(0.5)
+        assert client.total_cost == 0.0
+
+    def test_concurrent_acquires_respect_cap(self):
+        # Four threads all try to acquire 0.40 each against a 1.0 cap.
+        # Pre-fix (read-only _check_budget): all four would see
+        # 0.0 + 0.40 < 1.0 and pass, total would later balloon to 1.60.
+        # Post-fix: two succeed (total = 0.80), two refuse — cap held.
+        import threading
+
+        client = self._client(cap=1.0)
+        barrier = threading.Barrier(4)
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def attempt():
+            # All four threads block at the barrier so the contention
+            # is real, not just scheduled-serially-anyway.
+            barrier.wait()
+            ok = client._acquire_budget(0.40)
+            with results_lock:
+                results.append(ok)
+
+        threads = [threading.Thread(target=attempt) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        successes = sum(1 for r in results if r)
+        # Either 2 (the strict guarantee: 2 × 0.40 = 0.80 ≤ 1.0; the
+        # third would push to 1.20 > 1.0 and is refused) acquires
+        # land. Pre-fix this test would have had all 4 = True.
+        assert successes == 2, (
+            f"Expected exactly 2 acquires under cap=1.0 with 0.40 each, "
+            f"got {successes} (results: {results})"
+        )
+        # Total reflects only the successful reservations.
+        assert client.total_cost == 0.80, (
+            f"total_cost should equal successful reservations only, "
+            f"got {client.total_cost}"
+        )
+
+    def test_check_budget_remains_read_only(self):
+        # Backwards-compat: ``_check_budget`` stays non-mutating so
+        # existing call sites that use it as a fast-fail predicate
+        # don't accidentally start reserving.
+        client = self._client(cap=10.0)
+        client.total_cost = 5.0
+        assert client._check_budget(estimated_cost=1.0) is True
+        assert client.total_cost == 5.0  # unchanged
+
+    def test_tracking_disabled_acquire_is_noop(self):
+        # When enable_cost_tracking=False, _acquire_budget must NOT
+        # debit anything — total_cost should stay 0.0 across N calls.
+        # Pre-fix the post-call reconcile (response.cost - reservation)
+        # was running unconditionally, draining $0.10 per call when
+        # the acquire was a no-op.
+        with patch("core.llm.config.detect_llm_availability") as mock_detect:
+            mock_detect.return_value = MagicMock(
+                external_llm=True, claude_code=False, llm_available=True
+            )
+            config = LLMConfig(
+                primary_model=ModelConfig(
+                    provider="openai", model_name="gpt-5.2", api_key="sk-test"
+                ),
+                fallback_models=[],
+                max_cost_per_scan=1.0,
+                enable_cost_tracking=False,  # tracking OFF
+            )
+            client = LLMClient(config)
+        # Acquire is a no-op when tracking is off.
+        assert client._acquire_budget(0.10) is True
+        assert client.total_cost == 0.0  # unchanged
+        # Release is also a no-op.
+        client._release_budget(0.10)
+        assert client.total_cost == 0.0
+
+    def test_cache_hit_does_not_reserve(self):
+        # Cache hits short-circuit BEFORE the retry loop where
+        # _acquire_budget lives, so they correctly don't consume
+        # budget. Locks in that invariant against future refactors
+        # that might move the cache check below the acquire point —
+        # such a move would silently start charging cache hits.
+        client = self._client(cap=1.0)
+        client.total_cost = 0.95  # Almost at the cap.
+        # Force a cache hit by stubbing the lookup. The fast-fail
+        # _check_budget at the top of generate sees 0.95 + 0.10
+        # (default estimate) = 1.05 > 1.0 and would normally
+        # short-circuit — but cache hits don't even reach the loop
+        # body's acquire, so we patch _check_budget too to isolate
+        # the cache-path behaviour we're asserting.
+        with patch.object(client, "_get_cached_response",
+                          return_value="cached content"), \
+             patch.object(client, "_check_budget", return_value=True):
+            response = client.generate(prompt="anything")
+        # Cache hit returned the cached content with cost=0.
+        assert response.content == "cached content"
+        assert response.cost == 0.0
+        # CRITICAL: total_cost did not change. If a future refactor
+        # moved the acquire above the cache check, this would
+        # increase by _BUDGET_RESERVATION ($0.10).
+        assert client.total_cost == 0.95

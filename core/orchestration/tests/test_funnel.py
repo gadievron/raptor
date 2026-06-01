@@ -75,11 +75,13 @@ class TestErrorAndBlockedBucketing:
             "error": "timeout",
             "is_true_positive": True,
             "is_exploitable": True,
+            "self_contradictory": True,
         }]
         b = bucket_orchestration_results(results)
         assert b["failed"] == 1
         assert b["true_positives"] == 0
         assert b["exploitable"] == 0
+        assert b["inconsistent"] == 0
 
 
 class TestExploitableTracking:
@@ -90,6 +92,7 @@ class TestExploitableTracking:
         b = bucket_orchestration_results(results)
         assert b["true_positives"] == 1
         assert b["exploitable"] == 1
+        assert b["inconsistent"] == 0
 
     def test_unverdicted_with_none_exploitable_is_not_counted(self):
         # Defensive: a q<0.5 empty response has BOTH verdicts as None.
@@ -98,6 +101,78 @@ class TestExploitableTracking:
         b = bucket_orchestration_results(results)
         assert b["unverdicted"] == 1
         assert b["exploitable"] == 0
+        assert b["inconsistent"] == 0
+
+
+class TestInconsistentSplitsOutOfExploitable:
+    """``self_contradictory=True`` + ``is_exploitable=True`` lands in
+    ``inconsistent``, NOT in ``exploitable``. Pre-fix the headline
+    "Exploitable: N" double-counted these against the per-finding
+    table's totals in the same output."""
+
+    def test_exploitable_self_contradictory_goes_to_inconsistent(self):
+        results = [{
+            "is_true_positive": True,
+            "is_exploitable": True,
+            "self_contradictory": True,
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 0
+        assert b["inconsistent"] == 1
+        # ``true_positives`` is unaffected — the verdict-classification
+        # path runs independently of the exploitable split.
+        assert b["true_positives"] == 1
+        # Full finding dict surfaces in inconsistent_findings so the
+        # caller can render the per-finding list without re-filtering
+        # results[*].self_contradictory itself.
+        assert len(b["inconsistent_findings"]) == 1
+        assert b["inconsistent_findings"][0] is results[0]
+
+    def test_exploitable_clean_stays_in_exploitable(self):
+        results = [{
+            "is_true_positive": True,
+            "is_exploitable": True,
+            "self_contradictory": False,
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 1
+        assert b["inconsistent"] == 0
+
+    def test_self_contradictory_without_exploitable_neither_bucket(self):
+        # Self-contradictory verdicts that AREN'T exploitable don't go
+        # into the new ``inconsistent`` bucket — that bucket exists
+        # specifically to subtract from the headline Exploitable count.
+        # The pre-existing "Self-contradictory: N" line in the report
+        # counts these separately (broader signal).
+        results = [{
+            "is_true_positive": True,
+            "is_exploitable": False,
+            "self_contradictory": True,
+        }]
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 0
+        assert b["inconsistent"] == 0
+
+    def test_mixed_exploitable_and_inconsistent_account_arithmetic(self):
+        # Pre-fix the headline "Exploitable: N" included every finding
+        # with is_exploitable=True, double-counting the
+        # self_contradictory subset that the per-finding table
+        # reported separately. Same data, two disagreeing totals in
+        # the same output. Post-fix: exploitable and inconsistent are
+        # disjoint, the headline and the table agree.
+        results = (
+            [{"is_true_positive": True, "is_exploitable": True}] * 5
+            + [{"is_true_positive": True, "is_exploitable": True,
+                "self_contradictory": True}] * 3
+            + [{"is_true_positive": False, "is_exploitable": False}] * 2
+        )
+        b = bucket_orchestration_results(results)
+        assert b["exploitable"] == 5
+        assert b["inconsistent"] == 3
+        assert b["false_positives"] == 2
+        # Headline arithmetic: exploitable + inconsistent + false_positives
+        # accounts for all 10 verdicts.
+        assert b["exploitable"] + b["inconsistent"] + b["false_positives"] == 10
 
 
 class TestSeverityMismatch:
@@ -170,6 +245,8 @@ class TestRealWorldShape:
         assert b["false_positives"] == 0
         assert b["unverdicted"] == 0
         assert b["exploitable"] == 0
+        assert b["inconsistent"] == 0
         assert b["failed"] == 0
         assert b["blocked"] == 0
         assert b["severity_mismatches"] == []
+        assert b["inconsistent_findings"] == []

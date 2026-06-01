@@ -28,6 +28,35 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_active_project(tmp_path_factory, monkeypatch):
+    """Isolate the test from any operator-set active project.
+
+    The lifecycle subprocess reads ``~/.raptor/projects/.active`` to
+    decide if the run's target is inside the active project's bounds.
+    If the operator has a project active that points at a different
+    tree, this test's tmp_path target gets rejected with ''target X
+    is outside project Y'' and the launcher short-circuits before the
+    pointer write — making the test fail in operator-local
+    environments while passing in CI (which has no active project).
+
+    Force a clean projects dir for the duration of the test by
+    pointing HOME at a fresh tmpdir (so the subprocess's
+    ``Path.home() / .raptor / projects`` resolves to an empty tree)
+    and patching the in-process module constant to match.
+    """
+    fake_home = tmp_path_factory.mktemp("isolated-home")
+    monkeypatch.setenv("HOME", str(fake_home))
+    fake_projects_dir = fake_home / ".raptor" / "projects"
+    fake_projects_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "core.project.project.PROJECTS_DIR", fake_projects_dir,
+    )
+    yield
+
 
 def _write_synthetic_project(tmp_path: Path) -> Path:
     """Project with both live (called from main) and dead
