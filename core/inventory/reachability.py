@@ -2586,7 +2586,18 @@ PROFILES: Dict[str, ReachabilityProfile] = {
     "go":   ReachabilityProfile("go", "sound", "go_exported", has_go_init=True),
     "rust": ReachabilityProfile("rust", "sound", "rust_pub"),
     "java": ReachabilityProfile("java", "none", has_java_web=True),
-    "python":     ReachabilityProfile("python", "none", has_python_framework=True),
+    # Python's entry model is heuristic: module-level public functions
+    # (non-``_``-prefixed, no enclosing class) are external entries by
+    # convention, BUT reflection (``getattr`` / ``importlib`` / decorator
+    # registries that the static graph didn't capture) can mint an
+    # entry at runtime. The masking check in ``entry_reachability``
+    # already returns UNCERTAIN for any file in the reverse-closure
+    # that uses ``getattr``/``__import__``/etc., so the heuristic
+    # verdict fires ONLY on reflection-clean dead-island chains. The
+    # witness tier (HEURISTIC) keeps the verdict surface-only — no
+    # suppression — matching the strength of the evidence.
+    "python":     ReachabilityProfile("python", "heuristic", "python_public",
+                                       has_python_framework=True),
     "javascript": ReachabilityProfile("javascript", "none"),
     "typescript": ReachabilityProfile("typescript", "none", has_ts_framework=True),
     "tsx":        ReachabilityProfile("tsx", "none", has_ts_framework=True),
@@ -2607,6 +2618,16 @@ def _profile(language: str) -> ReachabilityProfile:
 # frozenset for the entry_reachability soundness gate.
 _CLOSEABLE_ENTRY_LANGS = frozenset(
     lang for lang, p in PROFILES.items() if p.entry_model == "sound"
+)
+
+# Languages where entry_reachability MAY return ``no_path_from_entry``.
+# Sound languages above + heuristic languages whose verdict feeds through
+# as HEURISTIC-tier (surface-only, no suppression) per the witness table.
+# Without heuristic on this list, Python dead-island chains would always
+# fall through to UNCERTAIN even when reflection-clean.
+_REPORTABLE_ENTRY_LANGS = frozenset(
+    lang for lang, p in PROFILES.items()
+    if p.entry_model in ("sound", "heuristic")
 )
 
 # Java servlet / filter lifecycle methods — invoked by the container, no
@@ -2943,8 +2964,40 @@ def _is_library_export(item: Dict[str, Any], language: str) -> bool:
     return False
 
 
+def _nested_function_keys(items: List[Dict[str, Any]]) -> "frozenset":
+    """Return ``{(name, line_start), ...}`` for items whose line_start falls
+    INSIDE another item's [line_start, line_end] range — i.e. nested
+    closures, inner functions, lambdas extracted as separate items by
+    the extractor.
+
+    Used by ``_item_is_entry`` to keep nested closures out of the
+    Python heuristic-entry set: a nested ``def inner():`` inside a
+    decorator factory looks like a "module-level public" function to
+    the per-item check (no ``_`` prefix, no class_name) but is NOT
+    externally invocable — adversarial review P1-1.
+    """
+    fns = [(it.get("name") or "",
+            int(it.get("line_start") or 0),
+            int(it.get("line_end") or 0))
+           for it in items
+           if isinstance(it, dict)
+           and it.get("kind", "function") == "function"]
+    nested: set = set()
+    for name, ls, _le in fns:
+        if not ls:
+            continue
+        for _other_name, ols, ole in fns:
+            if ols <= 0 or ole <= 0:
+                continue
+            if ols < ls and ls <= ole:
+                nested.add((name, ls))
+                break
+    return frozenset(nested)
+
+
 def _item_is_entry(item: Dict[str, Any], language: str,
-                   library_mode: bool = False) -> bool:
+                   library_mode: bool = False,
+                   nested_keys: "frozenset" = frozenset()) -> bool:
     """Is this inventory item an externally-invocable entry point under its
     language's linkage/visibility model? (Framework dispatch is handled
     separately off the adjacency index.)
@@ -3018,6 +3071,24 @@ def _item_is_entry(item: Dict[str, Any], language: str,
         return vis == "exported" or name[:1].isupper()
     if p.visibility_entry == "rust_pub":
         return vis in ("public", "pub")
+    if p.visibility_entry == "python_public":
+        # Module-level public function — name not starting with ``_``,
+        # not a method (no enclosing class), and not a nested closure
+        # (line_start falls inside another item's range — extractor
+        # flattens nested defs to top-level items). Heuristic:
+        # reflection (``getattr`` / ``importlib`` / decorator
+        # registries the static graph missed) can construct an entry
+        # at runtime, so the entry_reachability layer's masking check
+        # refuses to claim NO_PATH whenever the reverse closure
+        # includes a masking file. The witness tier (HEURISTIC) keeps
+        # verdicts surface-only — they don't earn suppression.
+        if name.startswith("_"):
+            return False
+        if (item.get("metadata") or {}).get("class_name"):
+            return False
+        if (name, int(item.get("line_start") or 0)) in nested_keys:
+            return False
+        return True
     return False
 
 
@@ -3042,12 +3113,19 @@ def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
             continue
         lang = fr.get("language") or ""
         path = fr.get("path") or ""
-        for item in fr.get("items", []):
+        items = fr.get("items", []) or []
+        # Compute the set of nested-closure (name, line_start) tuples
+        # ONCE per file — passed to _item_is_entry so the python_public
+        # branch can reject nested defs that the extractor flattened
+        # into top-level items.
+        nested_keys = _nested_function_keys(items)
+        for item in items:
             if not isinstance(item, dict):
                 continue
             if item.get("kind", "function") != "function":
                 continue
-            if _item_is_entry(item, lang, library_mode=library_mode):
+            if _item_is_entry(item, lang, library_mode=library_mode,
+                              nested_keys=nested_keys):
                 entries.add(InternalFunction(
                     file_path=path, name=item.get("name") or "",
                     line=int(item.get("line_start") or 0),
@@ -3177,8 +3255,8 @@ def entry_reachability(
         return "uncertain"
     # Not reachable from any entry. Decide confident-dead vs uncertain.
     lang = _file_language(inventory, target.file_path)
-    if lang not in _CLOSEABLE_ENTRY_LANGS:
-        return "uncertain"          # fuzzy entry model (py/js/...) → don't claim
+    if lang not in _REPORTABLE_ENTRY_LANGS:
+        return "uncertain"          # entry model with no reportable signal
     # Call-masking indirection (reflection / func-like macros) in the
     # target's file, or in any function that transitively calls it, could
     # hide an entry edge the static graph didn't capture → don't claim
