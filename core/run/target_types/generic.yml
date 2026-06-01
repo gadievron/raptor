@@ -1,0 +1,42 @@
+name: generic
+description: |
+  Fallback catalog entry when no specific target-type matched.
+  Operator sees the generic defaults rather than a None — they
+  can still proceed; the result is just less tuned than a
+  matching specific entry would have given.
+
+  Detection signals are empty (this entry is loaded by
+  ``load_by_name('generic')`` from the fallback path in
+  ``load(target_path)``, NEVER by the score-ranked ``detect()``).
+
+detection: {}
+
+semgrep_packs:
+  default:
+    - security-audit
+    - owasp-top-ten
+  optional:
+    - secrets
+
+attack_surface:
+  high_priority_dirs: []
+  low_priority_dirs:
+    - tests
+    - test
+    - docs
+    - examples
+    - "**/__pycache__"
+    - "node_modules"
+
+pipeline:
+  recommended:
+    - scan
+    - agentic
+  estimated_cost_usd: [10, 30]
+  estimated_time_min: [15, 45]
+
+budget_defaults:
+  typical_findings_count: 15
+  typical_cost_per_run_usd: 15
+
+version: 1

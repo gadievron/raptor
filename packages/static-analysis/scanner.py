@@ -1443,6 +1443,23 @@ def main():
         duration = time.time() - start_time
         logger.info(f"Total scan duration: {duration:.2f}s")
 
+        # Tool-execution coverage block — reads coverage-<tool>.json
+        # records the scanners emit; renders an aligned per-tool
+        # summary (findings count, rule groups, silent-drop
+        # warnings) so the operator sees what RAN with what RESULT
+        # before the function-level coverage block below.
+        # Distinct from store_summary which answers ''what code did
+        # any tool examine?''; this one answers ''what did we look
+        # at it WITH?''.
+        try:
+            from core.reporting.scan_coverage import render_scan_coverage
+            tool_cov = render_scan_coverage(out_dir)
+            if tool_cov:
+                print()
+                print(tool_cov)
+        except Exception as e:
+            logger.debug(f"Tool-coverage render failed (non-fatal): {e}")
+
         # Print coverage summary (unified store-backed report; file-level tier
         # when there's no function inventory, e.g. a bare /scan).
         try:

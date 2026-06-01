@@ -9,11 +9,26 @@ classification can be unit-tested without pulling in the
 ``raptor_agentic`` module's transitive imports (every ``core.*`` and
 ``packages.*`` it touches), and so report writers / dashboards can
 reuse the same bucketing logic.
+
+## Relationship with ``core/run/finding_status.py``
+
+The bucketing prefers each result's explicit ``status`` field (per
+the QoL #19 enum: ``analysed`` / ``analysis_inconsistent`` /
+``skipped_*`` / ``error``) when present and falls back to the
+legacy field-detection logic when not — backwards-compat for
+pre-#19 emit paths.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from core.run.finding_status import (
+    ANALYSIS_INCONSISTENT,
+    ERROR,
+    derive_status,
+    is_skipped,
+)
 
 
 def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
@@ -75,11 +90,29 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
         "inconsistent_findings": [],
     }
     for r in results:
-        if "error" in r:
+        # Status-aware short-circuits for the categorical buckets.
+        # ``status`` (when set) is authoritative; ``derive_status``
+        # is the pre-#19 fallback. Skipped findings don't contribute
+        # to ANY verdict bucket — they're tracked separately by
+        # callers that care.
+        explicit_status = r.get("status") if isinstance(r, dict) else None
+        status = explicit_status if explicit_status else derive_status(r)
+
+        if status == ERROR or "error" in r:
+            # ``error`` field takes precedence even when status was
+            # set to something else (defensive against partial-state
+            # writes that record an error but forget to update
+            # status).
             if r.get("error_type") == "blocked":
                 buckets["blocked"] += 1
             else:
                 buckets["failed"] += 1
+            continue
+        if is_skipped(r):
+            # Skipped findings don't get counted in the verdict
+            # funnel — they're a separate category tracked by
+            # whatever code decided to skip them (binary-oracle,
+            # dedup, --exclude-dir, budget cap).
             continue
         if "is_true_positive" not in r:
             continue
@@ -93,7 +126,14 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
         else:
             buckets["unverdicted"] += 1
         if r.get("is_exploitable"):
-            if r.get("self_contradictory"):
+            # Status-aware split: ``analysis_inconsistent`` goes to
+            # inconsistent regardless of self_contradictory state
+            # (the status enum is the authoritative signal); legacy
+            # path keeps the self_contradictory check.
+            if status == ANALYSIS_INCONSISTENT or (
+                explicit_status is None
+                and r.get("self_contradictory")
+            ):
                 buckets["inconsistent"] += 1
                 buckets["inconsistent_findings"].append(r)
             else:

@@ -1,0 +1,84 @@
+name: python.web-app
+description: |
+  Python web applications — Django, Flask, FastAPI, Pyramid,
+  Tornado, Sanic, Starlette. HTTP attack surface, ORM-mediated
+  data access, templating injection risks, dependency surface
+  via PyPI. Distinct from python.cli-tool (no network surface)
+  and python.library (no application boundary).
+
+detection:
+  file_globs:
+    # Project / dep manifests.
+    - "pyproject.toml"
+    - "setup.py"
+    - "setup.cfg"
+    - "requirements.txt"
+    - "requirements-*.txt"
+    - "Pipfile"
+    - "poetry.lock"
+    # Framework-distinctive entry / config files.
+    - "manage.py"          # Django
+    - "wsgi.py"            # Django / generic WSGI
+    - "asgi.py"            # Django / generic ASGI
+    - "app.py"             # Flask / FastAPI common
+    - "main.py"            # FastAPI common
+    - "settings.py"        # Django
+    - "urls.py"            # Django
+    - "**/templates/**/*.html"
+    # Container shape often paired with web apps.
+    - "Dockerfile"
+    - "docker-compose.yml"
+    - "docker-compose.yaml"
+  file_extensions:
+    - .py
+    - .html
+    - .jinja
+    - .jinja2
+  negative_globs:
+    # Rule out Python kernel/system modules (rare but real).
+    - "linux/**"
+    # Rule out notebook-heavy repos (different shape: data
+    # science, not web app).
+    - "*.ipynb"
+
+semgrep_packs:
+  default:
+    - security-audit
+    - python-django
+    - python-flask
+    - owasp-top-ten
+  optional:
+    - secrets
+    - jwt
+    - command-injection
+
+attack_surface:
+  high_priority_dirs:
+    - "**/views"
+    - "**/api"
+    - "**/handlers"
+    - "**/routes"
+    - "**/templates"
+    - "**/auth"
+  low_priority_dirs:
+    - tests
+    - test
+    - migrations
+    - docs
+    - examples
+    - "**/__pycache__"
+
+pipeline:
+  recommended:
+    - understand-map
+    - scan-with-codeql
+    - agentic-with-validate
+    - sca
+  estimated_cost_usd: [15, 35]
+  estimated_time_min: [30, 60]
+
+budget_defaults:
+  typical_findings_count: 20
+  typical_cost_per_run_usd: 22
+
+version: 1
