@@ -39,10 +39,14 @@ from .snappy import (
 logger = logging.getLogger(__name__)
 
 LEVELDB_URL = "https://github.com/google/leveldb.git"
-# Most-recent commit on main as of 2026-05-30. "Bump third_party/
-# dependencies." — necessary because the v1.23 tag's gtest submodule
-# pin doesn't compile with clang-21.
-LEVELDB_SHA = "7ee830d6c12fec2e02a4dde0adf6db1ed1afc4b8"
+# Most-recent commit on main as of 2026-05-30 ("Bump third_party/
+# dependencies.") — necessary because the v1.23 tag's gtest submodule
+# pin doesn't compile with clang-21. Verified against the live repo:
+# the prior value (7ee830d6c12f…) was never a real leveldb commit
+# ("upload-pack: not our ref"), which is why the pinned checkout 128'd
+# every nightly. This is the actual main HEAD SHA (same 7ee830d prefix
+# — the old value was a corrupted full SHA).
+LEVELDB_SHA = "7ee830d02b623e8ffe0b95d59a74db1e58da04c5"
 # In case the SHA isn't reachable, fall back to whatever ``main`` HEAD
 # is now — leveldb's main has been stable for years.
 LEVELDB_FALLBACK_BRANCH = "main"
@@ -93,18 +97,30 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     logger.info("leveldb: cloning %s → %s", LEVELDB_URL, src)
     if not clone_repository(LEVELDB_URL, src, depth=None):
         raise RuntimeError(f"leveldb: clone failed for {LEVELDB_URL}")
-    # Hard-pin: check out the pinned SHA. If the local clone history
-    # doesn't reach it (depth-limited clone, force-pushed history),
-    # FAIL rather than fall back to ``main`` HEAD — silently using a
-    # different revision destroys reproducibility of the precision
-    # claim and makes corpus FPs unfalsifiable ("is this drift in the
-    # classifier, or drift in upstream HEAD?"). Adversarial review
-    # E P2-1. Operators wanting a different revision bump
-    # ``LEVELDB_SHA`` explicitly.
-    subprocess.run(
+    # Hard-pin: check out the pinned SHA. The clone fetches branch heads
+    # + their history, but the pinned commit may not be reachable from
+    # the default branch (shallow clone, or the commit sits behind a
+    # later force-push / on a now-deleted branch). In that case fetch the
+    # exact object explicitly, then check it out — GitHub honours fetching
+    # an arbitrary reachable SHA. We still check out ``LEVELDB_SHA`` and
+    # never fall back to ``main`` HEAD, so reproducibility of the precision
+    # claim is preserved (Adversarial review E P2-1): an unfetchable object
+    # is a hard error, never a silent revision swap. Operators wanting a
+    # different revision bump ``LEVELDB_SHA`` explicitly.
+    checkout = subprocess.run(
         safe_git_command("-C", str(src), "checkout", LEVELDB_SHA),
-        env=get_safe_git_env(), check=True, timeout=60,
+        env=get_safe_git_env(), check=False, timeout=60,
     )
+    if checkout.returncode != 0:
+        subprocess.run(
+            safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                             "origin", LEVELDB_SHA),
+            env=get_safe_git_env(), check=True, timeout=120,
+        )
+        subprocess.run(
+            safe_git_command("-C", str(src), "checkout", LEVELDB_SHA),
+            env=get_safe_git_env(), check=True, timeout=60,
+        )
 
     subprocess.run(
         safe_git_command("-C", str(src), "submodule", "update",
