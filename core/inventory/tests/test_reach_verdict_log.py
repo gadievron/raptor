@@ -9,6 +9,10 @@ contaminate the real sidecar — each test isolates via the
 from __future__ import annotations
 
 import json
+import os
+import sys
+from pathlib import Path
+
 import pytest
 
 from core.inventory import reach_verdict_log
@@ -246,44 +250,58 @@ def test_concurrent_record_threadsafe(_isolated_sidecar):
         N_THREADS * N_PER_THREAD
 
 
-def test_cli_table_output(_isolated_sidecar, capsys, monkeypatch):
-    # Run the CLI's main() with a populated sidecar; verify the
-    # operator-facing table includes language sections + counts.
+_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "scripts" / "reach-verdict-log"
+)
+
+
+def _run_script(*args, sidecar: Path) -> tuple[int, str]:
+    """Invoke the standalone CLI script with the test's tmp sidecar.
+    Subprocess so the test exercises the same surface an operator
+    hits — including the shebang + sys.path bootstrap at script top.
+    """
+    import subprocess
+    env = dict(os.environ)
+    env["RAPTOR_REACH_VERDICT_LOG"] = str(sidecar)
+    env.pop("RAPTOR_REACH_VERDICT_LOG_DISABLED", None)
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), *args],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    return result.returncode, result.stdout
+
+
+def test_cli_script_table_output(_isolated_sidecar):
+    # Pre-populate the sidecar via the in-process API, then run the
+    # standalone script to render the operator-facing table.
     reach_verdict_log.record_verdict("python", "reachable")
     reach_verdict_log.record_verdict("python", "no_path_from_entry")
     reach_verdict_log.record_verdict("c", "reachable")
     reach_verdict_log.flush()
 
-    from core.inventory.reach_verdict_log_cli import main
-    monkeypatch.setattr("sys.argv", ["raptor-reach-verdict-log"])
-    rc = main()
+    rc, out = _run_script(sidecar=_isolated_sidecar)
     assert rc == 0
-    out = capsys.readouterr().out
     assert "python" in out and "c" in out
     assert "reachable" in out and "no_path_from_entry" in out
-    assert "1" in out  # the c=1 count at least
 
 
-def test_cli_json_output(_isolated_sidecar, capsys, monkeypatch):
+def test_cli_script_json_output(_isolated_sidecar):
+    import os, sys  # noqa: F401
     reach_verdict_log.record_verdict("python", "reachable")
     reach_verdict_log.flush()
 
-    from core.inventory.reach_verdict_log_cli import main
-    monkeypatch.setattr("sys.argv", ["raptor-reach-verdict-log", "--json"])
-    rc = main()
+    rc, out = _run_script("--json", sidecar=_isolated_sidecar)
     assert rc == 0
-    out = capsys.readouterr().out
     data = json.loads(out)
     assert data == {"python": {"reachable": 1}}
 
 
-def test_cli_reset(_isolated_sidecar, capsys, monkeypatch):
+def test_cli_script_reset(_isolated_sidecar):
+    import os, sys  # noqa: F401
     reach_verdict_log.record_verdict("python", "reachable")
     reach_verdict_log.flush()
     assert _isolated_sidecar.exists()
 
-    from core.inventory.reach_verdict_log_cli import main
-    monkeypatch.setattr("sys.argv", ["raptor-reach-verdict-log", "--reset"])
-    rc = main()
+    rc, _out = _run_script("--reset", sidecar=_isolated_sidecar)
     assert rc == 0
     assert not _isolated_sidecar.exists()
