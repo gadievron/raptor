@@ -11,6 +11,7 @@ from core.inventory.binary_oracle_edges import (
     BinaryCallEdge,
     BinaryEdgeIndex,
     _clean_r2_function_name,
+    _fn_addr,
     _parse_axffj_batch,
     annotate_inventory_with_edges,
     extract_direct_call_edges,
@@ -33,6 +34,72 @@ def test_clean_r2_function_name_strips_known_prefixes() -> None:
     assert _clean_r2_function_name("func.helper") == "helper"
     assert _clean_r2_function_name("fcn.0x1234") == "0x1234"
     assert _clean_r2_function_name("plain_name") == "plain_name"
+
+
+def test_fn_addr_accepts_addr_and_offset_keys() -> None:
+    """aflj records key the entry address as ``addr`` on r2 6.x and as
+    ``offset`` on r2 5.x (the apt-shipped version the nightly CI corpus
+    job installs). Both must resolve; a record with neither returns
+    None so the caller skips it instead of KeyError-ing."""
+    assert _fn_addr({"addr": 0x1149}) == 0x1149
+    assert _fn_addr({"offset": 0x1149}) == 0x1149
+    # addr wins when both are present.
+    assert _fn_addr({"addr": 0x1149, "offset": 0x2000}) == 0x1149
+    assert _fn_addr({"name": "f", "size": 10}) is None
+    # Non-int values are ignored (defensive against malformed output).
+    assert _fn_addr({"addr": "0x1149"}) is None
+
+
+def test_extract_handles_offset_keyed_aflj_without_crashing(
+    monkeypatch, tmp_path,
+) -> None:
+    """Regression: old-r2 (5.x) ``aflj`` keys the entry address as
+    ``offset`` rather than ``addr``. The extractor previously indexed
+    eligible functions with an unguarded ``f['addr']`` and raised
+    KeyError on that output (nightly CI installs apt radare2). With the
+    fix it resolves the address from either key and finds the edge."""
+    import core.sandbox as _sb
+    import core.inventory.binary_oracle_edges as _edges
+
+    # r2 may be absent on the fast tier — the extractor early-returns on
+    # ``which('r2') is None``. Pretend it is present; the sandbox run is
+    # mocked below so no real r2 is invoked.
+    monkeypatch.setattr(_edges.shutil, "which", lambda _name: "/usr/bin/r2")
+
+    binary = tmp_path / "x"
+    binary.write_bytes(b"\x7fELF placeholder")
+
+    # Two functions, addressed via the OLD ``offset`` key only.
+    aflj = (
+        '[{"offset":4425,"name":"main","size":20},'
+        '{"offset":4401,"name":"sym.leaf","size":16}]'
+    )
+    # axffj batch: main (4425) calls leaf (4401).
+    axffj = (
+        "BATCH 4425\n"
+        '[{"type":"CALL","at":4430,"ref":4401,"name":"sym.leaf"}]\n'
+        "BATCH 4401\n[]\n"
+    )
+
+    class _Proc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.stderr = ""
+            self.returncode = 0
+
+    def _fake_run(cmd, **kwargs):
+        joined = " ".join(cmd)
+        if "aflj" in joined:
+            return _Proc(aflj)
+        if "-i" in cmd:            # axffj script-file invocation
+            return _Proc(axffj)
+        return _Proc("")           # av (vtable) — no vtables
+
+    monkeypatch.setattr(_sb, "run", _fake_run, raising=False)
+
+    idx = extract_direct_call_edges(binary, use_cache=False)
+    assert "leaf" in idx.callees
+    assert any(e.caller == "main" and e.callee == "leaf" for e in idx.edges)
 
 
 def test_parse_axffj_batch_extracts_call_edges() -> None:
