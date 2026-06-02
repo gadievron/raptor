@@ -20,7 +20,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
 # packages/static-analysis/scanner.py -> repo root
@@ -146,6 +146,369 @@ def _resolve_baseline_packs(
     if entry is None or not entry.semgrep_packs_default:
         return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
     return [_pack_tuple_for_id(pid) for pid in entry.semgrep_packs_default]
+
+
+# File-extension → semgrep-language mapping. Covers the common
+# cases; missing extensions silently produce no language hit
+# (operator sees an empty applicability count rather than a wrong
+# one). Lowercased keys; matches the lowercased extensions
+# catalog YAMLs ship.
+_EXT_TO_SEMGREP_LANG: Dict[str, str] = {
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp",
+    ".hpp": "cpp", ".hh": "cpp",
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".java": "java",
+    ".rb": "ruby",
+    ".php": "php",
+    ".kt": "kotlin", ".kts": "kotlin",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".cs": "csharp",
+    ".sol": "solidity",
+    ".sh": "bash", ".bash": "bash",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".json": "json",
+    ".html": "html", ".htm": "html",
+    ".lua": "lua",
+}
+
+
+# Semgrep ships rules using BOTH names for the same language —
+# e.g. ``p/owasp-top-ten`` carries 67 rules at ``languages: [ts]``
+# AND 4 at ``languages: [typescript]``. A naïve extension →
+# canonical-name mapping misses the alias rules, undercounting
+# applicability. Expand the target set with the known aliases
+# before intersecting against each rule's ``languages`` field.
+# Symmetric: every key/value is rewritten the same direction
+# in both classes (operator's catalog might declare either form).
+_SEMGREP_LANG_ALIASES: Dict[str, set] = {
+    "typescript": {"typescript", "ts"},
+    "ts": {"typescript", "ts"},
+    "kotlin": {"kotlin", "kt"},
+    "kt": {"kotlin", "kt"},
+    "javascript": {"javascript", "js"},
+    "js": {"javascript", "js"},
+    "csharp": {"csharp", "cs", "C#"},
+    "cs": {"csharp", "cs", "C#"},
+    "bash": {"bash", "sh"},
+    "sh": {"bash", "sh"},
+    "yaml": {"yaml", "yml"},
+}
+
+
+# Semgrep internal language id → operator-facing display name.
+# Used purely for rendered text — internal sets / counts continue
+# to use the canonical lowercased ids. Unmapped ids render as-is
+# (lowercased) so a missing entry doesn't break the line.
+_LANG_DISPLAY: Dict[str, str] = {
+    "c": "C",
+    "cpp": "C++",
+    "python": "Python",
+    "go": "Go",
+    "rust": "Rust",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "java": "Java",
+    "ruby": "Ruby",
+    "php": "PHP",
+    "kotlin": "Kotlin",
+    "swift": "Swift",
+    "scala": "Scala",
+    "csharp": "C#",
+    "solidity": "Solidity",
+    "bash": "Bash",
+    "yaml": "YAML",
+    "json": "JSON",
+    "html": "HTML",
+    "lua": "Lua",
+}
+
+
+def _display_lang(lang: str) -> str:
+    """Map a semgrep language id to its operator-facing display
+    name; pass through unchanged if no mapping exists."""
+    return _LANG_DISPLAY.get(lang, lang)
+
+
+def _display_langs(langs: List[str]) -> str:
+    """Operator-readable joined list, e.g. ``[c, cpp]`` → ``C, C++``."""
+    return ", ".join(_display_lang(lang) for lang in langs)
+
+
+def _expand_language_aliases(langs: List[str]) -> set:
+    """Expand ``langs`` to include semgrep's alias names so the
+    intersection check below catches rules registered under
+    either form."""
+    out: set = set()
+    for lang in langs:
+        out.add(lang)
+        out.update(_SEMGREP_LANG_ALIASES.get(lang, set()))
+    return out
+
+
+def _target_semgrep_languages(repo_path: Optional[Path]) -> List[str]:
+    """Best-effort set of semgrep language ids for ``repo_path``.
+
+    Sourced from the matched target-type catalog entry's
+    ``file_extensions`` — cheap (no tree walk) and accurate for
+    the common case. Returns ``[]`` when no catalog match,
+    extension list empty, or no extension maps to a known
+    semgrep language. Caller treats ``[]`` as ''don't show
+    applicability'' (better than guessing wrong).
+    """
+    if repo_path is None:
+        return []
+    try:
+        from core.run.target_types import load as _load_tt
+        entry = _load_tt(repo_path)
+    except Exception:  # noqa: BLE001
+        return []
+    if entry is None:
+        return []
+    langs: set = set()
+    for ext in entry.file_extensions:
+        lang = _EXT_TO_SEMGREP_LANG.get(ext.lower())
+        if lang:
+            langs.add(lang)
+    return sorted(langs)
+
+
+def _pack_rules_applicable_count(
+    pack_id: str, target_langs: List[str],
+) -> Optional[Tuple[int, int]]:
+    """Read the cached pack JSON for ``pack_id`` and return
+    ``(applicable_rule_count, total_rule_count)`` for rules
+    whose ``languages`` list intersects the alias-expanded
+    ``target_langs`` set.
+
+    None when the pack isn't cached locally — the operator's
+    semgrep invocation would fetch the pack from the registry
+    at scan time and we'd be measuring stale numbers. The
+    visibility line then omits this pack rather than printing
+    a misleading zero.
+    """
+    cache_file = RaptorConfig.SEMGREP_REGISTRY_CACHE_DIR / (
+        "c." + pack_id.replace("/", ".") + ".json"
+    )
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    rules = data.get("rules") or []
+    # Defensive: a future / corrupted cache file with ``rules`` as
+    # a non-list (e.g. dict, scalar) would crash the iteration
+    # below. Treat as no data — caller skips the pack.
+    if not isinstance(rules, list):
+        return None
+    target_set = _expand_language_aliases(target_langs)
+    applicable = 0
+    total = 0
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        total += 1
+        rule_langs = r.get("languages") or []
+        if not isinstance(rule_langs, list):
+            continue
+        if set(rule_langs) & target_set:
+            applicable += 1
+    return (applicable, total)
+
+
+def _pack_applicable_rule_ids(
+    pack_id: str, target_langs: List[str],
+) -> Optional[set]:
+    """Return the SET of rule ids in ``pack_id`` whose
+    ``languages`` field intersects the alias-expanded
+    ``target_langs``. Used by ``_is_coverage_thin`` to dedupe
+    across packs that ship overlapping rules — e.g. ``p/default``
+    and ``p/security-audit`` share many entries; counting each
+    twice would inflate the threshold check.
+
+    None when the pack isn't cached locally (same contract as
+    ``_pack_rules_applicable_count``).
+    """
+    cache_file = RaptorConfig.SEMGREP_REGISTRY_CACHE_DIR / (
+        "c." + pack_id.replace("/", ".") + ".json"
+    )
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    rules = data.get("rules") or []
+    if not isinstance(rules, list):
+        return None
+    target_set = _expand_language_aliases(target_langs)
+    ids: set = set()
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        rule_langs = r.get("languages") or []
+        if not isinstance(rule_langs, list):
+            continue
+        if set(rule_langs) & target_set:
+            rule_id = r.get("id")
+            if isinstance(rule_id, str) and rule_id:
+                ids.add(rule_id)
+    return ids
+
+
+# Default threshold for unique applicable rules across baseline
+# packs. Calibration point: a C / userspace-daemon scan with the
+# c.userspace-daemon catalog nets ~9 unique applicable C rules; a
+# Python web-app scan with its catalog nets ~200+. 25 sits
+# comfortably between the two — picks up genuinely thin language
+# coverage without false-positive-ing on healthy coverage.
+# Operator-tunable via ``RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD``
+# env var so future catalog entries with different rule densities
+# can be accommodated without a code change.
+_DEFAULT_THIN_COVERAGE_RULE_THRESHOLD = 25
+
+
+def _thin_coverage_threshold() -> int:
+    """Read the threshold from the env var, fall back to the
+    default. Malformed values (non-integer / negative) warn-once
+    and fall back to the default so a typo doesn't silently
+    disable the hint forever."""
+    import os
+    raw = os.environ.get("RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD")
+    if not raw:
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD=%r is not an int; "
+            "using default %d",
+            raw, _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD,
+        )
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    if value < 0:
+        logger.warning(
+            "RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD=%d must be >= 0; "
+            "using default %d",
+            value, _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD,
+        )
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    return value
+
+
+def _is_coverage_thin(
+    resolved_baseline: List[Tuple[str, str]],
+    target_langs: List[str],
+) -> bool:
+    """True iff the count of UNIQUE applicable rule ids across
+    all baseline packs falls below the configured threshold
+    (``RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD`` env var, default
+    25). Uncached packs are skipped — we don't know what they'd
+    contribute, so the hint doesn't fire on uncertainty.
+    Deduplication is essential because packs share rules
+    (``p/default`` and ``p/security-audit`` overlap heavily);
+    naively summing per-pack counts would inflate the figure
+    past the threshold for genuinely thin coverage."""
+    if not target_langs:
+        return False
+    unique_ids: set = set()
+    have_any_cached = False
+    for _, pack_id in resolved_baseline:
+        ids = _pack_applicable_rule_ids(pack_id, target_langs)
+        if ids is None:
+            continue
+        have_any_cached = True
+        unique_ids.update(ids)
+    return (
+        have_any_cached
+        and len(unique_ids) < _thin_coverage_threshold()
+    )
+
+
+def _llm_configured() -> bool:
+    """True when RAPTOR can dispatch an LLM call. Best-effort —
+    used to decide whether to suggest ``/agentic`` in the
+    thin-coverage hint (no point suggesting an LLM-driven path
+    when no LLM provider is available).
+
+    Defaults to True on any import / instantiation failure so a
+    transient config bug doesn't silently strip an option the
+    operator might be able to use."""
+    try:
+        from core.llm.config import LLMConfig
+        return LLMConfig().primary_model is not None
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _format_thin_coverage_hint(
+    target_langs: List[str],
+    codeql_already_running: bool,
+    llm_configured: bool = True,
+) -> str:
+    """One-line operator-facing escalation hint when pack
+    applicability is thin. CodeQL clause omitted when the
+    operator already passed ``--codeql``; /agentic clause
+    omitted when no LLM is configured (suggesting it would be
+    hollow guidance).
+    """
+    lang_label = _display_langs(target_langs)
+    options: List[str] = []
+    if not codeql_already_running:
+        options.append("rerun with --codeql for richer queries")
+    if llm_configured:
+        options.append("use /agentic for LLM-driven hunting")
+    if not options:
+        # Pathological: both alternatives unavailable. Honest
+        # about it — operator at least knows the gap is real.
+        return f"  Coverage thin for {lang_label}."
+    return (
+        f"  Coverage thin for {lang_label} — "
+        f"{'; '.join(options)}."
+    )
+
+
+def _format_pack_applicability(
+    resolved_baseline: List[Tuple[str, str]],
+    target_langs: List[str],
+) -> Optional[str]:
+    """Render the operator-facing visibility line, or None when
+    no useful signal (no target langs, no cached pack data).
+
+    Example::
+
+        Pack rules applicable to c: security-audit 9/225, command-injection 0/30, owasp-top-ten 0/544
+
+    Pre-#16a the operator saw only ``6 rule-group(s)`` with no
+    way to know how many of the ~2k rules across those packs
+    actually target their language — masked the upstream
+    coverage gap that surfaced on the c.userspace-daemon scan.
+    """
+    if not target_langs:
+        return None
+    parts: List[str] = []
+    for _, pack_id in resolved_baseline:
+        counts = _pack_rules_applicable_count(pack_id, target_langs)
+        if counts is None:
+            continue
+        applicable, total = counts
+        # Strip the ``p/`` prefix for readability — the operator
+        # cares about the pack name, not the registry path
+        # convention.
+        short = pack_id[2:] if pack_id.startswith("p/") else pack_id
+        parts.append(f"{short} {applicable}/{total}")
+    if not parts:
+        return None
+    return (
+        f"Pack rules applicable to "
+        f"{_display_langs(target_langs)}: {', '.join(parts)}"
+    )
 
 
 def _resolve_rules_applied(
@@ -1465,6 +1828,34 @@ def main():
                 f"Semgrep baseline packs from target-type catalog "
                 f"'{_tt_name}': {_names}"
             )
+        # Per-pack language applicability (QoL #16a). Tells the
+        # operator how many rules in each baseline pack actually
+        # match the target's language(s) — without this they read
+        # ``6 rule-group(s)`` and assume thousands of rules
+        # apply, when the upstream registry coverage for their
+        # language may be much thinner. Silent on no-target-lang
+        # or no-cached-pack-data (we won't fabricate a count).
+        _target_langs = _target_semgrep_languages(repo_path)
+        _applicability = _format_pack_applicability(
+            list(resolved_baseline), _target_langs,
+        )
+        if _applicability:
+            logger.info(_applicability)
+            # Escalation hint when applicability is thin —
+            # surface the alternative paths now so the operator
+            # doesn't think the framework's silent under-scan IS
+            # the verdict on the target. Omit when --codeql is
+            # already running (would suggest something happening).
+            if _is_coverage_thin(
+                list(resolved_baseline), _target_langs,
+            ):
+                _codeql_running = (
+                    args.codeql and not args.no_codeql
+                )
+                logger.info(_format_thin_coverage_hint(
+                    _target_langs, _codeql_running,
+                    llm_configured=_llm_configured(),
+                ))
         logger.info("Starting Semgrep scans...")
         if args.sequential:
             # Fallback to sequential for debugging
