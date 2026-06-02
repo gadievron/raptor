@@ -21,6 +21,15 @@ Nothing will be applied to your code - only generated in the out/ directory.
 
 Execute: `libexec/raptor-agentic --repo <path>`
 
+## Handling `--help` / `-h`
+
+If ARGUMENTS is exactly `--help` or `-h` (the operator wants the flag list, not a run),
+run `libexec/raptor-agentic --help` and present its output. That command is
+side-effect-free — it spawns the agentic script's own argparse help and exits, with
+no run directory, license/cost preamble, or LLM dispatcher. It is the authoritative,
+complete flag list; the prose tables below are a curated subset. Do NOT start a run
+and do NOT hand-summarise the flags from this doc when `--help` is requested.
+
 ## Optional enrichment flags
 
 By default, `/agentic` scans and analyses findings in isolation. Two optional flags add richer context for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.

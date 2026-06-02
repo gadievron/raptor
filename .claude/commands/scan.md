@@ -4,6 +4,8 @@ description: Scan a repository with Semgrep and CodeQL
 
 # /scan - RAPTOR Code Security Scan
 
+**`--help` / `-h`:** If the user passes only `--help` or `-h`, run `python3 raptor.py scan --help` and present its output. That command is side-effect-free (no run, lifecycle, output directory, or LLM dispatcher) and is the complete, authoritative flag list — do NOT start a scan or hand-summarise flags from this doc.
+
 You are helping the user run RAPTOR's autonomous security scanning on a code repository.
 
 ## Your Task

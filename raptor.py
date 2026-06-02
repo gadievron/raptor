@@ -242,6 +242,17 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
     return new_args, identity
 
 
+def _wants_help(args: list) -> bool:
+    """True if args request argparse help (``--help`` / ``-h``).
+
+    Single source of truth for the help short-circuits. A help request is
+    not a run: it must never resolve a target, create/seal an output
+    directory, print the OUTPUT_DIR sentinel or license/cost preamble, or
+    start the LLM dispatcher.
+    """
+    return "--help" in args or "-h" in args
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -249,6 +260,15 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     Resolves the output directory via the run lifecycle, injects --out
     into the downstream script args, and marks the run complete or failed.
     """
+    # Defense-in-depth behind main()'s per-mode help short-circuit: if any
+    # caller reaches the lifecycle wrapper with --help/-h, skip the entire
+    # lifecycle and delegate straight to _run_script (which has its own
+    # --help guard for the dispatcher). The child's argparse prints help and
+    # exits during parse_args, before its body runs — so no run directory,
+    # sentinel, license/cost preamble, coverage, or complete_run.
+    if _wants_help(args):
+        return _run_script(script_path, args)
+
     target = _extract_target(args)
 
     # Operator-declared per-run budget cap (QoL #21). Stripped from
@@ -615,6 +635,21 @@ def _run_script(script_path: Path, args: list) -> int:
     """
     cmd = [sys.executable, str(script_path)] + args
 
+    # --help/-h is not a run: render the child's argparse help with a plain
+    # subprocess (safe env, short timeout) and skip the LLM dispatcher
+    # entirely. argparse prints help and exits during parse_args, before the
+    # script body — so starting the dispatcher would be a pure side effect.
+    if _wants_help(args):
+        from core.config import RaptorConfig
+        try:
+            return subprocess.run(
+                cmd, env=RaptorConfig.get_safe_env(), timeout=15,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            print(f"✗ Help rendering for {script_path.name} timed out",
+                  file=sys.stderr)
+            return 1
+
     try:
         from core.config import RaptorConfig
         # Phase B: opt the spawn into the credential-isolation
@@ -892,11 +927,15 @@ def mode_doctor(args: list) -> int:
     return doctor_main(args)
 
 
-def show_mode_help(mode: str) -> None:
-    """Show detailed help for a specific mode."""
+def _mode_help_scripts() -> dict:
+    """Map mode name → the script whose argparse renders that mode's help.
+
+    Single source of truth shared by show_mode_help (renders the help) and
+    the `<mode> --help` short-circuit in main() (decides which modes get the
+    side-effect-free help path vs. falling through to their handler).
+    """
     script_root = Path(__file__).parent
-    
-    mode_scripts = {
+    return {
         'scan': script_root / "packages/static-analysis/scanner.py",
         'fuzz': script_root / "raptor_fuzzing.py",
         'web': script_root / "packages/web/scanner.py",
@@ -904,18 +943,40 @@ def show_mode_help(mode: str) -> None:
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
     }
-    
+
+
+# Modes whose `<mode> --help` is rendered by spawning the child script's own
+# argparse (no run lifecycle). Derived from _mode_help_scripts so it stays in
+# lockstep with what show_mode_help can actually render.
+_HELP_RENDER_MODES = frozenset(_mode_help_scripts().keys())
+
+
+def show_mode_help(mode: str, preamble: bool = True) -> None:
+    """Show detailed help for a specific mode.
+
+    preamble=True prints a "[*] Help for mode: <mode>" header (the
+    `raptor.py help <mode>` surface). The `<mode> --help` short-circuit
+    passes preamble=False so the output is *only* the mode's argparse
+    help, with nothing above it.
+    """
+    mode_scripts = _mode_help_scripts()
+
     if mode not in mode_scripts:
         print(f"✗ Unknown mode: {mode}", file=sys.stderr)
         print(f"Available modes: {', '.join(mode_scripts.keys())}")
         return
-    
+
     script_path = mode_scripts[mode]
     if not script_path.exists():
         print(f"✗ Script not found: {script_path}", file=sys.stderr)
         return
-    
-    print(f"\n[*] Help for mode: {mode}\n")
+
+    if preamble:
+        # flush=True so the header lands ABOVE the child's help. Without
+        # it, Python block-buffers the print when stdout is a pipe while
+        # the subprocess writes to fd 1 directly — interleaving the
+        # header to the bottom of the output.
+        print(f"\n[*] Help for mode: {mode}\n", flush=True)
     # `env=` to a stripped environment so the help-rendering
     # subprocess doesn't inherit the parent's full env. Pre-fix the
     # bare subprocess.run carried LD_PRELOAD / LD_LIBRARY_PATH /
@@ -1058,7 +1119,23 @@ def main():
             print("Usage: raptor.py help <mode>")
             print("Example: raptor.py help scan")
         return 0
-    
+
+    # `<mode> --help` / `<mode> -h`: render the mode's own argparse help
+    # WITHOUT entering the run lifecycle. Pre-fix, --help fell through to
+    # the mode handler (mode_agentic etc.), which wraps the child in
+    # _run_with_lifecycle — resolving a target, creating AND sealing an
+    # output directory, printing the OUTPUT_DIR sentinel + license + cost
+    # estimate preamble, starting the LLM dispatcher, then emitting a
+    # coverage summary, all before the child's argparse ever saw --help.
+    # A help request must be side-effect-free. show_mode_help spawns
+    # `python3 raptor_<mode>.py --help` directly (safe env, timeout, no
+    # lifecycle, no dispatcher). Gated to the modes show_mode_help knows
+    # how to render; 'doctor' parses --help inside its own handler and
+    # 'sca' has no subprocess help script, so both fall through.
+    if mode in _HELP_RENDER_MODES and _wants_help(remaining):
+        show_mode_help(mode, preamble=False)
+        return 0
+
     # Route to appropriate mode
     mode_handlers = {
         'scan': mode_scan,

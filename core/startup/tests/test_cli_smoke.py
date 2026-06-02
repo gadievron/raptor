@@ -179,6 +179,52 @@ def test_fuzz_accepts_autonomous():
 
 
 # ---------------------------------------------------------------------------
+# Section 3b: `<mode> --help` is side-effect-free
+# ---------------------------------------------------------------------------
+#
+# Regression guard: `<mode> --help` used to fall through to the mode handler,
+# which wraps the child in the run lifecycle — resolving a target, creating
+# AND sealing an output directory, printing the OUTPUT_DIR sentinel + license
+# + cost-estimate preamble, and starting the LLM dispatcher, all before the
+# child argparse ever processed --help. A help request must do none of that.
+
+
+# Every recognised mode, with a substring that proves its OWN help rendered.
+# (sca/doctor render bespoke usage text, not an argparse "usage:" line.)
+_HELP_MARKER = {
+    "scan": "usage:",
+    "fuzz": "usage:",
+    "web": "usage:",
+    "agentic": "usage:",
+    "codeql": "usage:",
+    "analyze": "usage:",
+    "sca": "raptor-sca",
+    "doctor": "raptor doctor",
+}
+
+
+@pytest.mark.parametrize("mode", sorted(_HELP_MARKER))
+@pytest.mark.parametrize("help_flag", ["--help", "-h"])
+def test_mode_help_is_side_effect_free(mode: str, help_flag: str):
+    """`<mode> --help`/`-h` prints only that mode's help and exits 0.
+
+    Asserts no run lifecycle ever engaged (no OUTPUT_DIR sentinel, license,
+    or "[*] Starting" preamble), no LLM dispatcher started, and the mode's
+    own help DID render. The OUTPUT_DIR sentinel is the lifecycle's first
+    observable action (printed right after the run dir is created), so its
+    absence also proves no run directory was created.
+    """
+    r = _run_raptor(mode, help_flag, timeout=20)
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, f"{mode} {help_flag} exited {r.returncode}: {combined}"
+    assert "OUTPUT_DIR=" not in combined, f"lifecycle ran for {mode} {help_flag}"
+    assert "Target license:" not in combined
+    assert "[*] Starting" not in combined
+    assert "llm-dispatcher server.start" not in combined, "dispatcher started"
+    assert _HELP_MARKER[mode].lower() in combined.lower(), "mode help did not render"
+
+
+# ---------------------------------------------------------------------------
 # Section 4: module-import smoke
 # ---------------------------------------------------------------------------
 

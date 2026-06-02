@@ -7,6 +7,8 @@ description: Web application security scanner (alpha)
 WARNING: `/web` is in alpha — expect false positives and incomplete
 coverage. Use against test endpoints you own.
 
+**`--help` / `-h`:** If the user passes only `--help` or `-h`, run `python3 raptor.py web --help` and present its output. That command is side-effect-free (no run, lifecycle, output directory, or LLM dispatcher) and is the complete, authoritative flag list — do NOT start a scan or hand-summarise flags from this doc.
+
 You are helping the user scan a web application for security vulnerabilities.
 
 1. **Understand the target**: Get the web application URL

@@ -4,6 +4,8 @@ description: CodeQL deep static analysis with dataflow validation
 
 # /codeql - RAPTOR CodeQL Analysis
 
+**`--help` / `-h`:** If the user passes only `--help` or `-h`, run `python3 raptor.py codeql --help` and present its output. That command is side-effect-free (no run, lifecycle, output directory, or LLM dispatcher) and is the complete, authoritative flag list — do NOT start a scan or hand-summarise flags from this doc.
+
 Runs CodeQL deep static analysis with dataflow validation. Slower but finds complex vulnerabilities that Semgrep misses (tainted flows, use-after-free, injection chains).
 
 ## Usage

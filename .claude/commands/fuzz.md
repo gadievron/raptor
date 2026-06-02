@@ -4,6 +4,8 @@ description: Binary fuzzing with AFL++ integration
 
 # /fuzz - RAPTOR Binary Fuzzer
 
+**`--help` / `-h`:** If the user passes only `--help` or `-h`, run `python3 raptor.py fuzz --help` and present its output. That command is side-effect-free (no run, lifecycle, output directory, or LLM dispatcher) and is the complete, authoritative flag list — do NOT start a fuzzing campaign or hand-summarise flags from this doc.
+
 You are helping the user fuzz a binary executable with RAPTOR's AFL++ integration.
 
 ## Your Task
