@@ -260,13 +260,21 @@ def test_go_autobuild_env_redirects_module_cache(tmp_path: Path):
 def test_autobuild_profiles_have_distinct_proxy_hosts():
     """Soundness check: the Java + Go profiles must NOT share a proxy host
     set — a copy/paste here would silently mis-route one language's
-    module downloads, looking like build failures."""
-    java_hosts, _ = cvefix_walk._AUTOBUILD_PROFILES["java"]
-    go_hosts, _ = cvefix_walk._AUTOBUILD_PROFILES["go"]
-    assert set(java_hosts).isdisjoint(set(go_hosts)), \
-        f"profiles share hosts: {set(java_hosts) & set(go_hosts)}"
-    assert "proxy.golang.org" in go_hosts
-    assert "repo.maven.apache.org" in java_hosts
+    module downloads, looking like build failures.
+
+    Use ``set(...) >= {...}`` for the canonical-host membership checks
+    rather than ``"host" in hosts_var``: CodeQL's
+    ``py/incomplete-url-substring-sanitization`` FP-flags the latter on
+    any list var that carries hostname-shaped strings.  Same FP class
+    as the auth-vocab cleartext-logging issue — see memory
+    ``feedback-codeql-cleartext-logging-auth-vocab-fp``.
+    """
+    java_set, _ = cvefix_walk._AUTOBUILD_PROFILES["java"]
+    go_set, _ = cvefix_walk._AUTOBUILD_PROFILES["go"]
+    assert set(java_set).isdisjoint(set(go_set)), \
+        f"profiles share entries: {set(java_set) & set(go_set)}"
+    assert set(go_set) >= {"proxy.golang.org"}
+    assert set(java_set) >= {"repo.maven.apache.org"}
 
 
 def test_clean_go_caches_removes_readonly_module_cache(tmp_path: Path):
