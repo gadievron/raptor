@@ -80,6 +80,62 @@ def _extract_target(args: list) -> str | None:
     return None
 
 
+def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
+    """Extract ``--max-cost-usd <USD>`` (or ``--max-cost-usd=<USD>``)
+    from ``args``. Returns ``(cap_usd, args_without_flag)``.
+
+    Lives at the lifecycle level so the operator can declare a
+    per-run budget once at the entry point and the estimator gate
+    + downstream loop both see the same cap. Stripped before
+    forwarding so downstream scripts (scanner, agentic, codeql)
+    don't have to recognise the flag.
+
+    Invalid values (non-numeric, zero, negative) print a stderr
+    warning and return ``(None, args)`` unchanged — operator's
+    typo doesn't silently uncap the run, but the run also doesn't
+    refuse to start over a bad cap value. (A hard error here
+    would force every operator typo through a full lifecycle
+    failure, which is more brittle than this warn-and-skip
+    fallback.)
+    """
+    flag = "--max-cost-usd"
+    prefix = f"{flag}="
+    cap_str: str | None = None
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == flag and i + 1 < len(args):
+            cap_str = args[i + 1]
+            i += 2
+            continue
+        if a.startswith(prefix):
+            cap_str = a[len(prefix):]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    if cap_str is None:
+        return (None, args)
+    try:
+        cap = float(cap_str)
+    except ValueError:
+        print(
+            f"WARNING: --max-cost-usd value {cap_str!r} is not a number; "
+            "ignoring cap for this run",
+            file=sys.stderr,
+        )
+        return (None, args)
+    if cap <= 0:
+        print(
+            f"WARNING: --max-cost-usd must be > 0 (got {cap}); "
+            "ignoring cap for this run",
+            file=sys.stderr,
+        )
+        return (None, args)
+    return (cap, out)
+
+
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
     """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
     ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
@@ -195,6 +251,12 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     """
     target = _extract_target(args)
 
+    # Operator-declared per-run budget cap (QoL #21). Stripped from
+    # ``args`` before forwarding so downstream scripts don't have
+    # to recognise the flag. Pre-flight gate fires below, after
+    # the catalog estimate is computed.
+    max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
+
     # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
     # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
     # an explicit target. Pre-fix, scanner.py's `--repo required=True`
@@ -279,6 +341,48 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             # License detection is non-essential; never fail the
             # lifecycle on a detector bug.
             print(f"  (license-detect skipped: {e})",
+                  file=sys.stderr, flush=True)
+
+    # Cost-and-time estimate from the target-type catalog (QoL #21).
+    # Operator sees the expected ballpark before any LLM cost
+    # incurs; Ctrl-C is the cancel path. When ``--max-cost-usd``
+    # is set, the upper bound of the catalog estimate is gated
+    # against the cap pre-flight — runs that would obviously
+    # blow the budget refuse to start rather than spending the
+    # cap to discover the cap was insufficient.
+    if target:
+        try:
+            from core.run.estimator import estimate_run, format_estimate
+            _est = estimate_run(Path(target))
+            _est_line = format_estimate(_est)
+            if _est_line:
+                print(_est_line, flush=True)
+            if (
+                max_cost_usd is not None
+                and _est is not None
+                and _est.cost_high > max_cost_usd
+            ):
+                print(
+                    f"✗ Pre-flight cost gate: catalog estimate "
+                    f"upper bound (${_est.cost_high:.2f}) exceeds "
+                    f"--max-cost-usd cap (${max_cost_usd:.2f}). "
+                    f"Raise the cap or accept the risk and re-run "
+                    f"without --max-cost-usd.",
+                    file=sys.stderr, flush=True,
+                )
+                # Mark the run failed so the lifecycle metadata
+                # reflects WHY this output dir didn't progress —
+                # operator inspecting the dir later sees the
+                # pre-flight refusal, not a phantom ``running``
+                # state.
+                try:
+                    fail_run(out_dir, "pre-flight cost gate exceeded")
+                except Exception:  # noqa: BLE001
+                    pass
+                return 1
+        except Exception as e:
+            # Estimator is best-effort; never break the lifecycle.
+            print(f"  (estimate skipped: {e})",
                   file=sys.stderr, flush=True)
 
     # SAGE: Pre-scan recall
