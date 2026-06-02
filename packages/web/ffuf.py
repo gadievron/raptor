@@ -74,7 +74,7 @@ class FfufRunner:
                 continue
             name, _value = stripped.split("=", 1)
             parts.append(f"{prefix}{name}=[REDACTED]")
-        return "; ".join(parts)
+        return ";".join(parts)
 
     def _redact_header_value(self, header: str) -> str:
         if self.reveal_secrets or ":" not in header:
@@ -82,7 +82,7 @@ class FfufRunner:
         name, value = header.split(":", 1)
         normalized = name.strip().lower()
         if normalized in {"authorization", "proxy-authorization"}:
-            return f"{name}: {self._redact(value.strip())}"
+            return f"{name}: [REDACTED]"
         if normalized in {"cookie", "set-cookie"}:
             return f"{name}: {self._redact_cookie_value(value.strip())}"
         if is_secret_field_name(normalized) or normalized in {
@@ -160,6 +160,11 @@ class FfufRunner:
             raise ValueError("ffuf headers must not contain newlines")
         if any("\n" in cookie or "\r" in cookie for cookie in config.cookies):
             raise ValueError("ffuf cookies must not contain newlines")
+        if any(
+            ":" not in header or not header.split(":", 1)[0].strip()
+            for header in config.headers
+        ):
+            raise ValueError("ffuf headers must be in 'Name: value' form")
 
         url_template = self.build_url_template(config.path_template)
         cmd = [

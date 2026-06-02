@@ -96,7 +96,7 @@ def test_build_command_threads_authenticated_ffuf_options(tmp_path: Path):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
     output = tmp_path / "ffuf_results.json"
-    bearer = "Bearer " + "a" * 32
+    bearer = "Authorization: Bearer " + "a" * 32
 
     runner = FfufRunner("https://example.test", tmp_path)
     cmd = runner.build_command(
@@ -124,6 +124,8 @@ def test_build_command_threads_authenticated_ffuf_options(tmp_path: Path):
     [
         ({"headers": ("X-Test: ok\nInjected: yes",)}, "headers must not contain newlines"),
         ({"headers": ("X-Test: ok\rInjected: yes",)}, "headers must not contain newlines"),
+        ({"headers": ("Bearer abc123",)}, "headers must be in 'Name: value' form"),
+        ({"headers": (": abc123",)}, "headers must be in 'Name: value' form"),
         ({"cookies": ("session=ok\nother=yes",)}, "cookies must not contain newlines"),
         ({"cookies": ("session=ok\rother=yes",)}, "cookies must not contain newlines"),
     ],
@@ -155,7 +157,7 @@ def test_run_redacts_authenticated_ffuf_options_from_logs(
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
-    bearer = "Bearer " + "a" * 32
+    bearer = "Authorization: Bearer " + "a" * 32
     cookie = "session=" + "b" * 32
 
     messages: list[str] = []
@@ -165,10 +167,38 @@ def test_run_redacts_authenticated_ffuf_options_from_logs(
     runner.run(FfufConfig(wordlist=wordlist, headers=(bearer,), cookies=(cookie,)))
 
     logs = "\n".join(messages)
-    assert "Bearer [REDACTED]" in logs
+    assert "Authorization: [REDACTED]" in logs
     assert "session=[REDACTED]" in logs
     assert "a" * 32 not in logs
     assert "b" * 32 not in logs
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization: Token abc123",
+        "Authorization: ApiKey short",
+        'Authorization: Digest username="u", nonce="n"',
+        "Proxy-Authorization: Negotiate abc",
+    ],
+)
+def test_redacts_authorization_headers_without_relying_on_token_shape(
+    tmp_path: Path,
+    header: str,
+):
+    runner = FfufRunner("https://example.test", tmp_path)
+
+    assert runner._redact_header_value(header) == f"{header.split(':', 1)[0]}: [REDACTED]"
+
+
+def test_cookie_redaction_preserves_separator_spacing(tmp_path: Path):
+    runner = FfufRunner("https://example.test", tmp_path)
+
+    assert (
+        runner._redact_cookie_value("session=abc123; pref=dark")
+        == "session=[REDACTED]; pref=[REDACTED]"
+    )
+
 
 def test_run_requires_explicit_ffuf_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     wordlist = tmp_path / "words.txt"
