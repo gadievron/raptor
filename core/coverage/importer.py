@@ -76,9 +76,21 @@ def run_provenance(run_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _tool_stamp(tool: str, prov: Dict[str, Any]) -> Dict[str, Any]:
+def _tool_stamp(tool: str, prov: Dict[str, Any],
+                record_version: Optional[str] = None) -> Dict[str, Any]:
     """The provenance slice for one (file, tool): engine version for a
-    scanner, resolved model(s) for an LLM tool, plus run-level fields."""
+    scanner, resolved model(s) for an LLM tool, plus run-level fields.
+
+    ``record_version`` is the coverage record's own ``version`` field
+    (build_from_semgrep / build_from_cocci / build_from_codeql all
+    carry it). Used as a fallback when the manifest's ``engines``
+    map hasn't been stamped yet — scanner.py renders the coverage
+    summary BEFORE raptor.py's lifecycle wrapper calls
+    ``complete_run`` (which is when ``standard_completion_provenance``
+    stamps engine versions), so a same-run render would otherwise
+    see ``(version unrecorded)`` even though the per-tool JSON does
+    carry it.
+    """
     stamp: Dict[str, Any] = {
         "timestamp": prov.get("timestamp"),
         "target": prov.get("target"),
@@ -89,6 +101,14 @@ def _tool_stamp(tool: str, prov: Dict[str, Any]) -> Dict[str, Any]:
     engines = prov.get("engines") or {}
     if base in engines:
         stamp["version"] = engines[base]
+    elif isinstance(record_version, str) and record_version:
+        # ``isinstance`` guard: the record's ``version`` field
+        # comes from each tool's own JSON output schema
+        # (semgrep / coccinelle / codeql), but a future caller
+        # passing a non-string would silently land an
+        # unhashable value here and crash downstream in
+        # ``provenance_summary`` (sets the version into a set).
+        stamp["version"] = record_version
     if category_of(tool) == "llm" and prov.get("models"):
         stamp["models"] = prov["models"]
     return stamp
@@ -141,7 +161,9 @@ def import_record(
     tool = record.get("tool")
     if not tool:
         return 0
-    stamp = _tool_stamp(tool, provenance) if provenance else None
+    stamp = _tool_stamp(
+        tool, provenance, record_version=record.get("version"),
+    ) if provenance else None
     inv_paths = set(total_lines)                     # inventory keys (target-relative)
     marked = 0
     for path in record.get("files_examined", []) or []:
@@ -383,7 +405,9 @@ def import_functions_analysed(
     fa_list = record.get("functions_analysed")
     if not tool or not fa_list:
         return 0
-    stamp = _tool_stamp(tool, provenance) if provenance else None
+    stamp = _tool_stamp(
+        tool, provenance, record_version=record.get("version"),
+    ) if provenance else None
     marked = 0
     for fa in fa_list:
         if not isinstance(fa, dict):

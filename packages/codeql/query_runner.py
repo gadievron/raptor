@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
 
@@ -319,10 +320,12 @@ class QueryRunner:
             actual_suite_path,
             "--format=sarif-latest",
             f"--output={sarif_path}",
-            f"--threads={RaptorConfig.CODEQL_THREADS}",
-            f"--ram={RaptorConfig.CODEQL_RAM_MB}",
             "--no-rerun",  # Don't rerun queries if results exist
         ]
+        # Central CodeQL resource tunables (-j / -M, tuning.json-backed).
+        # ``include_disk_cache=False`` because ``database analyze``
+        # rejects ``--max-disk-cache`` as an unknown flag.
+        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
 
         # DO NOT add search-path - it causes pack conflicts when multiple copies exist
         # Instead, we always use absolute paths (resolved above) to avoid ambiguity
@@ -550,8 +553,8 @@ class QueryRunner:
             str(query_path),
             "--format=sarif-latest",
             f"--output={sarif_path}",
-            f"--threads={RaptorConfig.CODEQL_THREADS}",
         ]
+        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
 
         try:
             from core.sandbox import run as sandbox_run
@@ -811,8 +814,8 @@ class QueryRunner:
             str(db), str(pack_dir),
             "--format=sarif-latest",
             f"--output={sarif_path}",
-            f"--threads={RaptorConfig.CODEQL_THREADS}",
         ]
+        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=False)
         analysis_start = time.time()
         try:
             proc = sandbox_run(

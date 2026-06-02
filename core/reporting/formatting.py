@@ -1,6 +1,47 @@
 """Shared formatting utilities for report rendering."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+
+_SEMGREP_REGISTRY_CACHE_PREFIX = "engine.semgrep.rules.registry-cache."
+
+
+def display_rule_id(rule_id: Optional[str]) -> str:
+    """Operator-facing short form of a SARIF rule id.
+
+    Semgrep rule ids in RAPTOR carry a long internal prefix
+    (``engine.semgrep.rules.registry-cache.c.lang.security.foo.foo``)
+    that's namespacing noise — it's the local-cache reflection of the
+    semgrep.dev registry pack path, with the leaf name duplicated
+    (semgrep convention: rule file basename matches rule id leaf).
+    This helper strips both for terminal/log/patch-header rendering
+    while leaving stored/serialised ids untouched (SARIF + provenance
+    keep the full id for back-reference and grep-ability).
+
+    - Strips the ``engine.semgrep.rules.registry-cache.`` prefix.
+    - Collapses a trailing ``foo.foo`` duplication to a single ``foo``.
+    - CodeQL ``lang/rule-id`` and Coccinelle ``snake_case`` rule ids
+      pass through unchanged (already short).
+    - Empty / None input returns ``"unknown"`` so callers don't have
+      to guard against missing rule ids in format strings.
+
+    Verified safe by grep: no consumer branches on the
+    ``registry-cache`` prefix substring, so dropping it in the
+    render layer doesn't break behaviour anywhere.
+    """
+    if not rule_id:
+        return "unknown"
+    short = rule_id
+    if short.startswith(_SEMGREP_REGISTRY_CACHE_PREFIX):
+        short = short[len(_SEMGREP_REGISTRY_CACHE_PREFIX):]
+    # Collapse trailing leaf-duplication: `...foo.foo` -> `...foo`.
+    # Split on '.' so it only fires on the rule-id structure, not
+    # if the trailing segment happens to repeat a substring within
+    # a single token.
+    parts = short.split(".")
+    if len(parts) >= 2 and parts[-1] == parts[-2]:
+        short = ".".join(parts[:-1])
+    return short
 
 
 def get_display_status(finding: Dict[str, Any]) -> str:

@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Inspect the per-language reachability verdict-frequency log.
+
+The substrate (``core/inventory/reach_verdict_log.py``) records
+``(language, verdict)`` from every ``classify_reachability`` call and
+flushes a counter dict to ``out/reach_verdict_log.json`` at process
+exit. Researcher / debug tooling — most operators won't run this; the
+log is the empirical signal that justifies (or rules out) further
+investment in language-specific reachability work.
+
+Default action prints a human-readable per-language table sorted by
+count::
+
+    reach verdicts (out/reach_verdict_log.json, schema v1):
+      python:
+        reachable           : 1023
+        no_path_from_entry  :   47
+        uncertain           :   12
+      c:
+        ...
+
+Usage::
+
+    core/inventory/scripts/reach-verdict-log               # table
+    core/inventory/scripts/reach-verdict-log --json        # raw counts
+    core/inventory/scripts/reach-verdict-log --reset       # clear sidecar
+    core/inventory/scripts/reach-verdict-log --path FILE   # override location
+
+Sidecar path resolution: ``--path`` arg > ``RAPTOR_REACH_VERDICT_LOG``
+env > ``$RAPTOR_DIR/out/reach_verdict_log.json``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+# Resolve repo root + RAPTOR_DIR the way the sibling scripts do.
+RAPTOR = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(RAPTOR))
+os.environ.setdefault("RAPTOR_DIR", str(RAPTOR))
+
+from core.inventory.reach_verdict_log import (  # noqa: E402
+    SCHEMA_VERSION,
+    _sidecar_path,
+    reset,
+    summarize,
+)
+
+
+def _format_table(data: dict) -> str:
+    if not data:
+        return "no verdicts recorded yet"
+    lines = []
+    for lang in sorted(data):
+        verdicts = data[lang]
+        if not verdicts:
+            continue
+        lines.append(f"  {lang}:")
+        items = sorted(verdicts.items(), key=lambda kv: (-kv[1], kv[0]))
+        width = max(len(v) for v, _ in items)
+        for v, n in items:
+            lines.append(f"    {v:<{width}} : {n:>6}")
+    if not lines:
+        return "no verdicts recorded yet"
+    return "\n".join(lines)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="reach-verdict-log",
+        description=(
+            "Inspect the per-language reachability verdict-frequency log. "
+            "Sidecar accumulates (language, verdict) counts from every "
+            "classify_reachability call; flushes at process exit."
+        ),
+    )
+    p.add_argument("--json", action="store_true",
+                   help="Emit the raw counts as JSON instead of a table.")
+    p.add_argument("--reset", action="store_true",
+                   help="Delete the sidecar and clear in-memory counts.")
+    p.add_argument("--path", type=Path, default=None,
+                   help="Override sidecar location (default: "
+                        "$RAPTOR_REACH_VERDICT_LOG env or "
+                        "$RAPTOR_DIR/out/reach_verdict_log.json).")
+    args = p.parse_args()
+
+    path = args.path or _sidecar_path()
+
+    if args.reset:
+        reset(path)
+        print(f"reset {path}")
+        return 0
+
+    data = summarize(path)
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+        return 0
+
+    print(f"reach verdicts ({path}, schema v{SCHEMA_VERSION}):")
+    print(_format_table(data))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

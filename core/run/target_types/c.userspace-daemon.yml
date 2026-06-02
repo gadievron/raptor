@@ -1,0 +1,73 @@
+name: c.userspace-daemon
+description: |
+  C / C++ userspace daemons that listen on the network. Examples:
+  nginx, monit, kamailio, redis. Distinct from c.kernel-module
+  (privileged context, different rule sets) and c.cli-tool (no
+  network attack surface). Distinct from c.embedded (no MMU /
+  RTOS context — different sandbox + threat model).
+
+detection:
+  file_globs:
+    # Autotools daemon shape — configure.ac + Makefile.am at top.
+    - "configure.ac"
+    - "configure.in"
+    - "Makefile.am"
+    # CMake daemon shape.
+    - "CMakeLists.txt"
+    # Config-driven daemon — conf-template at top is a strong signal.
+    - "*.conf.template"
+    - "*.conf.example"
+    # Network listener present in src tree.
+    - "src/**/socket*.c"
+    - "src/**/net*.c"
+    - "src/**/http*.c"
+  file_extensions:
+    - .c
+    - .h
+  negative_globs:
+    # Rule out kernel modules — they're a different shape entirely.
+    - "kernel/**"
+    - "drivers/**"
+    - "Kconfig"
+    - "Kbuild"
+    # Rule out Linux-kernel-sources style trees.
+    - "include/linux/**"
+
+semgrep_packs:
+  default:
+    - security-audit
+    - command-injection
+    - owasp-top-ten
+  optional:
+    - secrets
+    - jwt
+
+attack_surface:
+  high_priority_dirs:
+    - src/http
+    - src/net
+    - src/protocols
+    - src/notification
+    - src/api
+  low_priority_dirs:
+    - src/device/sysdep_*
+    - tests
+    - test
+    - examples
+    - docs
+    - libmonit/test
+    - libmonit/src/exceptions
+
+pipeline:
+  recommended:
+    - understand-map
+    - scan-with-codeql
+    - agentic-with-validate
+  estimated_cost_usd: [25, 50]
+  estimated_time_min: [40, 75]
+
+budget_defaults:
+  typical_findings_count: 25
+  typical_cost_per_run_usd: 30
+
+version: 1

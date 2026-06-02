@@ -666,7 +666,8 @@ class AutonomousCodeQLAnalyzer:
         Returns:
             VulnerabilityAnalysis result
         """
-        self.logger.info(f"Analyzing vulnerability: {finding.rule_id}")
+        from core.reporting.formatting import display_rule_id
+        self.logger.info(f"Analyzing vulnerability: {display_rule_id(finding.rule_id)}")
 
         # Step 1: cheap-tier prefilter. Asks a small model "is this
         # a clear false positive?" — and consults the scorecard for

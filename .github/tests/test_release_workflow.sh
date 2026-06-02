@@ -69,14 +69,21 @@ build_repo() {
     cp "$SCRIPT_DIR/core/startup/assets/raptor-offset" \
        "$REPO/core/startup/assets/raptor-offset"
 
-    # Create core/config.py with realistic VERSION lines
-    mkdir -p core
-    cat > core/config.py <<'PYEOF'
+    # Create core/config/__init__.py with realistic VERSION lines
+    mkdir -p core/config
+    cat > core/config/__init__.py <<'PYEOF'
 class RaptorConfig:
     VERSION = "3.0.0"
     DEFAULT_POLICY_VERSION = "v1"
     MCP_VERSION = "0.6.0"
 PYEOF
+
+    # Create CITATION.cff (semver version line, no leading 'v')
+    cat > CITATION.cff <<'CFFEOF'
+cff-version: 1.2.0
+title: RAPTOR
+version: "3.0.0"
+CFFEOF
 
     # Create .gitattributes
     cp "$SCRIPT_DIR/.gitattributes" "$REPO/.gitattributes" 2>/dev/null || \
@@ -227,24 +234,25 @@ import sys, re
 tag = sys.argv[1]
 ver = tag.lstrip('v')
 
-# raptor-offset banner (lives under core/startup/assets/)
-BANNER = 'core/startup/assets/raptor-offset'
-text = open(BANNER).read()
-def replace_banner(m):
-    prefix = m.group(1)
-    content = prefix + tag
-    pad = 76 - len(content)
-    return content + ' ' * pad + '║'
-text = re.sub(r'(║\s+Based on Claude Code - )\S+[^║]*║', replace_banner, text)
-open(BANNER, 'w').write(text)
+# The banner (core/startup/assets/raptor-offset) is deliberately NOT stamped —
+# it keeps a __VERSION__ placeholder and banner.py injects the live version at
+# render time. The test asserts below that the release leaves it untouched.
 
-# core/config.py VERSION
-text = open('core/config.py').read()
+# core/config/__init__.py VERSION
+text = open('core/config/__init__.py').read()
 text = re.sub(
     r'^(\s+VERSION = \")[^\"]+(\")' ,
     lambda m: m.group(1) + ver + m.group(2),
     text, count=1, flags=re.MULTILINE)
-open('core/config.py', 'w').write(text)
+open('core/config/__init__.py', 'w').write(text)
+
+# CITATION.cff version (semver, no leading 'v')
+text = open('CITATION.cff').read()
+text = re.sub(
+    r'^(version: \")[^\"]+(\")',
+    lambda m: m.group(1) + ver + m.group(2),
+    text, count=1, flags=re.MULTILINE)
+open('CITATION.cff', 'w').write(text)
 " "$TAG"
 }
 
@@ -351,42 +359,50 @@ echo "=== Version stamping ==="
 # Save originals
 BANNER_PATH=core/startup/assets/raptor-offset
 cp "$BANNER_PATH" "$BANNER_PATH.orig"
-cp core/config.py core/config.py.orig
+cp core/config/__init__.py core/config/__init__.py.orig
+cp CITATION.cff CITATION.cff.orig
 
 for tag in v3.1.0 v10.20.30; do
     # Restore originals
     cp "$BANNER_PATH.orig" "$BANNER_PATH"
-    cp core/config.py.orig core/config.py
+    cp core/config/__init__.py.orig core/config/__init__.py
+    cp CITATION.cff.orig CITATION.cff
 
     stamp_version "$tag"
     ver="${tag#v}"
 
-    # raptor-offset: check line contains tag and is correct width
+    # raptor-offset: NOT stamped — placeholder must survive untouched so
+    # banner.py can inject the live version at render time.
     BANNER_LINE=$(grep "Based on Claude Code" "$BANNER_PATH")
-    BANNER_LEN=${#BANNER_LINE}
-    assert_eq      "raptor-offset width for $tag" "77" "$BANNER_LEN"
-    assert_contains "raptor-offset contains $tag" "$BANNER_LINE" "$tag"
-    assert_contains "raptor-offset box intact"    "$BANNER_LINE" "║"
+    assert_contains "raptor-offset placeholder preserved" "$BANNER_LINE" "__VERSION__"
+    assert_not_contains "raptor-offset not stamped with $tag" "$BANNER_LINE" "$tag"
 
-    # core/config.py: only VERSION changed
-    CONFIG=$(cat core/config.py)
+    # core/config/__init__.py: only VERSION changed
+    CONFIG=$(cat core/config/__init__.py)
     assert_contains     "config VERSION = \"$ver\""       "$CONFIG" "VERSION = \"$ver\""
     assert_contains     "config POLICY_VERSION unchanged"  "$CONFIG" "DEFAULT_POLICY_VERSION = \"v1\""
     assert_contains     "config MCP_VERSION unchanged"     "$CONFIG" "MCP_VERSION = \"0.6.0\""
+
+    # CITATION.cff: version stamped (semver, no leading 'v')
+    CITATION=$(cat CITATION.cff)
+    assert_contains     "CITATION version: \"$ver\""        "$CITATION" "version: \"$ver\""
 done
 
 # Idempotency: stamp same version twice
 cp "$BANNER_PATH.orig" "$BANNER_PATH"
-cp core/config.py.orig core/config.py
+cp core/config/__init__.py.orig core/config/__init__.py
+cp CITATION.cff.orig CITATION.cff
 stamp_version "v3.1.0"
 stamp_version "v3.1.0"
-BANNER_LINE=$(grep "Based on Claude Code" "$BANNER_PATH")
-assert_eq "idempotent stamp width" "77" "${#BANNER_LINE}"
+CONFIG=$(cat core/config/__init__.py)
+assert_contains "idempotent stamp (VERSION)" "$CONFIG" 'VERSION = "3.1.0"'
+assert_eq "idempotent: single VERSION line" "1" "$(grep -c '    VERSION = ' core/config/__init__.py)"
 
 # Restore for archive test
 cp "$BANNER_PATH.orig" "$BANNER_PATH"
-cp core/config.py.orig core/config.py
-rm -f "$BANNER_PATH.orig" core/config.py.orig
+cp core/config/__init__.py.orig core/config/__init__.py
+cp CITATION.cff.orig CITATION.cff
+rm -f "$BANNER_PATH.orig" core/config/__init__.py.orig CITATION.cff.orig
 echo ""
 
 # ── 6. Archive exclusions ──────────────────────────────────────────────
@@ -403,7 +419,7 @@ ARCHIVE_DIR=$(build_archive v3.0.0 "$TMPDIR_BASE")
 # Should be included
 assert_file_exists "raptor.py in archive"           "$ARCHIVE_DIR/raptor.py"
 assert_file_exists "raptor-offset in archive"       "$ARCHIVE_DIR/core/startup/assets/raptor-offset"
-assert_file_exists "core/config.py in archive"      "$ARCHIVE_DIR/core/config.py"
+assert_file_exists "core/config/__init__.py in archive"      "$ARCHIVE_DIR/core/config/__init__.py"
 assert_file_exists "packages/ in archive"           "$ARCHIVE_DIR/packages/__init__.py"
 
 # Should be excluded by .gitattributes export-ignore
@@ -416,10 +432,11 @@ assert_file_missing "test/ excluded"                "$ARCHIVE_DIR/test"
 assert_file_missing "docs/img/ excluded"            "$ARCHIVE_DIR/docs/img"
 assert_file_missing "conftest.py excluded"          "$ARCHIVE_DIR/conftest.py"
 
-# Verify stamped version is in the archive
+# Archive ships the banner placeholder (rendered at runtime) and the stamped
+# baked VERSION the placeholder falls back to when there is no .git.
 ARCHIVE_BANNER=$(grep "Based on Claude Code" "$ARCHIVE_DIR/core/startup/assets/raptor-offset")
-assert_contains "archive has stamped version"       "$ARCHIVE_BANNER" "v3.0.0"
-ARCHIVE_CONFIG=$(cat "$ARCHIVE_DIR/core/config.py")
+assert_contains "archive banner keeps placeholder"   "$ARCHIVE_BANNER" "__VERSION__"
+ARCHIVE_CONFIG=$(cat "$ARCHIVE_DIR/core/config/__init__.py")
 assert_contains "archive config has stamped version" "$ARCHIVE_CONFIG" 'VERSION = "3.0.0"'
 echo ""
 

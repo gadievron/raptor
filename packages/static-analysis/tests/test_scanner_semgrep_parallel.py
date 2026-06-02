@@ -65,11 +65,14 @@ def _stub_run_single(name, config, repo_path, out_dir, timeout, progress_callbac
 class TestSemgrepScanParallel:
 
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
-    def test_returns_list_of_sarif_paths(self, mock_single, tmp_path):
-        paths = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+    def test_returns_sarif_paths_and_failed_list(self, mock_single, tmp_path):
+        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
         assert isinstance(paths, list)
+        assert isinstance(failed, list)
         for p in paths:
             assert isinstance(p, str)
+        # Clean run: no failures.
+        assert failed == []
 
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
     def test_creates_out_dir_if_missing(self, mock_single, tmp_path):
@@ -96,7 +99,7 @@ class TestSemgrepScanParallel:
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
     def test_nonexistent_rules_dir_skipped(self, mock_single, tmp_path):
         """Non-existent rule directories should be skipped without error."""
-        paths = semgrep_scan_parallel(
+        paths, _failed = semgrep_scan_parallel(
             tmp_path,
             [str(tmp_path / "does_not_exist")],
             tmp_path,
@@ -152,7 +155,7 @@ class TestSemgrepScanParallel:
         """An exception raised by a worker should be caught and logged, not propagate."""
         mock_single.side_effect = RuntimeError("worker exploded")
         # Must not raise
-        paths = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        paths, _failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
         assert isinstance(paths, list)
 
     @patch.object(_scanner_mod, "run_single_semgrep")
@@ -172,9 +175,70 @@ class TestSemgrepScanParallel:
             raise RuntimeError("boom")
 
         mock_single.side_effect = side_effect
-        paths = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
         # At least one path from the successful scan
         assert len(paths) >= 1
+        # Worker exceptions land in the failed list (per-name).
+        assert len(failed) >= 1
+
+
+class TestSemgrepScanParallelSilentDropDetection:
+    """The silent-drop class: a worker returns (sarif_path, success=True)
+    but no SARIF file ends up on disk. Pre-fix this looked clean —
+    ``failure_count`` was 0, the missing SARIFs were invisible. The
+    cross-check between submitted pack names and SARIFs landed on disk
+    promotes silent drops to ``failed`` so callers can surface them.
+    """
+
+    @patch.object(_scanner_mod, "run_single_semgrep")
+    def test_missing_sarif_promoted_to_failed(self, mock_single, tmp_path):
+        # Stub: claims success but DOESN'T write the SARIF file.
+        # Realistic surrogate for the bug class — anything between the
+        # worker's success return and the file actually landing
+        # (filesystem write failure, sandbox teardown, race) lands
+        # here.
+        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+            suffix = name.replace("/", "_").replace(":", "_")
+            sarif = out_dir / f"semgrep_{suffix}.sarif"
+            # Return success + sarif path — but never write the file.
+            return str(sarif), True
+        mock_single.side_effect = lying_stub
+        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        # Every submitted pack name appears in failed (since none
+        # produced an on-disk SARIF). Worker returned success so
+        # `failure_count` from the future loop alone would have
+        # reported 0 — the cross-check picks them up.
+        baseline_names = {n for n, _ in RaptorConfig.BASELINE_SEMGREP_PACKS}
+        assert baseline_names.issubset(set(failed)), (
+            f"Expected baseline packs to be marked failed, got: {failed!r}"
+        )
+
+    @patch.object(_scanner_mod, "run_single_semgrep")
+    def test_partial_landing_marks_only_missing_as_failed(self, mock_single, tmp_path):
+        # First call writes its SARIF (real success). Second + third
+        # claim success but produce no file (silent drop).
+        call_count = 0
+
+        def mixed_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+            nonlocal call_count
+            call_count += 1
+            suffix = name.replace("/", "_").replace(":", "_")
+            sarif = out_dir / f"semgrep_{suffix}.sarif"
+            if call_count == 1:
+                sarif.write_text('{"runs": []}')
+            # else: silent drop — return success but write nothing.
+            return str(sarif), True
+
+        mock_single.side_effect = mixed_stub
+        paths, failed = semgrep_scan_parallel(tmp_path, [], tmp_path, timeout=10)
+        # First pack landed → not in failed. Remaining baselines → in failed.
+        # (The exact count is len(BASELINE_SEMGREP_PACKS) - 1; threading
+        # makes the call-order non-deterministic so we don't assert which
+        # specific name survives — just that ≥1 succeeded and the rest
+        # are flagged.)
+        total = len(RaptorConfig.BASELINE_SEMGREP_PACKS)
+        assert 0 < total - len(failed) <= total
+        assert len(failed) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +248,26 @@ class TestSemgrepScanParallel:
 class TestSemgrepScanSequential:
 
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
-    def test_returns_list(self, mock_single, tmp_path):
-        paths = semgrep_scan_sequential(tmp_path, [], tmp_path, timeout=10)
+    def test_returns_sarif_paths_and_failed_list(self, mock_single, tmp_path):
+        paths, failed = semgrep_scan_sequential(tmp_path, [], tmp_path, timeout=10)
         assert isinstance(paths, list)
+        assert isinstance(failed, list)
+        # Clean run: no failures.
+        assert failed == []
+
+    @patch.object(_scanner_mod, "run_single_semgrep")
+    def test_silent_drop_promoted_to_failed(self, mock_single, tmp_path):
+        # Same shape as the parallel-path test: worker claims success
+        # but no SARIF on disk. Sequential should detect via the same
+        # submitted-vs-landed cross-check.
+        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+            suffix = name.replace("/", "_").replace(":", "_")
+            sarif = out_dir / f"semgrep_{suffix}.sarif"
+            return str(sarif), True  # claim success, never write
+        mock_single.side_effect = lying_stub
+        paths, failed = semgrep_scan_sequential(tmp_path, [], tmp_path, timeout=10)
+        baseline_names = {n for n, _ in RaptorConfig.BASELINE_SEMGREP_PACKS}
+        assert baseline_names.issubset(set(failed))
 
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
     def test_creates_out_dir(self, mock_single, tmp_path):
@@ -211,6 +292,111 @@ class TestSemgrepScanSequential:
         # is intentional and not considered a duplicate).
         called_names = [c.args[0] for c in mock_single.call_args_list]
         assert called_names.count("semgrep_secrets") == 1
+
+
+# ---------------------------------------------------------------------------
+# filter_sarif_by_exclude_globs — operator-side --exclude-dir post-filter
+# ---------------------------------------------------------------------------
+
+class TestFilterSarifByExcludeGlobs:
+    """Drop SARIF results whose file URI matches any exclude glob.
+    Order-preserving for what remains. No-op when globs are empty."""
+
+    @staticmethod
+    def _result(uri: str, rule_id: str = "rule-x"):
+        return {
+            "ruleId": rule_id,
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": uri},
+                    "region": {"startLine": 1},
+                }
+            }],
+        }
+
+    def _sarif(self, *uris):
+        return {"runs": [{"results": [self._result(u) for u in uris]}]}
+
+    def test_none_globs_is_noop(self):
+        sarif = self._sarif("a.c", "b.c")
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(sarif, None)
+        assert out == sarif
+        assert dropped == 0
+
+    def test_empty_globs_is_noop(self):
+        sarif = self._sarif("a.c", "b.c")
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(sarif, [])
+        assert out == sarif
+        assert dropped == 0
+
+    def test_single_glob_drops_matches(self):
+        sarif = self._sarif("vendor/lib.c", "src/http/server.c", "vendor/util.c")
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(
+            sarif, ["vendor/*"],
+        )
+        kept_uris = [
+            r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            for r in out["runs"][0]["results"]
+        ]
+        assert kept_uris == ["src/http/server.c"]
+        assert dropped == 2
+
+    def test_multiple_globs_or_semantics(self):
+        sarif = self._sarif(
+            "src/util.c", "vendor/lib.c", "tests/test_x.c", "src/http/server.c",
+        )
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(
+            sarif, ["vendor/*", "tests/*"],
+        )
+        kept_uris = [
+            r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            for r in out["runs"][0]["results"]
+        ]
+        assert kept_uris == ["src/util.c", "src/http/server.c"]
+        assert dropped == 2
+
+    def test_missing_uri_kept_defensively(self):
+        # Malformed location: no artifactLocation. operator-exclude
+        # shouldn't silently drop these.
+        sarif = {"runs": [{"results": [
+            {"ruleId": "rule-x", "locations": [{"physicalLocation": {}}]},
+            self._result("vendor/lib.c"),
+        ]}]}
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(
+            sarif, ["vendor/*"],
+        )
+        assert dropped == 1
+        # Malformed entry survives.
+        assert len(out["runs"][0]["results"]) == 1
+        assert out["runs"][0]["results"][0]["ruleId"] == "rule-x"
+
+    def test_does_not_mutate_input(self):
+        # Caller may want to keep the original for forensic record.
+        sarif = self._sarif("vendor/a.c", "src/b.c")
+        out, _ = _scanner_mod.filter_sarif_by_exclude_globs(
+            sarif, ["vendor/*"],
+        )
+        # Input still has both results.
+        assert len(sarif["runs"][0]["results"]) == 2
+        # Output has one.
+        assert len(out["runs"][0]["results"]) == 1
+
+    def test_multi_run_sarif(self):
+        # Some emitters produce multiple runs in one SARIF file.
+        sarif = {
+            "runs": [
+                {"results": [self._result("vendor/a.c"),
+                             self._result("src/x.c")]},
+                {"results": [self._result("vendor/b.c"),
+                             self._result("src/y.c")]},
+            ],
+        }
+        out, dropped = _scanner_mod.filter_sarif_by_exclude_globs(
+            sarif, ["vendor/*"],
+        )
+        assert dropped == 2
+        assert len(out["runs"][0]["results"]) == 1
+        assert len(out["runs"][1]["results"]) == 1
 
     @patch.object(_scanner_mod, "run_single_semgrep", side_effect=_stub_run_single)
     def test_scans_run_in_order(self, mock_single, tmp_path):

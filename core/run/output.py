@@ -85,6 +85,25 @@ def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
     return None
 
 
+def resolve_default_target() -> Optional[str]:
+    """CLAUDE.md DEFAULT TARGET DIRECTORY resolution: (1) active project,
+    (2) ``RAPTOR_CALLER_DIR``, (3) None (caller asks the user).
+
+    Pre-existing layering: ``_resolve_active_project`` returns the active
+    project's target; ``raptor_agentic.py`` falls back to
+    ``RAPTOR_CALLER_DIR``; ``scanner.py`` has neither (``required=True``).
+    Centralising the chain here lets every dispatcher / entry script
+    inherit the same behaviour without re-implementing it. Returns the
+    resolved target path or None if neither signal is present — the
+    caller is expected to error or prompt.
+    """
+    active = _resolve_active_project()
+    if active is not None:
+        return active[2]
+    env = os.environ.get("RAPTOR_CALLER_DIR")
+    return env or None
+
+
 def get_output_dir(command: str, target_name: str = "", explicit_out: str = None,
                    target_path: str = None) -> Path:
     """Resolve the output directory for a command run.

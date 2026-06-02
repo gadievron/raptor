@@ -44,6 +44,16 @@ later")
     as ``mypkg.helpers.ezp`` won't be matched on the
     ``mypkg.helpers.ezp`` qualified name unless the inventory
     captures the re-export — and at first cut, it doesn't.
+  * Cross-file string-literal ``getattr`` dispatch. ``file_a.py``
+    holds ``getattr(obj, "foo")(...)`` where ``obj`` is an instance
+    of a class in ``file_b.py``. The masking signal is per-file,
+    and ``file_a.py`` is not in the static reverse closure of
+    ``file_b.py::Klass.foo`` (the getattr call site isn't a
+    resolved edge), so the dead-island claim against ``Klass.foo``
+    can't see ``file_a``'s confounding dispatch. UNCERTAIN-safe
+    only when ``Klass.foo`` is reachable through some non-getattr
+    edge; pure-getattr-only consumers of an internal API are the
+    blind spot.
 
 If the consumer cares about any of those, CodeQL's call-graph
 queries are the right tool — at the cost of a ~30s DB build.
@@ -77,6 +87,7 @@ from .call_graph import (
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
     INDIRECTION_GETATTR,
+    INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_REFLECT,
     INDIRECTION_WILDCARD_IMPORT,
@@ -130,9 +141,30 @@ _TEST_FILE_PATTERN = re.compile(
 # also mentions the target tail name.
 _MASKING_FLAGS: Set[str] = {
     INDIRECTION_GETATTR,
+    INDIRECTION_GETATTR_OPAQUE,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_WILDCARD_IMPORT,
+    INDIRECTION_BRACKET_DISPATCH,
+    INDIRECTION_DYNAMIC_IMPORT,
+    INDIRECTION_EVAL,
+    INDIRECTION_REFLECT,
+}
+
+# Subset of ``_MASKING_FLAGS`` whose dispatcher has no recorded tail
+# name — the runtime target is genuinely unknown and could be ANY
+# function in the file's reverse closure. ``INDIRECTION_GETATTR`` is
+# NOT here because a literal ``getattr(obj, "foo")(...)`` records
+# ``"foo"`` in ``getattr_targets``; ``_file_masks_target`` checks
+# that list and taints only the matching target. Wildcard-import
+# (``from x import *``) is also outside this set — both ``function_called``
+# and ``_file_masks_target`` route it through ``_wildcard_could_provide``
+# to narrow per-target (the entry-reachability path derives the target's
+# module from its file path so the heuristic applies there too).
+_OPAQUE_MASKING_FLAGS: Set[str] = {
+    INDIRECTION_GETATTR_OPAQUE,
+    INDIRECTION_IMPORTLIB,
+    INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
@@ -3100,6 +3132,39 @@ def _item_is_entry(item: Dict[str, Any], language: str,
 _ENTRY_SET_CACHE: Dict[int, Tuple[Dict[str, Any], "frozenset"]] = {}
 _ENTRY_SET_CACHE_MAX = 8
 
+_FILES_BY_PATH_CACHE: Dict[int, Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]] = {}
+_FILES_BY_PATH_CACHE_MAX = 8
+
+
+def _files_by_path(inventory: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Path-keyed view of ``inventory["files"]`` — O(1) lookup per file.
+
+    Cached per-inventory by ``id``; identity-checked on read so a fresh
+    inventory at the same address rebuilds the index. Used by the
+    file-scoped helpers (``_file_language``, ``_file_python_exports``,
+    ``_file_masks_target``, ``_is_nested_function``) which were each
+    doing an O(files) linear scan per call — the entry-reachability
+    path walks the reverse closure and pays this cost per node.
+    """
+    inv_id = id(inventory)
+    cached = _FILES_BY_PATH_CACHE.get(inv_id)
+    if cached is not None and cached[0] is inventory:
+        return cached[1]
+    index: Dict[str, Dict[str, Any]] = {}
+    for fr in inventory.get("files", []):
+        if not isinstance(fr, dict):
+            continue
+        path = (fr.get("path") or "").replace("\\", "/")
+        if path:
+            index[path] = fr
+    # FIFO eviction (matches the sibling ``_ENTRY_SET_CACHE`` pattern):
+    # drop the oldest entry when full, instead of wiping every entry —
+    # keeps the cache useful under multi-inventory pipelines.
+    if len(_FILES_BY_PATH_CACHE) >= _FILES_BY_PATH_CACHE_MAX:
+        _FILES_BY_PATH_CACHE.pop(next(iter(_FILES_BY_PATH_CACHE)))
+    _FILES_BY_PATH_CACHE[inv_id] = (inventory, index)
+    return index
+
 
 def _entry_functions(inventory: Dict[str, Any]) -> "frozenset":
     """Set of InternalFunction entry points (visibility/linkage model +
@@ -3186,11 +3251,8 @@ def _entry_reachable_set(
 
 
 def _file_language(inventory: Dict[str, Any], file_path: str) -> Optional[str]:
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if isinstance(fr, dict) and (fr.get("path") or "").replace("\\", "/") == norm:
-            return fr.get("language")
-    return None
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    return fr.get("language") if fr else None
 
 
 def _file_python_exports(
@@ -3201,15 +3263,13 @@ def _file_python_exports(
     "what is exported" signal — distinct from the leading-underscore
     convention, which is a fallback when ``__all__`` is absent.
     """
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        exports = fr.get("exports")
-        if exports is None:
-            return None
-        return frozenset(exports)
-    return None
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    if not fr:
+        return None
+    exports = fr.get("exports")
+    if exports is None:
+        return None
+    return frozenset(exports)
 
 
 def _is_nested_function(
@@ -3220,39 +3280,80 @@ def _is_nested_function(
     ``line_start`` falls strictly inside another item's
     ``[line_start, line_end]`` range is nested.
     """
-    norm = target.file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        items = fr.get("items", []) or []
-        if target.line <= 0:
-            return False
-        for other in items:
-            if not isinstance(other, dict):
-                continue
-            if other.get("kind", "function") != "function":
-                continue
-            ols = int(other.get("line_start") or 0)
-            ole = int(other.get("line_end") or 0)
-            if ols <= 0 or ole <= 0:
-                continue
-            if ols < target.line and target.line <= ole:
-                return True
+    if target.line <= 0:
         return False
+    fr = _files_by_path(inventory).get(target.file_path.replace("\\", "/"))
+    if not fr:
+        return False
+    for other in fr.get("items", []) or []:
+        if not isinstance(other, dict):
+            continue
+        if other.get("kind", "function") != "function":
+            continue
+        ols = int(other.get("line_start") or 0)
+        ole = int(other.get("line_end") or 0)
+        if ols <= 0 or ole <= 0:
+            continue
+        if ols < target.line and target.line <= ole:
+            return True
     return False
 
 
-def _file_has_masking(inventory: Dict[str, Any], file_path: str) -> bool:
-    norm = file_path.replace("\\", "/")
-    for fr in inventory.get("files", []):
-        if not isinstance(fr, dict) or (fr.get("path") or "").replace("\\", "/") != norm:
-            continue
-        cg = fr.get("call_graph") or {}
-        if set(cg.get("indirection") or []) & _MASKING_FLAGS:
-            return True
-        if cg.get("macro_call_targets"):
-            return True
+def _file_masks_target(
+    inventory: Dict[str, Any], file_path: str, target_name: str,
+    *, target_module: Optional[str] = None,
+) -> bool:
+    """Could dynamic dispatch in this file resolve to ``target_name``?
+
+    Refines the older "any masking flag → True" check (which over-tainted
+    every reverse-closure path through a file with any reflection) by
+    asking the more precise question: is there a dispatcher in this file
+    whose runtime target COULD be ``target_name``?
+
+    Returns ``True`` when:
+      - The file carries any OPAQUE masking flag (variable-arg getattr,
+        importlib, eval, bracket-dispatch, …) — the dispatcher's name is
+        unknown, so any target is possible.
+      - The file has a literal-string ``getattr`` AND ``target_name`` is
+        one of those literals (the dispatch could hit this target).
+      - The file has a wildcard-import that could plausibly bring
+        ``target_name`` in scope. When ``target_module`` is supplied the
+        resolver layer's ``_wildcard_could_provide`` heuristic is used
+        to narrow per-target (drops the wildcard claim when no other
+        import in this file shares the target's module root). Without
+        ``target_module`` the wildcard is conservatively blanket.
+      - The file's macro_call_targets list mentions ``target_name``
+        (C/C++ macro-body dispatch — same per-target shape).
+
+    Returns ``False`` when all dispatchers resolve to literal names other
+    than ``target_name``: the masking is real but doesn't affect this
+    target, so an entry_reachability dead-island claim is safe.
+    """
+    fr = _files_by_path(inventory).get(file_path.replace("\\", "/"))
+    if not fr:
         return False
+    cg = fr.get("call_graph") or {}
+    flags = set(cg.get("indirection") or [])
+    if flags & _OPAQUE_MASKING_FLAGS:
+        return True
+    if (INDIRECTION_GETATTR in flags
+            and target_name in (cg.get("getattr_targets") or [])):
+        return True
+    if INDIRECTION_WILDCARD_IMPORT in flags:
+        # When the caller supplies ``target_module`` (entry_reachability
+        # derives it from the target's file path) we narrow per-target
+        # — a ``from json import *`` in a file that doesn't import
+        # anything from the target's root package can't have brought
+        # the target into scope. Without ``target_module`` we stay
+        # conservative.
+        if target_module is None:
+            return True
+        imports = cg.get("imports") or {}
+        if _wildcard_could_provide(imports, target_module, target_name):
+            return True
+    macro_targets = cg.get("macro_call_targets") or []
+    if target_name in macro_targets:
+        return True
     return False
 
 
@@ -3349,12 +3450,31 @@ def entry_reachability(
     # target's file, or in any function that transitively calls it, could
     # hide an entry edge the static graph didn't capture → don't claim
     # dead. This reverse walk only runs for the not-reachable minority.
-    if _file_has_masking(inventory, target.file_path):
+    # ``_file_masks_target`` is target-name aware: a file whose only
+    # reflection is ``getattr(obj, "foo")`` does NOT mask an unrelated
+    # ``bar`` — narrower than the previous "any masking flag → uncertain"
+    # check. ``target_module`` (derived from the target's path) narrows
+    # the wildcard-import branch via ``_wildcard_could_provide``: a
+    # ``from json import *`` in a file that doesn't otherwise import
+    # from the target's root package no longer masks every dead-island
+    # claim through that file.
+    #
+    # Note: ``_wildcard_could_provide`` was originally written for the
+    # resolver layer's ``function_called`` flow, where ``target_module``
+    # is the *dep being queried* (e.g. ``requests.utils``). Here we pass
+    # the target's *own file-derived module* (e.g. ``mypkg.helpers``).
+    # The heuristic answer-shape is the same — "does this file's import
+    # surface touch the target's root package" — but the semantic of
+    # ``target_module`` differs per caller; mind this if extending.
+    target_module = _file_path_to_module(target.file_path)
+    if _file_masks_target(inventory, target.file_path, target.name,
+                          target_module=target_module):
         return "uncertain"
     rc = reverse_closure(inventory, target, max_depth=max_depth)
     for fn in rc.nodes:
-        if isinstance(fn, InternalFunction) and _file_has_masking(
-            inventory, fn.file_path,
+        if isinstance(fn, InternalFunction) and _file_masks_target(
+            inventory, fn.file_path, target.name,
+            target_module=target_module,
         ):
             return "uncertain"
     return "no_path_from_entry"

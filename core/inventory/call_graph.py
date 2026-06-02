@@ -94,6 +94,13 @@ def _get_ts_parser(language_fn: Any) -> Any:
 # Indirection-flag values. Strings (not enum) so they round-trip
 # through JSON cleanly without a from_dict shim.
 INDIRECTION_GETATTR = "getattr"
+# Distinct from ``getattr``: the second argument is NOT a string Constant,
+# so the resolver can't narrow to a specific tail name. This is the truly
+# opaque case and earns blanket masking for any target name in the file's
+# reverse closure. ``getattr`` (with a literal-string arg) populates
+# ``getattr_targets`` and the resolver only taints THAT specific name —
+# unrelated targets in the same file aren't tainted.
+INDIRECTION_GETATTR_OPAQUE = "getattr_opaque"
 INDIRECTION_IMPORTLIB = "importlib"
 INDIRECTION_WILDCARD_IMPORT = "wildcard_import"
 INDIRECTION_DUNDER_IMPORT = "dunder_import"     # __import__("x.y")
@@ -101,7 +108,7 @@ INDIRECTION_DUNDER_IMPORT = "dunder_import"     # __import__("x.y")
 # treats them the same as the Python flags: any present →
 # UNCERTAIN for queries against names this file mentions.
 INDIRECTION_DYNAMIC_IMPORT = "dynamic_import"   # JS import(<var>) / require(<var>)
-INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...)
+INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...) / Py HANDLERS[k]()
 INDIRECTION_EVAL = "eval"                        # JS eval / new Function
 
 
@@ -576,17 +583,39 @@ class _PythonCallGraph(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         chain = _attribute_chain(node.func)
         if chain is None:
-            # Non-name callee (lambda, subscript, returned function
-            # call, etc.) — nothing for the resolver to match.
+            # Non-name callee — but ``HANDLERS[key](...)`` (Subscript)
+            # is dict-of-functions dispatch, a real opaque-dispatch
+            # channel. Without a tail name to narrow, treat it like
+            # opaque getattr: any target in the file's reverse
+            # closure could be the runtime callee. Other non-name
+            # forms (``(lambda x: …)()``, ``f()()``) carry no
+            # callable-name signal and stay invisible.
+            if isinstance(node.func, ast.Subscript):
+                self.graph.indirection.add(INDIRECTION_BRACKET_DISPATCH)
             self.generic_visit(node)
             return
 
-        # Indirection: getattr(obj, "name")(...)
-        if (chain == ["getattr"] and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)):
-            self.graph.indirection.add(INDIRECTION_GETATTR)
-            self.graph.getattr_targets.add(node.args[1].value)
+        # Indirection: getattr(obj, ...)
+        # Two sub-cases:
+        #   literal:  getattr(obj, "name")    → record "name", flag
+        #             stays narrow (only "name" gets uncertain in
+        #             reverse closure; unrelated targets in same file
+        #             stay claimable).
+        #   opaque:   getattr(obj, var_expr)  → no name to record;
+        #             ANY target in the file's reverse closure could
+        #             be the runtime dispatch — blanket masking.
+        # Aliased forms — ``from builtins import getattr as g`` /
+        # ``import builtins; builtins.getattr(...)`` — resolved via
+        # the file's import map so ``g(obj, …)`` and
+        # ``builtins.getattr(obj, …)`` are also seen.
+        if _is_builtin_call(chain, "getattr", self.graph.imports) and len(node.args) >= 2:
+            second = node.args[1]
+            if (isinstance(second, ast.Constant)
+                    and isinstance(second.value, str)):
+                self.graph.indirection.add(INDIRECTION_GETATTR)
+                self.graph.getattr_targets.add(second.value)
+            else:
+                self.graph.indirection.add(INDIRECTION_GETATTR_OPAQUE)
 
         # Indirection: importlib.import_module("x.y")
         if chain == ["importlib", "import_module"]:
@@ -597,8 +626,8 @@ class _PythonCallGraph(ast.NodeVisitor):
             if qualified == "importlib.import_module":
                 self.graph.indirection.add(INDIRECTION_IMPORTLIB)
 
-        # Indirection: __import__("x.y")
-        if chain == ["__import__"]:
+        # Indirection: __import__("x.y") — also aliased forms.
+        if _is_builtin_call(chain, "__import__", self.graph.imports):
             self.graph.indirection.add(INDIRECTION_DUNDER_IMPORT)
 
         caller = self._enclosing[-1] if self._enclosing else None
@@ -619,6 +648,35 @@ class _PythonCallGraph(ast.NodeVisitor):
             receiver_class=receiver_class,
         ))
         self.generic_visit(node)
+
+
+def _is_builtin_call(
+    chain: List[str], builtin_name: str, imports: Dict[str, str],
+) -> bool:
+    """Does ``chain`` resolve to a call of the Python builtin
+    ``builtin_name`` (``getattr``, ``__import__``, …)?
+
+    Matches three forms:
+      - bare:     ``getattr(obj, "x")``               → chain ``["getattr"]``
+      - aliased:  ``from builtins import getattr as g; g(obj, "x")``
+                  → chain ``["g"]`` + ``imports["g"] == "builtins.getattr"``
+      - dotted:   ``import builtins; builtins.getattr(obj, "x")``
+                  → chain ``["builtins", "getattr"]``
+
+    Aliased and dotted forms are easy to miss but real: any project
+    that shadows a builtin name locally (lint workaround,
+    deobfuscation pattern, …) routes its dispatch through this
+    aliased path. Catching them keeps the masking signal honest.
+    """
+    if chain == [builtin_name]:
+        return True
+    if len(chain) == 1:
+        qualified = imports.get(chain[0])
+        if qualified == f"builtins.{builtin_name}":
+            return True
+    if chain == ["builtins", builtin_name]:
+        return True
+    return False
 
 
 def _decorator_chain(deco: ast.AST) -> Optional[List[str]]:

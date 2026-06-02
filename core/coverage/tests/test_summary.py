@@ -105,6 +105,40 @@ class TestFormatExecutionDetail(unittest.TestCase):
     def test_empty_renders_blank(self):
         self.assertEqual(format_execution_detail({"tools": {}}), "")
 
+    def test_files_failed_renders_as_parse_errors_not_failed(self):
+        # ``files_failed`` on the coverage record is per-file PARSE
+        # errors (semgrep couldn't tokenise N source files), NOT
+        # failed packs. Pre-fix the line printed ``N failed``
+        # adjacent to scan_coverage's ``X packs failed`` line, an
+        # operator-confusing terminology overlap.
+        detail = {"tools": {"semgrep": {
+            "files_examined": 10, "files_total": 10,
+            "rules_applied": ["crypto"], "packs": [],
+            "files_failed": [
+                {"path": "src/a.c", "reason": "syntax error"},
+                {"path": "src/b.c", "reason": "syntax error"},
+                {"path": "src/c.c", "reason": "syntax error"},
+            ],
+            "version": "1.0"}},
+            "missing_groups": []}
+        text = format_execution_detail(detail)
+        # New wording explicitly names PARSE errors.
+        self.assertIn("3 file parse errors", text)
+        # And does NOT use the ambiguous ``N failed`` wording the
+        # adjacent ``Coverage:`` line uses for failed packs.
+        self.assertNotIn("3 failed", text)
+
+    def test_single_file_parse_error_uses_singular(self):
+        detail = {"tools": {"semgrep": {
+            "files_examined": 1, "files_total": 1,
+            "rules_applied": ["crypto"], "packs": [],
+            "files_failed": [{"path": "src/a.c", "reason": "syntax error"}],
+            "version": "1.0"}},
+            "missing_groups": []}
+        text = format_execution_detail(detail)
+        self.assertIn("1 file parse error", text)
+        self.assertNotIn("1 file parse errors", text)
+
 
 class TestMatchToInventory(unittest.TestCase):
 

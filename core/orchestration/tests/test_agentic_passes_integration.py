@@ -25,8 +25,11 @@ _interactive_patch = None
 
 def setUpModule():
     global _interactive_patch
+    # Force the agentic-pass gate open: mock the human-terminal leg True so
+    # the full pass path runs under CI/pytest (no controlling terminal).
     _interactive_patch = patch(
-        "core.security.rule_of_two.is_interactive", return_value=True,
+        "core.security.rule_of_two._session_has_human_terminal",
+        return_value=True,
     )
     _interactive_patch.start()
 

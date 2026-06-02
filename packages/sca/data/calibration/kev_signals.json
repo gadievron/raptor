@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-05-28T17:39:22Z",
+    "fetched_at": "2026-06-02T10:03:51Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -8596,6 +8596,13 @@
       "ransomware_use": false,
       "vendor": "Oracle"
     },
+    "CVE-2024-21182": {
+      "date_added": "2026-06-01",
+      "kev": true,
+      "product": "WebLogic Server",
+      "ransomware_use": false,
+      "vendor": "Oracle"
+    },
     "CVE-2024-21287": {
       "date_added": "2024-11-21",
       "kev": true,
@@ -10835,6 +10842,13 @@
       "product": "Multiple Routers",
       "ransomware_use": false,
       "vendor": "TP-Link"
+    },
+    "CVE-2026-0257": {
+      "date_added": "2026-05-29",
+      "kev": true,
+      "product": "PAN-OS",
+      "ransomware_use": false,
+      "vendor": "Palo Alto Networks"
     },
     "CVE-2026-0300": {
       "date_added": "2026-05-06",

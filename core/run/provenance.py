@@ -108,13 +108,19 @@ def source_control_snapshot(repo_dir: Optional[Path] = None) -> Dict[str, Any]:
                    only its hash — so the manifest cannot leak source. Note
                    an untracked-only modification sets dirty=True but leaves
                    diff_sha256 None (``git diff HEAD`` omits untracked files).
+      version      human-readable ``git describe`` of the framework (e.g.
+                   ``3.0.0-1786-g7fcf38ea``), or None if unknowable. Unlike the
+                   banner's ``RaptorConfig.effective_version()`` this never
+                   falls back to the baked constant — provenance must report
+                   what it can actually verify, not a substituted value.
     """
     repo_dir = repo_dir or _REPO_ROOT
     sha = _git(repo_dir, "rev-parse", "HEAD")
     if sha is None:
         # Not a git checkout (or git unavailable) — provenance unknowable.
         # Report None across the board; do NOT substitute any current value.
-        return {"base_sha": None, "dirty": None, "diff_sha256": None}
+        return {"base_sha": None, "dirty": None, "diff_sha256": None,
+                "version": None}
 
     porcelain = _git(repo_dir, "status", "--porcelain")
     # Empty porcelain output == clean tree. None == status failed (unknowable).
@@ -128,7 +134,15 @@ def source_control_snapshot(repo_dir: Optional[Path] = None) -> Dict[str, Any]:
                 diff.encode("utf-8", "replace")
             ).hexdigest()
 
-    return {"base_sha": sha, "dirty": dirty, "diff_sha256": diff_sha256}
+    # Human-readable framework version, derived from the same checkout the
+    # sha came from. ``--always`` falls back to a short sha for an untagged
+    # commit; ``lstrip('v')`` normalises the tag prefix to match VERSION.
+    version = _git(repo_dir, "describe", "--tags", "--dirty=-local", "--always")
+    if version:
+        version = version.lstrip("v")
+
+    return {"base_sha": sha, "dirty": dirty, "diff_sha256": diff_sha256,
+            "version": version}
 
 
 def tool_version(name: str) -> Optional[str]:

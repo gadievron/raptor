@@ -26,6 +26,72 @@ def _red(text): return _c(text, "31")
 def _yellow(text): return _c(text, "33")
 
 
+def _detect_target_type(target_path: str):
+    """Best-effort catalog detection for project-create. Returns
+    a ``CatalogEntry`` or None — substrate failures (catalog
+    missing, YAML malformed) collapse to None so create never
+    refuses over a catalog substrate bug.
+
+    Distinct from the runtime consumers (/scan baseline packs,
+    /agentic attack-surface ranking) which call the same
+    ``core.run.target_types.load`` — this is just the project-
+    create surface so operators see the catalog match at
+    create-time.
+    """
+    try:
+        from core.run.target_types import load
+        return load(Path(target_path))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _format_project_tuning(entry) -> list:
+    """Render the post-create tuning block from a CatalogEntry.
+
+    Composes ``core.run.estimator.format_estimate`` (cost/time
+    one-liner) plus a compact summary of the catalog defaults so
+    the operator sees up-front what RAPTOR will use for /scan,
+    /agentic, /codeql defaults on this project. Returns a list of
+    lines (caller decides where they land — stdout / file / etc.).
+    """
+    from core.run.estimator import RunEstimate, format_estimate
+    lines: list = []
+    lines.append(f"  Target type: {entry.name}")
+    # Cost/time — synthesise a RunEstimate from the catalog so we
+    # share the format_estimate renderer (single source of truth
+    # for the operator-facing string).
+    cost_low, cost_high = entry.estimated_cost_usd
+    time_low, time_high = entry.estimated_time_min
+    if cost_high > 0 or time_high > 0:
+        _est = RunEstimate(
+            cost_low=cost_low, cost_high=cost_high,
+            time_low=time_low, time_high=time_high,
+            target_type=entry.name,
+        )
+        _est_line = format_estimate(_est)
+        if _est_line:
+            # Strip the ``(target type: X)`` suffix — already
+            # printed above in the tuning block.
+            _est_line = _est_line.split(" (target type:", 1)[0]
+            lines.append(f"  {_est_line}")
+    if entry.semgrep_packs_default:
+        lines.append(
+            f"  /scan baseline packs: "
+            f"{', '.join(entry.semgrep_packs_default)}"
+        )
+    if entry.attack_surface_high:
+        lines.append(
+            f"  /agentic preferred dirs: "
+            f"{', '.join(entry.attack_surface_high)}"
+        )
+    if entry.pipeline_recommended:
+        lines.append(
+            f"  Recommended pipeline: "
+            f"{' → '.join(entry.pipeline_recommended)}"
+        )
+    return lines
+
+
 class _Fmt(argparse.HelpFormatter):
     """Wider help alignment for subcommand option lists."""
     def __init__(self, prog):
@@ -56,6 +122,15 @@ def main():
               "project; loaded into every subsequent /agentic / "
               "/codeql / /validate run on this project. Explicit "
               "--binary on the CLI is additive."),
+    )
+    p_create.add_argument(
+        "--require-target-type", default=None, metavar="<name>",
+        help=("Hard-fail if target-type catalog detection didn't "
+              "pick this exact name (e.g. ``c.userspace-daemon``, "
+              "``python.web-app``). For strict-CI runs that assert "
+              "the project's target shape — catches malformed "
+              "targets or stale catalog drift BEFORE any LLM cost. "
+              "On mismatch the project is NOT created."),
     )
 
     # binary — per-project binary management
@@ -313,6 +388,23 @@ def main():
                 parser.print_help()
 
         elif args.subcommand == "create":
+            # Target-type catalog detection — runs BEFORE
+            # ProjectManager.create so a --require-target-type
+            # mismatch refuses without leaving a half-created
+            # project on disk (QoL #18).
+            _detected_entry = _detect_target_type(args.target)
+            _required = getattr(args, "require_target_type", None)
+            if _required:
+                _detected_name = _detected_entry.name if _detected_entry else None
+                if _detected_name != _required:
+                    print(_red(
+                        f"--require-target-type mismatch: expected "
+                        f"'{_required}', detected "
+                        f"{_detected_name!r}. Project NOT created. "
+                        f"Inspect target or list available types via "
+                        f"the catalog YAMLs in core/run/target_types/."
+                    ))
+                    sys.exit(1)
             p = mgr.create(args.name, args.target,
                            description=args.description,
                            output_dir=args.output_dir,
@@ -321,6 +413,15 @@ def main():
             _p_binaries = getattr(p, "binaries", None) or []
             if _p_binaries:
                 print(f"  binaries: {', '.join(_p_binaries)}")
+            # Print the catalog tuning block AFTER the create
+            # confirmation — operator sees what RAPTOR will use as
+            # defaults when /scan, /agentic, /codeql etc. run on
+            # this project. Strictly informational; per-command
+            # flags (--policy-groups, --prefer) still override at
+            # run time.
+            if _detected_entry is not None:
+                for line in _format_project_tuning(_detected_entry):
+                    print(line)
 
         elif args.subcommand == "binary":
             from core.json import save_json

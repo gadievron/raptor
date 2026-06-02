@@ -181,6 +181,26 @@ class TestUsage:
         assert rc == 2
         assert "usage: raptor doctor" in captured.err
 
+    def test_help_flag_returns_zero_on_stdout(self, capsys):
+        """`--help` is a help request: usage to stdout, exit 0.
+
+        Distinct from an unknown flag (stderr, exit 2). Guards against the
+        regression where --help fell into the unknown-arg branch.
+        """
+        rc = main(["--help"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "usage: raptor doctor" in captured.out
+        assert captured.err == ""
+
+    def test_short_help_flag_returns_zero_on_stdout(self, capsys):
+        """`-h` behaves identically to `--help`."""
+        rc = main(["-h"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "usage: raptor doctor" in captured.out
+        assert captured.err == ""
+
     def test_strict_and_verbose_combinable(self, capsys, monkeypatch):
         monkeypatch.setattr(
             doctor, "_gather",

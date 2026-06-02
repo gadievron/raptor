@@ -105,6 +105,9 @@ class TestSourceControlSnapshot(unittest.TestCase):
             self.assertIsNone(snap["base_sha"])
             self.assertIsNone(snap["dirty"])
             self.assertIsNone(snap["diff_sha256"])
+            # Provenance never substitutes a value — version is None too,
+            # not the baked RaptorConfig.VERSION.
+            self.assertIsNone(snap["version"])
 
     @unittest.skipUnless(_GIT, "git not available")
     def test_clean_repo(self):
@@ -115,6 +118,9 @@ class TestSourceControlSnapshot(unittest.TestCase):
             self.assertRegex(snap["base_sha"], r"^[0-9a-f]{40}$")
             self.assertFalse(snap["dirty"])
             self.assertIsNone(snap["diff_sha256"])
+            # Untagged repo → describe --always falls back to a short sha,
+            # which is a non-empty honest version string (not None).
+            self.assertTrue(snap["version"])
 
     @unittest.skipUnless(_GIT, "git not available")
     def test_dirty_tracked_change_sets_diff_hash(self):

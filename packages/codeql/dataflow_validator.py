@@ -732,7 +732,8 @@ class DataflowValidator:
         Returns:
             DataflowValidation result
         """
-        self.logger.info(f"Validating dataflow path: {dataflow.rule_id}")
+        from core.reporting.formatting import display_rule_id
+        self.logger.info(f"Validating dataflow path: {display_rule_id(dataflow.rule_id)}")
 
         # SMT pre-check: extract path conditions (plus a bitvector type
         # hint from the LLM) and test joint satisfiability.  If unsat,

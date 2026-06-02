@@ -17,10 +17,18 @@ WRAPPER = REPO_ROOT / "libexec" / "raptor-normalize-context-map"
 
 
 def _run(*args, **kwargs):
-    """Invoke the wrapper as a real subprocess (matches how skills call it)."""
+    """Invoke the wrapper as a real subprocess (matches how skills call it).
+
+    Timeout: 60s. The wrapper's cold-start cost is dominated by
+    ``core.orchestration.understand_bridge`` import + its transitive
+    dependencies (tree-sitter, model data, sandbox primitives) —
+    ~17s on a typical workstation. The original 15s timeout was set
+    when the import chain was thinner; ran flaky as RAPTOR's
+    inventory substrate grew. 60s leaves comfortable headroom
+    without masking a genuine wedge."""
     return subprocess.run(
         [str(WRAPPER), *args],
-        capture_output=True, text=True, timeout=15, **kwargs,
+        capture_output=True, text=True, timeout=60, **kwargs,
     )
 
 

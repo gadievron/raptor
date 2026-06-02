@@ -4,6 +4,8 @@ description: Software Composition Analysis — find vulnerable dependencies, gat
 
 # RAPTOR Software Composition Analysis
 
+**`--help` / `-h`:** If the user passes only `--help` or `-h`, run `python3 raptor.py sca --help` and present its output. That command is side-effect-free (no run, lifecycle, output directory, or LLM dispatcher) and is the complete, authoritative command/flag list — do NOT start a scan or hand-summarise from this doc.
+
 You are helping the user analyse a project's third-party dependencies for known vulnerabilities, supply-chain red flags, and hygiene issues.
 
 ## Your task

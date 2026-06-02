@@ -60,7 +60,7 @@ from pathlib import Path
 # is safer than implicit.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core.run.output import get_output_dir, TargetMismatchError
+from core.run.output import get_output_dir, resolve_default_target, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
 from core.run.safe_io import safe_run_mkdir
 
@@ -87,6 +87,62 @@ def _extract_target(args: list) -> str | None:
             if arg.startswith(prefix):
                 return arg[len(prefix):]
     return None
+
+
+def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
+    """Extract ``--max-cost-usd <USD>`` (or ``--max-cost-usd=<USD>``)
+    from ``args``. Returns ``(cap_usd, args_without_flag)``.
+
+    Lives at the lifecycle level so the operator can declare a
+    per-run budget once at the entry point and the estimator gate
+    + downstream loop both see the same cap. Stripped before
+    forwarding so downstream scripts (scanner, agentic, codeql)
+    don't have to recognise the flag.
+
+    Invalid values (non-numeric, zero, negative) print a stderr
+    warning and return ``(None, args)`` unchanged — operator's
+    typo doesn't silently uncap the run, but the run also doesn't
+    refuse to start over a bad cap value. (A hard error here
+    would force every operator typo through a full lifecycle
+    failure, which is more brittle than this warn-and-skip
+    fallback.)
+    """
+    flag = "--max-cost-usd"
+    prefix = f"{flag}="
+    cap_str: str | None = None
+    out: list = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == flag and i + 1 < len(args):
+            cap_str = args[i + 1]
+            i += 2
+            continue
+        if a.startswith(prefix):
+            cap_str = a[len(prefix):]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    if cap_str is None:
+        return (None, args)
+    try:
+        cap = float(cap_str)
+    except ValueError:
+        print(
+            f"WARNING: --max-cost-usd value {cap_str!r} is not a number; "
+            "ignoring cap for this run",
+            file=sys.stderr,
+        )
+        return (None, args)
+    if cap <= 0:
+        print(
+            f"WARNING: --max-cost-usd must be > 0 (got {cap}); "
+            "ignoring cap for this run",
+            file=sys.stderr,
+        )
+        return (None, args)
+    return (cap, out)
 
 
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
@@ -195,6 +251,17 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
     return new_args, identity
 
 
+def _wants_help(args: list) -> bool:
+    """True if args request argparse help (``--help`` / ``-h``).
+
+    Single source of truth for the help short-circuits. A help request is
+    not a run: it must never resolve a target, create/seal an output
+    directory, print the OUTPUT_DIR sentinel or license/cost preamble, or
+    start the LLM dispatcher.
+    """
+    return "--help" in args or "-h" in args
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -202,7 +269,34 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     Resolves the output directory via the run lifecycle, injects --out
     into the downstream script args, and marks the run complete or failed.
     """
+    # Defense-in-depth behind main()'s per-mode help short-circuit: if any
+    # caller reaches the lifecycle wrapper with --help/-h, skip the entire
+    # lifecycle and delegate straight to _run_script (which has its own
+    # --help guard for the dispatcher). The child's argparse prints help and
+    # exits during parse_args, before its body runs — so no run directory,
+    # sentinel, license/cost preamble, coverage, or complete_run.
+    if _wants_help(args):
+        return _run_script(script_path, args)
+
     target = _extract_target(args)
+
+    # Operator-declared per-run budget cap (QoL #21). Stripped from
+    # ``args`` before forwarding so downstream scripts don't have
+    # to recognise the flag. Pre-flight gate fires below, after
+    # the catalog estimate is computed.
+    max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
+
+    # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
+    # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
+    # an explicit target. Pre-fix, scanner.py's `--repo required=True`
+    # crashed with "required: --repo" even when a project was active —
+    # the dispatcher resolved the output dir correctly but never
+    # forwarded the target into the downstream script's args.
+    # Explicit --repo from args always wins (per the override pattern).
+    if target is None:
+        target = resolve_default_target()
+        if target is not None:
+            args = args + ["--repo", target]
 
     try:
         out_dir = get_output_dir(command, target_path=target)
@@ -232,6 +326,93 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             args, target_identity = res
 
     start_run(out_dir, command, target=target, target_identity=target_identity)
+    # Mirror libexec/raptor-run-lifecycle's sentinel so direct
+    # `python3 raptor.py <mode>` invocation honours the OUTPUT_DIR=<path>
+    # contract documented in CLAUDE.md. Downstream tooling that greps
+    # stdout for the sentinel works on both invocation paths.
+    print(f"OUTPUT_DIR={out_dir}", flush=True)
+
+    # Surface the target's license at lifecycle start, BEFORE any
+    # tool actually runs — operators about to use CodeQL get the
+    # license-terms warning in time to Ctrl-C, not after they've
+    # incurred LLM cost / DB-build time. Strictly informational —
+    # RAPTOR doesn't gate the run on the result (operator may have
+    # a CodeQL commercial license, may be authorised on first-party
+    # code without a LICENSE file, etc.). Terse operator-line only;
+    # the HOW (source file, confidence, additional files) lives at
+    # debug-log level via log_license_details.
+    #
+    # CodeQL-use detection: only fires the codeql-terms warning when
+    # this run is ACTUALLY going to invoke CodeQL — the ``codeql``
+    # mode itself, or scan/agentic with ``--codeql`` /
+    # ``--codeql-only``. Plain /agentic (no --codeql) doesn't reach
+    # CodeQL, so the operator doesn't need the warning.
+    if target:
+        try:
+            from core.license import (
+                detect_target_license,
+                format_license_summary,
+                log_license_details,
+            )
+            _lic = detect_target_license(Path(target))
+            log_license_details(_lic)
+            _will_run_codeql = (
+                command == "codeql"
+                or "--codeql" in args
+                or "--codeql-only" in args
+            )
+            _summary = format_license_summary(
+                _lic, command="codeql" if _will_run_codeql else command,
+            )
+            if _summary:
+                print(_summary, flush=True)
+        except Exception as e:
+            # License detection is non-essential; never fail the
+            # lifecycle on a detector bug.
+            print(f"  (license-detect skipped: {e})",
+                  file=sys.stderr, flush=True)
+
+    # Cost-and-time estimate from the target-type catalog (QoL #21).
+    # Operator sees the expected ballpark before any LLM cost
+    # incurs; Ctrl-C is the cancel path. When ``--max-cost-usd``
+    # is set, the upper bound of the catalog estimate is gated
+    # against the cap pre-flight — runs that would obviously
+    # blow the budget refuse to start rather than spending the
+    # cap to discover the cap was insufficient.
+    if target:
+        try:
+            from core.run.estimator import estimate_run, format_estimate
+            _est = estimate_run(Path(target))
+            _est_line = format_estimate(_est)
+            if _est_line:
+                print(_est_line, flush=True)
+            if (
+                max_cost_usd is not None
+                and _est is not None
+                and _est.cost_high > max_cost_usd
+            ):
+                print(
+                    f"✗ Pre-flight cost gate: catalog estimate "
+                    f"upper bound (${_est.cost_high:.2f}) exceeds "
+                    f"--max-cost-usd cap (${max_cost_usd:.2f}). "
+                    f"Raise the cap or accept the risk and re-run "
+                    f"without --max-cost-usd.",
+                    file=sys.stderr, flush=True,
+                )
+                # Mark the run failed so the lifecycle metadata
+                # reflects WHY this output dir didn't progress —
+                # operator inspecting the dir later sees the
+                # pre-flight refusal, not a phantom ``running``
+                # state.
+                try:
+                    fail_run(out_dir, "pre-flight cost gate exceeded")
+                except Exception:  # noqa: BLE001
+                    pass
+                return 1
+        except Exception as e:
+            # Estimator is best-effort; never break the lifecycle.
+            print(f"  (estimate skipped: {e})",
+                  file=sys.stderr, flush=True)
 
     # SAGE: Pre-scan recall
     try:
@@ -462,6 +643,21 @@ def _run_script(script_path: Path, args: list) -> int:
         Exit code from the script
     """
     cmd = [sys.executable, str(script_path)] + args
+
+    # --help/-h is not a run: render the child's argparse help with a plain
+    # subprocess (safe env, short timeout) and skip the LLM dispatcher
+    # entirely. argparse prints help and exits during parse_args, before the
+    # script body — so starting the dispatcher would be a pure side effect.
+    if _wants_help(args):
+        from core.config import RaptorConfig
+        try:
+            return subprocess.run(
+                cmd, env=RaptorConfig.get_safe_env(), timeout=15,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            print(f"✗ Help rendering for {script_path.name} timed out",
+                  file=sys.stderr)
+            return 1
 
     try:
         from core.config import RaptorConfig
@@ -777,11 +973,15 @@ def mode_zkpox(args: list) -> int:
 
 
 
-def show_mode_help(mode: str) -> None:
-    """Show detailed help for a specific mode."""
+def _mode_help_scripts() -> dict:
+    """Map mode name → the script whose argparse renders that mode's help.
+
+    Single source of truth shared by show_mode_help (renders the help) and
+    the `<mode> --help` short-circuit in main() (decides which modes get the
+    side-effect-free help path vs. falling through to their handler).
+    """
     script_root = Path(__file__).parent
-    
-    mode_scripts = {
+    return {
         'scan': script_root / "packages/static-analysis/scanner.py",
         'fuzz': script_root / "raptor_fuzzing.py",
         'web': script_root / "packages/web/scanner.py",
@@ -790,18 +990,40 @@ def show_mode_help(mode: str) -> None:
         'analyze': script_root / "packages/llm_analysis/agent.py",
         'zkpox': script_root / "libexec" / "raptor-zkpox",
     }
-    
+
+
+# Modes whose `<mode> --help` is rendered by spawning the child script's own
+# argparse (no run lifecycle). Derived from _mode_help_scripts so it stays in
+# lockstep with what show_mode_help can actually render.
+_HELP_RENDER_MODES = frozenset(_mode_help_scripts().keys())
+
+
+def show_mode_help(mode: str, preamble: bool = True) -> None:
+    """Show detailed help for a specific mode.
+
+    preamble=True prints a "[*] Help for mode: <mode>" header (the
+    `raptor.py help <mode>` surface). The `<mode> --help` short-circuit
+    passes preamble=False so the output is *only* the mode's argparse
+    help, with nothing above it.
+    """
+    mode_scripts = _mode_help_scripts()
+
     if mode not in mode_scripts:
         print(f"✗ Unknown mode: {mode}", file=sys.stderr)
         print(f"Available modes: {', '.join(mode_scripts.keys())}")
         return
-    
+
     script_path = mode_scripts[mode]
     if not script_path.exists():
         print(f"✗ Script not found: {script_path}", file=sys.stderr)
         return
-    
-    print(f"\n[*] Help for mode: {mode}\n")
+
+    if preamble:
+        # flush=True so the header lands ABOVE the child's help. Without
+        # it, Python block-buffers the print when stdout is a pipe while
+        # the subprocess writes to fd 1 directly — interleaving the
+        # header to the bottom of the output.
+        print(f"\n[*] Help for mode: {mode}\n", flush=True)
     # `env=` to a stripped environment so the help-rendering
     # subprocess doesn't inherit the parent's full env. Pre-fix the
     # bare subprocess.run carried LD_PRELOAD / LD_LIBRARY_PATH /
@@ -923,6 +1145,14 @@ def main():
         parser.print_help()
         return 0
     
+    # Print the running framework version and exit. Uses effective_version()
+    # so a checkout reports its true position past the last tag (git describe)
+    # and an installed/archived copy reports the baked VERSION.
+    if sys.argv[1] in ('--version', '-V', 'version'):
+        from core.config import RaptorConfig
+        print(RaptorConfig.effective_version())
+        return 0
+
     # Get mode from first argument
     mode = sys.argv[1].lower()
     remaining = sys.argv[2:]
@@ -945,7 +1175,23 @@ def main():
             print("Usage: raptor.py help <mode>")
             print("Example: raptor.py help scan")
         return 0
-    
+
+    # `<mode> --help` / `<mode> -h`: render the mode's own argparse help
+    # WITHOUT entering the run lifecycle. Pre-fix, --help fell through to
+    # the mode handler (mode_agentic etc.), which wraps the child in
+    # _run_with_lifecycle — resolving a target, creating AND sealing an
+    # output directory, printing the OUTPUT_DIR sentinel + license + cost
+    # estimate preamble, starting the LLM dispatcher, then emitting a
+    # coverage summary, all before the child's argparse ever saw --help.
+    # A help request must be side-effect-free. show_mode_help spawns
+    # `python3 raptor_<mode>.py --help` directly (safe env, timeout, no
+    # lifecycle, no dispatcher). Gated to the modes show_mode_help knows
+    # how to render; 'doctor' parses --help inside its own handler and
+    # 'sca' has no subprocess help script, so both fall through.
+    if mode in _HELP_RENDER_MODES and _wants_help(remaining):
+        show_mode_help(mode, preamble=False)
+        return 0
+
     # Route to appropriate mode
     mode_handlers = {
         'scan': mode_scan,
@@ -970,6 +1216,27 @@ def main():
         )
         if suggestion:
             print(f"  Did you mean '{suggestion[0]}'?", file=sys.stderr)
+        # Slash-command hint when one exists — that's the
+        # user-facing surface (operator types ``python3 raptor.py
+        # project`` and we point them at the ``/project`` slash-
+        # command in Claude Code). Automated callers (LLMs, skills,
+        # CLAUDE.md procedures) invoke libexec scripts directly; the
+        # libexec→mode mapping is arbitrary (``/project`` →
+        # ``raptor-project-manager``, but ``/validate`` has no
+        # libexec entry point — ``raptor-validate-schema`` is a
+        # specialised JSON-schema helper), so we don't try to
+        # auto-suggest libexec paths. The LLM context reads the
+        # skill / CLAUDE.md for the canonical invocation.
+        _slash = Path(__file__).parent / ".claude" / "commands" / f"{mode}.md"
+        if _slash.is_file():
+            print(
+                f"\n  '{mode}' isn't a raptor.py mode — for the "
+                f"operator-facing surface, run /{mode} in Claude "
+                f"Code. Automated callers should read "
+                f".claude/commands/{mode}.md for the canonical "
+                f"invocation.",
+                file=sys.stderr,
+            )
         print(f"\nAvailable modes: {', '.join(mode_handlers.keys())}", file=sys.stderr)
         print("\nRun 'python3 raptor.py --help' for more information", file=sys.stderr)
         return 1

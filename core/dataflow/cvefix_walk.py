@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -40,6 +41,67 @@ _MAVEN_PROXY_HOSTS = [
     "central.sonatype.com", "oss.sonatype.org", "maven.google.com", "dl.google.com",
 ]
 
+# Go module proxies the Go autobuilder fetches from.  Restricted to the
+# canonical Google-controlled chain:
+#
+#   * ``proxy.golang.org``      — module-info / version-list endpoint.
+#   * ``sum.golang.org``        — the Go checksum DB.
+#   * ``storage.googleapis.com`` — backs the proxy's ``.zip`` downloads.
+#     Without it 114 of 221 egress denials in the first Go walk were GCS;
+#     every module download failed at the content step even though the
+#     metadata fetch passed.
+#
+# Third-party mirrors (``goproxy.cn``, ``goproxy.io``) and the defunct
+# ``code.google.com`` are deliberately excluded — allowlisting them
+# expands trust surface to mirrors we don't control for a marginal yield
+# bump.  Projects pinning a third-party mirror just hit build_fail
+# under our sandbox; that's acceptable for a measurement corpus.
+#
+# Fail-mode is graceful: a build needing a non-allowlisted host gets
+# blocked → build_fail is recorded, the walker moves on.
+_GO_PROXY_HOSTS = [
+    "proxy.golang.org", "sum.golang.org",
+    "storage.googleapis.com",
+]
+
+
+# Per-language autobuild profile: which egress hosts to allowlist and what
+# env vars to inject so the build never writes to host config locations
+# (~/.m2, ~/go, etc.).  Keeping these together makes adding a new compiled
+# language a single profile entry rather than scattered conditionals in
+# the sandbox runner.
+def _java_autobuild_env(work_root: Path) -> dict:
+    return {"MAVEN_OPTS": f"-Dmaven.repo.local={work_root / '.m2'}"}
+
+
+def _go_autobuild_env(work_root: Path) -> dict:
+    """Redirect every Go cache + path into the work area so the sandboxed
+    build doesn't escape Landlock's allow-write set.  THREE Go state
+    locations matter — missing any one causes a permission-denied build
+    fail with no actionable signal:
+
+      * ``GOMODCACHE`` — downloaded module artifacts (was caught first).
+      * ``GOPATH`` — legacy package dir (some tools still write here).
+      * ``GOCACHE`` — the build cache; Go ALWAYS writes here regardless
+        of module mode.  Default ``$HOME/.cache/go-build`` is outside
+        the sandbox's writable set and silently fails 100% of builds.
+
+    ``GOFLAGS=-mod=mod`` allows the build to download missing modules
+    (default ``-mod=readonly`` would fail-closed without a go.sum hit).
+    """
+    return {
+        "GOMODCACHE": str(work_root / "go-mod-cache"),
+        "GOPATH": str(work_root / "gopath"),
+        "GOCACHE": str(work_root / "go-build-cache"),
+        "GOFLAGS": "-mod=mod",
+    }
+
+
+_AUTOBUILD_PROFILES = {
+    "java": (_MAVEN_PROXY_HOSTS, _java_autobuild_env),
+    "go":   (_GO_PROXY_HOSTS,   _go_autobuild_env),
+}
+
 # codeql extractor language -> (queries pack, {cwe: pack-relative query path}).
 # Ruby uses a different path scheme (lowercase queries/security/cwe-0XX) and query
 # names (ReflectedXSS, not ReflectedXss; PathInjection, not TaintedPath).
@@ -49,36 +111,68 @@ _QUERIES = {
         "CWE-78": "Security/CWE-078/CommandInjection.ql",
         "CWE-79": "Security/CWE-079/ReflectedXss.ql",
         "CWE-22": "Security/CWE-022/PathInjection.ql",
+        "CWE-94": "Security/CWE-094/CodeInjection.ql",
+        "CWE-918": "Security/CWE-918/FullServerSideRequestForgery.ql",
     }),
     "javascript": ("javascript-queries", {
         "CWE-89": "Security/CWE-089/SqlInjection.ql",
         "CWE-78": "Security/CWE-078/CommandInjection.ql",
         "CWE-79": "Security/CWE-079/ReflectedXss.ql",
         "CWE-22": "Security/CWE-022/TaintedPath.ql",
+        "CWE-94": "Security/CWE-094/CodeInjection.ql",
+        "CWE-918": "Security/CWE-918/RequestForgery.ql",
     }),
     "ruby": ("ruby-queries", {
         "CWE-89": "queries/security/cwe-089/SqlInjection.ql",
         "CWE-78": "queries/security/cwe-078/CommandInjection.ql",
         "CWE-79": "queries/security/cwe-079/ReflectedXSS.ql",
         "CWE-22": "queries/security/cwe-022/PathInjection.ql",
+        "CWE-94": "queries/security/cwe-094/CodeInjection.ql",
+        "CWE-918": "queries/security/cwe-918/ServerSideRequestForgery.ql",
     }),
     "java": ("java-queries", {
         "CWE-89": "Security/CWE/CWE-089/SqlTainted.ql",
         "CWE-78": "Security/CWE/CWE-078/ExecTainted.ql",
         "CWE-79": "Security/CWE/CWE-079/XSS.ql",
         "CWE-22": "Security/CWE/CWE-022/TaintedPath.ql",
+        # CWE-94 omitted for Java: the standard pack has no generic
+        # CodeInjection.ql; the framework-specific alternatives (SpEL,
+        # MVEL, Groovy, JEXL, Template) are too narrow for a broad walk
+        # and would silently miss most real Java code-injection fixes.
+        "CWE-918": "Security/CWE/CWE-918/RequestForgery.ql",
+    }),
+    "go": ("go-queries", {
+        # SQL injection: two query files in the Go pack — ``SqlInjection.ql``
+        # (the canonical taint query) and ``StringBreak.ql`` (a narrower
+        # string-literal break check).  Use the canonical one to match the
+        # other languages' shape.
+        "CWE-89": "Security/CWE-089/SqlInjection.ql",
+        "CWE-78": "Security/CWE-078/CommandInjection.ql",
+        "CWE-79": "Security/CWE-079/ReflectedXss.ql",
+        # CWE-22: Go pack has three path-traversal queries — ``TaintedPath``
+        # (the broad query, matches other langs' default), plus narrower
+        # ``ZipSlip`` and ``UnsafeUnzipSymlink``.  TaintedPath for the walk.
+        "CWE-22": "Security/CWE-022/TaintedPath.ql",
+        # CWE-94 omitted for Go: pack has no CodeInjection.ql.
+        "CWE-918": "Security/CWE-918/RequestForgery.ql",
     }),
 }
 
 # CVEfixes repo_language -> codeql extractor language. TypeScript extracts with
-# the javascript extractor; Ruby/Java are their own; else python/js.
-_LANG_MAP = {"Python": "python", "Ruby": "ruby", "Java": "java"}
+# the javascript extractor; Ruby/Java/Go are their own; else python/js.
+_LANG_MAP = {"Python": "python", "Ruby": "ruby", "Java": "java", "Go": "go"}
 
 # Compiled languages we extract build-free via `--build-mode=none`. Source-
 # extracted langs (python/js/ruby) take no build mode. Java's buildless recall is
 # weaker (no type resolution → Spring/interface flows missed); the build-promote
 # pass recovers those `before==0` misses with a real build.
 _BUILDLESS_COMPILED = {"java"}
+
+# Compiled languages that MUST autobuild — CodeQL has no buildless extractor
+# for them.  Go's extractor runs ``go build`` to walk packages; without an
+# actual build the database is empty.  Go cases route through the sandboxed
+# autobuild path on the FIRST attempt (no buildless fallback to promote from).
+_AUTOBUILD_ONLY = {"go"}
 
 
 def _codeql_lang(repo_language: str) -> str:
@@ -130,13 +224,21 @@ def _toolchain_readable_paths(codeql_bin: str) -> list:
     ]
 
 
-def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str, timeout: int) -> bool:
+def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str,
+                              timeout: int, lang: str) -> bool:
     """Run `codeql database create --build-mode=autobuild` — which EXECUTES the
-    untrusted project build (mvn runs pom plugins = arbitrary code) — under the
-    untrusted sandbox. FAIL CLOSED: refuse rather than run an untrusted build
-    unsandboxed. Landlock restricts writes to the work area, reads exclude host
-    credentials, egress is allowlisted to package repos; maven's local repo is
-    redirected into the work area so the build never writes to host ~/.m2.
+    untrusted project build (mvn runs pom plugins = arbitrary code; ``go build``
+    can run ``go:generate`` directives) — under the untrusted sandbox.  FAIL
+    CLOSED: refuse rather than run an untrusted build unsandboxed.  Landlock
+    restricts writes to the work area, reads exclude host credentials, egress
+    is allowlisted to package repos; each language's package cache is
+    redirected into the work area so the build never writes to host config
+    locations (``~/.m2``, ``~/go/pkg/mod``, …).
+
+    ``lang`` selects the egress + env profile in :data:`_AUTOBUILD_PROFILES`;
+    unknown ``lang`` raises — adding a compiled language must be an
+    intentional substrate change (a missed profile would default to
+    Maven hosts and silently mis-route the build's network calls).
     """
     try:
         from core.sandbox import check_landlock_available, run_untrusted_networked
@@ -146,12 +248,17 @@ def _run_autobuild_sandboxed(cmd, *, work_root: Path, codeql_bin: str, timeout: 
     if not check_landlock_available():
         raise RuntimeError(
             "Landlock unavailable — refusing to autobuild an untrusted repo unsandboxed")
+    if lang not in _AUTOBUILD_PROFILES:
+        raise RuntimeError(
+            f"no autobuild profile for lang={lang!r}; known: "
+            f"{sorted(_AUTOBUILD_PROFILES)}")
+    proxy_hosts, env_extender = _AUTOBUILD_PROFILES[lang]
     env = RaptorConfig.get_safe_env(preserve_proxy=True)
-    env["MAVEN_OPTS"] = f"-Dmaven.repo.local={work_root / '.m2'}"
+    env.update(env_extender(work_root))
     try:
         proc = run_untrusted_networked(
             cmd, target=str(work_root), output=str(work_root),
-            proxy_hosts=_MAVEN_PROXY_HOSTS,
+            proxy_hosts=proxy_hosts,
             readable_paths=_toolchain_readable_paths(codeql_bin),
             env=env, timeout=timeout,
         )
@@ -171,25 +278,41 @@ def _fetch_pair(repo_url: str, fix_hash: str, dest: Path, timeout: int) -> bool:
     return _run(["git", "-C", str(dest), "fetch", "-q", "--depth", "2", "origin", fix_hash], timeout)
 
 
+# CodeQL resource tunables live in ``packages.codeql`` — the central
+# home for all CodeQL-related utilities.  We re-export the type at the
+# old name so other modules in this file (and tests that import it via
+# cvefix_walk) keep working without churn.
+from packages.codeql.tunables import CodeQLTunables  # noqa: E402
+
+_DEFAULT_TUNABLES = CodeQLTunables()
+
+
 def _build_db(src: Path, commit: str, db: Path, lang: str, codeql_bin: str, timeout: int,
-              build_mode: Optional[str] = None) -> bool:
+              build_mode: Optional[str] = None,
+              tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> bool:
     if not _run(["git", "-C", str(src), "checkout", "-q", commit], 60):
         return False
     cmd = [codeql_bin, "database", "create", str(db), f"--language={lang}",
            f"--source-root={src}", "--overwrite"]
     if build_mode:
         cmd.append(f"--build-mode={build_mode}")
+    tunables.append_to(cmd, include_disk_cache=True)
     # autobuild executes untrusted build scripts → must be sandboxed (fail-closed).
     # Buildless/source extraction runs no repo code → plain spawn (get_safe_env).
     if build_mode == "autobuild":
         return _run_autobuild_sandboxed(cmd, work_root=db.parent, codeql_bin=codeql_bin,
-                                        timeout=timeout)
+                                        timeout=timeout, lang=lang)
     return _run(cmd, timeout)
 
 
-def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int) -> Optional[int]:
-    if not _run([codeql_bin, "database", "analyze", str(db), query,
-                 "--format=sarif-latest", f"--output={out}"], timeout):
+def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
+                 tunables: CodeQLTunables = _DEFAULT_TUNABLES) -> Optional[int]:
+    cmd = [codeql_bin, "database", "analyze", str(db), query,
+           "--format=sarif-latest", f"--output={out}"]
+    # ``database analyze`` doesn't accept ``--max-disk-cache``; suppress it
+    # to avoid an "unknown option" rejection.
+    tunables.append_to(cmd, include_disk_cache=False)
+    if not _run(cmd, timeout):
         return None
     try:
         import json
@@ -199,40 +322,99 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int)
         return None
 
 
+def _clean_go_caches(work_dir: Path) -> None:
+    """Per-pair cleanup of Go's module / build caches in the work area.
+
+    Go marks every file in ``GOMODCACHE`` read-only by design (the
+    module proxy treats cache contents as immutable), so a plain
+    ``shutil.rmtree`` silently fails to delete anything.  We add
+    ``S_IWUSR`` recursively before the rmtree.
+
+    Why per-pair: one project's ``replace`` directives or version pins
+    can map a required module name (``github.com/armon/go-metrics``) to
+    a physical module that declares a DIFFERENT path
+    (``github.com/hashicorp/go-metrics``).  When the next pair's build
+    requires the original path, the cached content claims to be the
+    other and CodeQL's extractor aborts:
+
+        module declares its path as: github.com/hashicorp/go-metrics
+                but was required as: github.com/armon/go-metrics
+
+    The fix is to keep the cache per-project — the cost is re-
+    downloading common modules per pair (cheap; ``proxy.golang.org``
+    serves at ~MB/s and total module size per repo is single-digit MB
+    for typical CVE pairs).
+    """
+    for sub in ("go-mod-cache", "gopath", "go-build-cache"):
+        p = work_dir / sub
+        if not p.is_dir():
+            continue
+        # Recursively add owner-write so rmtree can unlink everything.
+        # Symlinks are skipped (we don't want to chmod the target).
+        for root, dirs, files in os.walk(p):
+            for name in dirs + files:
+                fp = Path(root) / name
+                try:
+                    if not fp.is_symlink():
+                        fp.chmod(fp.stat().st_mode | stat.S_IWUSR)
+                except OSError:
+                    pass
+        shutil.rmtree(p, ignore_errors=True)
+
+
 def process_pair(
     pair: CveFixPair, *, work_dir: Path, codeql_bin: str = DEFAULT_CODEQL_BIN,
     fetch_timeout: int = 150, build_timeout: int = 240, analyze_timeout: int = 180,
     build_mode: Optional[str] = None,
+    tunables: CodeQLTunables = _DEFAULT_TUNABLES,
 ) -> WalkResult:
     """Fetch, build before/after DBs, run the CWE query; clean up; return counts.
 
     ``build_mode`` overrides the CodeQL extraction mode; when None it is auto-
     picked per language (``none`` for buildless-compiled langs like Java, no flag
     for source-extracted langs). The build-promote pass passes ``autobuild``.
+
+    ``tunables`` controls CodeQL resource limits (``-j``, ``-M``,
+    ``--max-disk-cache``).  See :class:`CodeQLTunables` for defaults.
     """
     query = query_for(pair.repo_language, pair.cwe)
     if query is None:
         return WalkResult(pair.fix_hash, "no_query")
     lang = _codeql_lang(pair.repo_language)
-    mode = build_mode or ("none" if lang in _BUILDLESS_COMPILED else None)
+    mode = build_mode or (
+        "none" if lang in _BUILDLESS_COMPILED
+        else "autobuild" if lang in _AUTOBUILD_ONLY
+        else None
+    )
     repo = work_dir / "repo"
     db_a, db_b = work_dir / "db-a", work_dir / "db-b"
     sa, sb = work_dir / "a.sarif", work_dir / "b.sarif"
     try:
         if not _fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
             return WalkResult(pair.fix_hash, "fetch_fail")
-        if not _build_db(repo, pair.fix_hash, db_a, lang, codeql_bin, build_timeout, mode):
+        if not _build_db(repo, pair.fix_hash, db_a, lang, codeql_bin, build_timeout, mode,
+                         tunables=tunables):
             return WalkResult(pair.fix_hash, "build_fail")
-        if not _build_db(repo, pair.parent_hash, db_b, lang, codeql_bin, build_timeout, mode):
+        if not _build_db(repo, pair.parent_hash, db_b, lang, codeql_bin, build_timeout, mode,
+                         tunables=tunables):
             return WalkResult(pair.fix_hash, "build_fail")
-        after = _count_query(db_a, query, sa, codeql_bin, analyze_timeout)
-        before = _count_query(db_b, query, sb, codeql_bin, analyze_timeout)
+        after = _count_query(db_a, query, sa, codeql_bin, analyze_timeout, tunables=tunables)
+        before = _count_query(db_b, query, sb, codeql_bin, analyze_timeout, tunables=tunables)
         if after is None or before is None:
             return WalkResult(pair.fix_hash, "analyze_fail")
         return WalkResult(pair.fix_hash, "ok", before_count=before, after_count=after)
     finally:
         for p in (repo, db_a, db_b, sa, sb):
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+        # Per-pair Go cache cleanup.  Without this, modules cached from
+        # one project with its `replace` directives corrupt the next
+        # project's build (CodeQL surfaces this as
+        # "module declares its path as X but was required as Y" and
+        # extraction fails).  Java's Maven cache doesn't have this
+        # conflict shape — version conflicts resolve last-write-wins —
+        # so cross-pair Maven reuse is fine and we leave it alone.
+        if lang in _AUTOBUILD_PROFILES and lang == "go":
+            _clean_go_caches(work_dir)
 
 
 # --- resumable results store ---
@@ -269,21 +451,43 @@ def walk(
     work_dir: Path = Path("/data/corpus/clones/walk"),
     codeql_bin: str = DEFAULT_CODEQL_BIN,
     limit: Optional[int] = None,
+    fetch_timeout: int = 150,
+    build_timeout: int = 240,
+    analyze_timeout: int = 180,
+    tunables: CodeQLTunables = _DEFAULT_TUNABLES,
     log=print,
 ) -> dict:
-    """Walk the metadata DB's pairs through CodeQL, recording results (resumable)."""
+    """Walk the metadata DB's pairs through CodeQL, recording results (resumable).
+
+    Timeouts default to the conservative walker-tier values; operators
+    pushing into projects with very long secondary-extractor phases
+    (large Go web repos) can raise ``build_timeout``.  ``tunables``
+    controls ``--threads`` / ``--ram`` / ``--max-disk-cache``."""
     pairs = load_pairs(db_path, cwes=cwes, languages=languages)
     con = sqlite3.connect(str(results_db))
     con.execute(_SCHEMA)
+    # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
+    # yields identical (DB, query, result), so process it once. (The PK already
+    # dedups at storage, but without this we'd waste a full rebuild on each.)
     done = _processed(con)
-    todo = [p for p in pairs if (p.fix_hash, p.cwe) not in done]
+    todo, seen = [], set()
+    for p in pairs:
+        key = (p.fix_hash, p.cwe)
+        if key in done or key in seen:
+            continue
+        seen.add(key)
+        todo.append(p)
     log(f"walk: {len(pairs)} pairs, {len(done)} already done, {len(todo)} to process")
     work_dir.mkdir(parents=True, exist_ok=True)
     n = 0
     for pair in todo:
         if limit is not None and n >= limit:
             break
-        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin)
+        res = process_pair(pair, work_dir=work_dir, codeql_bin=codeql_bin,
+                           fetch_timeout=fetch_timeout,
+                           build_timeout=build_timeout,
+                           analyze_timeout=analyze_timeout,
+                           tunables=tunables)
         _record(con, pair, res)
         n += 1
         tag = "YIELD" if res.is_yield else res.status
@@ -367,8 +571,42 @@ def main(argv=None) -> None:
     ap.add_argument("--promote", action="store_true",
                     help="build-promote buildless misses (autobuild) instead of walking")
     ap.add_argument("--promote-languages", nargs="+", default=["Java"])
+    # CodeQL resource tunables.  Defaults come from RAPTOR's central
+    # tuning config (tuning.json: codeql_threads, codeql_ram_mb) via
+    # CodeQLTunables.from_tuning(); CLI flags here are operator-overrides.
+    ap.add_argument("--threads", type=int, default=None,
+                    help="codeql -j: extractor threads.  Default: from "
+                         "tuning.json:codeql_threads ('auto' -> 0 = all "
+                         "cores).  The codeql default of 1 serializes the "
+                         "secondary HTML/JS extraction phase and regularly "
+                         "times out build_timeout on Go web repos.")
+    ap.add_argument("--ram", type=int, default=None,
+                    help="codeql -M: ram budget MB hint.  Default: from "
+                         "tuning.json:codeql_ram_mb ('auto' -> 25%% of "
+                         "system RAM clamped [2048, 16384])")
+    ap.add_argument("--max-disk-cache", type=int, default=None,
+                    help="codeql --max-disk-cache MB.  Default: codeql's "
+                         "unbounded.  Set when running unattended to keep "
+                         "DB build cache from growing without limit. "
+                         "Not in tuning.json today — add there once a "
+                         "second consumer needs it")
+    # Pipeline timeouts.
+    ap.add_argument("--fetch-timeout", type=int, default=150,
+                    help="git fetch timeout, seconds (default 150)")
+    ap.add_argument("--build-timeout", type=int, default=240,
+                    help="codeql database create timeout, seconds (default 240). "
+                         "Raise (e.g. 600) for projects with very large "
+                         "secondary-extractor footprints (Go web repos with "
+                         "thousands of HTML templates)")
+    ap.add_argument("--analyze-timeout", type=int, default=180,
+                    help="codeql database analyze timeout, seconds (default 180)")
     a = ap.parse_args(argv)
     log = lambda m: print(m, flush=True)  # noqa: E731
+    # Resolve operator overrides against tuning.json-backed defaults.
+    tunables = CodeQLTunables.from_tuning(
+        overrides={"threads": a.threads, "ram_mb": a.ram,
+                   "max_disk_cache_mb": a.max_disk_cache},
+    )
     if a.promote:
         summary = promote_misses(
             a.results, work_dir=a.work_dir, codeql_bin=a.codeql_bin,
@@ -378,7 +616,10 @@ def main(argv=None) -> None:
         return
     summary = walk(
         a.db, a.results, cwes=a.cwes, languages=a.languages,
-        work_dir=a.work_dir, codeql_bin=a.codeql_bin, limit=a.limit, log=log,
+        work_dir=a.work_dir, codeql_bin=a.codeql_bin, limit=a.limit,
+        fetch_timeout=a.fetch_timeout, build_timeout=a.build_timeout,
+        analyze_timeout=a.analyze_timeout, tunables=tunables,
+        log=log,
     )
     print(f"=== SUMMARY {summary} ===", flush=True)
 

@@ -684,6 +684,32 @@ Examples:
     parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10; codeql-only default is 20, agentic is lower because each finding runs the full multi-pass LLM analysis chain at ~3-5x the per-finding cost)")
     parser.add_argument(
+        "--prefer", action="append", default=None, metavar="GLOB",
+        help=(
+            "Prioritise findings whose file_path matches GLOB. Repeatable for "
+            "multiple patterns (OR semantics). Matching findings sort to the "
+            "front of the analysis queue before --max-findings caps the set, "
+            "so a low cap reaches your attack-surface targets first instead "
+            "of analysing in arbitrary file-order. Within each bucket, the "
+            "existing ordering (dataflow-prioritised then SARIF-order) is "
+            "preserved for stable diffs across re-runs. Example: "
+            "``--prefer 'src/http/*' --prefer 'src/protocols/*'``"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-dir", action="append", default=None, metavar="GLOB",
+        dest="exclude_dir",
+        help=(
+            "Drop findings whose file_path matches GLOB before analysis. "
+            "Repeatable for multiple patterns (OR semantics). Operator escape "
+            "hatch for vendored third-party code, test fixtures, generated "
+            "dirs the structural filters (binary-oracle, dataflow priority) "
+            "can't cover. Applied before --prefer + --max-findings so excluded "
+            "paths don't push attack-surface candidates out of the captured "
+            "set. Example: ``--exclude-dir 'vendor/*' --exclude-dir '**/tests/*'``"
+        ),
+    )
+    parser.add_argument(
         "--phase-timeout", type=int,
         default=RaptorConfig.DEFAULT_TIMEOUT, metavar="SECONDS",
         help=(
@@ -1757,6 +1783,16 @@ Examples:
                 "--max-findings", str(args.max_findings)
             ]
 
+        # Forward --prefer GLOB(s) so the agent re-orders findings
+        # before applying --max-findings. Each --prefer becomes a
+        # separate flag on the child argv.
+        for pref in (args.prefer or []):
+            analysis_cmd += ["--prefer", pref]
+        # Same forwarding for --exclude-dir; agent applies it before
+        # the prefer/cap so excluded paths don't compete for slots.
+        for excl in (args.exclude_dir or []):
+            analysis_cmd += ["--exclude-dir", excl]
+
         # Attach checklist for metadata lookup
         if (out_dir / "checklist.json").exists():
             analysis_cmd.extend(["--checklist", str(out_dir / "checklist.json")])
@@ -2144,6 +2180,8 @@ Examples:
     false_positives = 0
     unverdicted = 0
     exploitable_count = 0
+    inconsistent_count = 0
+    inconsistent_findings: list = []
     failed_count = 0
     blocked_count = 0
     severity_mismatches = []
@@ -2164,6 +2202,8 @@ Examples:
         false_positives = _buckets["false_positives"]
         unverdicted = _buckets["unverdicted"]
         exploitable_count = _buckets["exploitable"]
+        inconsistent_count = _buckets["inconsistent"]
+        inconsistent_findings = _buckets["inconsistent_findings"]
         failed_count = _buckets["failed"]
         blocked_count = _buckets["blocked"]
         severity_mismatches = _buckets["severity_mismatches"]
@@ -2229,7 +2269,63 @@ Examples:
     if severity_mismatches:
         print(f"   ⚠️  {len(severity_mismatches)} high-severity finding{'s' if len(severity_mismatches) != 1 else ''} "
               f"ruled as false positive (review recommended)")
+    # Binary-oracle suppression visibility: when the chokepoint
+    # dropped a meaningful fraction of candidate findings as
+    # ``absent`` from the analysed binary, surface that BEFORE the
+    # Exploitable count so the operator can spot a build-mismatch
+    # signal (oracle filtering too aggressively against a binary
+    # that doesn't match the analysis target). At >=50% suppression,
+    # the soft summary becomes a loud warning with the re-run hint —
+    # the most common cause is a partial / wrong-target build, and
+    # ``--no-binary-oracle`` is the right escape hatch.
+    _suppr_path = out_dir / "suppressions.jsonl"
+    if _suppr_path.is_file():
+        try:
+            _suppr_count = sum(
+                1 for _ in _suppr_path.read_text().splitlines() if _.strip()
+            )
+        except OSError:
+            _suppr_count = 0
+        if _suppr_count > 0:
+            _candidates = total_findings if total_findings else _suppr_count
+            _pct = (_suppr_count / _candidates * 100) if _candidates else 0
+            if _pct >= 50.0:
+                print(
+                    f"   ⚠️  binary-oracle suppressed: {_suppr_count} of "
+                    f"{_candidates} candidates ({_pct:.0f}%) — likely "
+                    f"build mismatch; verify binary matches analysis "
+                    f"target or re-run with --no-binary-oracle. See "
+                    f"suppressions.jsonl."
+                )
+            else:
+                print(
+                    f"   binary-oracle suppressed: {_suppr_count} of "
+                    f"{_candidates} candidates ({_pct:.0f}%, see "
+                    f"suppressions.jsonl)"
+                )
     print(f"   Exploitable: {exploitable_count}")
+    if inconsistent_count > 0:
+        # Findings the LLM marked exploitable but whose own reasoning
+        # was internally contradictory (post-Stage-F retry). Excluded
+        # from the Exploitable count above to keep the headline
+        # arithmetic honest — operator can review these separately.
+        print(f"   ⚠️  Inconsistent (review needed): {inconsistent_count} "
+              f"(exploitable verdict but self-contradictory reasoning)")
+        # Per-finding list so the operator doesn't have to grep the
+        # report for which findings these were. Truncated at 10 to
+        # keep the summary scannable on larger runs; full set is in
+        # ``orchestrated_report.json::results[*].self_contradictory``.
+        from core.reporting.formatting import display_rule_id
+        for r in inconsistent_findings[:10]:
+            fp = r.get("file_path") or "?"
+            line = r.get("line") or r.get("start_line") or "?"
+            rule = display_rule_id(r.get("rule_id") or r.get("rule"))
+            fid = r.get("finding_id") or ""
+            tag = f"[{fid}] " if fid else ""
+            print(f"      {tag}{fp}:{line} — {rule}")
+        if len(inconsistent_findings) > 10:
+            print(f"      ... and {len(inconsistent_findings) - 10} more")
+        print("      → re-run with --judge <model> to break ties, or inspect manually")
     if exploits_count > 0:
         print(f"   Exploits generated: {exploits_count}")
     if patches_count > 0:

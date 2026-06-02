@@ -36,6 +36,7 @@ from core.logging import get_logger
 from core.git.clone import safe_git_command
 from core.git import get_safe_git_env
 from packages.codeql.build_detector import BuildSystem
+from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
 
@@ -689,6 +690,11 @@ class DatabaseManager:
             f"--language={language}",
             f"--source-root={repo_path}",
         ]
+        # Central CodeQL resource tunables (-j / -M / --max-disk-cache,
+        # tuning.json-backed).  ``include_disk_cache=True`` because
+        # ``database create`` accepts the flag; ``database analyze``
+        # would reject it.
+        CodeQLTunables.from_tuning().append_to(cmd, include_disk_cache=True)
 
         # Set working directory and environment.
         #

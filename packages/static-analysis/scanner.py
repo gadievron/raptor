@@ -11,6 +11,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -19,7 +20,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
 # packages/static-analysis/scanner.py -> repo root
@@ -36,6 +37,579 @@ from core.hash import sha256_bytes, sha256_tree
 from packages import semgrep as semgrep_pkg
 
 logger = get_logger()
+
+
+def _sarif_result_uri(result: dict) -> str:
+    """Extract the file URI from a SARIF result, or empty string when
+    the structure is missing the expected nesting."""
+    locs = result.get("locations") or []
+    if not locs:
+        return ""
+    phys = locs[0].get("physicalLocation") or {}
+    return (phys.get("artifactLocation") or {}).get("uri") or ""
+
+
+def filter_sarif_by_exclude_globs(
+    sarif: dict, exclude_globs: Optional[List[str]],
+) -> Tuple[dict, int]:
+    """Return ``(filtered_sarif, dropped_count)`` — a copy of ``sarif``
+    with every result whose file URI matches any of ``exclude_globs``
+    removed from ``runs[*].results``. Order-preserving. No-op when
+    ``exclude_globs`` is None/empty.
+
+    Operator escape hatch for vendored / test / generated paths the
+    structural filters can't cover. Applied at the combined-SARIF
+    layer in /scan so the downstream metrics + /agentic consumption
+    see the filtered set; individual per-tool SARIFs stay unfiltered
+    as a forensic record of what each tool actually emitted.
+
+    Results without a usable URI (malformed location block) are kept
+    defensively — operator excludes shouldn't accidentally drop
+    findings whose metadata is broken.
+    """
+    if not exclude_globs:
+        return sarif, 0
+    import copy
+    import fnmatch as _fnmatch
+    out = copy.deepcopy(sarif)
+    dropped = 0
+    for run in out.get("runs", []):
+        kept: list = []
+        for r in run.get("results", []):
+            uri = _sarif_result_uri(r)
+            if uri and any(_fnmatch.fnmatch(uri, g) for g in exclude_globs):
+                dropped += 1
+                continue
+            kept.append(r)
+        run["results"] = kept
+    return out, dropped
+
+
+def _pack_tuple_for_id(pack_id: str) -> Tuple[str, str]:
+    """Resolve a pack-id-suffix (``"security-audit"``,
+    ``"command-injection"``) to the full
+    ``(display_name, full_pack_id)`` tuple ``BASELINE_SEMGREP_PACKS``
+    uses. The display names aren't a clean derivation from the
+    pack-id (``command-injection`` → ``semgrep_injection``,
+    ``owasp-top-ten`` → ``semgrep_owasp_top_10`` — both reflect
+    historical naming conventions in
+    ``RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK``), so consult
+    those mappings first; fall back to a synthesised name for
+    unknown ids.
+
+    Used by ``_resolve_baseline_packs`` to convert the
+    target-type catalog's ``semgrep_packs.default`` (a list of
+    pack-id suffixes) to the tuple shape scanner internals expect.
+    """
+    full_id = f"p/{pack_id}"
+    # Baseline packs are listed by full tuple already.
+    for name, fid in RaptorConfig.BASELINE_SEMGREP_PACKS:
+        if fid == full_id:
+            return (name, fid)
+    # POLICY_GROUP_TO_SEMGREP_PACK values cover the rest of the
+    # canonical (name, pack-id) pairs.
+    for name, fid in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.values():
+        if fid == full_id:
+            return (name, fid)
+    # Unknown pack-id (catalog author added something we don't
+    # have a name convention for) — synthesise a safe name.
+    safe = pack_id.replace("-", "_").replace("/", "_")
+    return (f"semgrep_{safe}", full_id)
+
+
+def _resolve_baseline_packs(
+    repo_path: Optional[Path],
+) -> List[Tuple[str, str]]:
+    """Resolve the baseline semgrep pack set for ``repo_path``.
+
+    When the target-type catalog matches and ships
+    ``semgrep_packs.default``, use the catalog's list — that's
+    the per-target-type tuning #7-7b ships. When no catalog match
+    (or the matched entry has no default packs, like the
+    ``generic`` fallback), use the hardcoded
+    ``RaptorConfig.BASELINE_SEMGREP_PACKS``.
+
+    Operator override via ``--policy-groups`` happens elsewhere
+    (in main's rules_dirs construction) and remains authoritative
+    — this resolver only governs the baseline (what runs when
+    the operator hasn't narrowed the rule set explicitly).
+    """
+    if repo_path is None:
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    try:
+        from core.run.target_types import load as load_target_type
+        entry = load_target_type(Path(repo_path))
+    except Exception:  # noqa: BLE001
+        # Catalog substrate is best-effort; never break the scan
+        # on a catalog load issue.
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    if entry is None or not entry.semgrep_packs_default:
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    return [_pack_tuple_for_id(pid) for pid in entry.semgrep_packs_default]
+
+
+# File-extension → semgrep-language mapping. Covers the common
+# cases; missing extensions silently produce no language hit
+# (operator sees an empty applicability count rather than a wrong
+# one). Lowercased keys; matches the lowercased extensions
+# catalog YAMLs ship.
+_EXT_TO_SEMGREP_LANG: Dict[str, str] = {
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp",
+    ".hpp": "cpp", ".hh": "cpp",
+    ".py": "python",
+    ".go": "go",
+    ".rs": "rust",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".java": "java",
+    ".rb": "ruby",
+    ".php": "php",
+    ".kt": "kotlin", ".kts": "kotlin",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".cs": "csharp",
+    ".sol": "solidity",
+    ".sh": "bash", ".bash": "bash",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".json": "json",
+    ".html": "html", ".htm": "html",
+    ".lua": "lua",
+}
+
+
+# Semgrep ships rules using BOTH names for the same language —
+# e.g. ``p/owasp-top-ten`` carries 67 rules at ``languages: [ts]``
+# AND 4 at ``languages: [typescript]``. A naïve extension →
+# canonical-name mapping misses the alias rules, undercounting
+# applicability. Expand the target set with the known aliases
+# before intersecting against each rule's ``languages`` field.
+# Symmetric: every key/value is rewritten the same direction
+# in both classes (operator's catalog might declare either form).
+_SEMGREP_LANG_ALIASES: Dict[str, set] = {
+    "typescript": {"typescript", "ts"},
+    "ts": {"typescript", "ts"},
+    "kotlin": {"kotlin", "kt"},
+    "kt": {"kotlin", "kt"},
+    "javascript": {"javascript", "js"},
+    "js": {"javascript", "js"},
+    "csharp": {"csharp", "cs", "C#"},
+    "cs": {"csharp", "cs", "C#"},
+    "bash": {"bash", "sh"},
+    "sh": {"bash", "sh"},
+    "yaml": {"yaml", "yml"},
+}
+
+
+# Semgrep internal language id → operator-facing display name.
+# Used purely for rendered text — internal sets / counts continue
+# to use the canonical lowercased ids. Unmapped ids render as-is
+# (lowercased) so a missing entry doesn't break the line.
+_LANG_DISPLAY: Dict[str, str] = {
+    "c": "C",
+    "cpp": "C++",
+    "python": "Python",
+    "go": "Go",
+    "rust": "Rust",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "java": "Java",
+    "ruby": "Ruby",
+    "php": "PHP",
+    "kotlin": "Kotlin",
+    "swift": "Swift",
+    "scala": "Scala",
+    "csharp": "C#",
+    "solidity": "Solidity",
+    "bash": "Bash",
+    "yaml": "YAML",
+    "json": "JSON",
+    "html": "HTML",
+    "lua": "Lua",
+}
+
+
+def _display_lang(lang: str) -> str:
+    """Map a semgrep language id to its operator-facing display
+    name; pass through unchanged if no mapping exists."""
+    return _LANG_DISPLAY.get(lang, lang)
+
+
+def _display_langs(langs: List[str]) -> str:
+    """Operator-readable joined list, e.g. ``[c, cpp]`` → ``C, C++``."""
+    return ", ".join(_display_lang(lang) for lang in langs)
+
+
+def _expand_language_aliases(langs: List[str]) -> set:
+    """Expand ``langs`` to include semgrep's alias names so the
+    intersection check below catches rules registered under
+    either form."""
+    out: set = set()
+    for lang in langs:
+        out.add(lang)
+        out.update(_SEMGREP_LANG_ALIASES.get(lang, set()))
+    return out
+
+
+def _target_semgrep_languages(repo_path: Optional[Path]) -> List[str]:
+    """Best-effort set of semgrep language ids for ``repo_path``.
+
+    Sourced from the matched target-type catalog entry's
+    ``file_extensions`` — cheap (no tree walk) and accurate for
+    the common case. Returns ``[]`` when no catalog match,
+    extension list empty, or no extension maps to a known
+    semgrep language. Caller treats ``[]`` as ''don't show
+    applicability'' (better than guessing wrong).
+    """
+    if repo_path is None:
+        return []
+    try:
+        from core.run.target_types import load as _load_tt
+        entry = _load_tt(repo_path)
+    except Exception:  # noqa: BLE001
+        return []
+    if entry is None:
+        return []
+    langs: set = set()
+    for ext in entry.file_extensions:
+        lang = _EXT_TO_SEMGREP_LANG.get(ext.lower())
+        if lang:
+            langs.add(lang)
+    return sorted(langs)
+
+
+def _pack_rules_applicable_count(
+    pack_id: str, target_langs: List[str],
+) -> Optional[Tuple[int, int]]:
+    """Read the cached pack JSON for ``pack_id`` and return
+    ``(applicable_rule_count, total_rule_count)`` for rules
+    whose ``languages`` list intersects the alias-expanded
+    ``target_langs`` set.
+
+    None when the pack isn't cached locally — the operator's
+    semgrep invocation would fetch the pack from the registry
+    at scan time and we'd be measuring stale numbers. The
+    visibility line then omits this pack rather than printing
+    a misleading zero.
+    """
+    cache_file = RaptorConfig.SEMGREP_REGISTRY_CACHE_DIR / (
+        "c." + pack_id.replace("/", ".") + ".json"
+    )
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    rules = data.get("rules") or []
+    # Defensive: a future / corrupted cache file with ``rules`` as
+    # a non-list (e.g. dict, scalar) would crash the iteration
+    # below. Treat as no data — caller skips the pack.
+    if not isinstance(rules, list):
+        return None
+    target_set = _expand_language_aliases(target_langs)
+    applicable = 0
+    total = 0
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        total += 1
+        rule_langs = r.get("languages") or []
+        if not isinstance(rule_langs, list):
+            continue
+        if set(rule_langs) & target_set:
+            applicable += 1
+    return (applicable, total)
+
+
+def _pack_applicable_rule_ids(
+    pack_id: str, target_langs: List[str],
+) -> Optional[set]:
+    """Return the SET of rule ids in ``pack_id`` whose
+    ``languages`` field intersects the alias-expanded
+    ``target_langs``. Used by ``_is_coverage_thin`` to dedupe
+    across packs that ship overlapping rules — e.g. ``p/default``
+    and ``p/security-audit`` share many entries; counting each
+    twice would inflate the threshold check.
+
+    None when the pack isn't cached locally (same contract as
+    ``_pack_rules_applicable_count``).
+    """
+    cache_file = RaptorConfig.SEMGREP_REGISTRY_CACHE_DIR / (
+        "c." + pack_id.replace("/", ".") + ".json"
+    )
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    rules = data.get("rules") or []
+    if not isinstance(rules, list):
+        return None
+    target_set = _expand_language_aliases(target_langs)
+    ids: set = set()
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        rule_langs = r.get("languages") or []
+        if not isinstance(rule_langs, list):
+            continue
+        if set(rule_langs) & target_set:
+            rule_id = r.get("id")
+            if isinstance(rule_id, str) and rule_id:
+                ids.add(rule_id)
+    return ids
+
+
+# Default threshold for unique applicable rules across baseline
+# packs. Calibration point: a C / userspace-daemon scan with the
+# c.userspace-daemon catalog nets ~9 unique applicable C rules; a
+# Python web-app scan with its catalog nets ~200+. 25 sits
+# comfortably between the two — picks up genuinely thin language
+# coverage without false-positive-ing on healthy coverage.
+# Operator-tunable via ``RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD``
+# env var so future catalog entries with different rule densities
+# can be accommodated without a code change.
+_DEFAULT_THIN_COVERAGE_RULE_THRESHOLD = 25
+
+
+def _thin_coverage_threshold() -> int:
+    """Read the threshold from the env var, fall back to the
+    default. Malformed values (non-integer / negative) warn-once
+    and fall back to the default so a typo doesn't silently
+    disable the hint forever."""
+    import os
+    raw = os.environ.get("RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD")
+    if not raw:
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD=%r is not an int; "
+            "using default %d",
+            raw, _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD,
+        )
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    if value < 0:
+        logger.warning(
+            "RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD=%d must be >= 0; "
+            "using default %d",
+            value, _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD,
+        )
+        return _DEFAULT_THIN_COVERAGE_RULE_THRESHOLD
+    return value
+
+
+def _is_coverage_thin(
+    resolved_baseline: List[Tuple[str, str]],
+    target_langs: List[str],
+) -> bool:
+    """True iff the count of UNIQUE applicable rule ids across
+    all baseline packs falls below the configured threshold
+    (``RAPTOR_SCAN_THIN_COVERAGE_THRESHOLD`` env var, default
+    25). Uncached packs are skipped — we don't know what they'd
+    contribute, so the hint doesn't fire on uncertainty.
+    Deduplication is essential because packs share rules
+    (``p/default`` and ``p/security-audit`` overlap heavily);
+    naively summing per-pack counts would inflate the figure
+    past the threshold for genuinely thin coverage."""
+    if not target_langs:
+        return False
+    unique_ids: set = set()
+    have_any_cached = False
+    for _, pack_id in resolved_baseline:
+        ids = _pack_applicable_rule_ids(pack_id, target_langs)
+        if ids is None:
+            continue
+        have_any_cached = True
+        unique_ids.update(ids)
+    return (
+        have_any_cached
+        and len(unique_ids) < _thin_coverage_threshold()
+    )
+
+
+def _llm_configured() -> bool:
+    """True when RAPTOR can dispatch an LLM call. Best-effort —
+    used to decide whether to suggest ``/agentic`` in the
+    thin-coverage hint (no point suggesting an LLM-driven path
+    when no LLM provider is available).
+
+    Defaults to True on any import / instantiation failure so a
+    transient config bug doesn't silently strip an option the
+    operator might be able to use."""
+    try:
+        from core.llm.config import LLMConfig
+        return LLMConfig().primary_model is not None
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _format_thin_coverage_hint(
+    target_langs: List[str],
+    codeql_already_running: bool,
+    llm_configured: bool = True,
+) -> str:
+    """One-line operator-facing escalation hint when pack
+    applicability is thin. CodeQL clause omitted when the
+    operator already passed ``--codeql``; /agentic clause
+    omitted when no LLM is configured (suggesting it would be
+    hollow guidance).
+    """
+    lang_label = _display_langs(target_langs)
+    options: List[str] = []
+    if not codeql_already_running:
+        options.append("rerun with --codeql for richer queries")
+    if llm_configured:
+        options.append("use /agentic for LLM-driven hunting")
+    if not options:
+        # Pathological: both alternatives unavailable. Honest
+        # about it — operator at least knows the gap is real.
+        return f"  Coverage thin for {lang_label}."
+    return (
+        f"  Coverage thin for {lang_label} — "
+        f"{'; '.join(options)}."
+    )
+
+
+def _format_pack_applicability(
+    resolved_baseline: List[Tuple[str, str]],
+    target_langs: List[str],
+) -> Optional[str]:
+    """Render the operator-facing visibility line, or None when
+    no useful signal (no target langs, no cached pack data).
+
+    Example::
+
+        Pack rules applicable to c: security-audit 9/225, command-injection 0/30, owasp-top-ten 0/544
+
+    Pre-#16a the operator saw only ``6 rule-group(s)`` with no
+    way to know how many of the ~2k rules across those packs
+    actually target their language — masked the upstream
+    coverage gap that surfaced on the c.userspace-daemon scan.
+    """
+    if not target_langs:
+        return None
+    parts: List[str] = []
+    for _, pack_id in resolved_baseline:
+        counts = _pack_rules_applicable_count(pack_id, target_langs)
+        if counts is None:
+            continue
+        applicable, total = counts
+        # Strip the ``p/`` prefix for readability — the operator
+        # cares about the pack name, not the registry path
+        # convention.
+        short = pack_id[2:] if pack_id.startswith("p/") else pack_id
+        parts.append(f"{short} {applicable}/{total}")
+    if not parts:
+        return None
+    return (
+        f"Pack rules applicable to "
+        f"{_display_langs(target_langs)}: {', '.join(parts)}"
+    )
+
+
+def _resolve_rules_applied(
+    groups: List[str],
+    resolved_baseline: List[Tuple[str, str]],
+    rules_dirs: List[str],
+) -> List[str]:
+    """Compute the ``rules_applied`` list stored on the semgrep
+    coverage record.
+
+    Captures every policy group whose registry pack actually ran,
+    so the coverage report's "policy group(s) not used" check
+    (``POLICY_GROUP_TO_SEMGREP_PACK.keys() - rules_applied``)
+    doesn't falsely flag groups whose pack was added via the
+    catalog, via a rule-dir-name match, or as a shared pack id
+    across multiple policy groups.
+
+    Pre-fix: ``rules_applied=['all']`` (literal) or local rule
+    directory names; both lacked the canonical policy-group keys,
+    so EVERY policy group showed as ''not used'' — the
+    operator-facing inconsistency the c.userspace-daemon scan
+    surfaced.
+
+    Honest semantic: pack-id-driven. A policy group is ''applied''
+    iff its registry pack id is in the set of pack ids semgrep
+    actually ran. That set is the union of:
+
+    * Catalog-resolved baseline packs (``resolved_baseline``).
+    * Pack ids that ``semgrep_scan_parallel`` adds because a
+      rule dir's name matched a key in ``POLICY_GROUP_TO_SEMGREP_PACK``
+      (see scanner.py:``Add corresponding standard pack if available``).
+
+    Operator-passed specific policy groups (``--policy-groups
+    auth,injection``) drive ``rules_dirs`` membership, which feeds
+    back through the same rule-dir → pack-id mapping — so the
+    set inclusion is automatic; no special branch needed.
+
+    Two correctness wins over the pre-fix design:
+
+    1. Shared pack ids — ``flows`` and ``best-practices`` both
+       map to ``p/default``; running ``flows/`` exercises both,
+       and both correctly land in ``applied`` here.
+    2. No-local-rule-dir groups — ``best-practices`` has no
+       local rule dir; ``--policy-groups all`` doesn't trigger
+       its registry pack via the rule-dir loop, so it's NOT in
+       ``applied`` unless something else added ``p/default``
+       (which ``flows/`` does in practice).
+
+    * ``groups`` — accepted for API symmetry / future extension;
+      currently unused (rule-dir membership is the actual signal).
+    * ``resolved_baseline`` — the catalog-resolved baseline pack
+      set (``[(display_name, pack_id), ...]``).
+    * ``rules_dirs`` — local rule directory paths the scanner
+      passed to semgrep_scan_parallel. Used to derive which
+      registry packs got auto-added via the rule-dir → pack-id
+      mapping, AND as the fallback identity when nothing else
+      populated the applied set.
+    """
+    # Compute the set of pack ids semgrep ACTUALLY ran — the
+    # union of catalog baseline + auto-added registry packs (via
+    # rule-dir name match).
+    ran_pack_ids: set = {pid for _, pid in resolved_baseline}
+    for rd in rules_dirs:
+        dir_name = Path(rd).name
+        mapping = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.get(dir_name)
+        if mapping is not None:
+            ran_pack_ids.add(mapping[1])
+
+    # Reverse-map every policy group whose pack id ran.
+    applied = {
+        group
+        for group, (_name, pack_id)
+        in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.items()
+        if pack_id in ran_pack_ids
+    }
+    if applied:
+        return sorted(applied)
+    # Fallback: no policy groups exercised → record rule-dir
+    # names so the coverage record still has SOME identity
+    # (preserves pre-fix shape for the genuinely-empty case).
+    _ = groups  # accepted for API symmetry; unused — see docstring.
+    return [str(Path(r).name) for r in rules_dirs]
+
+
+def _sanitize_pack_name(name: str) -> str:
+    """Strict allowlist: alphanumeric + dash + underscore + dot.
+
+    ``name`` is the policy-pack name from
+    ``RaptorConfig.BASELINE_SEMGREP_PACKS`` /
+    ``POLICY_GROUP_TO_SEMGREP_PACK`` (operator can extend via
+    ``--policy-groups``), and the sanitised result becomes part of an
+    output FILE PATH. Any other shell / filesystem-special character
+    (``*``, ``?``, ``[``, ``]``, ``\\``, space, NUL, newline, control
+    bytes) would otherwise flow straight into
+    ``out_dir / f"semgrep_{suffix}.sarif"``. Concrete failure: a
+    custom policy pack named with a space produced an output path with
+    embedded whitespace that subsequent ``find`` / ``glob`` calls
+    mishandled. Preserves the legacy ``/`` → ``_`` and ``:`` → ``_``
+    mapping (both in the disallowed set, so they get replaced anyway).
+    """
+    return re.sub(r'[^A-Za-z0-9._-]', '_', name)
 
 
 def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
@@ -210,30 +784,7 @@ def run_single_semgrep(
     Returns:
         Tuple of (sarif_path, success)
     """
-    def sanitize_name(name: str) -> str:
-        # Strict allowlist: alphanumeric + dash + underscore +
-        # dot. Pre-fix only `/` and `:` were replaced — but
-        # `name` is the policy-pack name from
-        # `RaptorConfig.BASELINE_SEMGREP_PACKS` /
-        # `POLICY_GROUP_TO_SEMGREP_PACK` (operator can extend
-        # via `--policy-groups`), and the sanitised result
-        # becomes part of an output FILE PATH. Any other shell
-        # / filesystem-special character (`*`, `?`, `[`, `]`,
-        # `\\`, space, NUL, newline, control bytes) flowed
-        # straight into `out_dir / f"semgrep_{suffix}.sarif"`.
-        # Concrete failure: a custom policy pack named with a
-        # space (e.g. `--policy-groups "my pack"`) produced
-        # `semgrep_my pack.sarif` — a path with embedded
-        # whitespace that subsequent `find` / `glob` calls
-        # mishandled (split on whitespace, missing the second
-        # half).
-        import re as _re
-        # Replace any non-allowed char with underscore. Preserve
-        # the legacy `/` → `_` and `:` → `_` mapping (those are
-        # both in the disallowed set, so they get replaced anyway).
-        return _re.sub(r'[^A-Za-z0-9._-]', '_', name)
-
-    suffix = sanitize_name(name)
+    suffix = _sanitize_pack_name(name)
     sarif = out_dir / f"semgrep_{suffix}.sarif"
     json_out = out_dir / f"semgrep_{suffix}.json"
     stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
@@ -383,8 +934,9 @@ def semgrep_scan_parallel(
     rules_dirs: List[str],
     out_dir: Path,
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
-    progress_callback: Optional[Callable] = None
-) -> List[str]:
+    progress_callback: Optional[Callable] = None,
+    baseline_packs: Optional[List[Tuple[str, str]]] = None,
+) -> Tuple[List[str], List[str]]:
     """
     Run Semgrep scans in parallel for improved performance.
 
@@ -394,10 +946,27 @@ def semgrep_scan_parallel(
         out_dir: Output directory for results
         timeout: Timeout per scan
         progress_callback: Optional callback for progress updates
+        baseline_packs: Override for the always-run baseline pack
+            set (``[(display_name, pack_id), ...]``). When None,
+            falls back to ``RaptorConfig.BASELINE_SEMGREP_PACKS`` —
+            preserves pre-#17 behaviour for callers that don't
+            consult the target-type catalog. Callers integrated
+            with the catalog (scanner.py main) resolve via
+            ``_resolve_baseline_packs`` and pass the result.
 
     Returns:
-        List of SARIF file paths
+        (sarif_paths, failed_pack_names). Callers MUST surface the
+        failed list — silent-failure on parallel pack dispatch (a
+        submitted pack producing no SARIF on disk while
+        ``failed_scans`` records nothing) had no operator-visible
+        signal pre-fix: the survivor's SARIF was the only artifact
+        and the coverage record read like a complete run. Returning
+        the failed list from the dispatcher closes that gap; the
+        caller renders the summary line and writes it into the
+        coverage record.
     """
+    if baseline_packs is None:
+        baseline_packs = list(RaptorConfig.BASELINE_SEMGREP_PACKS)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Build config list with BOTH local rules AND standard packs for each category
@@ -424,8 +993,10 @@ def semgrep_scan_parallel(
         else:
             logger.warning(f"Rule directory not found: {rd_path}")
 
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
+    # Add baseline packs (unless already added). ``baseline_packs``
+    # was resolved by the caller (target-type catalog → tuned
+    # default per #7-7b; otherwise hardcoded BASELINE).
+    for pack_name, pack_identifier in baseline_packs:
         if pack_identifier not in added_packs:
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
@@ -473,22 +1044,61 @@ def semgrep_scan_parallel(
                 logger.error(f"Semgrep scan '{name}' raised exception: {exc}")
                 failed_scans.append(name)
 
+    # Detect the missing-SARIF case (worker returned success + a
+    # SARIF path, but no file actually exists on disk). Pre-fix,
+    # silently-dropped packs left no ``failed_scans`` entry —
+    # ``failure_count`` was 0, operators saw a clean run, the missing
+    # SARIFs went unnoticed. Check actual file presence (not the
+    # returned-path string) so any drop between worker-return and
+    # file-landing — filesystem error, sandbox teardown, race —
+    # registers as a failure.
+    submitted_names = {name for name, _ in configs}
+    silently_dropped = []
+    for name in submitted_names:
+        suffix = _sanitize_pack_name(name)
+        sarif_expected = out_dir / f"semgrep_{suffix}.sarif"
+        if not sarif_expected.is_file():
+            if name not in failed_scans:
+                silently_dropped.append(name)
+                failed_scans.append(name)
+    if silently_dropped:
+        logger.warning(
+            f"Silently-dropped packs (submitted, no SARIF on disk): "
+            f"{', '.join(silently_dropped)}"
+        )
+
     if failed_scans:
         logger.warning(f"Failed scans: {', '.join(failed_scans)}")
 
     logger.info(f"Completed {len(sarif_paths)} scans ({len(failed_scans)} failed)")
-    return sarif_paths
+    return sarif_paths, failed_scans
 
 
 def semgrep_scan_sequential(
     repo_path: Path,
     rules_dirs: List[str],
     out_dir: Path,
-    timeout: int = RaptorConfig.SEMGREP_TIMEOUT
-) -> List[str]:
-    """Sequential scanning fallback for debugging."""
+    timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
+    baseline_packs: Optional[List[Tuple[str, str]]] = None,
+) -> Tuple[List[str], List[str]]:
+    """Sequential scanning fallback for debugging.
+
+    Returns ``(sarif_paths, failed_pack_names)`` — same contract as
+    ``semgrep_scan_parallel``. The sequential path is the
+    ``--sequential`` debug fallback; parallelism isn't the source of
+    the silent-drop class but the worker can still claim success
+    while no SARIF lands (filesystem error, sandbox teardown), so
+    the same cross-check + reporting apply.
+
+    ``baseline_packs``: same contract as the parallel sibling —
+    override for the always-run baseline pack set; None falls back
+    to ``RaptorConfig.BASELINE_SEMGREP_PACKS``.
+    """
+    if baseline_packs is None:
+        baseline_packs = list(RaptorConfig.BASELINE_SEMGREP_PACKS)
     out_dir.mkdir(parents=True, exist_ok=True)
     sarif_paths: List[str] = []
+    failed_scans: List[str] = []
 
     # Build config list with BOTH local rules AND standard packs for each category
     configs: List[Tuple[str, str]] = []
@@ -511,8 +1121,9 @@ def semgrep_scan_sequential(
                     configs.append((pack_name, resolved))
                     added_packs.add(pack_id)
 
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
+    # Add baseline packs (unless already added) — see parallel sibling
+    # for the catalog-aware resolution rationale.
+    for pack_name, pack_identifier in baseline_packs:
         if pack_identifier not in added_packs:
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
@@ -521,8 +1132,28 @@ def semgrep_scan_sequential(
         logger.info(f"Running scan {idx}/{len(configs)}: {name}")
         sarif_path, success = run_single_semgrep(name, config, repo_path, out_dir, timeout)
         sarif_paths.append(sarif_path)
+        if not success:
+            failed_scans.append(name)
 
-    return sarif_paths
+    # Detect silent drops the same way semgrep_scan_parallel does —
+    # worker may report success while no SARIF actually exists on
+    # disk. Cross-check submitted names against on-disk files.
+    submitted_names = {name for name, _ in configs}
+    silently_dropped = []
+    for name in submitted_names:
+        suffix = _sanitize_pack_name(name)
+        sarif_expected = out_dir / f"semgrep_{suffix}.sarif"
+        if not sarif_expected.is_file():
+            if name not in failed_scans:
+                silently_dropped.append(name)
+                failed_scans.append(name)
+    if silently_dropped:
+        logger.warning(
+            f"Silently-dropped packs (submitted, no SARIF on disk): "
+            f"{', '.join(silently_dropped)}"
+        )
+
+    return sarif_paths, failed_scans
 
 
 def run_codeql(
@@ -1078,6 +1709,18 @@ def main():
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
+    ap.add_argument(
+        "--exclude-dir", action="append", default=None, metavar="GLOB",
+        dest="exclude_dir",
+        help=(
+            "Drop SARIF results whose file URI matches GLOB. Repeatable "
+            "(OR semantics). Applied post-merge to the combined.sarif + "
+            "scan_metrics; individual per-tool SARIFs stay unfiltered as "
+            "forensic record of what each tool actually emitted. Operator "
+            "escape hatch for vendored / test / generated paths. Example: "
+            "``--exclude-dir 'vendor/*' --exclude-dir '**/tests/*'``"
+        ),
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
@@ -1165,14 +1808,79 @@ def main():
         }
         save_json(out_dir / "scan-manifest.json", manifest)
 
-        # Semgrep stage - Use parallel scanning by default
+        # Semgrep stage - Use parallel scanning by default. Resolve
+        # the baseline pack set via the target-type catalog (QoL
+        # #7-7b: per-target tuning) — catalog entry for the matched
+        # target type provides ``semgrep_packs.default``; falls back
+        # to the hardcoded RaptorConfig.BASELINE_SEMGREP_PACKS when
+        # no catalog match. Surface the resolved set + source so the
+        # operator sees WHY a particular pack list ran.
+        resolved_baseline = _resolve_baseline_packs(repo_path)
+        if list(resolved_baseline) != list(RaptorConfig.BASELINE_SEMGREP_PACKS):
+            try:
+                from core.run.target_types import load as _load_tt
+                _tt = _load_tt(repo_path)
+                _tt_name = _tt.name if _tt else "unknown"
+            except Exception:  # noqa: BLE001
+                _tt_name = "unknown"
+            _names = [n for n, _ in resolved_baseline]
+            logger.info(
+                f"Semgrep baseline packs from target-type catalog "
+                f"'{_tt_name}': {_names}"
+            )
+        # Per-pack language applicability (QoL #16a). Tells the
+        # operator how many rules in each baseline pack actually
+        # match the target's language(s) — without this they read
+        # ``6 rule-group(s)`` and assume thousands of rules
+        # apply, when the upstream registry coverage for their
+        # language may be much thinner. Silent on no-target-lang
+        # or no-cached-pack-data (we won't fabricate a count).
+        _target_langs = _target_semgrep_languages(repo_path)
+        _applicability = _format_pack_applicability(
+            list(resolved_baseline), _target_langs,
+        )
+        if _applicability:
+            logger.info(_applicability)
+            # Escalation hint when applicability is thin —
+            # surface the alternative paths now so the operator
+            # doesn't think the framework's silent under-scan IS
+            # the verdict on the target. Omit when --codeql is
+            # already running (would suggest something happening).
+            if _is_coverage_thin(
+                list(resolved_baseline), _target_langs,
+            ):
+                _codeql_running = (
+                    args.codeql and not args.no_codeql
+                )
+                logger.info(_format_thin_coverage_hint(
+                    _target_langs, _codeql_running,
+                    llm_configured=_llm_configured(),
+                ))
         logger.info("Starting Semgrep scans...")
         if args.sequential:
             # Fallback to sequential for debugging
             logger.warning("Sequential scanning enabled (slower)")
-            semgrep_sarifs = semgrep_scan_sequential(repo_path, rules_dirs, out_dir)
+            semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
+                repo_path, rules_dirs, out_dir,
+                baseline_packs=resolved_baseline,
+            )
         else:
-            semgrep_sarifs = semgrep_scan_parallel(repo_path, rules_dirs, out_dir)
+            semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
+                repo_path, rules_dirs, out_dir,
+                baseline_packs=resolved_baseline,
+            )
+
+        # Surface failed-pack count on stderr — at scan-level so the
+        # operator sees it without trawling the run's log file. The
+        # logger.warning inside semgrep_scan_parallel writes to the
+        # configured log handler (DEBUG/INFO level depending on -v);
+        # the stderr line below is unconditional and operator-facing.
+        if semgrep_failed:
+            print(
+                f"⚠️  semgrep: {len(semgrep_failed)} pack(s) failed or "
+                f"produced no SARIF: {', '.join(semgrep_failed)}",
+                file=sys.stderr,
+            )
 
         # CodeQL stage (optional). --no-codeql takes precedence —
         # script-friendly so a default-flip from "off" to "on" can
@@ -1204,19 +1912,45 @@ def main():
         # Merge SARIFs if more than one
         sarif_inputs = semgrep_sarifs + codeql_sarifs + cocci_sarifs
         merged = out_dir / "combined.sarif"
+        exclude_globs = args.exclude_dir
+        excluded_count = 0
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
             try:
                 merged_data = merge_sarif([str(p) for p in sarif_inputs])
+                # Operator --exclude-dir: post-merge filter so
+                # combined.sarif + downstream metrics see only the
+                # non-excluded set. Per-tool SARIFs stay unfiltered
+                # (forensic record of what each tool emitted).
+                merged_data, excluded_count = filter_sarif_by_exclude_globs(
+                    merged_data, exclude_globs,
+                )
+                if excluded_count:
+                    logger.info(
+                        f"--exclude-dir dropped {excluded_count} results "
+                        f"from combined.sarif ({exclude_globs})"
+                    )
                 save_json(merged, merged_data)
                 logger.info(f"Merged SARIF created: {merged}")
             except Exception as e:
                 logger.warning(f"SARIF merge failed, using individual files: {e}")
                 (out_dir / "sarif_merge.stderr.log").write_text(str(e))
 
-        # Generate metrics
+        # Generate metrics. When --exclude-dir filtered the combined
+        # SARIF, metrics should reflect the filtered set — read from
+        # the just-written combined.sarif rather than the unfiltered
+        # individual inputs.
         logger.info("Generating scan metrics...")
-        metrics = generate_scan_metrics(sarif_inputs)
+        if excluded_count and merged.exists():
+            metrics = generate_scan_metrics([str(merged)])
+        else:
+            metrics = generate_scan_metrics(sarif_inputs)
+        # Record per-engine failure surfaces so downstream readers
+        # can distinguish a clean run from one where N packs silently
+        # dropped. Empty list is intentional (positive marker — "we
+        # tracked this, nothing failed") rather than absent-key
+        # (couldn't-be-bothered).
+        metrics["semgrep_failed_packs"] = semgrep_failed
         save_json(out_dir / "scan_metrics.json", metrics)
 
         logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")
@@ -1226,13 +1960,18 @@ def main():
             from core.coverage.record import (
                 build_from_semgrep, build_from_codeql, write_record, load_records,
             )
-            # Semgrep coverage — find JSON outputs alongside SARIFs
+            # Semgrep coverage — find JSON outputs alongside SARIFs.
+            # See ``_resolve_rules_applied`` for why this isn't just
+            # ``groups`` or rule-dir names.
+            _rules_applied = _resolve_rules_applied(
+                groups, resolved_baseline, rules_dirs,
+            )
             for sarif_path in semgrep_sarifs:
                 json_path = Path(sarif_path).with_suffix(".json")
                 if json_path.exists():
                     record = build_from_semgrep(
                         out_dir, json_path,
-                        rules_applied=groups if groups else [str(Path(r).name) for r in rules_dirs],
+                        rules_applied=_rules_applied,
                     )
                     if record:
                         write_record(out_dir, record, tool_name="semgrep")
@@ -1285,6 +2024,23 @@ def main():
 
         duration = time.time() - start_time
         logger.info(f"Total scan duration: {duration:.2f}s")
+
+        # Tool-execution coverage block — reads coverage-<tool>.json
+        # records the scanners emit; renders an aligned per-tool
+        # summary (findings count, rule groups, silent-drop
+        # warnings) so the operator sees what RAN with what RESULT
+        # before the function-level coverage block below.
+        # Distinct from store_summary which answers ''what code did
+        # any tool examine?''; this one answers ''what did we look
+        # at it WITH?''.
+        try:
+            from core.reporting.scan_coverage import render_scan_coverage
+            tool_cov = render_scan_coverage(out_dir)
+            if tool_cov:
+                print()
+                print(tool_cov)
+        except Exception as e:
+            logger.debug(f"Tool-coverage render failed (non-fatal): {e}")
 
         # Print coverage summary (unified store-backed report; file-level tier
         # when there's no function inventory, e.g. a bare /scan).

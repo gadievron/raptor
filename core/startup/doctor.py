@@ -164,7 +164,13 @@ def _render(
     if project_line:
         passes.append(project_line.strip())
 
-    out: List[str] = ["RAPTOR doctor", "============="]
+    from core.config import RaptorConfig
+
+    out: List[str] = [
+        "RAPTOR doctor",
+        "=============",
+        f"version: {RaptorConfig.effective_version()}",
+    ]
 
     # Defence in depth: although every current producer of these
     # strings is RAPTOR-internal (check_tools, check_llm, check_env),
@@ -222,6 +228,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             strict = True
         elif a in ("--verbose", "-v"):
             verbose = True
+        elif a in ("--help", "-h"):
+            # `--help` is a help request, not a usage error: print usage to
+            # stdout and exit 0, matching every other raptor.py mode. Pre-fix
+            # it fell into the else branch (usage to stderr, exit 2), making
+            # `doctor --help` the one mode where the documented help flag
+            # looked like a failure.
+            print(_USAGE)
+            return 0
         else:
             print(_USAGE, file=sys.stderr)
             return 2

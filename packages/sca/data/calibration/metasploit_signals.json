@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-05-28T17:39:23Z",
+    "fetched_at": "2026-06-02T10:03:52Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6640,
+    "modules_scanned": 6642,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -19047,6 +19047,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/xerte_unauthenticated_template_import_rce"
+      ]
+    },
+    "CVE-2026-34197": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/apache_activemq_jolokia_rce"
       ]
     },
     "CVE-2026-41940": {

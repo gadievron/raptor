@@ -5,16 +5,40 @@ the terminal banner. No logic, no checks, no side effects.
 """
 
 import random
+import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
+# The banner's version line carries a ``__VERSION__`` placeholder rather than a
+# hardcoded number, so the displayed version is always the live one injected
+# here — never a stale stamp. Matches the box layout the release uses.
+_VERSION_LINE = re.compile(r"(║\s+Based on Claude Code - )\S+[^║]*║")
 
-def read_logo() -> str:
-    """Read the ASCII logo from the raptor-offset file."""
+
+def read_logo(version: str = "") -> str:
+    """Read the ASCII logo, injecting ``version`` into the banner line.
+
+    ``version`` is the value to display (typically
+    ``RaptorConfig.effective_version()``); a leading ``v`` is added to match
+    the banner convention. The line is re-padded so the box border stays
+    aligned regardless of the version string's length. When ``version`` is
+    empty the asset is returned verbatim (placeholder left as-is)."""
     path = _ASSETS / "raptor-offset"
-    return path.read_text().rstrip() if path.exists() else ""
+    if not path.exists():
+        return ""
+    text = path.read_text().rstrip()
+    if version:
+        label = "v" + version.lstrip("v")
+
+        def _stamp(m: "re.Match[str]") -> str:
+            content = m.group(1) + label
+            pad = max(1, 76 - len(content))
+            return content + " " * pad + "║"
+
+        text = _VERSION_LINE.sub(_stamp, text, count=1)
+    return text
 
 
 def read_random_quote() -> str:

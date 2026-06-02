@@ -94,7 +94,14 @@ def format_execution_detail(detail: Dict[str, Any]) -> str:
         if info.get("packs"):
             bits.append(f"packs: {', '.join(info['packs'])}")
         if info.get("files_failed"):
-            bits.append(f"{len(info['files_failed'])} failed")
+            # ``files_failed`` is per-file PARSE errors (semgrep
+            # couldn't tokenise N source files), not failed PACKS
+            # — adjacent to the ``X packs failed`` line in the
+            # ``Coverage:`` block; identical wording is ambiguous.
+            bits.append(
+                f"{len(info['files_failed'])} file parse error"
+                f"{'s' if len(info['files_failed']) != 1 else ''}"
+            )
         ver = f" {info['version']}" if info.get("version") else ""
         lines.append(f"    {tool}{ver}: {', '.join(bits)}")
     missing = detail.get("missing_groups") or []

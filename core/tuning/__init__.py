@@ -29,6 +29,7 @@ _TUNING_PATH = _REPO_ROOT / "tuning.json"
 _VALID_KEYS = frozenset({
     "codeql_ram_mb",
     "codeql_threads",
+    "codeql_max_disk_cache_mb",
     "max_semgrep_workers",
     "max_codeql_workers",
     "max_agentic_parallel",
@@ -40,6 +41,10 @@ _VALID_KEYS = frozenset({
 _DEFAULTS = {
     "codeql_ram_mb": "auto",
     "codeql_threads": "auto",
+    # 0 sentinel = "leave codeql's own unbounded default in place".  Set
+    # explicit MB cap when running unattended on bounded disk; codeql's
+    # DB build cache otherwise grows without limit.
+    "codeql_max_disk_cache_mb": 0,
     "max_semgrep_workers": 4,
     "max_codeql_workers": 2,
     "max_agentic_parallel": 3,
@@ -178,8 +183,10 @@ _AUTO_RESOLVERS = {
     "max_inventory_workers": _detect_inventory_workers,
 }
 
-# Keys where 0 is a valid explicit value (e.g. CodeQL's "0 = all CPUs")
-_ZERO_ALLOWED = frozenset({"codeql_threads"})
+# Keys where 0 is a valid explicit value:
+#   - codeql_threads: 0 = all CPUs
+#   - codeql_max_disk_cache_mb: 0 = use codeql's unbounded default
+_ZERO_ALLOWED = frozenset({"codeql_threads", "codeql_max_disk_cache_mb"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +194,7 @@ class Tuning:
     """Resolved tuning values — all integers, no ``"auto"``."""
     codeql_ram_mb: int
     codeql_threads: int
+    codeql_max_disk_cache_mb: int
     max_semgrep_workers: int
     max_codeql_workers: int
     max_agentic_parallel: int
@@ -282,8 +290,9 @@ def _create_default_file(path: Path) -> None:
         # which also writes this file. Use the same format.
         import json
         comments = {
-            "codeql_ram_mb": "MB of RAM for CodeQL analysis",
-            "codeql_threads": "CPUs for CodeQL (0 = all available)",
+            "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
+            "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
+            "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",
             "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
             "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
             "max_agentic_parallel": "parallel Claude Code agents for analysis",
