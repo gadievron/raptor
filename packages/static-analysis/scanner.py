@@ -85,6 +85,69 @@ def filter_sarif_by_exclude_globs(
     return out, dropped
 
 
+def _pack_tuple_for_id(pack_id: str) -> Tuple[str, str]:
+    """Resolve a pack-id-suffix (``"security-audit"``,
+    ``"command-injection"``) to the full
+    ``(display_name, full_pack_id)`` tuple ``BASELINE_SEMGREP_PACKS``
+    uses. The display names aren't a clean derivation from the
+    pack-id (``command-injection`` → ``semgrep_injection``,
+    ``owasp-top-ten`` → ``semgrep_owasp_top_10`` — both reflect
+    historical naming conventions in
+    ``RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK``), so consult
+    those mappings first; fall back to a synthesised name for
+    unknown ids.
+
+    Used by ``_resolve_baseline_packs`` to convert the
+    target-type catalog's ``semgrep_packs.default`` (a list of
+    pack-id suffixes) to the tuple shape scanner internals expect.
+    """
+    full_id = f"p/{pack_id}"
+    # Baseline packs are listed by full tuple already.
+    for name, fid in RaptorConfig.BASELINE_SEMGREP_PACKS:
+        if fid == full_id:
+            return (name, fid)
+    # POLICY_GROUP_TO_SEMGREP_PACK values cover the rest of the
+    # canonical (name, pack-id) pairs.
+    for name, fid in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.values():
+        if fid == full_id:
+            return (name, fid)
+    # Unknown pack-id (catalog author added something we don't
+    # have a name convention for) — synthesise a safe name.
+    safe = pack_id.replace("-", "_").replace("/", "_")
+    return (f"semgrep_{safe}", full_id)
+
+
+def _resolve_baseline_packs(
+    repo_path: Optional[Path],
+) -> List[Tuple[str, str]]:
+    """Resolve the baseline semgrep pack set for ``repo_path``.
+
+    When the target-type catalog matches and ships
+    ``semgrep_packs.default``, use the catalog's list — that's
+    the per-target-type tuning #7-7b ships. When no catalog match
+    (or the matched entry has no default packs, like the
+    ``generic`` fallback), use the hardcoded
+    ``RaptorConfig.BASELINE_SEMGREP_PACKS``.
+
+    Operator override via ``--policy-groups`` happens elsewhere
+    (in main's rules_dirs construction) and remains authoritative
+    — this resolver only governs the baseline (what runs when
+    the operator hasn't narrowed the rule set explicitly).
+    """
+    if repo_path is None:
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    try:
+        from core.run.target_types import load as load_target_type
+        entry = load_target_type(Path(repo_path))
+    except Exception:  # noqa: BLE001
+        # Catalog substrate is best-effort; never break the scan
+        # on a catalog load issue.
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    if entry is None or not entry.semgrep_packs_default:
+        return list(RaptorConfig.BASELINE_SEMGREP_PACKS)
+    return [_pack_tuple_for_id(pid) for pid in entry.semgrep_packs_default]
+
+
 def _sanitize_pack_name(name: str) -> str:
     """Strict allowlist: alphanumeric + dash + underscore + dot.
 
@@ -426,7 +489,8 @@ def semgrep_scan_parallel(
     rules_dirs: List[str],
     out_dir: Path,
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
+    baseline_packs: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Run Semgrep scans in parallel for improved performance.
@@ -437,6 +501,13 @@ def semgrep_scan_parallel(
         out_dir: Output directory for results
         timeout: Timeout per scan
         progress_callback: Optional callback for progress updates
+        baseline_packs: Override for the always-run baseline pack
+            set (``[(display_name, pack_id), ...]``). When None,
+            falls back to ``RaptorConfig.BASELINE_SEMGREP_PACKS`` —
+            preserves pre-#17 behaviour for callers that don't
+            consult the target-type catalog. Callers integrated
+            with the catalog (scanner.py main) resolve via
+            ``_resolve_baseline_packs`` and pass the result.
 
     Returns:
         (sarif_paths, failed_pack_names). Callers MUST surface the
@@ -449,6 +520,8 @@ def semgrep_scan_parallel(
         caller renders the summary line and writes it into the
         coverage record.
     """
+    if baseline_packs is None:
+        baseline_packs = list(RaptorConfig.BASELINE_SEMGREP_PACKS)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Build config list with BOTH local rules AND standard packs for each category
@@ -475,8 +548,10 @@ def semgrep_scan_parallel(
         else:
             logger.warning(f"Rule directory not found: {rd_path}")
 
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
+    # Add baseline packs (unless already added). ``baseline_packs``
+    # was resolved by the caller (target-type catalog → tuned
+    # default per #7-7b; otherwise hardcoded BASELINE).
+    for pack_name, pack_identifier in baseline_packs:
         if pack_identifier not in added_packs:
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
@@ -558,7 +633,8 @@ def semgrep_scan_sequential(
     repo_path: Path,
     rules_dirs: List[str],
     out_dir: Path,
-    timeout: int = RaptorConfig.SEMGREP_TIMEOUT
+    timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
+    baseline_packs: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[List[str], List[str]]:
     """Sequential scanning fallback for debugging.
 
@@ -568,7 +644,13 @@ def semgrep_scan_sequential(
     the silent-drop class but the worker can still claim success
     while no SARIF lands (filesystem error, sandbox teardown), so
     the same cross-check + reporting apply.
+
+    ``baseline_packs``: same contract as the parallel sibling —
+    override for the always-run baseline pack set; None falls back
+    to ``RaptorConfig.BASELINE_SEMGREP_PACKS``.
     """
+    if baseline_packs is None:
+        baseline_packs = list(RaptorConfig.BASELINE_SEMGREP_PACKS)
     out_dir.mkdir(parents=True, exist_ok=True)
     sarif_paths: List[str] = []
     failed_scans: List[str] = []
@@ -594,8 +676,9 @@ def semgrep_scan_sequential(
                     configs.append((pack_name, resolved))
                     added_packs.add(pack_id)
 
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
+    # Add baseline packs (unless already added) — see parallel sibling
+    # for the catalog-aware resolution rationale.
+    for pack_name, pack_identifier in baseline_packs:
         if pack_identifier not in added_packs:
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
@@ -1280,17 +1363,38 @@ def main():
         }
         save_json(out_dir / "scan-manifest.json", manifest)
 
-        # Semgrep stage - Use parallel scanning by default
+        # Semgrep stage - Use parallel scanning by default. Resolve
+        # the baseline pack set via the target-type catalog (QoL
+        # #7-7b: per-target tuning) — catalog entry for the matched
+        # target type provides ``semgrep_packs.default``; falls back
+        # to the hardcoded RaptorConfig.BASELINE_SEMGREP_PACKS when
+        # no catalog match. Surface the resolved set + source so the
+        # operator sees WHY a particular pack list ran.
+        resolved_baseline = _resolve_baseline_packs(repo_path)
+        if list(resolved_baseline) != list(RaptorConfig.BASELINE_SEMGREP_PACKS):
+            try:
+                from core.run.target_types import load as _load_tt
+                _tt = _load_tt(repo_path)
+                _tt_name = _tt.name if _tt else "unknown"
+            except Exception:  # noqa: BLE001
+                _tt_name = "unknown"
+            _names = [n for n, _ in resolved_baseline]
+            logger.info(
+                f"Semgrep baseline packs from target-type catalog "
+                f"'{_tt_name}': {_names}"
+            )
         logger.info("Starting Semgrep scans...")
         if args.sequential:
             # Fallback to sequential for debugging
             logger.warning("Sequential scanning enabled (slower)")
             semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
                 repo_path, rules_dirs, out_dir,
+                baseline_packs=resolved_baseline,
             )
         else:
             semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
                 repo_path, rules_dirs, out_dir,
+                baseline_packs=resolved_baseline,
             )
 
         # Surface failed-pack count on stderr — at scan-level so the

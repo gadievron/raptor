@@ -70,6 +70,60 @@ def apply_prefer_globs(
     return preferred + others
 
 
+def _dir_to_glob(d: str) -> str:
+    """Convert a catalog directory path (``src/http``) to an
+    fnmatch glob that matches files inside it (``src/http/*``).
+    Already-glob entries (``src/device/sysdep_*``) pass through
+    unchanged.
+
+    fnmatch ``*`` is greedy across ``/`` (per Python's
+    ``fnmatch.translate``), so ``src/http/*`` matches both
+    ``src/http/server.c`` AND ``src/http/foo/bar.c`` — no need
+    for ``src/http/**`` or similar.
+    """
+    if "*" in d:
+        return d
+    return d.rstrip("/") + "/*"
+
+
+def resolve_prefer_globs(
+    operator_globs: Optional[List[str]],
+    repo_path: Optional[Path],
+) -> tuple:
+    """Resolve the effective attack-surface prefer-globs for an
+    /agentic run. Operator-supplied globs win unconditionally;
+    when absent, fall back to the target-type catalog's
+    ``attack_surface.high_priority_dirs`` for the matched target
+    type.
+
+    Returns ``(effective_globs, source_label)`` where
+    ``source_label`` is for the operator-facing log line
+    (``--prefer`` or ``catalog '<name>'``); both are None when
+    neither operator nor catalog supplied anything (operator
+    didn't pass --prefer AND no catalog entry matched, or repo_path
+    is missing entirely).
+
+    Module-level (rather than agent-method) so unit tests can
+    drive it without instantiating the full AutonomousSecurityAgentV2
+    (which pulls in LLMConfig, scorecard, sandbox, etc.).
+    """
+    if operator_globs:
+        return list(operator_globs), "--prefer"
+    if not repo_path:
+        return None, None
+    try:
+        from core.run.target_types import load
+        entry = load(Path(repo_path))
+    except Exception:  # noqa: BLE001
+        # Catalog substrate is best-effort; never fail the agent
+        # on a catalog-load issue.
+        return None, None
+    if entry is None or not entry.attack_surface_high:
+        return None, None
+    globs = [_dir_to_glob(d) for d in entry.attack_surface_high]
+    return globs, f"catalog '{entry.name}'"
+
+
 def apply_exclude_dir_globs(
     findings: List[Dict[str, Any]],
     exclude_globs: Optional[List[str]],
@@ -1721,6 +1775,15 @@ class AutonomousSecurityAgentV2:
             logger.debug("annotation emit error", exc_info=True)
             return None
 
+    def _resolve_prefer_globs(
+        self, operator_globs: Optional[List[str]],
+    ) -> tuple:
+        """Instance-method wrapper around module-level
+        ``resolve_prefer_globs`` — passes the agent's
+        ``self.repo_path``. Kept as a method so the call site in
+        ``process_findings`` stays brief."""
+        return resolve_prefer_globs(operator_globs, self.repo_path)
+
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
                          max_findings: int = 10, checklist: Dict[str, Any] = None,
                          emit_annotations: bool = True,
@@ -1793,21 +1856,34 @@ class AutonomousSecurityAgentV2:
         # Put dataflow findings first, then others
         prioritized_findings = findings_with_dataflow + findings_without_dataflow
 
-        # Operator-controlled attack-surface ordering: --prefer GLOB
-        # sorts matching findings to the front before the cap fires.
-        if prefer_globs:
+        # Attack-surface ordering: prefer-globs from operator
+        # (--prefer GLOB) take precedence; when absent, the
+        # target-type catalog's ``attack_surface.high_priority_dirs``
+        # supplies an implicit default for the matched target type
+        # so a low ``--max-findings`` cap reaches the architectural
+        # attack surface (src/http, src/protocols, ...) instead of
+        # spending budget on platform shims by SARIF order luck.
+        # Operator override always wins; catalog only fires when
+        # the operator didn't supply globs.
+        effective_globs, prefer_source = self._resolve_prefer_globs(
+            prefer_globs,
+        )
+        if effective_globs:
             total_before = len(prioritized_findings)
             prioritized_findings = apply_prefer_globs(
-                prioritized_findings, prefer_globs,
+                prioritized_findings, effective_globs,
             )
             matched = sum(
                 1 for f in prioritized_findings
-                if _file_matches_globs(f.get("file_path", ""), prefer_globs)
+                if _file_matches_globs(
+                    f.get("file_path", ""), effective_globs,
+                )
             )
             if matched and not is_prep_only:
                 logger.info(
-                    f"--prefer reordered: {matched} of {total_before} "
-                    f"findings match {prefer_globs} (sorted to front)"
+                    f"attack-surface ranking ({prefer_source}): "
+                    f"{matched} of {total_before} findings match "
+                    f"{effective_globs} (sorted to front)"
                 )
 
         if not is_prep_only:

@@ -172,6 +172,59 @@ class CostTracker:
             return summary
 
 
+def _finalize_results_for_emit(results: list) -> None:
+    """Strip operator-internal fields + stamp explicit status on
+    each per-finding record before it lands in
+    ``orchestrated_report.json``. Mutates ``results`` in place.
+
+    Two concerns:
+
+    * ``repo_path`` is an absolute filesystem path on the operator's
+      machine (``/home/alice/projects/my-target``,
+      ``/tmp/raptor/foo``); stamping it onto each finding earlier in
+      the pipeline (line ~303) is necessary for SAGE enrichment
+      scoping, but leaking it into the persisted report exposes
+      operator filesystem layout downstream (username, project
+      naming, runner tmp-dir hierarchy). Strip AFTER all internal
+      consumers have used it (judge, consensus, aggregation) and
+      BEFORE save_json hits disk.
+    * ``status`` is the QoL #19 canonical enum
+      (``analysed`` / ``analysis_inconsistent`` / ``error`` /
+      ``skipped_*``). Stamping it here lets on-disk readers
+      (raptor_agentic summary, report renderers, future automation)
+      consume positive status markers instead of detecting via
+      null-fields. Derived from the per-finding shape via
+      ``core.run.finding_status.derive_status`` — no fields
+      invented; consumers that previously inferred from
+      ``is_true_positive is None`` / ``self_contradictory`` /
+      ``error`` keys now read ``status`` instead.
+
+    Skipped variants (``skipped_over_budget``,
+    ``skipped_duplicate``, etc.) are stamped by their respective
+    producers (budget cap, dedup, binary-oracle) at skip time —
+    this finaliser only handles the analysed / inconsistent /
+    error cases that survive to the orchestrator emit.
+
+    Extracted from the inline emit-time loop so it's unit-testable
+    without driving the full orchestrate() dispatch path.
+
+    Producer-stamped status (when a specific skip-reason or
+    error-class producer set ``status`` explicitly upstream) is
+    PRESERVED — derive's generic fallback would lose the
+    specificity (``skipped_over_budget`` would become generic
+    ``skipped``). Only stamp when status is absent or carries an
+    unknown value (defensive against partial-write state from an
+    older codebase variant).
+    """
+    from core.run.finding_status import ALL_STATUSES, derive_status
+    for f in results:
+        if isinstance(f, dict):
+            f.pop("repo_path", None)
+            existing = f.get("status")
+            if existing not in ALL_STATUSES:
+                f["status"] = derive_status(f)
+
+
 def build_llm_config_from_flags(
     *,
     models: Optional[List[str]] = None,
@@ -1276,19 +1329,10 @@ def orchestrate(
     if defense_telemetry.has_warnings:
         merged["orchestration"]["defense_telemetry"] = defense_telemetry.summary()
 
-    # Strip the host-side `repo_path` we stamped onto every
-    # finding for SAGE enrichment scoping (line ~303). It's an
-    # absolute filesystem path on the operator's machine
-    # (`/home/alice/projects/my-target`, `/tmp/raptor/foo`) and
-    # leaking it into the persisted report exposes operator
-    # filesystem layout downstream — anyone the report is
-    # shared with sees username, project naming conventions,
-    # and the runner's tmp-dir hierarchy. Pop AFTER all
-    # internal consumers have used it (judge, consensus,
-    # aggregation) and BEFORE save_json hits disk.
-    for f in merged.get("results", []):
-        if isinstance(f, dict):
-            f.pop("repo_path", None)
+    # Finalize per-result records before save_json: strip
+    # operator-internal fields + stamp explicit status. See
+    # ``_finalize_results_for_emit`` for the rationale.
+    _finalize_results_for_emit(merged.get("results", []))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     from core.json import save_json
