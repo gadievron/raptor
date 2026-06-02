@@ -148,6 +148,88 @@ def _resolve_baseline_packs(
     return [_pack_tuple_for_id(pid) for pid in entry.semgrep_packs_default]
 
 
+def _resolve_rules_applied(
+    groups: List[str],
+    resolved_baseline: List[Tuple[str, str]],
+    rules_dirs: List[str],
+) -> List[str]:
+    """Compute the ``rules_applied`` list stored on the semgrep
+    coverage record.
+
+    Captures every policy group whose registry pack actually ran,
+    so the coverage report's "policy group(s) not used" check
+    (``POLICY_GROUP_TO_SEMGREP_PACK.keys() - rules_applied``)
+    doesn't falsely flag groups whose pack was added via the
+    catalog, via a rule-dir-name match, or as a shared pack id
+    across multiple policy groups.
+
+    Pre-fix: ``rules_applied=['all']`` (literal) or local rule
+    directory names; both lacked the canonical policy-group keys,
+    so EVERY policy group showed as ''not used'' — the
+    operator-facing inconsistency the c.userspace-daemon scan
+    surfaced.
+
+    Honest semantic: pack-id-driven. A policy group is ''applied''
+    iff its registry pack id is in the set of pack ids semgrep
+    actually ran. That set is the union of:
+
+    * Catalog-resolved baseline packs (``resolved_baseline``).
+    * Pack ids that ``semgrep_scan_parallel`` adds because a
+      rule dir's name matched a key in ``POLICY_GROUP_TO_SEMGREP_PACK``
+      (see scanner.py:``Add corresponding standard pack if available``).
+
+    Operator-passed specific policy groups (``--policy-groups
+    auth,injection``) drive ``rules_dirs`` membership, which feeds
+    back through the same rule-dir → pack-id mapping — so the
+    set inclusion is automatic; no special branch needed.
+
+    Two correctness wins over the pre-fix design:
+
+    1. Shared pack ids — ``flows`` and ``best-practices`` both
+       map to ``p/default``; running ``flows/`` exercises both,
+       and both correctly land in ``applied`` here.
+    2. No-local-rule-dir groups — ``best-practices`` has no
+       local rule dir; ``--policy-groups all`` doesn't trigger
+       its registry pack via the rule-dir loop, so it's NOT in
+       ``applied`` unless something else added ``p/default``
+       (which ``flows/`` does in practice).
+
+    * ``groups`` — accepted for API symmetry / future extension;
+      currently unused (rule-dir membership is the actual signal).
+    * ``resolved_baseline`` — the catalog-resolved baseline pack
+      set (``[(display_name, pack_id), ...]``).
+    * ``rules_dirs`` — local rule directory paths the scanner
+      passed to semgrep_scan_parallel. Used to derive which
+      registry packs got auto-added via the rule-dir → pack-id
+      mapping, AND as the fallback identity when nothing else
+      populated the applied set.
+    """
+    # Compute the set of pack ids semgrep ACTUALLY ran — the
+    # union of catalog baseline + auto-added registry packs (via
+    # rule-dir name match).
+    ran_pack_ids: set = {pid for _, pid in resolved_baseline}
+    for rd in rules_dirs:
+        dir_name = Path(rd).name
+        mapping = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.get(dir_name)
+        if mapping is not None:
+            ran_pack_ids.add(mapping[1])
+
+    # Reverse-map every policy group whose pack id ran.
+    applied = {
+        group
+        for group, (_name, pack_id)
+        in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.items()
+        if pack_id in ran_pack_ids
+    }
+    if applied:
+        return sorted(applied)
+    # Fallback: no policy groups exercised → record rule-dir
+    # names so the coverage record still has SOME identity
+    # (preserves pre-fix shape for the genuinely-empty case).
+    _ = groups  # accepted for API symmetry; unused — see docstring.
+    return [str(Path(r).name) for r in rules_dirs]
+
+
 def _sanitize_pack_name(name: str) -> str:
     """Strict allowlist: alphanumeric + dash + underscore + dot.
 
@@ -1487,13 +1569,18 @@ def main():
             from core.coverage.record import (
                 build_from_semgrep, build_from_codeql, write_record, load_records,
             )
-            # Semgrep coverage — find JSON outputs alongside SARIFs
+            # Semgrep coverage — find JSON outputs alongside SARIFs.
+            # See ``_resolve_rules_applied`` for why this isn't just
+            # ``groups`` or rule-dir names.
+            _rules_applied = _resolve_rules_applied(
+                groups, resolved_baseline, rules_dirs,
+            )
             for sarif_path in semgrep_sarifs:
                 json_path = Path(sarif_path).with_suffix(".json")
                 if json_path.exists():
                     record = build_from_semgrep(
                         out_dir, json_path,
-                        rules_applied=groups if groups else [str(Path(r).name) for r in rules_dirs],
+                        rules_applied=_rules_applied,
                     )
                     if record:
                         write_record(out_dir, record, tool_name="semgrep")

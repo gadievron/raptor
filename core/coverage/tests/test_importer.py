@@ -304,3 +304,121 @@ def test_backfill_unions_checked_by_and_records_then_gap(tmp_path):
     assert CoverageStore(tmp_path / "coverage.json").who_checked("a.c", 40) == [
         "semgrep", "validate:stage-a",
     ]
+
+
+# ---------------------------------------------------------------------------
+# _tool_stamp: per-tool record version fallback when manifest is bare
+# ---------------------------------------------------------------------------
+
+
+def test_tool_stamp_uses_engines_when_present():
+    from core.coverage.importer import _tool_stamp
+    prov = {
+        "engines": {"semgrep": "1.79.0"},
+        "timestamp": "2026-06-02T01:00:00Z",
+    }
+    stamp = _tool_stamp("semgrep", prov, record_version=None)
+    assert stamp["version"] == "1.79.0"
+
+
+def test_tool_stamp_falls_back_to_record_version_when_engines_bare():
+    # When raptor.py's lifecycle wrapper hasn't yet called
+    # complete_run, the manifest's ``engines`` map is bare. The
+    # per-tool coverage record's ``version`` field (populated by
+    # build_from_semgrep / build_from_cocci from the tool's own
+    # JSON output) is the fallback — without it, scanner.py's
+    # end-of-run coverage summary always shows
+    # ``(version unrecorded)``.
+    from core.coverage.importer import _tool_stamp
+    prov = {
+        "engines": {},
+        "timestamp": "2026-06-02T01:00:00Z",
+    }
+    stamp = _tool_stamp("semgrep", prov, record_version="1.79.0")
+    assert stamp["version"] == "1.79.0"
+
+
+def test_tool_stamp_engines_wins_over_record_version_when_both():
+    # Manifest engines is authoritative when present (matches
+    # post-complete_run state); record_version is the fallback for
+    # pre-complete_run renders.
+    from core.coverage.importer import _tool_stamp
+    prov = {
+        "engines": {"semgrep": "2.0.0"},
+        "timestamp": "2026-06-02T01:00:00Z",
+    }
+    stamp = _tool_stamp("semgrep", prov, record_version="1.79.0")
+    assert stamp["version"] == "2.0.0"
+
+
+def test_tool_stamp_no_version_anywhere_omits_field():
+    # Neither manifest nor record carries a version — stamp
+    # shouldn't fabricate one. Renderer will say "version
+    # unrecorded" in this case (genuinely unknown).
+    from core.coverage.importer import _tool_stamp
+    prov = {"engines": {}, "timestamp": "t"}
+    stamp = _tool_stamp("semgrep", prov, record_version=None)
+    assert "version" not in stamp
+
+
+def test_tool_stamp_non_string_record_version_rejected():
+    # Defensive: a future caller passing a dict / list / int as
+    # record_version would silently land an unhashable value in
+    # the stamp, then crash downstream in ``provenance_summary``
+    # (sets the version into a set). isinstance guard refuses.
+    from core.coverage.importer import _tool_stamp
+    prov = {"engines": {}, "timestamp": "t"}
+    for bogus in [{"v": "1.0"}, ["1.0"], 100, 1.5]:
+        stamp = _tool_stamp("semgrep", prov, record_version=bogus)
+        assert "version" not in stamp, (
+            f"version field should not be set for non-string "
+            f"record_version={bogus!r}"
+        )
+
+
+def test_tool_stamp_empty_string_record_version_omits_field():
+    # ``record.get("version")`` may return "" when the tool's
+    # JSON output had no version key (build_from_semgrep uses
+    # ``data.get("version", "")``). Empty string is no
+    # information — same treatment as None.
+    from core.coverage.importer import _tool_stamp
+    prov = {"engines": {}, "timestamp": "t"}
+    stamp = _tool_stamp("semgrep", prov, record_version="")
+    assert "version" not in stamp
+
+
+def test_tool_stamp_works_for_coccinelle():
+    # Same fallback applies to coccinelle — build_from_cocci
+    # stamps the spatch version on the record.
+    from core.coverage.importer import _tool_stamp
+    prov = {"engines": {}, "timestamp": "t"}
+    stamp = _tool_stamp(
+        "coccinelle", prov,
+        record_version="spatch version 1.3 compiled with OCaml 5.4.0",
+    )
+    assert "spatch version 1.3" in stamp["version"]
+
+
+def test_import_record_passes_version_through_to_stamp(tmp_path):
+    # End-to-end: a coverage record with ``version`` (but no
+    # ``engines`` in provenance) lands its version on the
+    # store's per-(file, tool) provenance slot. Reproduces the
+    # /scan render-time scenario where complete_run hasn't yet
+    # populated engines.
+    s = _store(tmp_path)
+    s.import_inventory_meta(_CHECKLIST)
+    record = {
+        "tool": "semgrep",
+        "files_examined": ["a.c"],
+        "version": "1.79.0",
+        "timestamp": "t",
+    }
+    prov_without_engines = {
+        "engines": {},
+        "timestamp": "t",
+        "run": "scan-1",
+    }
+    import_record(s, record, {"a.c": 100}, prov_without_engines)
+    # Verify the stamp landed via provenance_summary aggregation.
+    summary = s.provenance_summary()
+    assert "1.79.0" in summary["tools"].get("semgrep", [])
