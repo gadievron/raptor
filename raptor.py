@@ -410,9 +410,19 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         from core.sage.hooks import recall_context_for_scan
         sage_context = recall_context_for_scan(target or "")
         if sage_context:
-            print(f"📚 SAGE: Recalled {len(sage_context)} historical memories")
+            # Same flush rationale as the lifecycle banner —
+            # when stdout is piped (operator's ``| tee``), block-
+            # buffering makes these lines appear AFTER the
+            # subprocess output unless explicitly flushed.
+            print(
+                f"📚 SAGE: Recalled {len(sage_context)} historical memories",
+                flush=True,
+            )
             for mem in sage_context[:3]:
-                print(f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...")
+                print(
+                    f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
+                    flush=True,
+                )
     except Exception:
         pass
 
@@ -420,7 +430,15 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     if "--out" not in args:
         args = args + ["--out", str(out_dir)]
 
-    print(f"\n[*] {label}\n")
+    # ``flush=True``: when stdout is piped (e.g. operator's ``| tee
+    # run.log``) Python switches to block-buffering, so the banner
+    # lands AFTER the subprocess's already-flushed output. The
+    # subprocess uses its own writes (often flushed eagerly), so
+    # without the explicit flush here the parent's "starting"
+    # banner can appear near the END of the log after the child's
+    # final summary — a confusing ordering artefact operators
+    # actually noticed.
+    print(f"\n[*] {label}\n", flush=True)
     rc = _run_script(script_path, args)
 
     # Write coverage records from tool outputs (before lifecycle complete)

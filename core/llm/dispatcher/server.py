@@ -63,6 +63,14 @@ from .auth import (
 _logger = logging.getLogger(__name__)
 
 
+# Audit event types that fire on every successful LLM call and
+# would otherwise flood operator output. Consumed by ``_audit``
+# to route ok-status events here to DEBUG; everything else
+# (failures, lifecycle, unknown types) stays at INFO. See
+# ``_audit`` for the routing rationale.
+_HIGH_FREQ_OK_EVENTS = frozenset({"request.dispatch"})
+
+
 def _scrub(value: Optional[str]) -> Optional[str]:
     """Defang nonprintable + ANSI escapes in operator-visible
     fields (``worker_label``, ``reason``) before they hit the
@@ -331,6 +339,14 @@ class LLMDispatcher:
         )
         self._thread.start()
 
+        # Quiet third-party loggers (httpx HTTP-request lines,
+        # google.genai AFC banner, etc.) so operator output during
+        # /agentic / /understand / /validate isn't drowned in
+        # transport-layer chatter. WARNING and above still
+        # surface so real failures aren't hidden.
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+
         self._audit(AuditEvent(
             ts=time.time(),
             event="server.start",
@@ -472,6 +488,27 @@ class LLMDispatcher:
         # are internally produced strings.
         safe_worker = _scrub(ev.worker_label)
         safe_reason = _scrub(ev.reason)
+        # Log level chosen by event type + status:
+        # * High-frequency successful events (e.g. ``request.dispatch
+        #   ok``) → DEBUG. One per LLM call; floods operator
+        #   output during /agentic / /understand / /validate
+        #   without adding signal a human reads. Held in a SET so
+        #   a future high-frequency event type (cache hits,
+        #   prefetch acks, …) joins the demotion list cleanly
+        #   without re-introducing the noise on its own.
+        # * Everything else (server lifecycle, token issuance,
+        #   ANY failure, any unknown event type) → INFO. These
+        #   are low-frequency, operator-actionable, or both.
+        # Audit log on disk continues to record EVERY event at
+        # full fidelity — this only affects the stdlib logger
+        # that terminal output uses.
+        if (
+            ev.event in _HIGH_FREQ_OK_EVENTS
+            and ev.status == "ok"
+        ):
+            level = logging.DEBUG
+        else:
+            level = logging.INFO
         # Always log via stdlib logger for terminal visibility.
         # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         # ``ev.token_id`` is a 12-character correlation prefix (see
@@ -479,7 +516,8 @@ class LLMDispatcher:
         # full token. Operator visibility for the auth flow needs
         # SOME identifier; the prefix gives correlation without
         # disclosure.
-        _logger.info(
+        _logger.log(
+            level,
             "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
             ev.event, ev.status, ev.peer_pid, ev.peer_uid,
             ev.token_id or "-", safe_worker or "-",
