@@ -20,15 +20,18 @@ from core.orchestration.agentic_passes import (
     run_validate_postpass,
 )
 
-# Assume interactive for all tests except RuleOfTwoTests (which patches
-# is_interactive explicitly). Without this, every test that exercises the
-# full pass path fails in CI/pytest (no TTY).
+# Force the Rule-of-Two agentic-pass gate open for all tests except
+# RuleOfTwoTests (which drives the gate's legs explicitly). The gate allows
+# the pass when a human terminal OR an effective sandbox is present; we mock
+# the human-terminal leg True so the full pass path runs under CI/pytest
+# (no controlling terminal, sandbox capability varies).
 _interactive_patch = None
 
 def setUpModule():
     global _interactive_patch
     _interactive_patch = patch(
-        "core.security.rule_of_two.is_interactive", return_value=True,
+        "core.security.rule_of_two._session_has_human_terminal",
+        return_value=True,
     )
     _interactive_patch.start()
 
@@ -1372,24 +1375,43 @@ class MockContractTests(unittest.TestCase):
 
 
 class RuleOfTwoTests(unittest.TestCase):
-    """Agentic passes blocked in non-interactive mode (Rule of Two)."""
+    """Agentic-pass gate: allow when a human terminal OR an effective sandbox
+    is present; block only the no-human + no-sandbox quadrant.
 
-    def test_understand_blocked_in_ci(self):
-        with patch("core.security.rule_of_two.is_interactive", return_value=False):
+    Each test drives both legs explicitly via the gate's helper boundary, so
+    the outcome doesn't depend on the test host's process tree or sandbox
+    capability.
+    """
+
+    @staticmethod
+    def _legs(*, human: bool, sandbox: bool):
+        return (
+            patch("core.security.rule_of_two._session_has_human_terminal",
+                  return_value=human),
+            patch("core.security.rule_of_two._sandbox_will_contain",
+                  return_value=sandbox),
+        )
+
+    # --- block quadrant: neither human nor sandbox ---
+
+    def test_understand_blocked_when_neither(self):
+        h, s = self._legs(human=False, sandbox=False)
+        with h, s:
             result = run_understand_prepass(
                 target=Path("scratch/target"),
                 agentic_out_dir=Path("scratch/out"),
                 claude_bin="/fake/claude",
             )
         self.assertFalse(result.ran)
-        self.assertIn("not allowed in non-interactive", result.skipped_reason)
+        self.assertIn("Rule of Two", result.skipped_reason)
 
-    def test_validate_blocked_in_ci(self):
+    def test_validate_blocked_when_neither(self):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = tmp / "report.json"
             report.write_text('{"results": []}')
-            with patch("core.security.rule_of_two.is_interactive", return_value=False):
+            h, s = self._legs(human=False, sandbox=False)
+            with h, s:
                 result = run_validate_postpass(
                     target=Path("scratch/target"),
                     agentic_out_dir=tmp,
@@ -1397,35 +1419,55 @@ class RuleOfTwoTests(unittest.TestCase):
                     claude_bin="/fake/claude",
                 )
         self.assertFalse(result.ran)
-        self.assertIn("not allowed in non-interactive", result.skipped_reason)
+        self.assertIn("Rule of Two", result.skipped_reason)
 
-    def test_understand_passes_gate_when_interactive(self):
-        with patch("core.security.rule_of_two.is_interactive", return_value=True), \
-             patch("core.orchestration.agentic_passes.shutil.which",
-                   return_value=None):
+    # --- allow quadrants: human present, OR sandbox effective ---
+
+    def test_understand_passes_gate_when_human(self):
+        h, s = self._legs(human=True, sandbox=False)
+        with h, s, patch(
+            "core.orchestration.agentic_passes.shutil.which", return_value=None
+        ):
             result = run_understand_prepass(
                 target=Path("scratch/nonexistent-target"),
                 agentic_out_dir=Path("scratch/nonexistent-out"),
             )
-        # Gets past the Rule of Two gate, fails at next check
+        # Past the gate (no Rule-of-Two block), fails at the next check.
         self.assertFalse(result.ran)
-        self.assertNotIn("non-interactive", result.skipped_reason)
+        self.assertNotIn("Rule of Two", result.skipped_reason or "")
+        self.assertIn("claude not on PATH", result.skipped_reason)
 
-    def test_validate_passes_gate_when_interactive(self):
+    def test_understand_passes_gate_when_sandboxed_noninteractive(self):
+        # The new capability: CI/cron with containment runs the pass.
+        h, s = self._legs(human=False, sandbox=True)
+        with h, s, patch(
+            "core.orchestration.agentic_passes.shutil.which", return_value=None
+        ):
+            result = run_understand_prepass(
+                target=Path("scratch/nonexistent-target"),
+                agentic_out_dir=Path("scratch/nonexistent-out"),
+            )
+        self.assertFalse(result.ran)
+        self.assertNotIn("Rule of Two", result.skipped_reason or "")
+        self.assertIn("claude not on PATH", result.skipped_reason)
+
+    def test_validate_passes_gate_when_sandboxed_noninteractive(self):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = tmp / "report.json"
             report.write_text('{"results": []}')
-            with patch("core.security.rule_of_two.is_interactive", return_value=True), \
-                 patch("core.orchestration.agentic_passes.shutil.which",
-                       return_value=None):
+            h, s = self._legs(human=False, sandbox=True)
+            with h, s, patch(
+                "core.orchestration.agentic_passes.shutil.which",
+                return_value=None,
+            ):
                 result = run_validate_postpass(
                     target=Path("scratch/nonexistent-target"),
                     agentic_out_dir=tmp,
                     analysis_report=report,
                 )
         self.assertFalse(result.ran)
-        self.assertNotIn("non-interactive", result.skipped_reason)
+        self.assertNotIn("Rule of Two", result.skipped_reason or "")
 
 
 if __name__ == "__main__":

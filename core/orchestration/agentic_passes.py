@@ -153,10 +153,10 @@ def _run_understand_prepass_unsafe(
         return PrepassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
 
     from core.security.rule_of_two import (
-        NonInteractiveError, require_interactive_for_agentic_pass,
+        NonInteractiveError, require_human_or_sandbox_for_agentic_pass,
     )
     try:
-        require_interactive_for_agentic_pass("understand")
+        require_human_or_sandbox_for_agentic_pass("understand")
     except NonInteractiveError as e:
         return PrepassResult(ran=False, skipped_reason=str(e))
 
@@ -361,10 +361,10 @@ def _run_validate_postpass_unsafe(
         return PostpassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
 
     from core.security.rule_of_two import (
-        NonInteractiveError, require_interactive_for_agentic_pass,
+        NonInteractiveError, require_human_or_sandbox_for_agentic_pass,
     )
     try:
-        require_interactive_for_agentic_pass("validate")
+        require_human_or_sandbox_for_agentic_pass("validate")
     except NonInteractiveError as e:
         return PostpassResult(ran=False, skipped_reason=str(e))
 

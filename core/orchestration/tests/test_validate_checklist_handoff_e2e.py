@@ -149,7 +149,7 @@ def test_agentic_launcher_writes_pointer_into_validate_dir(tmp_path):
          patch("core.orchestration.agentic_passes.shutil.which",
                return_value="/usr/bin/fake-claude"), \
          patch("core.security.rule_of_two."
-               "require_interactive_for_agentic_pass"):
+               "require_human_or_sandbox_for_agentic_pass"):
         result = agentic_passes.run_validate_postpass(
             target=target,
             agentic_out_dir=agentic_out,
