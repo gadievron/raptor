@@ -142,6 +142,56 @@ class TestWebScannerNoneLlm(unittest.TestCase):
 
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
+    def test_injection_finding_carries_verified_outcome_fields(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                max_fuzz_urls=1,
+                max_fuzz_params=1,
+                max_fuzz_forms=0,
+            )
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = [
+                {
+                    "url": "http://example.com/search",
+                    "parameter": "q",
+                    "payload": "' OR 1=1--",
+                    "vulnerability_type": "sqli",
+                    "status_code": 500,
+                    "response_length": 128,
+                    "confirmed": True,
+                    "response_evidence": "You have an error in your SQL syntax",
+                    "oracle_signal": "sqli_error:you have an error in your sql syntax",
+                }
+            ]
+
+            findings = scanner._phase_injection({
+                "discovered_urls": ["http://example.com/search"],
+                "discovered_parameters": ["q"],
+                "discovered_forms": [],
+            })
+
+            self.assertEqual(len(findings), 1)
+            finding = findings[0].to_dict()
+            self.assertEqual(finding["target_url"], "http://example.com/search")
+            self.assertEqual(finding["confirmation_payload"], "' OR 1=1--")
+            self.assertEqual(
+                finding["response_evidence"],
+                "You have an error in your SQL syntax",
+            )
+            self.assertEqual(finding["cwe_id"], "CWE-89")
+            self.assertEqual(finding["oracle"], "web")
+            self.assertTrue(finding["confirmed"])
+            self.assertFalse(finding["reproducible"])
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
     def test_understand_writes_url_native_context_map(self, mock_client_cls, mock_crawler_cls):
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))

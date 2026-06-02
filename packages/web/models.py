@@ -7,7 +7,7 @@ type that individual checks produce.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -35,11 +35,20 @@ class WebFinding:
     auth_context: str = "unauthenticated"
     cwe_id: Optional[str] = None
     cvss_score_estimate: Optional[float] = None
+    confirmed: Optional[bool] = None
+    target_url: Optional[str] = None
+    confirmation_payload: Optional[str] = None
+    response_evidence: Optional[str] = None
+    oracle: str = "web"
+    reproducible: bool = False
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if v is not None}
         d["file"] = self.url
         d["finding_id"] = self.id
+        d["target_url"] = self.target_url or self.url
+        if self.confirmed is None:
+            d["confirmed"] = self.status == "confirmed"
         return d
 
 

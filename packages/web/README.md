@@ -150,7 +150,17 @@ Findings use RAPTOR's standard schema. Run `python3 raptor.py project findings` 
 
 Severity: `critical`, `high`, `medium`, `low`, `informational`.
 
-Injection findings from Phase 6 get `status: needs_review`. Pass `--validate` to run the validation pipeline on them.
+Injection findings from Phase 6 get `status: needs_review`. Pass `--validate` to run the validation pipeline on them. Because Phase 6 only reports when a live HTTP oracle observes exploitation evidence, these findings also carry structured confirmation fields for later `VerifiedOutcome` integration:
+
+- `confirmed: true`
+- `target_url`
+- `confirmation_payload`
+- `response_evidence`
+- `cwe_id`
+- `oracle: web`
+- `reproducible: false`
+
+`reproducible` is false because live web responses are point-in-time observations rather than deterministic sandbox witnesses or ZKPoX-provable artefacts.
 
 Every run also writes `research_landscape.json`. This is RAPTOR's explicit
 view of the modern web-testing landscape, distilled from the PortSwigger Top

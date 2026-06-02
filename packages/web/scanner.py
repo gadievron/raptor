@@ -41,6 +41,15 @@ from packages.web.research_landscape import (
 
 logger = get_logger()
 
+
+WEB_INJECTION_CWE = {
+    "sqli": "CWE-89",
+    "xss": "CWE-79",
+    "ssti": "CWE-94",
+    "command_injection": "CWE-78",
+    "path_traversal": "CWE-22",
+}
+
 _FINDING_VULN_MAP = {
     "V2":    "authn_bypass",
     "V3":    "session_management",
@@ -273,7 +282,8 @@ class WebScanner:
 
         # Collect raw hits keyed by (endpoint_url, vuln_type) so multiple
         # vulnerable parameters on the same endpoint collapse into one finding.
-        # Value: {"params": [name, ...], "payloads": [payload, ...], "example_url": str}
+        # Value carries structured proof so a future VerifiedOutcome adapter can
+        # consume the finding without scraping prose from the evidence string.
         grouped: Dict[tuple, dict] = {}
 
         def _record(endpoint: str, param: str, raw: dict) -> None:
@@ -285,9 +295,18 @@ class WebScanner:
                     "endpoint": endpoint,
                     "params": [],
                     "payloads": [],
+                    "response_evidence": [],
+                    "oracle_signals": [],
+                    "status_codes": [],
                 }
             grouped[key]["params"].append(param)
             grouped[key]["payloads"].append(raw.get("payload", "")[:200])
+            if raw.get("response_evidence"):
+                grouped[key]["response_evidence"].append(raw["response_evidence"])
+            if raw.get("oracle_signal"):
+                grouped[key]["oracle_signals"].append(raw["oracle_signal"])
+            if raw.get("status_code") is not None:
+                grouped[key]["status_codes"].append(raw["status_code"])
 
         target_urls = list(dict.fromkeys(
             crawl_data.get("discovered_urls")
@@ -333,7 +352,11 @@ class WebScanner:
         for (endpoint, vuln_type), hit in grouped.items():
             params = hit["params"]
             payloads = hit["payloads"]
+            response_evidence = hit.get("response_evidence") or []
+            oracle_signals = hit.get("oracle_signals") or []
             param_list = ", ".join(f"'{p}'" for p in params)
+            evidence_snippet = response_evidence[0] if response_evidence else ""
+            oracle_signal = oracle_signals[0] if oracle_signals else "web_oracle"
             self._finding_counter += 1
             findings.append(WebFinding(
                 id=f"WEB-{self._finding_counter:04d}",
@@ -342,7 +365,9 @@ class WebScanner:
                 url=endpoint,
                 evidence=(
                     f"Affected parameters: {param_list}\n"
-                    f"Example payload: {payloads[0]}"
+                    f"Example payload: {payloads[0]}\n"
+                    f"Response evidence: {evidence_snippet}\n"
+                    f"Oracle signal: {oracle_signal}"
                 ),
                 description=(
                     f"{len(params)} parameter(s) on this endpoint may be vulnerable to "
@@ -356,6 +381,12 @@ class WebScanner:
                 ),
                 vuln_type="injection", asvs_category="V5", check_id="V5.2.1",
                 auth_context=auth_ctx,
+                cwe_id=WEB_INJECTION_CWE.get(vuln_type),
+                confirmed=True,
+                target_url=endpoint,
+                confirmation_payload=payloads[0] if payloads else None,
+                response_evidence=evidence_snippet,
+                reproducible=False,
             ))
 
         logger.info(f"Phase 6 complete: {len(findings)} injection findings ({sum(len(h['params']) for h in grouped.values())} total hits grouped)")

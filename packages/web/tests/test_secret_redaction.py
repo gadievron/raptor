@@ -201,6 +201,9 @@ def test_web_fuzzer_redacts_finding_urls_by_default():
     assert finding is not None
     assert redaction_probe not in finding["url"]
     assert "access_token=[REDACTED]" in finding["url"]
+    assert finding["confirmed"] is True
+    assert finding["oracle_signal"].startswith("sqli_error:")
+    assert "SQL syntax" in finding["response_evidence"]
 
 
 def test_web_fuzzer_can_preserve_finding_urls_for_debugging():
