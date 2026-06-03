@@ -878,8 +878,8 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
 # ``supports_temperature``'s version-threshold approach. The whole o-series
 # is reasoning; gpt is reasoning from major version 5.
 _OPENAI_REASONING_GPT_FROM = 5
-_OPENAI_GPT_VERSION_RE = re.compile(r"gpt-(\d+)")
-_OPENAI_OSERIES_RE = re.compile(r"o\d+")
+_OPENAI_GPT_VERSION_RE = re.compile(r"^gpt-(\d+)")
+_OPENAI_OSERIES_RE = re.compile(r"^o\d")
 
 
 def _is_openai_reasoning_model(model_name: str) -> bool:
