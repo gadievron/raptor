@@ -873,6 +873,40 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     return model
 
 
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """True for OpenAI reasoning-tier models (gpt-5.x, o1/o3/o4 families).
+
+    These models changed the chat.completions contract: they reject the
+    legacy ``max_tokens`` param (require ``max_completion_tokens``) and only
+    accept the default ``temperature`` (1) — passing ``temperature=0.7``
+    returns HTTP 400. Matched by bare model-name prefix so aggregator/
+    provider prefixes (``openai/gpt-5.5``) and date suffixes are tolerated.
+    Non-OpenAI compat models (Ollama ``qwen3``, ``claude-*`` via compat) do
+    not match and keep the legacy params.
+    """
+    m = (model_name or "").lower().rsplit("/", 1)[-1]
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _openai_sampling_kwargs(
+    model_name: str,
+    max_tokens: int,
+    temperature: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Return the correct token-limit (+ optional temperature) kwargs for an
+    OpenAI chat.completions call, branching on the reasoning-model contract.
+
+    Reasoning models → ``max_completion_tokens`` and NO temperature (default
+    only). Classic models → ``max_tokens`` and the requested temperature.
+    """
+    if _is_openai_reasoning_model(model_name):
+        return {"max_completion_tokens": max_tokens}
+    kw: Dict[str, Any] = {"max_tokens": max_tokens}
+    if temperature is not None:
+        kw["temperature"] = temperature
+    return kw
+
+
 class OpenAICompatibleProvider(LLMProvider):
     """
     LLM provider using the OpenAI SDK.
@@ -950,8 +984,11 @@ class OpenAICompatibleProvider(LLMProvider):
             response = self.client.chat.completions.create(
                 model=self.config.model_name,
                 messages=messages,
-                temperature=kwargs.get("temperature", self.config.temperature),
-                max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+                **_openai_sampling_kwargs(
+                    self.config.model_name,
+                    kwargs.get("max_tokens", self.config.max_tokens),
+                    kwargs.get("temperature", self.config.temperature),
+                ),
             )
             duration = time.monotonic() - t_start
 
@@ -1049,8 +1086,11 @@ class OpenAICompatibleProvider(LLMProvider):
                     model=self.config.model_name,
                     response_model=pydantic_model,
                     messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.config.max_tokens,
+                    **_openai_sampling_kwargs(
+                        self.config.model_name,
+                        self.config.max_tokens,
+                        temperature,
+                    ),
                 )
                 duration = time.monotonic() - t_start
 
@@ -1175,8 +1215,8 @@ class OpenAICompatibleProvider(LLMProvider):
         # ---- dispatch (with retry on transient errors) ---------------
         kwargs: Dict[str, Any] = {
             "model": self.config.model_name,
-            "max_tokens": max_tokens,
             "messages": wire_messages,
+            **_openai_sampling_kwargs(self.config.model_name, max_tokens),
         }
         if tool_schemas:
             kwargs["tools"] = tool_schemas
