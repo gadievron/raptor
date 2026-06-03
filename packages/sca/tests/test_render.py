@@ -16,9 +16,11 @@ def _vuln_row(
     in_kev: bool = True,
     epss: float | None = 0.94,
     fix: str = "2.15.0",
+    name: str = "org.apache.logging.log4j:log4j-core",
+    reachability: str = "not_evaluated",
 ) -> Dict[str, Any]:
     return {
-        "id": "sca:vuln:Maven:log4j:2.14.1:GHSA-jfh8-c2jp-5v3q",
+        "id": f"sca:vuln:Maven:{name}:2.14.1:GHSA-jfh8-c2jp-5v3q",
         "vuln_type": "sca:vulnerable_dependency",
         "tool": "sca",
         "file": "/repo/pom.xml",
@@ -29,15 +31,20 @@ def _vuln_row(
         "description": "Log4Shell",
         "sca": {
             "ecosystem": "Maven",
-            "name": "org.apache.logging.log4j:log4j-core",
+            "name": name,
             "version": "2.14.1",
-            "purl": "pkg:maven/org.apache.logging.log4j:log4j-core@2.14.1",
+            "purl": f"pkg:maven/{name}@2.14.1",
             "advisory": {"id": "GHSA-jfh8-c2jp-5v3q",
                          "aliases": ["CVE-2021-44228"]},
             "in_kev": in_kev,
             "epss": epss,
             "fixed_version": fix,
             "cvss_score": 10.0,
+            "reachability": {
+                "verdict": reachability,
+                "confidence": {"level": "high", "reason": "test"},
+                "evidence": [],
+            },
         },
     }
 
@@ -52,6 +59,19 @@ def _hygiene_row(kind: str = "loose_pin") -> Dict[str, Any]:
         "suppressed": False,
         "description": "loose pin shape",
         "sca": {"ecosystem": "npm", "name": "lodash", "kind": kind},
+    }
+
+
+def _license_row(kind: str = "unknown") -> Dict[str, Any]:
+    return {
+        "id": f"sca:license:{kind}:Maven:private-lib",
+        "vuln_type": f"sca:license:{kind}",
+        "file": "/repo/pom.xml",
+        "line": 0,
+        "severity": "info",
+        "suppressed": False,
+        "description": "No license metadata for private-lib",
+        "sca": {"ecosystem": "Maven", "name": "private-lib", "kind": kind},
     }
 
 
@@ -82,6 +102,7 @@ def test_report_contains_severity_summary_and_kev_count(tmp_path: Path) -> None:
     assert "| Critical | 1 |" in md
     assert "| Medium | 1 |" in md
     assert "KEV-listed: **1**" in md
+    assert "### Reachability breakdown" in md
 
 
 def test_suppressed_rows_marked_in_table(tmp_path: Path) -> None:
@@ -102,6 +123,17 @@ def test_hygiene_section_emitted_when_hygiene_rows_present(
     md = (tmp_path / "report.md").read_text()
     assert "## Hygiene findings" in md
     assert "loose_pin" in md
+
+
+def test_license_section_emitted_when_license_rows_present(
+    tmp_path: Path,
+) -> None:
+    f = _findings_file(tmp_path, [_license_row()])
+    render.main([str(f)])
+    md = (tmp_path / "report.md").read_text()
+    assert "License findings: **1**" in md
+    assert "## License findings" in md
+    assert "private-lib" in md
 
 
 def test_no_findings_message(tmp_path: Path) -> None:
@@ -151,6 +183,63 @@ def test_no_sarif_skips_sarif(tmp_path: Path) -> None:
 def test_no_md_and_no_sarif_returns_2(tmp_path: Path) -> None:
     f = _findings_file(tmp_path, [_vuln_row()])
     rc = render.main([str(f), "--no-md", "--no-sarif"])
+    assert rc == 2
+
+
+def test_only_reachable_filters_vuln_rows_but_keeps_hygiene(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _vuln_row(name="reachable", reachability="likely_called"),
+        _vuln_row(name="unused", reachability="not_reachable"),
+        _hygiene_row(),
+    ]
+    f = _findings_file(tmp_path, rows)
+    rc = render.main([str(f), "--only-reachable", "--no-sarif"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text()
+    assert "Maven:reachable@2.14.1" in md
+    assert "Maven:unused@2.14.1" not in md
+    assert "## Hygiene findings" in md
+
+
+def test_hide_not_reachable_filters_not_reachable_verdicts(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _vuln_row(name="imported", reachability="imported"),
+        _vuln_row(name="not-fn", reachability="not_function_reachable"),
+    ]
+    f = _findings_file(tmp_path, rows)
+    rc = render.main([str(f), "--hide-not-reachable", "--no-sarif"])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text()
+    assert "Maven:imported@2.14.1" in md
+    assert "Maven:not-fn@2.14.1" not in md
+
+
+def test_reachability_allowlist_filters_to_requested_verdicts(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _vuln_row(name="review", reachability="not_evaluated"),
+        _vuln_row(name="unused", reachability="not_reachable"),
+    ]
+    f = _findings_file(tmp_path, rows)
+    rc = render.main([
+        str(f), "--reachability", "not_evaluated", "--no-sarif",
+    ])
+    assert rc == 0
+    md = (tmp_path / "report.md").read_text()
+    assert "Maven:review@2.14.1" in md
+    assert "Maven:unused@2.14.1" not in md
+
+
+def test_reachability_filters_are_mutually_exclusive(tmp_path: Path) -> None:
+    f = _findings_file(tmp_path, [_vuln_row()])
+    rc = render.main([
+        str(f), "--only-reachable", "--hide-not-reachable",
+    ])
     assert rc == 2
 
 

@@ -14,6 +14,7 @@ from packages.sca.models import (
     Dependency,
     HygieneFinding,
     PinStyle,
+    Reachability,
 )
 from packages.sca.osv import OsvResult
 from packages.sca.report import (
@@ -624,6 +625,43 @@ def test_dep_shared_lines_emitted_only_for_first_advisory() -> None:
     assert "CVE-2099-AAAA" in md
     assert "CVE-2099-BBBB" in md
     assert "CVE-2099-CCCC" in md
+
+
+def test_report_groups_vulns_by_reachability_and_summarises_counts() -> None:
+    """The report should show an at-a-glance reachability breakdown
+    and group vulnerable dependencies by triage usefulness."""
+    d_reach = _dep("reachable-pkg", "1.0.0")
+    d_imported = _dep("imported-pkg", "1.0.0")
+    d_not_reach = _dep("unused-pkg", "1.0.0")
+    findings = []
+    for dep, verdict in (
+        (d_reach, "likely_called"),
+        (d_imported, "imported"),
+        (d_not_reach, "not_reachable"),
+    ):
+        f = build_vuln_findings(
+            [dep], [OsvResult(dep.key(), [_adv(f"GHSA-{dep.name}")])],
+        )[0]
+        f.reachability = Reachability(
+            verdict=verdict,  # type: ignore[arg-type]
+            confidence=Confidence("high", reason="test verdict"),
+            evidence=[],
+        )
+        findings.append(f)
+
+    md = render_markdown_report(
+        target=Path("/x"), deps_analysed=3,
+        vuln_findings=findings, hygiene_findings=[],
+    )
+
+    assert "### Reachability breakdown" in md
+    assert "| Likely called | 1 |" in md
+    assert "| Imported | 1 |" in md
+    assert "| Not reachable | 1 |" in md
+    assert "### Reachable / likely used" in md
+    assert "### Probably not reachable" in md
+    assert "#### Critical — reachable-pkg" in md
+    assert "#### Critical — unused-pkg" in md
 
 
 def test_zero_epss_suppressed_in_badges() -> None:

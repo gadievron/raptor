@@ -65,6 +65,11 @@ def main(argv: Sequence[str]) -> int:
     sarif_path = Path(args.out_sarif).resolve() if args.out_sarif else (
         base_dir / "findings.sarif"
     )
+    try:
+        rows = _apply_reachability_filters(rows, args)
+    except ValueError as e:
+        print(f"raptor-sca render: {e}", file=sys.stderr)
+        return 2
 
     target = Path(args.target).resolve() if args.target else base_dir
     wrote: List[str] = []
@@ -120,11 +125,85 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--target",
                    help="target root used to relativise SARIF artefact URIs "
                         "(default: parent of findings.json)")
+    p.add_argument("--only-reachable", action="store_true",
+                   help="render only vulnerable dependency findings whose "
+                        "reachability is likely_called or imported. "
+                        "Non-vulnerability SCA rows are preserved.")
+    p.add_argument("--hide-not-reachable", action="store_true",
+                   help="hide vulnerable dependency findings whose "
+                        "reachability is not_reachable or "
+                        "not_function_reachable. Non-vulnerability SCA rows "
+                        "are preserved.")
+    p.add_argument("--reachability",
+                   help="comma-separated reachability verdict allowlist for "
+                        "vulnerable dependency findings, e.g. "
+                        "likely_called,imported,not_evaluated. "
+                        "Non-vulnerability SCA rows are preserved.")
     # CI gate flags — exit 1 if findings exceed thresholds.
     from .thresholds import add_threshold_args
     add_threshold_args(p)
     p.add_argument("-v", "--verbose", action="count", default=0)
     return p.parse_args(argv)
+
+
+_REACHABLE_VERDICTS = {"likely_called", "imported"}
+_NOT_REACHABLE_VERDICTS = {"not_reachable", "not_function_reachable"}
+
+
+def _apply_reachability_filters(
+    rows: List[Dict[str, Any]], args: argparse.Namespace,
+) -> List[Dict[str, Any]]:
+    """Filter vuln rows by reachability while preserving other rows."""
+    requested = []
+    if args.only_reachable:
+        requested.append("--only-reachable")
+    if args.hide_not_reachable:
+        requested.append("--hide-not-reachable")
+    if args.reachability:
+        requested.append("--reachability")
+    if len(requested) > 1:
+        raise ValueError(
+            "reachability filters are mutually exclusive: "
+            + ", ".join(requested)
+        )
+
+    allowed = None
+    denied = None
+    if args.only_reachable:
+        allowed = set(_REACHABLE_VERDICTS)
+    elif args.hide_not_reachable:
+        denied = set(_NOT_REACHABLE_VERDICTS)
+    elif args.reachability:
+        allowed = {
+            item.strip()
+            for item in str(args.reachability).split(",")
+            if item.strip()
+        }
+        if not allowed:
+            raise ValueError("--reachability needs at least one verdict")
+
+    if allowed is None and denied is None:
+        return rows
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if row.get("vuln_type") != "sca:vulnerable_dependency":
+            out.append(row)
+            continue
+        verdict = _row_reachability_verdict(row)
+        if allowed is not None and verdict not in allowed:
+            continue
+        if denied is not None and verdict in denied:
+            continue
+        out.append(row)
+    return out
+
+
+def _row_reachability_verdict(row: Dict[str, Any]) -> str:
+    sca = row.get("sca") or {}
+    reach = sca.get("reachability") or {}
+    verdict = reach.get("verdict")
+    return str(verdict) if verdict else "not_evaluated"
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +219,24 @@ _SEV_LABEL = {
     "none": "None",
 }
 
+_REACHABILITY_LABELS = {
+    "likely_called": "Likely called",
+    "imported": "Imported",
+    "called_in_dead_code": "Called in dead code",
+    "not_reachable": "Not reachable",
+    "not_function_reachable": "Not function reachable",
+    "not_evaluated": "Not evaluated",
+}
+
+_REACHABILITY_ORDER = (
+    "likely_called",
+    "imported",
+    "called_in_dead_code",
+    "not_reachable",
+    "not_function_reachable",
+    "not_evaluated",
+)
+
 
 def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
     # Defensive — hand-edited findings.json may contain non-dict
@@ -153,6 +250,9 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
     supply_rows = [r for r in rows
                    if isinstance(r.get("vuln_type"), str)
                    and r["vuln_type"].startswith("sca:supply_chain:")]
+    license_rows = [r for r in rows
+                    if isinstance(r.get("vuln_type"), str)
+                    and r["vuln_type"].startswith("sca:license:")]
 
     suppressed_count = sum(1 for r in vuln_rows if r.get("suppressed"))
     severity_counts: Counter[str] = Counter()
@@ -186,7 +286,13 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
               f"suppressed: **{suppressed_count}**)\n")
     buf.write(f"- KEV-listed: **{kev_count}**\n")
     buf.write(f"- Supply-chain findings: **{len(supply_rows)}**\n")
-    buf.write(f"- Hygiene findings: **{len(hygiene_rows)}**\n\n")
+    buf.write(f"- Hygiene findings: **{len(hygiene_rows)}**\n")
+    if license_rows:
+        buf.write(f"- License findings: **{len(license_rows)}**\n")
+    buf.write("\n")
+    reach_table = _render_reachability_breakdown(vuln_rows)
+    if reach_table:
+        buf.write(reach_table)
 
     if vuln_rows:
         buf.write("## Vulnerable dependencies\n\n")
@@ -197,8 +303,32 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
     if hygiene_rows:
         buf.write("## Hygiene findings\n\n")
         _render_kind_table(buf, hygiene_rows)
-    if not (vuln_rows or supply_rows or hygiene_rows):
+    if license_rows:
+        buf.write("## License findings\n\n")
+        _render_kind_table(buf, license_rows)
+    if not (vuln_rows or supply_rows or hygiene_rows or license_rows):
         buf.write("No findings.\n")
+    return buf.getvalue()
+
+
+def _render_reachability_breakdown(rows: List[Dict[str, Any]]) -> str:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        if row.get("suppressed"):
+            continue
+        counts[_row_reachability_verdict(row)] += 1
+    if not counts:
+        return ""
+    buf = StringIO()
+    buf.write("### Reachability breakdown\n\n")
+    buf.write("| Verdict | Count |\n|---|---:|\n")
+    for verdict in _REACHABILITY_ORDER:
+        if counts.get(verdict):
+            label = _REACHABILITY_LABELS.get(verdict, verdict)
+            buf.write(f"| {label} | {counts[verdict]} |\n")
+    for verdict in sorted(set(counts) - set(_REACHABILITY_ORDER)):
+        buf.write(f"| {verdict} | {counts[verdict]} |\n")
+    buf.write("\n")
     return buf.getvalue()
 
 
@@ -212,8 +342,8 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
             (r.get("sca") or {}).get("name") or "",
         ),
     )
-    buf.write("| Severity | Dep | Advisory | KEV | EPSS | Fix |\n")
-    buf.write("|---|---|---|---|---|---|\n")
+    buf.write("| Severity | Dep | Advisory | Reachability | KEV | EPSS | Fix |\n")
+    buf.write("|---|---|---|---|---|---|---|\n")
     for r in ordered:
         sca = r.get("sca") or {}
         adv = sca.get("advisory") or {}
@@ -229,7 +359,14 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
         kev = "yes" if sca.get("in_kev") else ""
         epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
         fix = sca.get("fixed_version") or ""
-        buf.write(f"| {sev} | {dep} | {adv_label} | {kev} | {epss} | {fix} |\n")
+        reach = _REACHABILITY_LABELS.get(
+            _row_reachability_verdict(r),
+            _row_reachability_verdict(r),
+        )
+        buf.write(
+            f"| {sev} | {dep} | {adv_label} | {reach} "
+            f"| {kev} | {epss} | {fix} |\n"
+        )
     buf.write("\n")
 
 

@@ -116,6 +116,22 @@ Registries supported: PyPI, npm, crates.io, RubyGems, Go (proxy.golang.org), Mav
 --offline                 skip network; cache-only
 ```
 
+Reports include a reachability breakdown for vulnerable dependencies and group
+the detailed vulnerability section into `Reachable / likely used`, `Present,
+needs review`, and `Probably not reachable`.
+
+### render
+
+```
+--only-reachable          render only likely_called/imported vuln findings
+--hide-not-reachable      hide not_reachable/not_function_reachable vuln findings
+--reachability <list>     comma-separated vuln reachability allowlist
+```
+
+Reachability filters apply only to `sca:vulnerable_dependency` rows; hygiene,
+supply-chain, and license rows are preserved when re-rendering an existing
+`findings.json`.
+
 ### fix
 
 ```
