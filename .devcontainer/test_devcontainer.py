@@ -564,7 +564,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
         ))
 
     # =========================================================================
-    # PYTHON CORE PACKAGES (from requirements.txt)
+    # PYTHON CORE PACKAGES (from pyproject.toml / compatibility requirements.txt)
     # =========================================================================
 
     python_core_packages = [
@@ -586,7 +586,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
         ))
 
     # =========================================================================
-    # PYTHON DEV PACKAGES (from requirements-dev.txt)
+    # PYTHON DEV PACKAGES (from dependency groups / compatibility requirements-dev.txt)
     # =========================================================================
 
     python_dev_packages = [
