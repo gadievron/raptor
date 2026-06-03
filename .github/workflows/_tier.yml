@@ -77,6 +77,7 @@ jobs:
           persist-credentials: false
       - name: Reconcile deps
         # Skip if the image's baked requirements match the checkout.
+        # Also covers pyproject.toml and poetry.lock changes.
         # pip must resolve every package to verify satisfaction (~10-15s);
         # the hash check short-circuits that on the common path.
         run: |
@@ -99,7 +100,8 @@ jobs:
           python -m pytest $TEST_PATH $PYTEST_EXTRA
 
   # Fallback path: fork PRs can't pull the private image, so install into
-  # the runner's system Python (uv's cache keyed on requirements*.txt).
+  # the runner's system Python (uv's cache keyed on Poetry manifests plus
+  # compatibility requirements*.txt).
   runner:
     if: ${{ !inputs.use_container }}
     runs-on: ubuntu-latest
@@ -128,7 +130,10 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
       - name: Install deps
         # --system installs into the setup-python interpreter so the test
         # step's `python` resolves the deps without venv activation,

@@ -1,11 +1,118 @@
 [project]
 name = "raptor"
 version = "3.0.0"
+description = "Autonomous offensive/defensive security research framework"
+readme = "README.md"
 requires-python = ">=3.10,<4.0"
 license = "MIT"
+authors = [
+    { name = "Gadi Evron" },
+    { name = "Daniel Cuthbert" },
+    { name = "Thomas Dullien" },
+    { name = "Michael Bargury" },
+    { name = "John Cartwright" },
+]
 
-# This is deliberately not a packaging migration. Runtime and development
-# dependencies still live in requirements.txt / requirements-dev.txt.
+dependencies = [
+    "requests==2.34.2",
+    "urllib3==2.7.0",
+    "pydantic==2.13.4",
+    "typer==0.25.1",
+    "instructor==1.15.4",
+    "openai==2.30.0",
+    "tabulate==0.10.0",
+    "pyyaml==6.0.3",
+    "defusedxml==0.7.1",
+    "packaging==25.0",
+    "pyelftools==0.33",
+]
+
+[project.optional-dependencies]
+# LLM providers — per-provider for targeted installs
+anthropic = ["anthropic==0.103.1"]
+google = ["google-genai==2.4.0"]
+bedrock = ["botocore==1.43.16"]
+llm = [
+    "anthropic==0.103.1",
+    "google-genai==2.4.0",
+    "botocore==1.43.16",
+]
+
+# Feature groups
+web = [
+    "beautifulsoup4==4.15.0",
+    "playwright==1.60.0",
+]
+smt = ["z3-solver>=4.13.0.0,<4.15.5.0"]
+binary = ["angr==9.3.3; python_version >= '3.12'"]
+sage = [
+    "sage-agent-sdk==11.17.11",
+    "httpx==0.28.1",
+]
+grammars = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-c==0.24.2",
+    "tree-sitter-c-sharp==0.23.5",
+    "tree-sitter-cpp==0.23.4",
+    "tree-sitter-go==0.25.0",
+    "tree-sitter-java==0.23.5",
+    "tree-sitter-javascript==0.25.0",
+    "tree-sitter-kotlin==1.1.0",
+    "tree-sitter-lua==0.5.0",
+    "tree-sitter-php==0.24.1",
+    "tree-sitter-python==0.25.0",
+    "tree-sitter-ruby==0.23.1",
+    "tree-sitter-rust==0.24.2",
+    "tree-sitter-scala==0.26.0",
+    "tree-sitter-swift==0.7.3",
+    "tree-sitter-typescript==0.23.2",
+]
+
+# Smaller optional deps
+h2 = ["h2==4.4.1"]
+cvss = ["cvss==3.6"]
+orjson = ["orjson==3.11.9"]
+r2pipe = ["r2pipe==1.9.8"]
+pyghidra = ["pyghidra==3.1.0"]
+frida = ["frida==16.7.19"]
+jsonschema = ["jsonschema==4.23.0"]
+tomli = ["tomli==2.4.1; python_version < '3.11'"]
+
+[project.urls]
+Homepage = "https://github.com/gadievron/raptor"
+Repository = "https://github.com/gadievron/raptor"
+Issues = "https://github.com/gadievron/raptor/issues"
+
+[dependency-groups]
+test = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+    "pytest-split==0.11.0",
+    "gcovr==8.6",
+    "beautifulsoup4==4.15.0",
+    "z3-solver>=4.13.0.0,<4.15.5.0",
+]
+lint = [
+    "ruff==0.15.12",
+    "mypy==2.1.0",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.dev]
+optional = true
 
 [tool.ruff]
 target-version = "py310"
@@ -19,3 +126,7 @@ select = [
     "F821", # undefined names
     "F841", # unused local variables
 ]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
