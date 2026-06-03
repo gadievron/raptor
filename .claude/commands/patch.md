@@ -1,5 +1,6 @@
 ---
 description: Generate secure patches for vulnerabilities (beta)
+dispatch: python3 raptor.py agentic
 ---
 
 # /patch - Generate Secure Patches (beta)

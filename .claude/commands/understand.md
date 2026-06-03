@@ -1,5 +1,6 @@
 ---
 description: Map attack surface, trace data flows, hunt vulnerability variants
+dispatch: libexec/raptor-understand [args]
 ---
 
 # /understand - RAPTOR Code Understanding

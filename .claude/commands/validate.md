@@ -1,5 +1,6 @@
 ---
 description: Validate that vulnerability findings are real, reachable, and exploitable
+dispatch: skill
 ---
 
 # /validate - Exploitability Validation Pipeline

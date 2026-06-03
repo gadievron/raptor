@@ -1,5 +1,6 @@
 ---
 description: Analyze existing SARIF findings with LLM
+dispatch: python3 raptor.py analyze
 ---
 
 # /analyze - RAPTOR LLM Analysis

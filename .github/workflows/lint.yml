@@ -192,3 +192,23 @@ jobs:
           ruff check --select F401,F811,F821,F841 \
             --output-format=github \
             .
+
+  # Slash-command metadata: enforces every .claude/commands/*.md has a
+  # parseable ``dispatch:`` frontmatter (target exists on disk) and that
+  # commands.md's hardcoded exclusion list matches the frontmatter
+  # ``exclude_from_listing: true`` flags. Catches renamed libexec paths,
+  # missing dispatch fields on new commands, and alias-list drift at PR
+  # time — see CLAUDE.md SLASH-COMMAND DISPATCH for the design.
+  #
+  # Pure stdlib Python; no setup beyond checkout.
+  command-metadata:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Lint slash-command metadata
+        run: python3 .github/scripts/check_command_metadata.py

@@ -1,5 +1,6 @@
 ---
 description: Full autonomous security workflow — scan, dedup, prep, analyse, consensus, judge, exploit, patch, group
+dispatch: libexec/raptor-agentic --repo <path>
 ---
 
 # /agentic - RAPTOR Full Autonomous Workflow

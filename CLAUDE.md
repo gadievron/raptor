@@ -24,6 +24,18 @@ Exception: when the skill itself shows the modification (e.g. a documented `| te
 
 ---
 
+## SLASH-COMMAND DISPATCH
+
+When a `/command` fires:
+
+1. Read `.claude/commands/<name>.md` frontmatter.
+2. If `dispatch: <command-line>`: substitute placeholders (operator arguments verbatim; `$OUTPUT_DIR` from RUN LIFECYCLE; `$TARGET_PATH` from DEFAULT TARGET DIRECTORY), then run the substituted command. EXECUTION RULES apply — no pipes / flags / wrappers added.
+3. If `dispatch: skill`: this is a multi-step workflow. Follow the body of the .md; there is no single libexec to run.
+4. Operator arguments pass through **verbatim**. If a subcommand isn't in the .md's documented surface, run it anyway and let the dispatch's own error surface. Do NOT silently rewrite to a similar subcommand.
+5. Never infer the dispatch from the description or from training-memory. The .md is authoritative; CI (`.github/scripts/check_command_metadata.py`) enforces every command has a parseable `dispatch:` field whose target exists on disk.
+
+---
+
 ## COMMANDS
 
 /project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export

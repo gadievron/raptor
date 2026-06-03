@@ -1,5 +1,6 @@
 ---
 description: CodeQL deep static analysis with dataflow validation
+dispatch: python3 raptor.py codeql
 ---
 
 # /codeql - RAPTOR CodeQL Analysis

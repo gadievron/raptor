@@ -1,5 +1,7 @@
 ---
 description: List all available RAPTOR commands
+dispatch: skill
+exclude_from_listing: true
 ---
 
 # RAPTOR Command Reference

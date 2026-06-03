@@ -1,5 +1,7 @@
 ---
 description: Web application security scanner (alpha) (alias for /web)
+dispatch: skill
+exclude_from_listing: true
 ---
 
 # /raptor-web - alias for /web

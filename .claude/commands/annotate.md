@@ -1,5 +1,6 @@
 ---
 description: Add, list, edit, or remove per-function annotations attached to source files
+dispatch: libexec/raptor-annotate <subcommand> [args]
 ---
 
 # /annotate

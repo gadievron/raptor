@@ -1,5 +1,7 @@
 ---
 description: Scan a repository with Semgrep and CodeQL (alias for /scan)
+dispatch: skill
+exclude_from_listing: true
 ---
 
 # /raptor-scan - alias for /scan

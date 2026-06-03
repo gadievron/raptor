@@ -1,5 +1,6 @@
 ---
 description: Inspect per-model reliability across decision classes; answer natural-language questions about model competence
+dispatch: libexec/raptor-llm-scorecard [args]
 ---
 
 # /scorecard

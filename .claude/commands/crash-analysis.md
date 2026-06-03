@@ -1,5 +1,6 @@
 ---
 description: Autonomous crash root-cause analysis for C/C++ bugs
+dispatch: skill
 ---
 
 # /crash-analysis - Autonomous Crash Root-Cause Analysis

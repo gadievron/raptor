@@ -1,5 +1,6 @@
 ---
 description: RAPTOR security testing assistant
+dispatch: python3 raptor.py agentic
 ---
 
 # RAPTOR - Security Testing Assistant
