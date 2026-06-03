@@ -63,12 +63,22 @@ from .auth import (
 _logger = logging.getLogger(__name__)
 
 
-# Audit event types that fire on every successful LLM call and
-# would otherwise flood operator output. Consumed by ``_audit``
-# to route ok-status events here to DEBUG; everything else
-# (failures, lifecycle, unknown types) stays at INFO. See
-# ``_audit`` for the routing rationale.
-_HIGH_FREQ_OK_EVENTS = frozenset({"request.dispatch"})
+# Audit event types whose terminal-visible log is duplicated by a
+# higher-level layer's own visibility — demote to DEBUG so operator
+# output isn't flooded. Consumed by ``_audit``; events not in this
+# set stay at INFO. Audit log on disk records every event at full
+# fidelity regardless.
+#
+# * ``request.dispatch`` (status="ok"): one per successful LLM call;
+#   ~100+ per /agentic run. No operator action on success.
+# * ``request.error`` (status="error"): one per upstream API
+#   failure. The LLMClient retry loop catches the underlying
+#   exception and emits its own WARNING ("Attempt N/M failed
+#   for <provider>/<model>: <reason>") at the operator-relevant
+#   abstraction layer. The dispatcher's INFO-level audit was a
+#   third copy of the same fact, alongside the provider's own
+#   error log — see the retry-dedupe commit for the full cluster.
+_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch", "request.error"})
 
 
 def _scrub(value: Optional[str]) -> Optional[str]:
@@ -488,24 +498,20 @@ class LLMDispatcher:
         # are internally produced strings.
         safe_worker = _scrub(ev.worker_label)
         safe_reason = _scrub(ev.reason)
-        # Log level chosen by event type + status:
-        # * High-frequency successful events (e.g. ``request.dispatch
-        #   ok``) → DEBUG. One per LLM call; floods operator
-        #   output during /agentic / /understand / /validate
-        #   without adding signal a human reads. Held in a SET so
-        #   a future high-frequency event type (cache hits,
-        #   prefetch acks, …) joins the demotion list cleanly
-        #   without re-introducing the noise on its own.
-        # * Everything else (server lifecycle, token issuance,
-        #   ANY failure, any unknown event type) → INFO. These
-        #   are low-frequency, operator-actionable, or both.
+        # Log level chosen by event type:
+        # * Events in ``_DEMOTED_AUDIT_EVENTS`` → DEBUG. These are
+        #   duplicated by a higher-level layer's own operator-
+        #   visible logging (LLMClient retry loop) or fire on
+        #   every LLM call without operator action (request.dispatch
+        #   ok). See the constant's docstring for per-event
+        #   rationale.
+        # * Server lifecycle, token issuance, any unknown event
+        #   type → INFO. Low-frequency, operator-actionable, or
+        #   both.
         # Audit log on disk continues to record EVERY event at
         # full fidelity — this only affects the stdlib logger
         # that terminal output uses.
-        if (
-            ev.event in _HIGH_FREQ_OK_EVENTS
-            and ev.status == "ok"
-        ):
+        if ev.event in _DEMOTED_AUDIT_EVENTS:
             level = logging.DEBUG
         else:
             level = logging.INFO

@@ -1075,7 +1075,16 @@ class OpenAICompatibleProvider(LLMProvider):
             # entries on operator TTYs.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("OpenAI completion failed: %s",
+            # DEBUG, not ERROR: the LLMClient retry loop catches this
+            # exception and emits its own WARNING ("Attempt N/M failed
+            # for openai/<model>: <reason>") with the same fact at
+            # the operator-relevant abstraction layer. Logging both
+            # produces a 3-line cluster per upstream failure — see
+            # the log-noise commit history. DEBUG keeps the deep-
+            # debugging detail (escaped + redacted exception body)
+            # available with ``-v`` / RAPTOR_LOG_LEVEL=DEBUG without
+            # spamming normal runs.
+            logger.debug("OpenAI completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
@@ -1661,7 +1670,10 @@ class AnthropicProvider(LLMProvider):
             # above — SDK exception bodies can include prompt + headers.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("Anthropic completion failed: %s",
+            # DEBUG, not ERROR — same rationale as OpenAI above:
+            # the LLMClient retry loop emits an operator-visible
+            # WARNING for the same failure.
+            logger.debug("Anthropic completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
@@ -2235,7 +2247,10 @@ class GeminiProvider(LLMProvider):
             # Same hardening rationale as OpenAICompatibleProvider.generate.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("Gemini completion failed: %s",
+            # DEBUG, not ERROR — same rationale as OpenAI above:
+            # the LLMClient retry loop emits an operator-visible
+            # WARNING for the same failure.
+            logger.debug("Gemini completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 

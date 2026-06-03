@@ -133,12 +133,19 @@ class TestDispatcherAuditLogLevel:
             "request.dispatch", "ok",
         ) == logging.DEBUG
 
-    def test_request_dispatch_error_stays_info(self):
-        # Errors are operator-relevant; stay at INFO so the
-        # operator sees them in the terminal stream.
+    def test_request_dispatch_demoted_regardless_of_status(self):
+        # The retry-dedupe commit moved from a status-gated check
+        # (event AND status==ok → DEBUG) to a pure event-set check
+        # (event in _DEMOTED_AUDIT_EVENTS → DEBUG). ``request.dispatch``
+        # is emitted by the dispatcher only with status="ok" today;
+        # the defensive "what if it's error" branch goes to DEBUG
+        # too because the LLMClient retry loop carries the WARNING.
+        # If a future dispatcher refactor starts emitting
+        # request.dispatch with other statuses, this test pins
+        # the behaviour explicitly.
         assert self._capture_log_call(
             "request.dispatch", "error",
-        ) == logging.INFO
+        ) == logging.DEBUG
 
     def test_server_start_stays_info(self):
         # Low-frequency lifecycle events stay at INFO.
@@ -152,30 +159,35 @@ class TestDispatcherAuditLogLevel:
             "token.issue", "ok",
         ) == logging.INFO
 
-    def test_request_error_stays_info(self):
-        # Real dispatcher emits ``request.error`` events; they
-        # must always be visible to operators.
+    def test_request_error_now_demoted_to_debug(self):
+        # Updated by the retry-dedupe commit: ``request.error`` is
+        # now in ``_DEMOTED_AUDIT_EVENTS`` because the LLMClient
+        # retry loop emits its own operator-visible WARNING for
+        # the same failure ("Attempt N/M failed for <provider>/
+        # <model>: <reason>"). The dispatcher's INFO-level audit
+        # was a third copy of the same fact. Audit log on disk
+        # continues to record every event at full fidelity.
         assert self._capture_log_call(
             "request.error", "error",
-        ) == logging.INFO
+        ) == logging.DEBUG
 
     def test_unknown_event_type_defaults_to_info(self):
         # New event types added later default to INFO (the
-        # ``_HIGH_FREQ_OK_EVENTS`` set is opt-in, not opt-out)
+        # ``_DEMOTED_AUDIT_EVENTS`` set is opt-in, not opt-out)
         # — operator-conservative: a new event type that turns
-        # out to be high-frequency would surface here rather
-        # than silently disappear into DEBUG.
+        # out to be high-frequency or duplicate would surface
+        # here rather than silently disappear into DEBUG.
         assert self._capture_log_call(
             "future.event", "ok",
         ) == logging.INFO
 
-    def test_high_freq_set_is_a_set(self):
-        # The set-based dispatch is a regression guard for the
-        # comment in scanner.py — future high-frequency event
-        # types join the demotion list cleanly without
-        # re-introducing the noise on their own. Pin the type
-        # so a refactor doesn't accidentally swap it for a
-        # string equality check again.
+    def test_demoted_audit_events_set_shape(self):
+        # The set-based dispatch is a regression guard so a
+        # refactor can't accidentally swap it for a string
+        # equality check. Pins the membership too — adding to
+        # the set is a deliberate visibility-reducing change
+        # and should land with an explicit test update.
         from core.llm.dispatcher import server as server_mod
-        assert isinstance(server_mod._HIGH_FREQ_OK_EVENTS, frozenset)
-        assert "request.dispatch" in server_mod._HIGH_FREQ_OK_EVENTS
+        assert isinstance(server_mod._DEMOTED_AUDIT_EVENTS, frozenset)
+        assert "request.dispatch" in server_mod._DEMOTED_AUDIT_EVENTS
+        assert "request.error" in server_mod._DEMOTED_AUDIT_EVENTS
