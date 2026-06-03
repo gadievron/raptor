@@ -51,6 +51,8 @@ from .findings import severity_rank
 from .models import (
     Advisory,
     HygieneFinding,
+    REACHABILITY_LABELS,
+    REACHABILITY_ORDER,
     SupplyChainFinding,
     VulnFinding,
 )
@@ -85,24 +87,6 @@ _SEV_LABEL: dict[str, str] = {
     # placeholder.
     "none": "None (CVSS 0.0)",
 }
-
-_REACHABILITY_LABELS: dict[str, str] = {
-    "likely_called": "Likely called",
-    "imported": "Imported",
-    "called_in_dead_code": "Called in dead code",
-    "not_reachable": "Not reachable",
-    "not_function_reachable": "Not function reachable",
-    "not_evaluated": "Not evaluated",
-}
-
-_REACHABILITY_ORDER = (
-    "likely_called",
-    "imported",
-    "called_in_dead_code",
-    "not_reachable",
-    "not_function_reachable",
-    "not_evaluated",
-)
 
 _REACHABILITY_GROUPS = (
     ("Reachable / likely used", {"likely_called", "imported"}),
@@ -371,13 +355,13 @@ def _render_reachability_breakdown(
         "| Verdict | Count |",
         "|---|---:|",
     ]
-    for verdict in _REACHABILITY_ORDER:
+    for verdict in REACHABILITY_ORDER:
         if counts.get(verdict):
             rows.append(
-                f"| {_REACHABILITY_LABELS.get(verdict, verdict)} "
+                f"| {REACHABILITY_LABELS.get(verdict, verdict)} "
                 f"| {counts[verdict]} |"
             )
-    for verdict in sorted(set(counts) - set(_REACHABILITY_ORDER)):
+    for verdict in sorted(set(counts) - set(REACHABILITY_ORDER)):
         rows.append(f"| {verdict} | {counts[verdict]} |")
     rows.append("")
     return "\n".join(rows)

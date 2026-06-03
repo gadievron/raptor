@@ -236,6 +236,33 @@ class Reachability:
     evidence: List[str] = field(default_factory=list)  # file:line refs
 
 
+# Operator-facing display labels for each verdict. Title-cased for the
+# rendered tables (the schema enum stays snake_case for the JSON/CLI
+# contract). Single source of truth — renderers + reports import from
+# here so a new verdict only needs one update.
+REACHABILITY_LABELS: dict[str, str] = {
+    "likely_called": "Likely called",
+    "imported": "Imported",
+    "called_in_dead_code": "Called in dead code",
+    "not_reachable": "Not reachable",
+    "not_function_reachable": "Not function reachable",
+    "not_evaluated": "Not evaluated",
+}
+
+# Display order for breakdown tables: reachable-tier first, then
+# uncertain, then not-reachable. Matches the triage-by-impact ordering
+# operators want at a glance. New verdicts not in this tuple sort to
+# the end (renderers handle the leftover set).
+REACHABILITY_ORDER: tuple[str, ...] = (
+    "likely_called",
+    "imported",
+    "called_in_dead_code",
+    "not_reachable",
+    "not_function_reachable",
+    "not_evaluated",
+)
+
+
 # ---------------------------------------------------------------------------
 # Findings — every finding flows into the shared findings.json schema
 # ---------------------------------------------------------------------------

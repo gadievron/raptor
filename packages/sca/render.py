@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 from .findings import severity_rank
+from .models import REACHABILITY_LABELS, REACHABILITY_ORDER
 from .sarif import write_sarif
 
 logger = logging.getLogger(__name__)
@@ -219,23 +220,6 @@ _SEV_LABEL = {
     "none": "None",
 }
 
-_REACHABILITY_LABELS = {
-    "likely_called": "Likely called",
-    "imported": "Imported",
-    "called_in_dead_code": "Called in dead code",
-    "not_reachable": "Not reachable",
-    "not_function_reachable": "Not function reachable",
-    "not_evaluated": "Not evaluated",
-}
-
-_REACHABILITY_ORDER = (
-    "likely_called",
-    "imported",
-    "called_in_dead_code",
-    "not_reachable",
-    "not_function_reachable",
-    "not_evaluated",
-)
 
 
 def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
@@ -322,11 +306,11 @@ def _render_reachability_breakdown(rows: List[Dict[str, Any]]) -> str:
     buf = StringIO()
     buf.write("### Reachability breakdown\n\n")
     buf.write("| Verdict | Count |\n|---|---:|\n")
-    for verdict in _REACHABILITY_ORDER:
+    for verdict in REACHABILITY_ORDER:
         if counts.get(verdict):
-            label = _REACHABILITY_LABELS.get(verdict, verdict)
+            label = REACHABILITY_LABELS.get(verdict, verdict)
             buf.write(f"| {label} | {counts[verdict]} |\n")
-    for verdict in sorted(set(counts) - set(_REACHABILITY_ORDER)):
+    for verdict in sorted(set(counts) - set(REACHABILITY_ORDER)):
         buf.write(f"| {verdict} | {counts[verdict]} |\n")
     buf.write("\n")
     return buf.getvalue()
@@ -359,7 +343,7 @@ def _render_vuln_table(buf: StringIO, rows: List[Dict[str, Any]]) -> None:
         kev = "yes" if sca.get("in_kev") else ""
         epss = f"{sca['epss']:.2f}" if sca.get("epss") is not None else ""
         fix = sca.get("fixed_version") or ""
-        reach = _REACHABILITY_LABELS.get(
+        reach = REACHABILITY_LABELS.get(
             _row_reachability_verdict(r),
             _row_reachability_verdict(r),
         )

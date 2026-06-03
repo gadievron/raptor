@@ -249,7 +249,6 @@ The diff command's exit code is 0 = no regression at threshold,
 
 ## Limitations + follow-ups
 
-- **Sandboxing** — registry HTTP calls go through `packages/sca/http.py` directly today. The sandbox seam will be retrofitted once `core/sandbox/` lands.
-- **Recent-publish + maintainer-change supply-chain checks** — need extra registry metadata (publish dates, maintainer lists). Deferred until sandbox lands.
-- **Variable-expanded inline installs** (`PKG="x=1"; apt install $PKG`) — would need a mini shell interpreter; deferred to a future LLM tier.
-- **Maven `mvn install:install-file`** — not yet rewritable; rare in inline contexts.
+- **Library-mode floor-raise unsupported on a handful of ecosystems** — `harden` refuses to corridor-pin a library's deps and emits `library_floor_raise_unsupported` for cases that can't be expressed as a range: inline-install (Dockerfile `RUN pip install foo`), Debian, Cargo, Go modules, RubyGems. The application path still pins these.
+- **OSV `affected_functions` coverage is patchy** — function-level reachability (the `not_function_reachable` / `likely_called` verdicts) only fires when an advisory ships symbol-level metadata. Python + Go are the best-covered ecosystems; npm / Maven / others mostly stay at the module-level `imported` verdict.
+- **CHA-precision for dynamic dispatch in Java / C#** — virtual / interface dispatch currently lands in `not_function_reachable` when the static graph can't narrow the receiver type. The reachability substrate has a scoping doc; the precision improvement is deferred until an operator signal justifies it.
