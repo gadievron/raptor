@@ -6,10 +6,10 @@ gpt-5.x and the o1/o3/o4 families reject the legacy ``max_tokens`` param
 provider never regresses to sending the wrong params (which 400s every
 gpt-5.x call). See core/llm/providers.py.
 """
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.environ.get("RAPTOR_DIR", os.getcwd()))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.llm.providers import (  # noqa: E402
     _is_openai_reasoning_model,
@@ -19,13 +19,19 @@ from core.llm.providers import (  # noqa: E402
 
 def test_reasoning_models_detected():
     for m in ("gpt-5", "gpt-5.4", "gpt-5.5", "gpt-5.5-pro",
-              "openai/gpt-5.5", "o1", "o3-mini", "o4-mini"):
+              "openai/gpt-5.5", "o1", "o3-mini", "o4-mini",
+              # future families must classify as reasoning the day they ship —
+              # a prefix list would silently 400 every one of these calls.
+              "gpt-6", "gpt-10", "openai/gpt-6", "gpt-6-2026-01-01",
+              "o5", "o6", "o5-mini"):
         assert _is_openai_reasoning_model(m), m
 
 
 def test_classic_models_not_detected():
     for m in ("gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
-              "claude-opus-4-8", "qwen3", "", None):
+              "claude-opus-4-8", "qwen3", "", None,
+              # 'o'-prefixed non-OpenAI names must NOT trip the o-series anchor.
+              "olmo", "olmo-7b", "orca", "orca-2"):
         assert not _is_openai_reasoning_model(m), m
 
 

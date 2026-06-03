@@ -873,19 +873,41 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     return model
 
 
+_OPENAI_REASONING_GPT_FROM = 5
+_GPT_VERSION_RE = re.compile(r"^gpt-(\d+)")
+_O_SERIES_RE = re.compile(r"^o\d")
+
+
 def _is_openai_reasoning_model(model_name: str) -> bool:
-    """True for OpenAI reasoning-tier models (gpt-5.x, o1/o3/o4 families).
+    """True for OpenAI reasoning-tier models (the o-series + gpt major >= 5).
 
     These models changed the chat.completions contract: they reject the
     legacy ``max_tokens`` param (require ``max_completion_tokens``) and only
     accept the default ``temperature`` (1) — passing ``temperature=0.7``
-    returns HTTP 400. Matched by bare model-name prefix so aggregator/
-    provider prefixes (``openai/gpt-5.5``) and date suffixes are tolerated.
-    Non-OpenAI compat models (Ollama ``qwen3``, ``claude-*`` via compat) do
-    not match and keep the legacy params.
+    returns HTTP 400.
+
+    We gate on the version number rather than a literal prefix list, mirroring
+    :func:`supports_temperature`: the whole ``o`` series is reasoning (``o1``,
+    ``o3``, ``o4`` today; ``o5``/``o6`` when they ship), and ``gpt`` is
+    reasoning from major version >= 5 (``gpt-5.x``, and ``gpt-6``/``gpt-10``
+    once released). Classic ``gpt-4o`` / ``gpt-4.1`` / ``gpt-4-turbo`` stay on
+    the legacy contract. A prefix list would silently 400 every call the day a
+    ``gpt-6`` or ``o5`` shipped, so version-gating is forward-safe — and
+    over-classifying a hypothetical future tier costs nothing.
+
+    Matched on the bare model name (last ``/`` segment) so aggregator/provider
+    prefixes (``openai/gpt-6``) and date suffixes (``gpt-5.5-2026-01-01``) are
+    tolerated. The ``o\\d`` anchor requires a digit right after the ``o`` so
+    non-OpenAI names that merely start with ``o`` (``olmo``, ``orca``) do not
+    match; Ollama ``qwen3`` and ``claude-*`` via compat keep the legacy params.
     """
     m = (model_name or "").lower().rsplit("/", 1)[-1]
-    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+    if _O_SERIES_RE.match(m):
+        return True
+    gm = _GPT_VERSION_RE.match(m)
+    if gm:
+        return int(gm.group(1)) >= _OPENAI_REASONING_GPT_FROM
+    return False
 
 
 def _openai_sampling_kwargs(
