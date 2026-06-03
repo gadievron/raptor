@@ -6,10 +6,12 @@ gpt-5.x and the o1/o3/o4 families reject the legacy ``max_tokens`` param
 provider never regresses to sending the wrong params (which 400s every
 gpt-5.x call). See core/llm/providers.py.
 """
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.environ.get("RAPTOR_DIR", os.getcwd()))
+# core/llm/tests/test_openai_reasoning_tokens.py -> parents[3] = repo root
+REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO))
 
 from core.llm.providers import (  # noqa: E402
     _is_openai_reasoning_model,
@@ -26,6 +28,20 @@ def test_reasoning_models_detected():
 def test_classic_models_not_detected():
     for m in ("gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
               "claude-opus-4-8", "qwen3", "", None):
+        assert not _is_openai_reasoning_model(m), m
+
+
+def test_future_reasoning_models_detected_by_version():
+    # gpt-6+/o5+ don't exist yet but must be treated as reasoning when they
+    # ship — detection is version-gated, not a literal name list.
+    for m in ("gpt-6", "gpt-6-mini", "gpt-10", "openai/gpt-6",
+              "o5", "o5-pro", "o6-mini"):
+        assert _is_openai_reasoning_model(m), m
+
+
+def test_non_reasoning_o_prefix_names_not_detected():
+    # Names that merely start with 'o' but aren't o-series reasoning models.
+    for m in ("olmo", "olmo-2", "orca-2", "openchat"):
         assert not _is_openai_reasoning_model(m), m
 
 
@@ -49,6 +65,8 @@ def test_classic_kwargs_omit_temperature_when_none():
 if __name__ == "__main__":
     test_reasoning_models_detected()
     test_classic_models_not_detected()
+    test_future_reasoning_models_detected_by_version()
+    test_non_reasoning_o_prefix_names_not_detected()
     test_reasoning_kwargs_use_max_completion_tokens_and_drop_temperature()
     test_classic_kwargs_keep_legacy_params()
     test_classic_kwargs_omit_temperature_when_none()
