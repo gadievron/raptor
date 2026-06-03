@@ -7,7 +7,8 @@ name: SCA-gated self-bump
 #
 #   1. ``raptor-sca fix --harden`` on Python / Debian apt / npm
 #      tooling pins — pins / bumps every
-#      loose dep in requirements.txt and requirements-dev.txt to the
+#      loose dep in pyproject.toml and the transitional requirements
+#      compatibility files to the
 #      highest version that passes the full SCA signal set (OSV vulns,
 #      KEV, EPSS, yanked-version detection, license diff, hygiene
 #      checks, supply-chain checks incl. install hooks / typo-squat /
@@ -107,7 +108,7 @@ jobs:
           # patched worktree to confirm findings reduced before
           # emitting. ``--no-llm`` keeps the run mechanical-only
           # (no API keys in CI). NO ``--ecosystems`` filter — we
-          # want the bump to cover Python (requirements.txt),
+          # want the bump to cover Python (pyproject.toml / requirements.txt),
           # Debian (apt-installed in devcontainer), and npm
           # (yarn / pnpm in devcontainer).
           rm -rf /tmp/sca-harden-out

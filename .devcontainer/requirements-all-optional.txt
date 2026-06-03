@@ -1,4 +1,5 @@
-# RAPTOR DevContainer - All Optional Dependencies
+# RAPTOR DevContainer - All Optional Dependencies (compatibility export)
+# Source of truth: pyproject.toml + poetry.lock.
 # Install with: pip install -r requirements-all-optional.txt
 # This includes ALL optional dependencies for full devcontainer functionality
 
@@ -7,6 +8,8 @@
 # All LLM provider SDKs
 openai==2.26.0
 anthropic==0.84.0
+google-genai==1.65.0
+botocore==1.42.70
 
 # `tabulate` is already pinned in ../requirements.txt (pulled in via
 # the `-r` above); it used to be repeated here loosely. Removed to
@@ -15,3 +18,8 @@ anthropic==0.84.0
 # Web scanning package
 beautifulsoup4==4.14.3
 playwright==1.58.0
+
+# SMT and SAGE optional stacks
+z3-solver==4.15.4.0
+sage-agent-sdk==8.4.2
+httpx==0.28.1

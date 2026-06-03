@@ -55,7 +55,10 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
 
       - name: Create venv and install deps
         run: |

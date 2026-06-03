@@ -59,7 +59,10 @@ git clone https://github.com/gadievron/raptor.git
 cd raptor
 
 # Install Python dependencies
-pip install -r requirements.txt
+poetry install --only main
+
+# Compatibility path during the Poetry migration
+# pip install -r requirements.txt
 
 # Install Claude Code (required)
 npm install -g @anthropic-ai/claude-code
@@ -83,6 +86,26 @@ docker run --privileged -it raptor:latest
 The `--privileged` flag is required for the `rr` deterministic debugger. The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.
 
 Once inside, just say "hi" to get started, or jump straight to a command.
+
+---
+
+## Python Dependencies
+
+RAPTOR uses `pyproject.toml` and `poetry.lock` as the source of truth for
+Python dependencies. The checked-in `requirements.txt` files remain as
+compatibility exports for one transition window.
+
+Useful installs:
+
+```bash
+poetry install --only main                  # core runtime
+poetry install --with dev                   # tests + linting
+poetry install --extras web                 # /web scanner support
+poetry install --extras "web smt llm sage"  # optional stacks
+```
+
+Keeping `/web`, Z3, SAGE and cloud provider SDKs as optional extras avoids
+making the default RAPTOR install heavier and more brittle than it needs to be.
 
 ---
 

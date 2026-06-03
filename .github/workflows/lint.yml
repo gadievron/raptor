@@ -95,14 +95,17 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
 
       - name: Install ruff
         run: |
           # Install only ruff (not full requirements-dev.txt) to keep
           # this job fast and to avoid pulling pytest et al. just to
-          # lint. ruff is pinned to 0.15.12 in requirements-dev.txt —
-          # grep + uv pip install keeps a single source of truth.
+          # lint. ruff is pinned in pyproject.toml and mirrored in
+          # requirements-dev.txt during the compatibility window.
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
           uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
@@ -174,7 +177,10 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
 
       - name: Install ruff
         run: |

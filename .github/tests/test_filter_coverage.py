@@ -274,6 +274,8 @@ class NormaliseGlobsTests(unittest.TestCase):
                     ".github/workflows/tests.yml",
                     "packages/source_intel/**", "core/build/**",
                     "requirements*.txt",
+                    "pyproject.toml",
+                    "poetry.lock",
                 },
                 "packages/source_intel",
             ),
@@ -283,6 +285,8 @@ class NormaliseGlobsTests(unittest.TestCase):
                 "core/build/**",              # core/* alpha
                 "core/llm/**",
                 "requirements*.txt",          # tails
+                "pyproject.toml",
+                "poetry.lock",
                 ".github/workflows/tests.yml",
             ],
         )
@@ -384,7 +388,8 @@ def _canonical_key(glob: str, own_prefix: str) -> "tuple[int, str]":
     Groups, in order: the subsystem's OWN package first, then
     ``packages/*`` (alphabetical), ``core/*`` (alphabetical),
     ``libexec/*`` (alphabetical), then the conventional tails
-    (``requirements*.txt`` → ``pyproject.toml`` → ``.github/...``).
+    (``requirements*.txt`` → ``pyproject.toml`` → ``poetry.lock`` →
+    ``.github/...``).
     Ordering is purely cosmetic — ``match_glob`` is order-independent —
     but a deterministic layout keeps diffs small and the lists readable.
     """
@@ -400,9 +405,11 @@ def _canonical_key(glob: str, own_prefix: str) -> "tuple[int, str]":
         return (4, glob)
     if glob == "pyproject.toml":
         return (5, glob)
-    if glob.startswith(".github/"):
+    if glob == "poetry.lock":
         return (6, glob)
-    return (7, glob)
+    if glob.startswith(".github/"):
+        return (7, glob)
+    return (8, glob)
 
 
 def _canonical_order(globs: "set[str]", own_prefix: str) -> list[str]:

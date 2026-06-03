@@ -113,7 +113,7 @@ RUN mkdir -p /opt/codeql \
 # PYTHON DEPENDENCIES
 # ============================================================================
 
-COPY requirements.txt requirements-dev.txt /tmp/
+COPY pyproject.toml poetry.lock requirements.txt requirements-dev.txt /tmp/
 # Also copy package-specific requirements so they can be installed explicitly if desired
 COPY packages/web/requirements.txt /tmp/packages-web-requirements.txt
 

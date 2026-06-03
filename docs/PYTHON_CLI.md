@@ -36,8 +36,9 @@ python3 raptor.py help scan
 
 ## Prerequisites
 
-- Python 3.9+
-- `pip install -r requirements.txt`
+- Python 3.10+
+- `poetry install --only main`
+- Compatibility path during the Poetry migration: `pip install -r requirements.txt`
 - `pip install semgrep`
 - Set an API key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY (optional — Claude Code alone works for analysis)
 

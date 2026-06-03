@@ -1,0 +1,96 @@
+[project]
+name = "raptor"
+version = "3.0.0"
+description = "Autonomous offensive/defensive security research framework"
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+license = "MIT"
+authors = [
+    { name = "Gadi Evron" },
+    { name = "Daniel Cuthbert" },
+    { name = "Thomas Dullien" },
+    { name = "Michael Bargury" },
+    { name = "John Cartwright" },
+]
+dependencies = [
+    "requests==2.33.0",
+    "urllib3==2.7.0",
+    "pydantic==2.12.5",
+    "typer==0.25.1",
+    "instructor==1.15.1",
+    "tabulate==0.10.0",
+    "pyyaml==6.0.3",
+    "defusedxml==0.7.1",
+    "packaging==25.0",
+    "tomli==2.3.0 ; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+web = [
+    "beautifulsoup4==4.14.3",
+    "playwright==1.58.0",
+]
+smt = [
+    "z3-solver==4.15.4.0",
+]
+llm = [
+    "openai==2.26.0",
+    "anthropic==0.84.0",
+    "google-genai==1.65.0",
+    "botocore==1.42.70",
+]
+sage = [
+    "sage-agent-sdk==8.4.2",
+    "httpx==0.28.1",
+]
+all-optional = [
+    "beautifulsoup4==4.14.3",
+    "playwright==1.58.0",
+    "z3-solver==4.15.4.0",
+    "openai==2.26.0",
+    "anthropic==0.84.0",
+    "google-genai==1.65.0",
+    "botocore==1.42.70",
+    "sage-agent-sdk==8.4.2",
+    "httpx==0.28.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/gadievron/raptor"
+Repository = "https://github.com/gadievron/raptor"
+Issues = "https://github.com/gadievron/raptor/issues"
+
+[dependency-groups]
+test = [
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+    "pytest-split==0.11.0",
+    "gcovr==8.6",
+    "beautifulsoup4==4.14.3",
+    "z3-solver==4.15.4.0",
+]
+lint = [
+    "ruff==0.15.12",
+    "mypy==2.0.0",
+]
+dev = [
+    { include-group = "test" },
+    { include-group = "lint" },
+]
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.group.test]
+optional = true
+
+[tool.poetry.group.lint]
+optional = true
+
+[tool.poetry.group.dev]
+optional = true
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

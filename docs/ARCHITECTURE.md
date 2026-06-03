@@ -218,7 +218,9 @@ raptor/
 ├── raptor_agentic.py               # Source code analysis workflow
 ├── raptor_codeql.py                # CodeQL workflow orchestrator
 ├── raptor_fuzzing.py               # Binary fuzzing workflow
-├── requirements.txt                # Python dependencies
+├── pyproject.toml                  # Python dependency/source metadata
+├── poetry.lock                     # Locked Python dependency graph
+├── requirements.txt                # Transitional pip compatibility export
 ├── CLAUDE.md                       # Claude Code instructions
 ├── LICENSE                         # License file
 └── README.md                       # Main README
@@ -1146,6 +1148,9 @@ git clone <repo-url>
 cd raptor
 
 # Install Python dependencies
+poetry install --only main
+
+# Compatibility path during the Poetry migration
 pip install -r requirements.txt
 
 # Or install manually:
@@ -1170,5 +1175,4 @@ python3 packages/llm_analysis/agent.py --help
 python3 raptor_agentic.py --help
 python3 raptor_fuzzing.py --help
 ```
-
 

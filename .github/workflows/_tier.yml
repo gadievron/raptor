@@ -73,14 +73,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Reconcile deps
-        # No-op unless this PR changed requirements*.txt before the image
-        # rebuilt on main; then installs only the delta.
+        # No-op unless this PR changed pyproject.toml, poetry.lock, or
+        # compatibility requirements*.txt before the image rebuilt on main;
+        # then installs only the delta.
         run: pip install --no-cache-dir -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest ${{ inputs.test_path }} ${{ inputs.pytest_args }}
 
   # Fallback path: fork PRs can't pull the private image, so install into
-  # the runner's system Python (uv's cache keyed on requirements*.txt).
+  # the runner's system Python (uv's cache keyed on Poetry manifests plus
+  # compatibility requirements*.txt).
   runner:
     if: ${{ !inputs.use_container }}
     runs-on: ubuntu-latest
@@ -98,7 +100,10 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
       - name: Install deps
         # --system installs into the setup-python interpreter so the test
         # step's `python` resolves the deps without venv activation,

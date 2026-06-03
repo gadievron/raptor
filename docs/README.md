@@ -508,7 +508,8 @@ Phase 4: Output
 ### Prerequisites
 
 **Required**:
-- Python 3.9 or later
+- Python 3.10 or later
+- Poetry (`poetry install --only main`)
 - Git
 
 **For Source Code Analysis**:
@@ -839,7 +840,5 @@ RAPTOR leverages excellent open source tools:
 - **GDB** (GNU Project) - The GNU Debugger
 - **Anthropic Claude** - LLM reasoning for vulnerability analysis
 - **OpenAI GPT-4** - Alternative LLM provider
-
-
 
 

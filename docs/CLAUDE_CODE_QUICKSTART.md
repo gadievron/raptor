@@ -105,7 +105,7 @@ cd raptor
 claude
 
 # 2. Let Claude handle setup
-"Install Python packages from requirements.txt"
+"Install Python packages with Poetry"
 "Install semgrep"  # External tool
 
 # 3. Set up LLM (choose one)

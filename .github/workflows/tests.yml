@@ -231,14 +231,17 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: |
+            pyproject.toml
+            poetry.lock
+            requirements*.txt
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
@@ -255,7 +258,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
@@ -296,7 +299,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Restore venv permissions
@@ -392,7 +395,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Restore venv permissions
@@ -434,7 +437,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Restore venv permissions
@@ -475,7 +478,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Restore venv permissions
@@ -526,7 +529,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
 
       - name: Restore venv permissions
@@ -657,7 +660,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'poetry.lock', 'requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -769,4 +772,3 @@ jobs:
           done
           [ "$ok" -eq 1 ] || exit 1
           echo "All tiers passed or were legitimately skipped."
-

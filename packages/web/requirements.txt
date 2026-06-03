@@ -1,4 +1,5 @@
-# Requirements specific to the `packages/web` module
+# Requirements specific to the `packages/web` module (compatibility export).
+# Source of truth: pyproject.toml + poetry.lock (`web` extra).
 # These are installed by consumers of the web package or can be
 # installed in the devcontainer to enable web scanning/browser automation.
 # Exact pins per the project's "no loose deps" policy — see

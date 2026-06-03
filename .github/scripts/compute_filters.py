@@ -31,6 +31,7 @@ FILTERS: dict[str, list[str]] = {
         "*.py",
         "requirements*.txt",
         "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # Direct + transitive deps for sandbox (validated by
@@ -43,6 +44,8 @@ FILTERS: dict[str, list[str]] = {
         "libexec/raptor-pid1-shim",
         "libexec/raptor-run-sandboxed",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # Direct + transitive deps for exploit_feasibility. Note: pre-#447
@@ -65,6 +68,8 @@ FILTERS: dict[str, list[str]] = {
         "core/smt_solver/**",
         "core/witness/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # CI lint / filter-coverage tests. Gated narrowly so a code-only PR
@@ -105,6 +110,8 @@ FILTERS: dict[str, list[str]] = {
         "core/tuning/**",
         "core/zip/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     "llm_analysis": [
@@ -143,6 +150,8 @@ FILTERS: dict[str, list[str]] = {
         "core/witness/**",
         "core/zip/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     "cve_diff": [
@@ -158,6 +167,8 @@ FILTERS: dict[str, list[str]] = {
         "core/url_patterns.py",
         "core/url_patterns/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     "fuzzing": [
@@ -171,6 +182,8 @@ FILTERS: dict[str, list[str]] = {
         "core/sandbox/**",
         "core/witness/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     "sage": [
@@ -185,6 +198,8 @@ FILTERS: dict[str, list[str]] = {
         "core/sandbox/**",
         "core/security/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # SCA tier — ~3,255 tests as of 2026-05-23, ≈30% of the broad
@@ -216,6 +231,8 @@ FILTERS: dict[str, list[str]] = {
         "core/upstream_latest/**",
         "core/zip/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     "orchestration": [
@@ -233,6 +250,8 @@ FILTERS: dict[str, list[str]] = {
         "core/schema_constants/**",
         "core/security/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # source_intel: Coccinelle-driven memory-corruption evidence.
@@ -254,6 +273,8 @@ FILTERS: dict[str, list[str]] = {
         "core/llm/**",
         "core/security/**",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
@@ -263,6 +284,7 @@ FILTERS: dict[str, list[str]] = {
         "**/*.py",
         "requirements*.txt",
         "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/codeql.yml",
         ".github/codeql/**",
     ],
@@ -317,6 +339,8 @@ FILTERS: dict[str, list[str]] = {
         "packages/cve_diff/cve_diff/agent/prompt.py",
         "packages/cve_diff/cve_diff/analysis/analyzer.py",
         "requirements*.txt",
+        "pyproject.toml",
+        "poetry.lock",
         ".github/workflows/tests.yml",
     ],
 }

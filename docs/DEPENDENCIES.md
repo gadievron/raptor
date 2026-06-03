@@ -30,12 +30,19 @@ For example CodeQL does not allow commerical use.
 - Usage: RAPTOR calls `semgrep` command-line tool
 - Note: User installs separately, not bundled with RAPTOR
 
-**Python packages** (from requirements.txt)
+**Python packages** (from `pyproject.toml` / `poetry.lock`)
 - requests (Apache 2.0)
-- anthropic (MIT)
+- urllib3 (MIT)
+- pydantic (MIT)
+- typer (MIT)
+- instructor (MIT)
 - tabulate (MIT)
-- Install: `pip install -r requirements.txt`
-- Note: Managed by pip, not bundled with RAPTOR
+- pyyaml (MIT)
+- defusedxml (Python Software Foundation License)
+- packaging (Apache 2.0 / BSD)
+- Install: `poetry install --only main`
+- Compatibility install during the migration: `pip install -r requirements.txt`
+- Note: Managed by Poetry/pip, not bundled with RAPTOR
 
 ### Optional Tools (Install When Needed)
 

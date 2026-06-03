@@ -7,7 +7,8 @@ name: CI deps image
 #
 # Tags pushed:
 #   :main        — moving tag the test tiers pull. Updated on every build.
-#   :req-<hash>  — content tag (first 12 hex of sha256 over requirements*.txt)
+#   :dep-<hash>  — content tag (first 12 hex of sha256 over pyproject.toml,
+#                  poetry.lock, and the compatibility requirements*.txt)
 #                  for traceability + rollback.
 #
 # Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
@@ -20,6 +21,8 @@ on:
     paths:
       - 'requirements.txt'
       - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
       - '.github/docker/ci-deps.Dockerfile'
       - '.github/workflows/ci-deps-image.yml'
   workflow_dispatch:
@@ -60,18 +63,18 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/raptor-ci-deps"
           # Content tag over the manifests that define the image.
-          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          dephash="$(cat pyproject.toml poetry.lock requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \
             -t "${image}:main" \
-            -t "${image}:req-${reqhash}" \
+            -t "${image}:dep-${dephash}" \
             .
           docker push "${image}:main"
-          docker push "${image}:req-${reqhash}"
-          echo "Pushed ${image}:main and ${image}:req-${reqhash}"
+          docker push "${image}:dep-${dephash}"
+          echo "Pushed ${image}:main and ${image}:dep-${dephash}"
 
-      # Prune the untagged digests left behind when :main / :req-<hash> move
-      # to this build. Tagged versions (current :main + every :req-<hash>
+      # Prune the untagged digests left behind when :main / :dep-<hash> move
+      # to this build. Tagged versions (current :main + every :dep-<hash>
       # rollback anchor) are untouched. GHCR has no auto-retention, so without
       # this the weekly rebuild alone accrues ~52 dangling versions/year.
       # delete-only-untagged + a small floor never risks a rollback anchor.
