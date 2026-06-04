@@ -16,6 +16,9 @@ from packages.coccinelle.runner import (
     run_rules,
     is_available,
     version,
+    version_tuple,
+    meets_min_version,
+    MIN_SPATCH_VERSION,
     _parse_results,
     _parse_errors,
     _inject_harness,
@@ -49,6 +52,44 @@ class TestAvailability:
     def test_version_unavailable(self):
         with patch("shutil.which", return_value=None):
             assert version() is None
+
+    def test_version_tuple_parses_major_minor(self):
+        with patch("shutil.which", return_value="/usr/bin/spatch"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="spatch version 1.3 compiled with OCaml version 5.4.0\n",
+                returncode=0,
+            )
+            assert version_tuple() == (1, 3)
+
+    def test_version_tuple_handles_three_component(self):
+        with patch("shutil.which", return_value="/usr/bin/spatch"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="spatch version 1.1.1 compiled with OCaml version 4.14.1\n",
+                returncode=0,
+            )
+            # Only major.minor is significant for the floor check.
+            assert version_tuple() == (1, 1)
+
+    def test_version_tuple_none_when_unavailable(self):
+        with patch("shutil.which", return_value=None):
+            assert version_tuple() is None
+
+    def test_meets_min_version_true_at_floor(self):
+        with patch("packages.coccinelle.runner.version_tuple",
+                   return_value=MIN_SPATCH_VERSION):
+            assert meets_min_version() is True
+
+    def test_meets_min_version_false_below_floor(self):
+        with patch("packages.coccinelle.runner.version_tuple",
+                   return_value=(1, 1)):
+            assert meets_min_version() is False
+
+    def test_meets_min_version_false_when_unknown(self):
+        with patch("packages.coccinelle.runner.version_tuple",
+                   return_value=None):
+            assert meets_min_version() is False
 
 
 class TestParseResults:
