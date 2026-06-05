@@ -267,7 +267,12 @@ class TestFormatInstallHint:
         monkeypatch.delenv("CONDA_DEFAULT_ENV", raising=False)
         with patch("shutil.which", side_effect=_which_only(set())):
             hint = format_install_advice("semgrep")
-        assert "pipx.pypa.io" in hint
+        # Operator-readable prose check rather than a hostname
+        # fragment — ``py/incomplete-url-substring-sanitization``
+        # false-positives on assertions like ``"pypa.io" in hint``
+        # because the substring looks like a URL-allowlist check.
+        # Same FP class as the trusted→short_circuit rename.
+        assert "install pipx first" in hint
         assert "pipx install semgrep" in hint
 
     def test_venv_wins_over_conda(self, monkeypatch):
