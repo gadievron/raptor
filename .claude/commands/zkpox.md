@@ -1,5 +1,6 @@
 ---
 description: ZKPoX — zero-knowledge proof of exploit (beta). Subcommands: eligible / bundle / reproduce / prove / verify.
+dispatch: python3 raptor.py zkpox
 ---
 
 # /zkpox — Zero-Knowledge Proof of Exploit (beta)
