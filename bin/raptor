@@ -170,6 +170,19 @@ export RAPTOR_DIR
 # and resolved RAPTOR_DIR; mark this invocation as trusted.
 export _RAPTOR_TRUSTED=1
 
+# Rootless podman / distrobox cannot engage mount-ns + Landlock, so the
+# default 'full' sandbox half-engages and the semgrep/codeql scanners emit
+# empty output. Inside the dedicated `raptor` distrobox, default the sandbox
+# profile to 'none' (the container itself is the isolation boundary). Only a
+# default — an explicit `export RAPTOR_SANDBOX=...` or `--sandbox <profile>`
+# still wins. Scoped via CONTAINER_ID so host / other distroboxes are
+# unaffected. RAPTOR_SANDBOX is allowlisted in core.config so it survives
+# into the scanner subprocess.
+if [ "${CONTAINER_ID:-}" = "raptor" ]; then
+    : "${RAPTOR_SANDBOX:=none}"
+    export RAPTOR_SANDBOX
+fi
+
 # Parse RAPTOR-specific args, collect Claude args
 STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
 CLAUDE_ARGS=("-n" "RAPTOR")

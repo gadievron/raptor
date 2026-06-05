@@ -403,6 +403,20 @@ class RaptorConfig:
         #                    read as an enum (any other value → auto); no
         #                    injection surface.
         "RAPTOR_TARGET_KIND",
+        #   RAPTOR_SANDBOX   operator's default sandbox-profile override
+        #                    (full|debug|network-only|none), read by
+        #                    core/sandbox/profiles._resolve_default_profile().
+        #                    Must survive the subprocess boundary: the
+        #                    scanner runs as a __main__ subprocess with a
+        #                    get_safe_env() environment, and without this
+        #                    in the allowlist the child re-resolves
+        #                    DEFAULT_PROFILE to "full" — silently ignoring
+        #                    the operator's choice (e.g. "none" on rootless
+        #                    podman/distrobox where mount-ns + Landlock
+        #                    cannot engage). Read only as a PROFILES enum
+        #                    key (any other value → "full"); no injection
+        #                    surface, identical to passing --sandbox.
+        "RAPTOR_SANDBOX",
     })
 
     # Name prefixes — any variable whose name starts with one of these is

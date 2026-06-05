@@ -12,6 +12,7 @@ a plain dict would let an external caller mutate `PROFILES["full"]
 sandbox() invocation in the process.
 """
 
+import os
 import types
 
 # Profile definitions
@@ -46,7 +47,24 @@ PROFILES = types.MappingProxyType({
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
 })
-DEFAULT_PROFILE = "full"
+def _resolve_default_profile() -> str:
+    """Default sandbox profile, overridable via ``RAPTOR_SANDBOX``.
+
+    Hardened default stays ``full`` (network blocked + Landlock +
+    seccomp). Environments where the kernel-isolation layers cannot
+    engage — notably **rootless podman / distrobox**, where mount-ns
+    spawn and Landlock are unavailable and the sandbox would otherwise
+    fall back to a half-broken path that yields empty scanner output —
+    can export ``RAPTOR_SANDBOX=none`` (or any valid profile name) to
+    set a coherent default without passing ``--sandbox`` on every call.
+    Unknown / empty values fall back to ``full`` so a typo never
+    silently downgrades isolation.
+    """
+    env = os.environ.get("RAPTOR_SANDBOX", "").strip().lower()
+    return env if env in PROFILES else "full"
+
+
+DEFAULT_PROFILE = _resolve_default_profile()
 
 
 # Kwargs that configure isolation. Callers must not pass these to

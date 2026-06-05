@@ -683,6 +683,19 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         effectively_disabled = disabled or state._cli_sandbox_disabled
         if effectively_disabled:
             profile = "none"
+        elif profile is None and DEFAULT_PROFILE != "full":
+            # No explicit caller profile and no CLI --sandbox flag: when the
+            # operator has set a non-default DEFAULT_PROFILE (via
+            # RAPTOR_SANDBOX), honour it across ALL isolation layers, not
+            # just the seccomp default seeded at function top. Without this,
+            # `RAPTOR_SANDBOX=none` disabled seccomp but left Landlock +
+            # network-block engaged — which breaks the semgrep scanner on
+            # rootless podman / distrobox, where mount-ns + Landlock cannot
+            # operate and the half-engaged sandbox yields empty output.
+            # Scoped to `!= "full"` so the stock default path is byte-for-
+            # byte unchanged: only an explicit operator downgrade takes it.
+            profile = DEFAULT_PROFILE
+            effectively_disabled = (profile == "none")
     if profile is not None:
         if profile not in PROFILES:
             raise ValueError(
