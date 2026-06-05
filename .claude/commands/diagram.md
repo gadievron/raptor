@@ -1,5 +1,6 @@
 ---
 description: Generate Mermaid visual maps from /understand or /validate output directories
+dispatch: libexec/raptor-render-diagrams <out-dir> [args]
 ---
 
 # /diagram

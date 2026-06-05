@@ -63,6 +63,24 @@ from .auth import (
 _logger = logging.getLogger(__name__)
 
 
+# Audit event types whose terminal-visible log is duplicated by a
+# higher-level layer's own visibility — demote to DEBUG so operator
+# output isn't flooded. Consumed by ``_audit``; events not in this
+# set stay at INFO. Audit log on disk records every event at full
+# fidelity regardless.
+#
+# * ``request.dispatch`` (status="ok"): one per successful LLM call;
+#   ~100+ per /agentic run. No operator action on success.
+# * ``request.error`` (status="error"): one per upstream API
+#   failure. The LLMClient retry loop catches the underlying
+#   exception and emits its own WARNING ("Attempt N/M failed
+#   for <provider>/<model>: <reason>") at the operator-relevant
+#   abstraction layer. The dispatcher's INFO-level audit was a
+#   third copy of the same fact, alongside the provider's own
+#   error log — see the retry-dedupe commit for the full cluster.
+_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch", "request.error"})
+
+
 def _scrub(value: Optional[str]) -> Optional[str]:
     """Defang nonprintable + ANSI escapes in operator-visible
     fields (``worker_label``, ``reason``) before they hit the
@@ -331,6 +349,14 @@ class LLMDispatcher:
         )
         self._thread.start()
 
+        # Quiet third-party loggers (httpx HTTP-request lines,
+        # google.genai AFC banner, etc.) so operator output during
+        # /agentic / /understand / /validate isn't drowned in
+        # transport-layer chatter. WARNING and above still
+        # surface so real failures aren't hidden.
+        from core.llm.log_quiet import quiet_noisy_loggers
+        quiet_noisy_loggers()
+
         self._audit(AuditEvent(
             ts=time.time(),
             event="server.start",
@@ -472,6 +498,23 @@ class LLMDispatcher:
         # are internally produced strings.
         safe_worker = _scrub(ev.worker_label)
         safe_reason = _scrub(ev.reason)
+        # Log level chosen by event type:
+        # * Events in ``_DEMOTED_AUDIT_EVENTS`` → DEBUG. These are
+        #   duplicated by a higher-level layer's own operator-
+        #   visible logging (LLMClient retry loop) or fire on
+        #   every LLM call without operator action (request.dispatch
+        #   ok). See the constant's docstring for per-event
+        #   rationale.
+        # * Server lifecycle, token issuance, any unknown event
+        #   type → INFO. Low-frequency, operator-actionable, or
+        #   both.
+        # Audit log on disk continues to record EVERY event at
+        # full fidelity — this only affects the stdlib logger
+        # that terminal output uses.
+        if ev.event in _DEMOTED_AUDIT_EVENTS:
+            level = logging.DEBUG
+        else:
+            level = logging.INFO
         # Always log via stdlib logger for terminal visibility.
         # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
         # ``ev.token_id`` is a 12-character correlation prefix (see
@@ -479,7 +522,8 @@ class LLMDispatcher:
         # full token. Operator visibility for the auth flow needs
         # SOME identifier; the prefix gives correlation without
         # disclosure.
-        _logger.info(
+        _logger.log(
+            level,
             "llm-dispatcher %s %s pid=%s uid=%s token=%s label=%s%s",
             ev.event, ev.status, ev.peer_pid, ev.peer_uid,
             ev.token_id or "-", safe_worker or "-",

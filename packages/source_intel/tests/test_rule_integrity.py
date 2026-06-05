@@ -18,6 +18,11 @@ from pathlib import Path
 
 import pytest
 
+from packages.coccinelle.runner import (
+    MIN_SPATCH_VERSION,
+    meets_min_version as _meets_min_spatch,
+)
+
 _RULES_ROOT = Path(__file__).resolve().parents[3] / "engine" / "coccinelle" / "source_intel"
 
 
@@ -141,6 +146,16 @@ def test_total_rule_count_matches():
 @pytest.mark.skipif(
     not shutil.which("spatch"),
     reason="spatch not installed",
+)
+@pytest.mark.skipif(
+    shutil.which("spatch") is not None and not _meets_min_spatch(),
+    reason=(
+        f"spatch < {'.'.join(map(str, MIN_SPATCH_VERSION))} cannot parse the "
+        "prefix-attribute rules RAPTOR ships against (apt builds on Ubuntu "
+        "22.04/24.04 and Debian bookworm are 1.1.1); the run-time runner "
+        "degrades per-rule on these. Re-runs in CI once the runner image "
+        "carries spatch >= the floor."
+    ),
 )
 def test_every_rule_parses(tmp_path):
     """spatch --parse-cocci shouldn't error on any shipped rule."""

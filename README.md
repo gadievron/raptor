@@ -95,6 +95,7 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
+| `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
 | `/exploit` | Generate proof-of-concept exploit code | Beta |
 | `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
@@ -127,6 +128,31 @@ Start by creating a project so all your runs land in one place:
 Findings that clear validation get exploit PoCs and patches generated. A cross-finding analysis runs at the end to find shared root causes and attack chains.
 
 `/validate` runs this same pipeline as a standalone step if you already have findings from a previous scan.
+
+---
+
+## Software Composition Analysis
+
+`/sca` analyses the dependency and supply-chain side of a project. It is not just a requirements-file CVE lookup: RAPTOR discovers manifests, lockfiles, inline install commands, workflow dependencies, and container/base-image package sources, then normalises them into a single dependency view.
+
+The scan enriches dependencies with OSV advisories, CISA KEV, EPSS, CISA Vulnrichment/SSVC, reachability, exploit-evidence signals, hygiene checks, supply-chain heuristics, licence policy findings, and optional LLM review/triage. It emits RAPTOR-native findings plus SBOM and CI-friendly output:
+
+- `findings.json` - canonical RAPTOR findings
+- `report.md` - human-readable summary
+- `sbom.cdx.json` - CycloneDX SBOM with VEX data
+- `findings.sarif` - GitHub/GitLab code-scanning output
+
+Common commands:
+
+```bash
+python3 raptor.py sca --repo /path/to/project
+python3 raptor.py sca --repo /path/to/project --no-llm
+python3 raptor.py sca --repo /path/to/project --fail-on-severity high --fail-on-kev
+python3 raptor.py sca --repo /path/to/project fix
+python3 raptor.py sca check PyPI django 4.2.10
+```
+
+Useful subcommands include `fix`, `check`, `upgrade`, `diff`, `verify`, `health`, `render`, `suppress`, and `clean-cache`. See `docs/sca.md` for the full reference.
 
 ---
 
@@ -318,6 +344,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 |------|----------|
 | `docs/CLAUDE_CODE_USAGE.md` | Complete usage guide for interactive sessions |
 | `docs/PYTHON_CLI.md` | Python CLI reference for scripting and CI |
+| `docs/sca.md` | Software composition analysis reference |
 | `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
 | `docs/ARCHITECTURE.md` | Technical architecture detail |
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |

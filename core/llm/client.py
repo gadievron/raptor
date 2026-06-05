@@ -1317,7 +1317,15 @@ class LLMClient:
                 for attempt in range(self.config.max_retries):
                     try:
                         if attempt > 0:
-                            logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
+                            # DEBUG, not INFO: the prior attempt's
+                            # WARNING ("Attempt N/M failed ...") already
+                            # signalled that a retry will follow. The
+                            # next attempt either succeeds (silent) or
+                            # fails (another WARNING) — operator infers
+                            # the retry from either. Adding an INFO
+                            # bookend produces operator log noise
+                            # without new signal.
+                            logger.debug(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                         provider = self._get_provider(model)
                         # Acquire budget reservation immediately before the
@@ -1401,8 +1409,28 @@ class LLMClient:
                                 _esc(quota_guidance),
                             )
 
-                        logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
-                                     f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
+                        # Sanitisation is the BROADER of the two
+                        # available paths: redact_secrets covers more
+                        # patterns than _sanitize_log_message's API-key
+                        # regex; escape_nonprintable defangs ANSI/control
+                        # bytes; [:1024] caps the length. This was the
+                        # sanitisation the (now-demoted) provider ERROR
+                        # used; moving it to the surviving operator-
+                        # visible line preserves the safety properties
+                        # at the right level. See the retry-dedupe
+                        # adversarial-review notes for rationale.
+                        from core.security.log_sanitisation import (
+                            escape_nonprintable as _esc_np,
+                        )
+                        from core.security.redaction import (
+                            redact_secrets as _redact,
+                        )
+                        _safe_e = _esc_np(_redact(str(e)))[:1024]
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{self.config.max_retries} "
+                            f"failed for {model.provider}/{model.model_name}: "
+                            f"{_safe_e}"
+                        )
 
                         if not _is_retryable_error(e):
                             logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")
@@ -1576,7 +1604,9 @@ class LLMClient:
                 for attempt in range(self.config.max_retries):
                     try:
                         if attempt > 0:
-                            logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
+                            # DEBUG, not INFO — see ``generate`` above
+                            # for the same noise-vs-signal rationale.
+                            logger.debug(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                         provider = self._get_provider(model)
 
@@ -1687,7 +1717,19 @@ class LLMClient:
                                 _esc(quota_guidance),
                             )
 
-                        logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
+                        # Broader sanitisation — same rationale as the
+                        # ``generate`` retry loop above.
+                        from core.security.log_sanitisation import (
+                            escape_nonprintable as _esc_np,
+                        )
+                        from core.security.redaction import (
+                            redact_secrets as _redact,
+                        )
+                        _safe_e = _esc_np(_redact(str(e)))[:1024]
+                        logger.warning(
+                            f"Structured generation attempt {attempt + 1} "
+                            f"failed: {_safe_e}"
+                        )
 
                         if not _is_retryable_error(e):
                             logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")

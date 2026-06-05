@@ -873,6 +873,57 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     return model
 
 
+# OpenAI reasoning-tier detection. Gated on the version *number*, not a
+# literal name list, so gpt-6 / o5 are caught when they ship — mirrors
+# ``supports_temperature``'s version-threshold approach. The whole o-series
+# is reasoning; gpt is reasoning from major version 5.
+_OPENAI_REASONING_GPT_FROM = 5
+_OPENAI_GPT_VERSION_RE = re.compile(r"^gpt-(\d+)")
+_OPENAI_OSERIES_RE = re.compile(r"^o\d")
+
+
+def _is_openai_reasoning_model(model_name: str) -> bool:
+    """True for OpenAI reasoning-tier models (gpt-5+ and the o-series).
+
+    These models changed the chat.completions contract: they reject the
+    legacy ``max_tokens`` param (require ``max_completion_tokens``) and only
+    accept the default ``temperature`` (1) — passing ``temperature=0.7``
+    returns HTTP 400.
+
+    Future-proofed like ``supports_temperature``: we gate on the version
+    *number*, not a literal name list, so gpt-6 / o5 are caught automatically
+    when they ship. The whole o-series is reasoning; gpt is reasoning from
+    major version >= 5 (gpt-4o / gpt-4.1 stay classic). Matched on the bare
+    model name so aggregator/provider prefixes (``openai/gpt-5.5``) and date
+    suffixes are tolerated. Non-OpenAI compat models (Ollama ``qwen3``,
+    ``olmo``, ``claude-*`` via compat) do not match and keep the legacy params.
+    """
+    m = (model_name or "").lower().rsplit("/", 1)[-1]
+    if _OPENAI_OSERIES_RE.match(m):
+        return True
+    gm = _OPENAI_GPT_VERSION_RE.match(m)
+    return bool(gm) and int(gm.group(1)) >= _OPENAI_REASONING_GPT_FROM
+
+
+def _openai_sampling_kwargs(
+    model_name: str,
+    max_tokens: int,
+    temperature: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Return the correct token-limit (+ optional temperature) kwargs for an
+    OpenAI chat.completions call, branching on the reasoning-model contract.
+
+    Reasoning models → ``max_completion_tokens`` and NO temperature (default
+    only). Classic models → ``max_tokens`` and the requested temperature.
+    """
+    if _is_openai_reasoning_model(model_name):
+        return {"max_completion_tokens": max_tokens}
+    kw: Dict[str, Any] = {"max_tokens": max_tokens}
+    if temperature is not None:
+        kw["temperature"] = temperature
+    return kw
+
+
 class OpenAICompatibleProvider(LLMProvider):
     """
     LLM provider using the OpenAI SDK.
@@ -950,8 +1001,11 @@ class OpenAICompatibleProvider(LLMProvider):
             response = self.client.chat.completions.create(
                 model=self.config.model_name,
                 messages=messages,
-                temperature=kwargs.get("temperature", self.config.temperature),
-                max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+                **_openai_sampling_kwargs(
+                    self.config.model_name,
+                    kwargs.get("max_tokens", self.config.max_tokens),
+                    kwargs.get("temperature", self.config.temperature),
+                ),
             )
             duration = time.monotonic() - t_start
 
@@ -1021,7 +1075,16 @@ class OpenAICompatibleProvider(LLMProvider):
             # entries on operator TTYs.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("OpenAI completion failed: %s",
+            # DEBUG, not ERROR: the LLMClient retry loop catches this
+            # exception and emits its own WARNING ("Attempt N/M failed
+            # for openai/<model>: <reason>") with the same fact at
+            # the operator-relevant abstraction layer. Logging both
+            # produces a 3-line cluster per upstream failure — see
+            # the log-noise commit history. DEBUG keeps the deep-
+            # debugging detail (escaped + redacted exception body)
+            # available with ``-v`` / RAPTOR_LOG_LEVEL=DEBUG without
+            # spamming normal runs.
+            logger.debug("OpenAI completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
@@ -1049,8 +1112,11 @@ class OpenAICompatibleProvider(LLMProvider):
                     model=self.config.model_name,
                     response_model=pydantic_model,
                     messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.config.max_tokens,
+                    **_openai_sampling_kwargs(
+                        self.config.model_name,
+                        self.config.max_tokens,
+                        temperature,
+                    ),
                 )
                 duration = time.monotonic() - t_start
 
@@ -1175,8 +1241,8 @@ class OpenAICompatibleProvider(LLMProvider):
         # ---- dispatch (with retry on transient errors) ---------------
         kwargs: Dict[str, Any] = {
             "model": self.config.model_name,
-            "max_tokens": max_tokens,
             "messages": wire_messages,
+            **_openai_sampling_kwargs(self.config.model_name, max_tokens),
         }
         if tool_schemas:
             kwargs["tools"] = tool_schemas
@@ -1604,7 +1670,10 @@ class AnthropicProvider(LLMProvider):
             # above — SDK exception bodies can include prompt + headers.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("Anthropic completion failed: %s",
+            # DEBUG, not ERROR — same rationale as OpenAI above:
+            # the LLMClient retry loop emits an operator-visible
+            # WARNING for the same failure.
+            logger.debug("Anthropic completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 
@@ -2178,7 +2247,10 @@ class GeminiProvider(LLMProvider):
             # Same hardening rationale as OpenAICompatibleProvider.generate.
             from core.security.log_sanitisation import escape_nonprintable
             from core.security.redaction import redact_secrets
-            logger.error("Gemini completion failed: %s",
+            # DEBUG, not ERROR — same rationale as OpenAI above:
+            # the LLMClient retry loop emits an operator-visible
+            # WARNING for the same failure.
+            logger.debug("Gemini completion failed: %s",
                          escape_nonprintable(redact_secrets(str(e)))[:1024])
             raise
 

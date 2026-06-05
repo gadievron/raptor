@@ -288,15 +288,28 @@ def _score_entry(entry: CatalogEntry, paths: List[str]) -> Optional[float]:
     (broad, many entries claim ``.c``). Function-name matching when
     tree-sitter substrate exists earns a higher weight; not used
     in v1.
+
+    Specificity gate: if an entry declares ``file_globs`` (= it
+    requires specific framework markers) but ZERO matched, refuse
+    to count the extension hits — extensions alone don't validate
+    the specificity claim, and would otherwise let python.web-app
+    win on any project that has .py + .html files (security
+    frameworks, doc generators, library examples). Entries with
+    no file_globs declared (``generic``) skip the gate and score
+    via extensions as before.
     """
     # Negative signals are deal-breakers.
     if entry.negative_globs and _matches_any(paths, entry.negative_globs):
         return None
-    score = 0.0
-    score += 2.0 * _matches_any(paths, entry.file_globs)
-    score += 1.0 * _has_extension(paths, entry.file_extensions)
+    file_glob_score = 2.0 * _matches_any(paths, entry.file_globs)
+    ext_score = 1.0 * _has_extension(paths, entry.file_extensions)
+    if entry.file_globs and file_glob_score == 0:
+        # Specificity gate fired — entry claimed framework
+        # signals that aren't here. Fall through to the
+        # next-best entry (likely ``generic``).
+        return 0.0
     # function_names ignored in v1 (no tree-sitter dependency here).
-    return score
+    return file_glob_score + ext_score
 
 
 def detect(target_path: Path) -> List[Tuple[CatalogEntry, float]]:

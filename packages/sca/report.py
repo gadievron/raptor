@@ -51,6 +51,8 @@ from .findings import severity_rank
 from .models import (
     Advisory,
     HygieneFinding,
+    REACHABILITY_LABELS,
+    REACHABILITY_ORDER,
     SupplyChainFinding,
     VulnFinding,
 )
@@ -85,6 +87,12 @@ _SEV_LABEL: dict[str, str] = {
     # placeholder.
     "none": "None (CVSS 0.0)",
 }
+
+_REACHABILITY_GROUPS = (
+    ("Reachable / likely used", {"likely_called", "imported"}),
+    ("Present, needs review", {"not_evaluated", "called_in_dead_code"}),
+    ("Probably not reachable", {"not_reachable", "not_function_reachable"}),
+)
 
 
 def render_markdown_report(
@@ -312,6 +320,10 @@ def _render_summary(
         rows.append(cache_line)
     rows.append("")
 
+    reachability_table = _render_reachability_breakdown(vuln_findings)
+    if reachability_table:
+        rows.append(reachability_table)
+
     # Build-stage breakdown: only render when more than one distinct
     # scope appears across vuln findings (otherwise it would be a
     # single-row table with no value). Multi-stage Dockerfiles
@@ -322,6 +334,36 @@ def _render_summary(
     if stage_table:
         rows.append(stage_table)
 
+    return "\n".join(rows)
+
+
+def _render_reachability_breakdown(
+    vuln_findings: Sequence[VulnFinding],
+) -> str:
+    """Render a compact verdict-count table for vulnerable findings."""
+    counts: Counter[str] = Counter()
+    for f in vuln_findings:
+        if f.suppressed:
+            continue
+        verdict = getattr(f.reachability, "verdict", None) or "not_evaluated"
+        counts[verdict] += 1
+    if not counts:
+        return ""
+
+    rows = [
+        "### Reachability breakdown\n",
+        "| Verdict | Count |",
+        "|---|---:|",
+    ]
+    for verdict in REACHABILITY_ORDER:
+        if counts.get(verdict):
+            rows.append(
+                f"| {REACHABILITY_LABELS.get(verdict, verdict)} "
+                f"| {counts[verdict]} |"
+            )
+    for verdict in sorted(set(counts) - set(REACHABILITY_ORDER)):
+        rows.append(f"| {verdict} | {counts[verdict]} |")
+    rows.append("")
     return "\n".join(rows)
 
 
@@ -393,20 +435,50 @@ def _render_vuln_section(findings: Sequence[VulnFinding]) -> str:
     """
     lines: List[str] = ["## Vulnerable dependencies\n"]
     groups = _group_vulns(findings)
-    # Track which (name, version) deps we've already emitted a
-    # full dep-level header for; subsequent advisories on the same
-    # dep render in compact form.
-    seen_dep_keys: set = set()
-    for group in groups:
-        primary = group[0]
-        dep_key = (primary.dependency.name,
-                    primary.dependency.version or "")
-        is_first_for_dep = dep_key not in seen_dep_keys
-        seen_dep_keys.add(dep_key)
-        lines.append(_render_one_vuln_group(
-            group, omit_dep_shared=not is_first_for_dep,
-        ))
+    for group_title, grouped in _bucket_vuln_groups_by_reachability(groups):
+        lines.append(f"### {group_title}\n")
+        # Track which (name, version) deps we've already emitted a
+        # full dep-level header for within this reachability bucket;
+        # subsequent advisories on the same dep render compact.
+        seen_dep_keys: set = set()
+        for group in grouped:
+            primary = group[0]
+            dep_key = (primary.dependency.name,
+                       primary.dependency.version or "")
+            is_first_for_dep = dep_key not in seen_dep_keys
+            seen_dep_keys.add(dep_key)
+            lines.append(_render_one_vuln_group(
+                group, omit_dep_shared=not is_first_for_dep,
+                heading_level=4,
+            ))
     return "\n".join(lines)
+
+
+def _bucket_vuln_groups_by_reachability(
+    groups: Sequence[Sequence[VulnFinding]],
+) -> List[tuple[str, List[Sequence[VulnFinding]]]]:
+    """Partition vuln groups into operator-facing reachability buckets.
+
+    Input ordering is already severity/KEV/EPSS sorted by the caller;
+    preserve that order inside each bucket.
+    """
+    buckets: List[tuple[str, List[Sequence[VulnFinding]]]] = [
+        (title, []) for title, _ in _REACHABILITY_GROUPS
+    ]
+    fallback: List[Sequence[VulnFinding]] = []
+    for group in groups:
+        verdict = getattr(group[0].reachability, "verdict", None)
+        placed = False
+        for idx, (_title, verdicts) in enumerate(_REACHABILITY_GROUPS):
+            if verdict in verdicts:
+                buckets[idx][1].append(group)
+                placed = True
+                break
+        if not placed:
+            fallback.append(group)
+    if fallback:
+        buckets.append(("Other reachability verdicts", fallback))
+    return [(title, grouped) for title, grouped in buckets if grouped]
 
 
 def _group_vulns(
@@ -433,6 +505,7 @@ def _group_vulns(
 def _render_one_vuln_group(
     group: Sequence[VulnFinding], *,
     omit_dep_shared: bool = False,
+    heading_level: int = 3,
 ) -> str:
     """Render a vuln finding group: one section per (dep, advisory),
     with each manifest source listed in a Sources sub-list.
@@ -456,6 +529,7 @@ def _render_one_vuln_group(
         primary,
         omit_source=len(paths) > 1 or omit_dep_shared,
         omit_dep_shared=omit_dep_shared,
+        heading_level=heading_level,
     )
     if omit_dep_shared or len(paths) <= 1:
         return body
@@ -472,13 +546,15 @@ def _render_one_vuln(
     f: VulnFinding, *,
     omit_source: bool = False,
     omit_dep_shared: bool = False,
+    heading_level: int = 3,
 ) -> str:
     dep = f.dependency
     primary: Optional[Advisory] = f.advisories[0] if f.advisories else None
     label = _SEV_LABEL.get(f.severity, f.severity.title())
     # Dep name comes from the operator's manifest — sanitise defensively
     # against ANSI / BIDI / control-character smuggling in package names.
-    head = f"### {label} — {escape_nonprintable(dep.name)} " \
+    heading = "#" * max(3, heading_level)
+    head = f"{heading} {label} — {escape_nonprintable(dep.name)} " \
            f"{escape_nonprintable(dep.version or '*')}"
     if f.fixed_version:
         head += f" → fix: {escape_nonprintable(f.fixed_version)}"

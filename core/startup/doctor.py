@@ -14,13 +14,18 @@ Differences from the banner:
   * Non-zero exit on real failure (``--strict`` also fails on
     warnings) so CI / shell scripts can gate on a clean state.
 
+Install advice (PM-aware): each missing-tool warning is enriched
+with an install-hint continuation line via
+``packages.describe.package_manager.format_install_advice``. The
+historic "no hints" stance was driven by the wrong-by-construction
+``apt install`` everywhere — install_advice fixes that: per-tool
+policy dispatches to the right shape for each install kind
+(distro PM with PM-correct package name, pipx for CLI tools,
+static URL for codeql, "Linux-only" for rr off Linux). The hints
+are correct or honestly absent — they're never patronising.
+
 Deliberately NOT in scope:
 
-  * Install advice for missing binaries. RAPTOR's audience is
-    technical operators — saying ``apt install rr`` is patronising
-    and often wrong (rr is Linux-only, the operator may build from
-    source for newer kernels, etc.). Doctor reports what's missing
-    and which features degrade; the operator picks how to install.
   * Performance benchmarks, network reachability beyond what
     ``check_llm`` already does, test runs.
 
@@ -51,6 +56,51 @@ _USAGE = (
     "  --strict     non-zero exit on warnings too (CI gate)\n"
     "  --verbose    include passing checks in the output\n"
 )
+
+
+def _build_install_hints(missing_tool_names: List[str]) -> dict:
+    """For each missing TOOL_DEPS name, look up its binary and
+    format install advice via packages.describe.package_manager.
+
+    Returns ``{binary_name: hint_line}``. Lookup keys are the
+    ``binary`` field from RaptorConfig.TOOL_DEPS, not the
+    user-facing tool name — warnings include the binary name
+    (e.g. ``spatch not found`` for coccinelle).
+    """
+    try:
+        from core.config import RaptorConfig
+        from packages.describe.package_manager import format_install_advice
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict = {}
+    for name in missing_tool_names:
+        dep = RaptorConfig.TOOL_DEPS.get(name)
+        if not dep:
+            continue
+        binary = dep.get("binary")
+        if not binary:
+            continue
+        try:
+            out[binary] = format_install_advice(binary)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _hint_for_warning(warning: str, install_hints: dict) -> Optional[str]:
+    """Match a warning string to one of the install hints. The
+    warnings produced by check_tools look like ``"… <binary>
+    not found"`` (single-tool case) or ``"… (afl-fuzz or
+    semgrep)"`` (group case). Match against the binary names
+    in ``install_hints``; first match wins.
+    """
+    for binary, hint in install_hints.items():
+        # Bounded by spaces / parentheses so a binary like "go"
+        # doesn't accidentally match inside "/agentic".
+        for needle in (f" {binary} ", f"({binary} ", f" {binary})", f" {binary}.", f"{binary} not found"):
+            if needle in warning:
+                return hint
+    return None
 
 
 def _gather() -> Tuple[
@@ -130,8 +180,30 @@ def _render(
         # need to re-format from tool_results here. tool_warnings
         # also carries group-level entries (e.g. "no scanner").
         pass
+    # Build a lookup of "binary name → install advice" for every
+    # tool that's missing so we can enrich the upstream warnings.
+    # Pre-fix /doctor printed "rr not found" with no hint — the
+    # historic concern was hints being patronising/wrong; with PM-
+    # aware advice they're correct-by-construction (or honest
+    # about Linux-only when off Linux).
+    install_hints = _build_install_hints(missing)
     for w in tool_warnings:
+        # Enrich the warning with an install hint when the
+        # missing tool's binary name appears in the warning. The
+        # warning strings look like "/crash-analysis limited — rr
+        # not found"; match by " <name> not found" so a future
+        # warning shape can extend without re-coding the
+        # detection.
         warnings.append(w)
+        hint = _hint_for_warning(w, install_hints)
+        if hint:
+            # Tuple-marker: the renderer below routes (hint, str)
+            # tuples to a continuation prefix instead of the
+            # warning bullet. Parallel structure rather than an
+            # in-band sentinel — eliminates the collision surface
+            # if a future warning string starts with an attacker-
+            # influenced LLM error message.
+            warnings.append(("hint", hint))
 
     # LLM — banner's ``check_llm`` is informational; entries describe
     # which provider is configured. Warnings stand alone.
@@ -189,7 +261,16 @@ def _render(
         out.append("")
         out.append("WARNINGS:")
         for w in warnings:
-            out.append(f"  ! {escape_nonprintable(w)}")
+            # Tuple-marked continuation lines (currently just
+            # install hints) get a continuation prefix instead of
+            # the warning bullet, so the operator reads them as a
+            # follow-up to the prior warning.
+            if isinstance(w, tuple) and len(w) == 2 and w[0] == "hint":
+                out.append(
+                    f"      hint: {escape_nonprintable(w[1])}"
+                )
+            else:
+                out.append(f"  ! {escape_nonprintable(w)}")
 
     if verbose and passes:
         out.append("")
@@ -203,12 +284,18 @@ def _render(
                    "(--verbose for detail.)")
 
     out.append("")
+    # Continuation entries (install-hint tuples) don't count as
+    # warnings — only the real warning bullets do.
+    real_warnings = sum(
+        1 for w in warnings
+        if not (isinstance(w, tuple) and w and w[0] == "hint")
+    )
     out.append(
         f"Summary: {len(failures)} failure(s), "
-        f"{len(warnings)} warning(s), {len(passes)} passed."
+        f"{real_warnings} warning(s), {len(passes)} passed."
     )
 
-    return "\n".join(out), len(failures), len(warnings)
+    return "\n".join(out), len(failures), real_warnings
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -892,3 +892,58 @@ class TestE2EResponseEncodingPreserved:
         finally:
             upstream.shutdown()
             d.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Integration: dispatcher init must wire ``quiet_noisy_loggers()`` so the
+# httpx / google.genai INFO chatter doesn't flood operator output.
+# Closes the gap between the helper's unit tests (in
+# ``core/llm/tests/test_log_quiet.py``) and the real LLM call path.
+# ---------------------------------------------------------------------------
+
+
+class TestQuietNoisyLoggersWired:
+
+    def test_dispatcher_init_silences_noisy_third_party_loggers(
+        self, fake_creds, tmp_path,
+    ):
+        """Regression guard: if a future refactor drops the
+        ``quiet_noisy_loggers()`` call from ``LLMDispatcher._init_server``,
+        every other test still passes — only operator runs show the
+        flood. This test pins the wire."""
+        import logging as _logging
+        from core.llm.log_quiet import _NOISY_LOGGERS
+
+        # Reset to a known noisy state BEFORE constructing the
+        # dispatcher — otherwise a stale process-wide setLevel
+        # (from a previous test that ran the dispatcher) could
+        # mask a missing wire here.
+        saved: dict = {}
+        for name in _NOISY_LOGGERS:
+            lg = _logging.getLogger(name)
+            saved[name] = lg.level
+            lg.setLevel(_logging.INFO)
+
+        audit = tmp_path / "audit.jsonl"
+        d = LLMDispatcher(
+            run_id="quiet-wire-test", audit_path=audit,
+            token_ttl_s=3600, token_budget=100, creds=fake_creds,
+        )
+        try:
+            # Every targeted logger landed at WARNING or stricter.
+            # ``>=`` accommodates an operator override that
+            # raised the level further (ERROR / CRITICAL).
+            for name in _NOISY_LOGGERS:
+                level = _logging.getLogger(name).level
+                assert level >= _logging.WARNING, (
+                    f"Logger {name!r}: expected WARNING+ after "
+                    f"dispatcher init (means quiet_noisy_loggers "
+                    f"is wired); got level={level}. Check that "
+                    f"LLMDispatcher._init_server still calls "
+                    f"core.llm.log_quiet.quiet_noisy_loggers."
+                )
+        finally:
+            d.shutdown()
+            # Restore prior state for isolation from other tests.
+            for name, lvl in saved.items():
+                _logging.getLogger(name).setLevel(lvl)

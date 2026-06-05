@@ -163,19 +163,13 @@ def _rewrite_target_arg(args: list, old: str, new: str) -> list:
     return out
 
 
-_CACHE_NAME_ALLOWED = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-
-
-def _safe_cache_name(archive_name: str, sha: str) -> str:
-    """Content-cache dir name: ``<sanitised archive name>-<sha>`` — readable
-    *and* collision-free. The archive name is attacker-influenced, so it's
-    reduced to a safe charset, stripped of leading separators, and length-capped
-    before the sha (which alone guarantees uniqueness) is appended.
-    """
-    base = "".join(c if c in _CACHE_NAME_ALLOWED else "_" for c in archive_name)
-    base = base.strip("._-")[:64] or "archive"
-    return f"{base}-{sha}"
+# Cache-name helper lives in core.archive (shared with
+# packages/describe/cli.py — extracts opportunistically into
+# the same cache so /describe + /scan don't re-extract the
+# same archive). Re-exported here under the old private name
+# for backward compatibility with anything in this module that
+# still references _safe_cache_name.
+from core.archive import safe_cache_name as _safe_cache_name  # noqa: E402
 
 
 def _unpack_archive_target(target: str, args: list, out_dir: Path):
@@ -383,9 +377,22 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         try:
             from core.run.estimator import estimate_run, format_estimate
             _est = estimate_run(Path(target))
-            _est_line = format_estimate(_est)
-            if _est_line:
-                print(_est_line, flush=True)
+            # Richer start line: primary language + LOC + build
+            # system + target type + cost estimate, all in one
+            # line. Falls back to the bare estimate if /describe
+            # substrate is unavailable so the budget gate still
+            # surfaces.
+            try:
+                from packages.describe.start_line import format_start_line
+                _start_line = format_start_line(Path(target))
+            except Exception:  # noqa: BLE001
+                _start_line = None
+            if _start_line:
+                print(_start_line, flush=True)
+            else:
+                _est_line = format_estimate(_est)
+                if _est_line:
+                    print(_est_line, flush=True)
             if (
                 max_cost_usd is not None
                 and _est is not None
@@ -419,9 +426,19 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         from core.sage.hooks import recall_context_for_scan
         sage_context = recall_context_for_scan(target or "")
         if sage_context:
-            print(f"📚 SAGE: Recalled {len(sage_context)} historical memories")
+            # Same flush rationale as the lifecycle banner —
+            # when stdout is piped (operator's ``| tee``), block-
+            # buffering makes these lines appear AFTER the
+            # subprocess output unless explicitly flushed.
+            print(
+                f"📚 SAGE: Recalled {len(sage_context)} historical memories",
+                flush=True,
+            )
             for mem in sage_context[:3]:
-                print(f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...")
+                print(
+                    f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...",
+                    flush=True,
+                )
     except Exception:
         pass
 
@@ -429,7 +446,15 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     if "--out" not in args:
         args = args + ["--out", str(out_dir)]
 
-    print(f"\n[*] {label}\n")
+    # ``flush=True``: when stdout is piped (e.g. operator's ``| tee
+    # run.log``) Python switches to block-buffering, so the banner
+    # lands AFTER the subprocess's already-flushed output. The
+    # subprocess uses its own writes (often flushed eagerly), so
+    # without the explicit flush here the parent's "starting"
+    # banner can appear near the END of the log after the child's
+    # final summary — a confusing ordering artefact operators
+    # actually noticed.
+    print(f"\n[*] {label}\n", flush=True)
     rc = _run_script(script_path, args)
 
     # Write coverage records from tool outputs (before lifecycle complete)
@@ -912,6 +937,49 @@ def mode_llm_analysis(args: list) -> int:
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
 
+
+def mode_describe(args: list) -> int:
+    """``raptor describe --target <path>`` — show target analysis,
+    tool readiness, and recommended pipeline BEFORE running any
+    analysis. No LLM cost, no side effects beyond stdout.
+
+    Composes ``packages/describe`` substrates: target-shape
+    inference + tool readiness + catalog defaults + cost
+    estimate. JSON form via ``--json`` for CI / dashboards;
+    text form (default) for human reading. Archive targets
+    (.tar.gz / .zip / …) extracted on the fly via
+    ``core.archive`` and described.
+    """
+    import argparse as _ap
+    parser = _ap.ArgumentParser(
+        prog="raptor describe",
+        description=(
+            "Pre-flight inspection: target type, tool readiness, "
+            "recommended pipeline, and cost estimate. No LLM cost."
+        ),
+    )
+    parser.add_argument(
+        "--target", default=None, metavar="<path>",
+        help=(
+            "Path to the target codebase (directory OR archive: "
+            "tar.gz / zip / …). Optional — falls back to the "
+            "active project's target, then $RAPTOR_CALLER_DIR, "
+            "per CLAUDE.md DEFAULT TARGET DIRECTORY."
+        ),
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON instead of the text block",
+    )
+    try:
+        parsed = parser.parse_args(args)
+    except SystemExit as e:
+        return int(e.code or 0)
+
+    from packages.describe.cli import describe_main
+    return describe_main(parsed.target, parsed.json)
+
+
 def mode_doctor(args: list) -> int:
     """Run the on-demand status report.
 
@@ -1203,6 +1271,7 @@ def main():
         'analyze': mode_llm_analysis,
         'doctor': mode_doctor,
         'zkpox': mode_zkpox,
+        'describe': mode_describe,
     }
     
     if mode not in mode_handlers:

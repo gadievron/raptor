@@ -116,6 +116,70 @@ Registries supported: PyPI, npm, crates.io, RubyGems, Go (proxy.golang.org), Mav
 --offline                 skip network; cache-only
 ```
 
+Reports include a reachability breakdown for vulnerable dependencies and group
+the detailed vulnerability section into `Reachable / likely used`, `Present,
+needs review`, and `Probably not reachable`.
+
+## Reachability analysis
+
+SCA reachability is mechanical. RAPTOR does not ask an LLM whether a dependency
+is reachable; it derives the verdict from source evidence and advisory metadata.
+LLM review can still run later in the pipeline, unless `--no-llm` is set, but it
+is not the source of truth for the reachability verdict.
+
+Best results come from scanning the full source tree. SBOM-only scans can still
+identify vulnerable components, but they usually do not contain enough source
+context to prove whether a vulnerable package or function is used.
+
+```bash
+# Source-first scan: best for reachability
+python3 raptor.py sca --repo /path/to/full/source --no-llm --no-progress
+
+# SBOM plus source: imports the component list, then uses source for reachability
+python3 raptor.py sca \
+  --repo /path/to/full/source \
+  --sbom /path/to/sbom.cdx.json \
+  --no-llm \
+  --no-progress
+```
+
+The reachability flow has two tiers:
+
+| Tier | What RAPTOR checks |
+|---|---|
+| Module/package reachability | Whether project source imports or requires the vulnerable dependency. Python uses AST import parsing; npm currently uses lightweight import/require scanning; other ecosystems use their own import scanners. |
+| Function-level reachability | When advisory data names affected functions or symbols, RAPTOR builds a source inventory/call graph and checks whether those affected functions appear to be called from project code. |
+
+Reachability verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `likely_called` | RAPTOR found evidence that an advisory-listed affected function or symbol is called from project source. |
+| `imported` | The vulnerable package is imported or required from non-test source, but RAPTOR has not proven a specific affected function call. |
+| `not_function_reachable` | The package is present or imported, but advisory-listed affected functions were not found in the project call evidence. |
+| `not_reachable` | RAPTOR found no production import/use evidence for the dependency. |
+| `called_in_dead_code` | A call was found, but the call site appears to live in dead or unreachable code. |
+| `not_evaluated` | RAPTOR could not make a reliable reachability claim for this dependency/ecosystem/run shape. |
+
+Treat `not_reachable` and `not_function_reachable` as triage signals, not as
+mathematical proof that the vulnerability is impossible to trigger. Dynamic
+dispatch, plugin loading, reflection, generated code, incomplete source trees,
+and SBOM-only input can all reduce confidence. In security review, these verdicts
+are useful for prioritisation; they should not be used as the only reason to
+ignore a high-impact issue.
+
+### render
+
+```
+--only-reachable          render only likely_called/imported vuln findings
+--hide-not-reachable      hide not_reachable/not_function_reachable vuln findings
+--reachability <list>     comma-separated vuln reachability allowlist
+```
+
+Reachability filters apply only to `sca:vulnerable_dependency` rows; hygiene,
+supply-chain, and license rows are preserved when re-rendering an existing
+`findings.json`.
+
 ### fix
 
 ```
@@ -185,7 +249,6 @@ The diff command's exit code is 0 = no regression at threshold,
 
 ## Limitations + follow-ups
 
-- **Sandboxing** — registry HTTP calls go through `packages/sca/http.py` directly today. The sandbox seam will be retrofitted once `core/sandbox/` lands.
-- **Recent-publish + maintainer-change supply-chain checks** — need extra registry metadata (publish dates, maintainer lists). Deferred until sandbox lands.
-- **Variable-expanded inline installs** (`PKG="x=1"; apt install $PKG`) — would need a mini shell interpreter; deferred to a future LLM tier.
-- **Maven `mvn install:install-file`** — not yet rewritable; rare in inline contexts.
+- **Library-mode floor-raise unsupported on a handful of ecosystems** — `harden` refuses to corridor-pin a library's deps and emits `library_floor_raise_unsupported` for cases that can't be expressed as a range: inline-install (Dockerfile `RUN pip install foo`), Debian, Cargo, Go modules, RubyGems. The application path still pins these.
+- **OSV `affected_functions` coverage is patchy** — function-level reachability (the `not_function_reachable` / `likely_called` verdicts) only fires when an advisory ships symbol-level metadata. Python + Go are the best-covered ecosystems; npm / Maven / others mostly stay at the module-level `imported` verdict.
+- **CHA-precision for dynamic dispatch in Java / C#** — virtual / interface dispatch currently lands in `not_function_reachable` when the static graph can't narrow the receiver type. The reachability substrate has a scoping doc; the precision improvement is deferred until an operator signal justifies it.

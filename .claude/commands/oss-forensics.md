@@ -1,5 +1,6 @@
 ---
 description: Evidence-backed forensic investigation for GitHub repositories
+dispatch: skill
 ---
 
 # /oss-forensics - OSS GitHub Forensic Investigation

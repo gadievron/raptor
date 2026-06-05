@@ -90,6 +90,18 @@ def is_available() -> bool:
     return shutil.which(_SPATCH_BIN) is not None
 
 
+# Minimum spatch version RAPTOR's shipped rule-set is authored against.
+# Several attribute rules (engine/coccinelle/source_intel/attrs/*) match a
+# *prefix* GCC attribute on a function declaration —
+# ``__attribute__((deprecated)) T f(...);`` — which spatch only learned to
+# parse at 1.3. On 1.1.1 (the apt build on Ubuntu 22.04/24.04 and Debian
+# bookworm) those rules raise a SmPL parse error and emit nothing; the
+# runner degrades per-rule (the run continues) but the rule is dead. The
+# rule-integrity parse test gates on this so it skips — rather than
+# false-fails — on a host whose spatch predates the floor.
+MIN_SPATCH_VERSION = (1, 3)
+
+
 def version() -> Optional[str]:
     """Return the spatch version string, or None if unavailable."""
     if not is_available():
@@ -105,6 +117,26 @@ def version() -> Optional[str]:
         return proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else None
     except (subprocess.TimeoutExpired, OSError):
         return None
+
+
+def version_tuple() -> Optional[tuple]:
+    """Parse the leading ``major.minor`` of the spatch version into an
+    int tuple (e.g. ``"1.3 compiled with ..."`` → ``(1, 3)``), or None if
+    spatch is unavailable / the version string can't be parsed."""
+    v = version()
+    if not v:
+        return None
+    m = re.match(r"\s*(\d+)\.(\d+)", v)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def meets_min_version() -> bool:
+    """True iff an installed spatch is at least ``MIN_SPATCH_VERSION``.
+    False when spatch is absent or its version can't be determined."""
+    vt = version_tuple()
+    return vt is not None and vt >= MIN_SPATCH_VERSION
 
 
 def run_rule(

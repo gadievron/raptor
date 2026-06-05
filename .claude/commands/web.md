@@ -1,5 +1,6 @@
 ---
 description: Web application security scanner (alpha)
+dispatch: python3 raptor.py web
 ---
 
 # /web - RAPTOR Web Application Scanner

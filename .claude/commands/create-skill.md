@@ -1,5 +1,6 @@
 ---
 description: Save a custom approach as a reusable skill
+dispatch: skill
 ---
 
 # /create-skill - Save Custom Approach as Reusable Skill

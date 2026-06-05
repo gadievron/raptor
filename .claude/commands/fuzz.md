@@ -1,5 +1,6 @@
 ---
 description: Binary fuzzing with AFL++ integration
+dispatch: python3 raptor.py fuzz
 ---
 
 # /fuzz - RAPTOR Binary Fuzzer

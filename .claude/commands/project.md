@@ -1,5 +1,6 @@
 ---
 description: Manage RAPTOR projects — create, list, status, coverage, findings, diff, merge, report, clean, export
+dispatch: libexec/raptor-project-manager <subcommand> [args]
 ---
 
 # /project — Project Management

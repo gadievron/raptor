@@ -1,5 +1,6 @@
 ---
 description: Software Composition Analysis — find vulnerable dependencies, gate CI, fix and pin
+dispatch: libexec/raptor-sca-run [args]
 ---
 
 # RAPTOR Software Composition Analysis

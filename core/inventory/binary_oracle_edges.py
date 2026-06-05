@@ -83,6 +83,20 @@ def _content_hash(binary_path: Path) -> Optional[str]:
         return None
 
 
+def _fn_addr(f: Dict) -> Optional[int]:
+    """Function entry address from an ``aflj`` record. r2 6.x keys this
+    as ``addr``; r2 5.x (the version Ubuntu/Debian apt ships, used by the
+    nightly CI corpus job) keys it as ``offset``. Accept either so the
+    extractor works across the r2 versions operators actually have
+    installed. Returns ``None`` when neither key holds an int — the
+    caller skips that function rather than crashing on ``f['addr']``."""
+    for key in ("addr", "offset"):
+        v = f.get(key)
+        if isinstance(v, int):
+            return v
+    return None
+
+
 def _edge_cache_dir() -> Path:
     """Edge-index cache root: ``out/binary-oracle-precision/edge-cache/``
     (re-using the existing binary_oracle output convention). Cache
@@ -260,14 +274,19 @@ def extract_direct_call_edges(
     # Build addr → name map for resolving callee addresses.
     addr_to_name: Dict[int, str] = {}
     for f in fns:
-        addr = f.get("addr")
+        addr = _fn_addr(f)
         name = f.get("name")
-        if isinstance(addr, int) and isinstance(name, str):
+        if addr is not None and isinstance(name, str):
             addr_to_name[addr] = _clean_r2_function_name(name)
 
+    # Only functions with a resolvable entry address are eligible — the
+    # axffj script keys every batch on that address. A record missing
+    # both ``addr`` and ``offset`` (malformed / partial r2 output) is
+    # dropped here rather than KeyError-ing the whole extraction.
     eligible_fns = [f for f in fns
                     if not f.get("name", "").startswith("sym.imp.")
-                    and f.get("size", 0) > 0]
+                    and f.get("size", 0) > 0
+                    and _fn_addr(f) is not None]
 
     # Single r2 invocation for ALL axffj calls (adversarial review
     # B P2-2 perf cliff fix). The prior implementation re-ran the
@@ -285,8 +304,9 @@ def extract_direct_call_edges(
     import tempfile
     script_lines = ["aaa"]
     for f in eligible_fns:
-        script_lines.append(f"echo BATCH {f['addr']}")
-        script_lines.append(f"axffj @ {f['addr']}")
+        addr = _fn_addr(f)
+        script_lines.append(f"echo BATCH {addr}")
+        script_lines.append(f"axffj @ {addr}")
     with tempfile.NamedTemporaryFile(
             mode="w", suffix=".r2", delete=False,
             dir=str(binary_path.parent),

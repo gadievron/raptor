@@ -169,6 +169,62 @@ class TestDetect:
         assert ranked
         assert ranked[0][0].name == "python.web-app"
 
+    def test_specificity_gate_extensions_alone_dont_score(self, tmp_path):
+        # Regression: a Python codebase with .py + .html files but
+        # NO framework markers (no manage.py / wsgi.py / urls.py /
+        # settings.py / templates/) must NOT match python.web-app.
+        # Pre-fix the catalog scorer counted file_extension hits
+        # even when no specific file_glob matched; RAPTOR-itself
+        # got false-classified as python.web-app for this reason.
+        _build_tree(tmp_path, {
+            "lib/util.py": "",
+            "lib/core.py": "",
+            "lib/tests.py": "",
+            "docs/index.html": "",
+            "README.md": "# Just a Python library",
+        })
+        winner = load(tmp_path)
+        assert winner is not None
+        # Must fall through to generic — no framework signals
+        # validate the python.web-app specificity claim.
+        assert winner.name == "generic", (
+            f"expected generic for Python-library-shaped tree; "
+            f"got {winner.name!r} — specificity gate regression"
+        )
+
+    def test_specificity_gate_still_matches_real_django(self, tmp_path):
+        # Counter-check: a tree WITH framework markers still
+        # matches python.web-app via the gate.
+        _build_tree(tmp_path, {
+            "manage.py": "",
+            "settings.py": "",
+            "urls.py": "",
+            "app/views.py": "",
+        })
+        winner = load(tmp_path)
+        assert winner.name == "python.web-app"
+
+    def test_specificity_gate_boundary_single_framework_file_wins(self, tmp_path):
+        # Boundary case: a tree with EXACTLY ONE framework file
+        # match (the minimum the gate requires) should still
+        # match the catalog entry. Pins the gate semantic at
+        # the lowest passing edge — a future refactor that
+        # raised the threshold (e.g. "require ≥2 file_globs")
+        # would silently drop borderline real web apps. This
+        # test fails loudly when that happens.
+        _build_tree(tmp_path, {
+            # Only manage.py — a minimal Django-shaped tree.
+            "manage.py": "",
+            "app/handler.py": "",
+        })
+        winner = load(tmp_path)
+        assert winner.name == "python.web-app", (
+            f"single-framework-file match should still win "
+            f"the specificity gate; got {winner.name}. The "
+            f"gate is 'at least one file_glob match', not "
+            f"'multiple file_glob matches'."
+        )
+
     def test_negative_signal_disqualifies(self, tmp_path):
         # Tree LOOKS like an autotools daemon but has a Kconfig at
         # top — that's a Linux-kernel-module shape, c.userspace-daemon

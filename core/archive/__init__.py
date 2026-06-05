@@ -8,8 +8,10 @@ packages.
 Public API:
     from core.archive import detect_format, is_archive, extract_to_dir
     from core.archive import ArchiveError, UnsupportedArchive, DecompressionLimitExceeded
+    from core.archive import safe_cache_name
 """
 
+from .cache import safe_cache_name
 from .detect import detect_format, is_archive
 from .errors import ArchiveError, DecompressionLimitExceeded, UnsupportedArchive
 from .extract import (
@@ -27,4 +29,5 @@ __all__ = [
     "detect_format",
     "extract_to_dir",
     "is_archive",
+    "safe_cache_name",
 ]

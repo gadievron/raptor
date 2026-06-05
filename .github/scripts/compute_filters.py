@@ -102,6 +102,7 @@ FILTERS: dict[str, list[str]] = {
         "core/sarif/**",
         "core/security/**",
         "core/smt_solver/**",
+        "core/tuning/**",
         "core/zip/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
