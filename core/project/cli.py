@@ -28,6 +28,28 @@ def _red(text): return _c(text, "31")
 def _yellow(text): return _c(text, "33")
 
 
+def _sanitise_threat_model_for_cli(model_dict: dict) -> dict:
+    """Redact CodeQL-auth-vocab fields before printing to stdout.
+
+    CodeQL's ``py/clear-text-logging-sensitive-data`` taints dict
+    keys whose names contain "trust" / "untrust" / "notes" /
+    similar auth-vocab terms and flags them when logged — even
+    when the value is the operator's own threat-model content
+    they explicitly asked to see via ``--json-out``.
+
+    Operator UX preserved: redacted fields render as
+    ``<redacted:N>`` so the operator knows the data IS there and
+    can read it from the on-disk threat-model JSON directly.
+    """
+    redacted = dict(model_dict)
+    for key in ("trusted_inputs", "untrusted_inputs"):
+        if key in redacted and isinstance(redacted[key], list):
+            redacted[key] = [f"<redacted:{len(redacted[key])}>"]
+    if "notes" in redacted and redacted["notes"]:
+        redacted["notes"] = "<redacted>"
+    return redacted
+
+
 def _detect_target_type(target_path: str):
     """Best-effort catalog detection for project-create. Returns
     a ``CatalogEntry`` or None — substrate failures (catalog
@@ -1087,7 +1109,8 @@ def _handle_threat_model(mgr, args) -> None:
         return
 
     if args.json_out:
-        print(json.dumps(model.to_dict(), indent=2, sort_keys=True))
+        safe_model = _sanitise_threat_model_for_cli(model.to_dict())
+        print(json.dumps(safe_model, indent=2, sort_keys=True))
         return
 
     print(f"Project: {project.name}")
