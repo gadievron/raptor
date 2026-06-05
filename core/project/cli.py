@@ -28,26 +28,11 @@ def _red(text): return _c(text, "31")
 def _yellow(text): return _c(text, "33")
 
 
-def _sanitise_threat_model_for_cli(model_dict: dict) -> dict:
-    """Redact CodeQL-auth-vocab fields before printing to stdout.
-
-    CodeQL's ``py/clear-text-logging-sensitive-data`` taints dict
-    keys whose names contain "trust" / "untrust" / "notes" /
-    similar auth-vocab terms and flags them when logged — even
-    when the value is the operator's own threat-model content
-    they explicitly asked to see via ``--json-out``.
-
-    Operator UX preserved: redacted fields render as
-    ``<redacted:N>`` so the operator knows the data IS there and
-    can read it from the on-disk threat-model JSON directly.
-    """
-    redacted = dict(model_dict)
-    for key in ("trusted_inputs", "untrusted_inputs"):
-        if key in redacted and isinstance(redacted[key], list):
-            redacted[key] = [f"<redacted:{len(redacted[key])}>"]
-    if "notes" in redacted and redacted["notes"]:
-        redacted["notes"] = "<redacted>"
-    return redacted
+# ``_sanitise_threat_model_for_cli`` removed — operators using
+# ``--json-out`` want the full threat-model JSON for downstream
+# automation (jq pipelines, dashboards), not a redacted subset.
+# The CodeQL ``py/clear-text-logging-sensitive-data`` alert on the
+# ``--json-out`` print is suppressed at the call site below instead.
 
 
 def _detect_target_type(target_path: str):
@@ -1109,8 +1094,16 @@ def _handle_threat_model(mgr, args) -> None:
         return
 
     if args.json_out:
-        safe_model = _sanitise_threat_model_for_cli(model.to_dict())
-        print(json.dumps(safe_model, indent=2, sort_keys=True))
+        # CodeQL ``py/clear-text-logging-sensitive-data`` flags this
+        # print because ``model.to_dict()`` contains "trusted_inputs"
+        # / "untrusted_inputs" / "notes" — auth-vocab keys the
+        # heuristic taints. The values are the operator's own
+        # threat-model content they explicitly asked to see via
+        # ``--json-out``, so redacting defeats the flag's purpose.
+        # Suppress at the print site.
+        print(  # lgtm[py/clear-text-logging-sensitive-data]
+            json.dumps(model.to_dict(), indent=2, sort_keys=True)
+        )
         return
 
     print(f"Project: {project.name}")

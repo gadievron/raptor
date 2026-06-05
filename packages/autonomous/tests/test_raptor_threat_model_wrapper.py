@@ -46,8 +46,14 @@ class RaptorThreatModelWrapperTests(unittest.TestCase):
             [str(WRAPPER), "show"],
             capture_output=True, text=True, timeout=15, env=_env(),
         )
-        combined = proc.stdout + proc.stderr
-        self.assertIn("threat model", combined.lower())
+        combined = (proc.stdout + proc.stderr).lower()
+        # The wrapper either prints "threat model" prose or routes
+        # to ``raptor project threat-model …`` (hyphenated CLI form).
+        # Accept either — both prove the show routing worked.
+        self.assertTrue(
+            "threat model" in combined or "threat-model" in combined,
+            f"neither 'threat model' nor 'threat-model' in: {combined!r}",
+        )
 
     def test_build_help_routes_to_agentic_help(self):
         proc = subprocess.run(

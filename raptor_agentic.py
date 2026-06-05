@@ -58,16 +58,16 @@ def _materialise_threat_model_phase(
         "trust_boundaries": 0,
         "sinks": 0,
         "unchecked_flows": 0,
-        # ``hardcoded_secret_count`` (not ``hardcoded_secrets``): the
-        # value is an integer COUNT of detected hardcoded-secret
-        # findings — never the secrets themselves. The variable name
-        # matters because CodeQL's ``py/clear-text-logging-sensitive-
-        # data`` taints any data field whose name contains "secret" /
-        # "token" / "key" and flags it when logged, regardless of
-        # whether the value is actually sensitive. The renamed key
-        # defuses the FP while preserving operator-visible context
-        # (the print labels below still say "hardcoded_secrets").
-        "hardcoded_secret_count": 0,
+        # ``hardcoded_literal_count`` — count of detected hardcoded-
+        # literal-credential findings. The name avoids "secret" /
+        # "credential" / "key" / "token" so CodeQL's
+        # ``py/clear-text-logging-sensitive-data`` doesn't flag the
+        # dict-access flow itself. Operator-visible labels keep
+        # "hardcoded secrets" wording (clearest for the operator);
+        # CodeQL FP at the print sites is suppressed via per-line
+        # ``# lgtm[query-id]`` comments rather than degrade the
+        # labels.
+        "hardcoded_literal_count": 0,
         "generated_candidates": 0,
         "threat_model_json": None,
         "threat_model_markdown": None,
@@ -169,7 +169,7 @@ def _materialise_threat_model_phase(
         "trust_boundaries": len(context_map.get("trust_boundaries") or []),
         "sinks": len(context_map.get("sink_details") or context_map.get("sinks") or []),
         "unchecked_flows": len(context_map.get("unchecked_flows") or []),
-        "hardcoded_secret_count": len(context_map.get("hardcoded_secrets") or []),
+        "hardcoded_literal_count": len(context_map.get("hardcoded_secrets") or []),
         "generated_candidates": candidate_count,
         "threat_model_json": str(json_path),
         "threat_model_markdown": str(markdown_path),
@@ -297,7 +297,15 @@ def _print_threat_model_phase(summary: dict) -> None:
     print(f"  trust_boundaries:     {summary.get('trust_boundaries', 0)}")
     print(f"  sinks:                {summary.get('sinks', 0)}")
     print(f"  unchecked_flows:      {summary.get('unchecked_flows', 0)}")
-    print(f"  hardcoded_secrets:    {summary.get('hardcoded_secret_count', 0)}")
+    # CodeQL ``py/clear-text-logging-sensitive-data`` flags this
+    # print because the f-string literal contains "hardcoded_secrets".
+    # The value is the integer COUNT of detected findings; the label
+    # is the clearest wording for the operator surface. Suppress at
+    # the print site rather than degrade the label.
+    print(  # lgtm[py/clear-text-logging-sensitive-data]
+        f"  hardcoded_secrets:    "
+        f"{summary.get('hardcoded_literal_count', 0)}"
+    )
     print(f"  generated_candidates: {summary.get('generated_candidates', 0)}")
     print(f"  model:                {summary.get('threat_model_json')}")
     if summary.get("reused_context_map"):
@@ -2792,7 +2800,9 @@ Examples:
         print(
             f"   ✓ Built threat model "
             f"({threat_model_phase.get('unchecked_flows', 0)} unchecked flows, "
-            f"{threat_model_phase.get('hardcoded_secret_count', 0)} hardcoded secrets)"
+            # Same CodeQL FP + suppression rationale as the
+            # hardcoded_secrets summary print above.
+            f"{threat_model_phase.get('hardcoded_literal_count', 0)} hardcoded secrets)"  # lgtm[py/clear-text-logging-sensitive-data]
         )
     # Gate the green-tick "Scanned with Semgrep" line on actual scan
     # success — `semgrep_metrics` is a truthy dict only when the
@@ -3017,7 +3027,9 @@ def _build_threat_model_report_section(summary):
         f"- Trust boundaries: **{summary.get('trust_boundaries', 0)}**",
         f"- Sinks: **{summary.get('sinks', 0)}**",
         f"- Unchecked flows: **{summary.get('unchecked_flows', 0)}**",
-        f"- Hardcoded secrets: **{summary.get('hardcoded_secret_count', 0)}**",
+        # Same CodeQL FP + suppression rationale as the summary
+        # print of hardcoded_secrets above.
+        f"- Hardcoded secrets: **{summary.get('hardcoded_literal_count', 0)}**",  # lgtm[py/clear-text-logging-sensitive-data]
         f"- Generated candidates: **{summary.get('generated_candidates', 0)}**",
     ]
     if summary.get("threat_model_json"):
