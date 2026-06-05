@@ -274,6 +274,66 @@ class TestOutputShape:
         warn_idx = out.index("WARNINGS:")
         assert fail_idx < warn_idx
 
+    def test_install_hint_attached_to_missing_tool_warning(
+        self, capsys, monkeypatch,
+    ):
+        # Missing rr → warning carries the PM-aware install hint
+        # on a continuation line. Shared substrate with /describe.
+        from packages.describe.package_manager import (
+            detect_package_manager,
+        )
+        detect_package_manager.cache_clear()
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda cmd: "/usr/bin/apt" if cmd == "apt" else None,
+        )
+        monkeypatch.setattr(
+            doctor, "_gather",
+            lambda: _gather_stub(
+                tool_results=[("rr", False), ("gdb", True)],
+                tool_warnings=[
+                    "/crash-analysis limited — rr not found",
+                ],
+            ),
+        )
+        main([])
+        out = capsys.readouterr().out
+        # Warning + install hint on its own continuation line.
+        assert "rr not found" in out
+        assert "hint: sudo apt install rr" in out
+        # Summary count uses real-warning count (1), not 1+hint=2.
+        assert "1 warning(s)" in out
+
+    def test_install_hint_for_codeql_uses_static_url(
+        self, capsys, monkeypatch,
+    ):
+        # codeql isn't in any distro repo → install_advice
+        # dispatches to a static GH-Releases URL instead of a
+        # bogus ``apt install codeql``.
+        from packages.describe.package_manager import (
+            detect_package_manager,
+        )
+        detect_package_manager.cache_clear()
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda cmd: "/usr/bin/apt" if cmd == "apt" else None,
+        )
+        monkeypatch.setattr(
+            doctor, "_gather",
+            lambda: _gather_stub(
+                tool_results=[("codeql", False)],
+                tool_warnings=[
+                    "/codeql, /agentic limited — codeql not found",
+                ],
+            ),
+        )
+        main([])
+        out = capsys.readouterr().out
+        # Static-URL kind: NO "apt install codeql" (would be
+        # wrong — package doesn't exist in distro repos).
+        assert "apt install codeql" not in out
+        assert "github.com/github/codeql-cli-binaries" in out
+
     def test_specific_paths_present_in_env_warnings(
         self, capsys, monkeypatch,
     ):

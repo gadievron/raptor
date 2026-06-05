@@ -149,27 +149,51 @@ class BuildDetector:
             },
         },
         "cpp": {
+            # Priority ordering rationale (lower = picked first
+            # via ``min()``): source-of-truth build descriptions
+            # win over generated artefacts. An autotools project
+            # ships ``configure.ac`` AND a generated ``Makefile``
+            # AND a generated ``configure`` — picking "make"
+            # because Makefile is present would tell the operator
+            # to run ``make`` on a clean checkout, which fails
+            # because Makefile carries host-specific paths that
+            # ``./configure`` would have populated. The
+            # source-of-truth markers (CMakeLists.txt /
+            # configure.ac / meson.build) are HAND-AUTHORED;
+            # everything else can be regenerated from them.
+            # ``make`` is the fallback when ONLY a Makefile
+            # exists (no higher-level source) — that's a real
+            # case (hand-written Makefile projects) but rare;
+            # losing the false positive on autotools projects is
+            # a much bigger win.
             "cmake": {
                 "files": ["CMakeLists.txt"],
                 "command": "cmake . && make",
                 "env_vars": {},
                 "priority": 1,
             },
-            "make": {
-                "files": ["Makefile", "makefile"],
-                "command": "make",
-                "env_vars": {},
-                "priority": 2,
-            },
             "autotools": {
-                "files": ["configure", "configure.ac"],
+                "files": ["configure.ac", "configure.in", "Makefile.am"],
                 "command": "./configure && make",
                 "env_vars": {},
-                "priority": 3,
+                "priority": 2,
             },
             "meson": {
                 "files": ["meson.build"],
                 "command": "meson setup builddir && meson compile -C builddir",
+                "env_vars": {},
+                "priority": 3,
+            },
+            "make": {
+                # Last-resort: a hand-written Makefile with no
+                # higher-level source. Generated Makefiles (from
+                # autotools / cmake / meson) get classified by
+                # those entries above instead. Note we DON'T
+                # include ``configure`` here — its presence
+                # implies autotools regardless of which file is
+                # source vs generated.
+                "files": ["Makefile", "makefile"],
+                "command": "make",
                 "env_vars": {},
                 "priority": 4,
             },

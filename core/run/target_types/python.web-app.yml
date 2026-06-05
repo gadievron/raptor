@@ -7,28 +7,47 @@ description: |
   and python.library (no application boundary).
 
 detection:
+  # Tightening rationale: this catalog entry previously included
+  # generic Python manifests (pyproject.toml, setup.py,
+  # requirements.txt, Pipfile, poetry.lock) AND generic entry
+  # files (app.py, main.py) AND containerisation markers
+  # (Dockerfile, docker-compose.yml). Every Python project hits
+  # several of those, so python.web-app won by score against
+  # ``generic`` for ANY Python codebase — including RAPTOR itself,
+  # which is a security framework not a web app.
+  #
+  # Keep only FRAMEWORK-DISTINCTIVE markers — files that exist
+  # almost exclusively in web-app codebases. Pure Python libraries
+  # / CLI tools / security frameworks land in ``generic`` instead.
+  # Under-matching a real web app is better than false-matching a
+  # library: an operator can override via #18 smart-create
+  # ``--require-target-type python.web-app`` if needed.
   file_globs:
-    # Project / dep manifests.
-    - "pyproject.toml"
-    - "setup.py"
-    - "setup.cfg"
-    - "requirements.txt"
-    - "requirements-*.txt"
-    - "Pipfile"
-    - "poetry.lock"
-    # Framework-distinctive entry / config files.
-    - "manage.py"          # Django
-    - "wsgi.py"            # Django / generic WSGI
-    - "asgi.py"            # Django / generic ASGI
-    - "app.py"             # Flask / FastAPI common
-    - "main.py"            # FastAPI common
-    - "settings.py"        # Django
-    - "urls.py"            # Django
+    # Django — very strong signal.
+    - "manage.py"
+    - "wsgi.py"
+    - "asgi.py"
+    - "urls.py"
+    - "settings.py"
+    # Templating — Jinja2 / Django templates / etc.
     - "**/templates/**/*.html"
-    # Container shape often paired with web apps.
-    - "Dockerfile"
-    - "docker-compose.yml"
-    - "docker-compose.yaml"
+    # Flask blueprint shape — also strong (less common than
+    # Django's manage.py but unambiguous when paired with .py).
+    - "**/blueprints/**/*.py"
+    #
+    # KNOWN UNDER-MATCH: A pure FastAPI app with only
+    # ``main.py`` + ``pyproject.toml`` won't match here. The
+    # alternative — listing ``main.py`` — over-matched every
+    # Python project (RAPTOR itself, library examples, doc
+    # generators) so we tightened to framework-distinctive
+    # markers only. Operators with a FastAPI app that lands in
+    # ``generic`` can override via ``raptor project create
+    # --target <path> --require-target-type python.web-app``
+    # (QoL #18 smart-create gate). When more FastAPI-shaped
+    # globs prove distinctive (e.g. specific dependency
+    # patterns from pyproject.toml), add them here. Don't
+    # weaken with ``main.py`` / ``app.py`` / ``pyproject.toml``
+    # without re-validating against the false-match corpus.
   file_extensions:
     - .py
     - .html

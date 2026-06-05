@@ -201,43 +201,16 @@ _SEMGREP_LANG_ALIASES: Dict[str, set] = {
 }
 
 
-# Semgrep internal language id → operator-facing display name.
-# Used purely for rendered text — internal sets / counts continue
-# to use the canonical lowercased ids. Unmapped ids render as-is
-# (lowercased) so a missing entry doesn't break the line.
-_LANG_DISPLAY: Dict[str, str] = {
-    "c": "C",
-    "cpp": "C++",
-    "python": "Python",
-    "go": "Go",
-    "rust": "Rust",
-    "javascript": "JavaScript",
-    "typescript": "TypeScript",
-    "java": "Java",
-    "ruby": "Ruby",
-    "php": "PHP",
-    "kotlin": "Kotlin",
-    "swift": "Swift",
-    "scala": "Scala",
-    "csharp": "C#",
-    "solidity": "Solidity",
-    "bash": "Bash",
-    "yaml": "YAML",
-    "json": "JSON",
-    "html": "HTML",
-    "lua": "Lua",
-}
-
-
-def _display_lang(lang: str) -> str:
-    """Map a semgrep language id to its operator-facing display
-    name; pass through unchanged if no mapping exists."""
-    return _LANG_DISPLAY.get(lang, lang)
-
-
-def _display_langs(langs: List[str]) -> str:
-    """Operator-readable joined list, e.g. ``[c, cpp]`` → ``C, C++``."""
-    return ", ".join(_display_lang(lang) for lang in langs)
+# Operator-facing display names live in
+# ``core.inventory.languages`` so /prepare and any future
+# renderer share the single source of truth. Re-exported with
+# underscore prefix here for back-compat with internal callers
+# (e.g. tests) that imported from this module.
+from core.inventory.languages import (  # noqa: E402, F401
+    LANG_DISPLAY as _LANG_DISPLAY,        # tests reference via _scanner._LANG_DISPLAY
+    display_lang as _display_lang,        # tests reference via _scanner._display_lang
+    display_langs as _display_langs,      # used by call sites below
+)
 
 
 def _expand_language_aliases(langs: List[str]) -> set:
@@ -1825,7 +1798,7 @@ def main():
                 _tt_name = "unknown"
             _names = [n for n, _ in resolved_baseline]
             logger.info(
-                f"Semgrep baseline packs from target-type catalog "
+                f"Semgrep baseline packs for target type "
                 f"'{_tt_name}': {_names}"
             )
         # Per-pack language applicability (QoL #16a). Tells the
