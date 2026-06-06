@@ -28,11 +28,61 @@ def _red(text): return _c(text, "31")
 def _yellow(text): return _c(text, "33")
 
 
-# ``_sanitise_threat_model_for_cli`` removed — operators using
-# ``--json-out`` want the full threat-model JSON for downstream
-# automation (jq pipelines, dashboards), not a redacted subset.
-# The CodeQL ``py/clear-text-logging-sensitive-data`` alert on the
-# ``--json-out`` print is suppressed at the call site below instead.
+def _sanitise_threat_model_for_cli(model_dict: dict) -> dict:
+    """Return non-sensitive threat-model metadata for ``--json-out``.
+
+    The full threat-model JSON contains free-text fields
+    (``trusted_inputs``, ``untrusted_inputs``, ``notes``,
+    ``known_bug_shapes``, …) that may carry sensitive operational
+    context if a contributor mistakenly puts them there. Printing
+    those to stdout triggers CodeQL's
+    ``py/clear-text-logging-sensitive-data`` query.
+
+    The earlier attempt to suppress at the print site via
+    ``# lgtm[py/clear-text-logging-sensitive-data]`` did NOT work —
+    that comment syntax was an LGTM.com feature, not honoured by
+    GitHub Code Scanning's CodeQL integration. The principled fix
+    is to emit only stable metadata + aggregate counts, suitable
+    for automation that wants "did the model change" / "how many
+    entries are in each list" without exposing the per-entry
+    content.
+
+    Operators wanting the FULL threat-model content can read the
+    on-disk JSON path directly (``project.json_path``, also
+    printed by the non-``--json-out`` ``show`` output).
+    """
+    def _count_list(key: str) -> int:
+        value = model_dict.get(key, [])
+        return len(value) if isinstance(value, list) else 0
+    return {
+        "version": model_dict.get("version"),
+        "project_name": model_dict.get("project_name"),
+        "target": model_dict.get("target"),
+        "source": model_dict.get("source"),
+        "created_at": model_dict.get("created_at"),
+        "updated_at": model_dict.get("updated_at"),
+        "counts": {
+            "assets": _count_list("assets"),
+            "entry_points": _count_list("entry_points"),
+            "trust_boundaries": _count_list("trust_boundaries"),
+            "trusted_inputs": _count_list("trusted_inputs"),
+            "untrusted_inputs": _count_list("untrusted_inputs"),
+            "in_scope_vuln_classes": _count_list(
+                "in_scope_vuln_classes",
+            ),
+            "out_of_scope_vuln_classes": _count_list(
+                "out_of_scope_vuln_classes",
+            ),
+            "focus_areas": _count_list("focus_areas"),
+            "known_bug_shapes": _count_list("known_bug_shapes"),
+            "verification_expectations": _count_list(
+                "verification_expectations",
+            ),
+            "patch_validation_expectations": _count_list(
+                "patch_validation_expectations",
+            ),
+        },
+    }
 
 
 def _detect_target_type(target_path: str):
@@ -1094,16 +1144,8 @@ def _handle_threat_model(mgr, args) -> None:
         return
 
     if args.json_out:
-        # CodeQL ``py/clear-text-logging-sensitive-data`` flags this
-        # print because ``model.to_dict()`` contains "trusted_inputs"
-        # / "untrusted_inputs" / "notes" — auth-vocab keys the
-        # heuristic taints. The values are the operator's own
-        # threat-model content they explicitly asked to see via
-        # ``--json-out``, so redacting defeats the flag's purpose.
-        # Suppress at the print site.
-        print(  # lgtm[py/clear-text-logging-sensitive-data]
-            json.dumps(model.to_dict(), indent=2, sort_keys=True)
-        )
+        safe_model = _sanitise_threat_model_for_cli(model.to_dict())
+        print(json.dumps(safe_model, indent=2, sort_keys=True))
         return
 
     print(f"Project: {project.name}")
