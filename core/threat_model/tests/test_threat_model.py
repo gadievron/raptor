@@ -220,17 +220,29 @@ def test_from_dict_rejects_out_of_range_version():
 
 
 def test_from_dict_caps_oversized_list_entries():
-    # Hostile JSON claims a million-entry focus_areas list, each
-    # entry 100 KB. Should be capped at _MAX_LIST_ENTRIES (256)
-    # and _MAX_STRING_BYTES per entry, not allocate forever.
-    from core.threat_model import ThreatModel
-    huge_value = "A" * (10 * 1024 * 1024)  # 10 MB single entry
+    # Pin both caps: the list-entry-count cap
+    # (``_MAX_LIST_ENTRIES``) and the per-entry byte cap
+    # (``_MAX_STRING_BYTES``). Fixture sizes are deliberately
+    # tight — proving the cap doesn't require allocating a real
+    # hostile-sized blob in the test; ``_clip_str`` now
+    # pre-truncates before ``escape_nonprintable`` so the
+    # substrate's behaviour on multi-MB inputs is bounded
+    # regardless.
+    from core.threat_model import (
+        _MAX_LIST_ENTRIES,
+        _MAX_STRING_BYTES,
+        ThreatModel,
+    )
+    oversized = "A" * (_MAX_STRING_BYTES * 2)   # twice per-entry cap
+    overlong_count = _MAX_LIST_ENTRIES * 2      # twice list cap
     model = ThreatModel.from_dict({
         "project_name": "x", "target": "/x",
-        "focus_areas": [huge_value] * 1000,
+        "focus_areas": [oversized] * overlong_count,
     })
-    assert len(model.focus_areas) <= 256
-    assert all(len(v) <= 4 * 1024 for v in model.focus_areas)
+    # List cap kicked in.
+    assert len(model.focus_areas) == _MAX_LIST_ENTRIES
+    # Per-entry byte cap kicked in.
+    assert all(len(v) <= _MAX_STRING_BYTES for v in model.focus_areas)
 
 
 def test_render_markdown_escapes_newline_injection(tmp_path):

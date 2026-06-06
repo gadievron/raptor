@@ -59,10 +59,22 @@ def _clip_str(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
     threat model. Strips the C1 control-char range
     (``escape_nonprintable``) and bounds total length. Returns
     empty string on None.
+
+    Coarse pre-truncation BEFORE ``escape_nonprintable`` —
+    otherwise a hostile 10 MB input made the escape pass do
+    proportional work even though we'd discard most of it
+    immediately. ``escape_nonprintable`` can expand chars up to
+    ~4x (each control byte → ``\\x..`` text); the pre-clip
+    accepts that the tail of the cap may be truncated
+    mid-escape sequence on hostile inputs, which is safer than
+    an O(N) regex pass over an attacker-controlled blob.
     """
     if value is None:
         return ""
-    s = escape_nonprintable(str(value))
+    s = str(value)
+    if len(s) > byte_cap:
+        s = s[:byte_cap]
+    s = escape_nonprintable(s)
     if len(s) > byte_cap:
         s = s[:byte_cap]
     return s
