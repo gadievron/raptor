@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.run.safe_io import safe_run_mkdir
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
@@ -1106,6 +1107,10 @@ Examples:
                 logger.error(f"Git init failed: {result.stderr}")
                 sys.exit(1)
 
+        except SandboxSetupError:
+            # Sandbox couldn't engage — not a git error. Propagate to the
+            # top-level handler so the operator gets the actionable message.
+            raise
         except subprocess.TimeoutExpired:
             print("  Git initialization timed out")
             logger.error("Git init timeout")
@@ -1488,6 +1493,20 @@ Examples:
             if not run_codeql:
                 sys.exit(1)
 
+        if rc == SANDBOX_ENGAGE_EXIT_CODE:
+            # The semgrep subprocess reported the sandbox could not engage
+            # (it already printed the actionable message). Abort the whole
+            # run loud — never fall through into LLM analysis on a silent
+            # "0 findings". Kill the sibling codeql child first.
+            if codeql_proc and codeql_proc.poll() is None:
+                codeql_proc.kill()
+            raise SandboxSetupError(
+                "the semgrep scan subprocess reported the sandbox could not "
+                f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",
+                "re-run with --sandbox network-only (or --sandbox none). "
+                "RAPTOR will not silently downgrade.",
+            )
+
         if rc in (0, 1):
             # The scanner now writes into the run dir's scan/ subdir (--out
             # above), so its outputs — combined.sarif, scan_metrics.json, and
@@ -1537,6 +1556,16 @@ Examples:
             rc = -1
             print("❌ CodeQL scan timed out (30m)")
             logger.error("CodeQL scan timed out")
+
+        if rc == SANDBOX_ENGAGE_EXIT_CODE:
+            # CodeQL subprocess reported the sandbox could not engage —
+            # abort loud rather than continuing with partial findings.
+            raise SandboxSetupError(
+                "the codeql scan subprocess reported the sandbox could not "
+                f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",
+                "re-run with --sandbox network-only (or --sandbox none). "
+                "RAPTOR will not silently downgrade.",
+            )
 
         if rc != 0:
             if all_sarif_files:
@@ -1810,6 +1839,17 @@ Examples:
             analysis_cmd, "Preparing findings for analysis",
             timeout=args.phase_timeout,
         )
+
+        if rc == SANDBOX_ENGAGE_EXIT_CODE:
+            # The analysis subprocess reported the sandbox could not engage.
+            # Abort loud rather than degrading the analysis phase to an
+            # empty `analysis = {}` (a silent "produced no output").
+            raise SandboxSetupError(
+                "the analysis subprocess reported the sandbox could not "
+                f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE}); see its output above",
+                "re-run with --sandbox network-only (or --sandbox none). "
+                "RAPTOR will not silently downgrade.",
+            )
 
         # Parse analysis results
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
@@ -2821,4 +2861,13 @@ def _postprocess_findings(results):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SandboxSetupError as e:
+        # Fail loud with the actionable message, not a traceback — the run
+        # did NOT analyse anything, so never let it look like a clean pass.
+        print(
+            f"\nRAPTOR: run aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

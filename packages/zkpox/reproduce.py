@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from core.sandbox import SandboxSetupError
 from core.witness.types import WitnessOutcome
 
 from packages.zkpox.bundle import ZKPoXBundle
@@ -290,6 +291,8 @@ def _reproduce_replay(
                 env=RaptorConfig.get_safe_env(),
                 strict_env=True,
             )
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except Exception as e:  # noqa: BLE001 — best-effort per run
             observed.append("error")
             log.debug("reproduce replay run raised: %s", e)

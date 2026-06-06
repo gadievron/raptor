@@ -595,9 +595,10 @@ from .observe_profile import (
 )
 from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
 from .mount import _build_mount_script
+from .errors import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from .probes import (
     check_mount_available, check_net_available, check_sandbox_available,
-    check_seatbelt_available,
+    check_seatbelt_available, check_unshare_engages,
 )
 from .profiles import DEFAULT_PROFILE, PROFILES, _SANDBOX_KWARGS
 from .seccomp import check_seccomp_available
@@ -643,6 +644,9 @@ __all__ = [
     "check_mount_available", "check_landlock_available",
     "check_seatbelt_available",
     "check_seccomp_available",
+    "check_unshare_engages",
+    # Engagement-failure signal (fail-loud, never silently degrade)
+    "SandboxSetupError", "SANDBOX_ENGAGE_EXIT_CODE",
     # Named profiles
     "PROFILES", "DEFAULT_PROFILE", "_SANDBOX_KWARGS",
     # Private re-exports kept for backward compatibility — see the

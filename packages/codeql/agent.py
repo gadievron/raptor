@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from core.json import save_json
 
 from core.config import RaptorConfig
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.run.output import unique_run_suffix as _unique_run_suffix
@@ -886,6 +887,14 @@ Examples:
     except KeyboardInterrupt:
         print("\n\nAnalysis interrupted by user")
         sys.exit(130)
+    except SandboxSetupError as e:
+        # Sandbox could not engage. Emit the dedicated exit code so a parent
+        # (/agentic, /scan) translates it back into a fail-loud abort rather
+        # than treating it as a generic codeql failure. The analysis did NOT
+        # run — never let it look like a clean "0 findings".
+        print(f"\n✗ Analysis aborted — sandbox isolation could not engage.\n{e}",
+              file=sys.stderr)
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         print(f"\n✗ Fatal error: {e}")

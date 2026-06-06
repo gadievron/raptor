@@ -31,6 +31,16 @@ _mount_available_cache = None
 # path is usable (i.e. newuidmap/newgidmap binaries are present and
 # user-ns unshare works). None = unchecked, False = not usable.
 _mount_ns_available_cache = None
+# _unshare_engage_cache: maps an exact unshare namespace-flag tuple
+# (e.g. ("--user","--pid","--fork","--ipc","--net")) to a (engages,
+# reason) result. The per-layer probes above (_net_available_cache /
+# _mount_ns_available_cache) test NARROWER operations than a real
+# sandboxed run performs; on rootless podman / distrobox (nested
+# userns) the narrow probe can pass while the full flag-set fails. This
+# cache records whether the ACTUAL flag-set engages, decided by running
+# it against `true`. Dict (not a single slot) because different calls
+# use different flag-sets (block_network on/off, mount on/off).
+_unshare_engage_cache = {}
 # Landlock cache uses -1 for "unavailable", >0 for ABI version, None for unchecked.
 _landlock_cache = None
 # Seccomp cache: None = unchecked, 0 = unavailable, CDLL handle = available.
@@ -104,6 +114,9 @@ _net_and_tcp_allowlist_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
 _ptrace_unavailable_warned = False
+# Set once when check_unshare_engages returns None (the probe couldn't RUN —
+# transient load) and the gate proceeds leniently instead of failing loud.
+_engage_probe_indeterminate_warned = False
 _audit_warned_no_spawn = False
 # NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
 # flag needed — workflow proceeds correctly at Landlock-only, same

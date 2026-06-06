@@ -211,8 +211,73 @@ _TIOCSCTTY = 0x540E
 _BLOCKED_IOCTL_CMDS = (_TIOCSTI, _TIOCCONS, _TIOCSCTTY)
 
 
+def _seccomp_functional_selftest(lib) -> bool:
+    """Fork a child, ACTUALLY apply a minimal allow-all seccomp filter, and
+    verify it loads.
+
+    Library-loadable is necessary but NOT sufficient: the kernel can still
+    reject ``seccomp_load()`` (no ``CONFIG_SECCOMP_FILTER``, a restrictive
+    container/seccomp policy, etc.). If we only checked loadability, such a
+    host would pass the probe, set a seccomp_profile, then die mid-spawn in
+    the child (``seccomp_load`` raises → exit 126 + empty stdout), which a
+    consumer reads as a silent "0 findings". Applying the filter for real
+    here — same sequence as ``_make_seccomp_preexec``: ``PR_SET_NO_NEW_PRIVS``
+    → ``seccomp_init`` → ``seccomp_load`` — reports unavailability up front so
+    seccomp is simply SKIPPED (real results under weaker isolation) instead.
+    Mirrors ``check_landlock_available()``'s functional self-test.
+
+    Child is ctypes + ``os._exit`` only (no Python logger — not fork-safe).
+    """
+    # Resolve all ctypes handles + signatures in the PARENT, before fork, so
+    # the forked child does NO dlopen/CDLL — a child that dlopens can deadlock
+    # if a sibling thread (the scanner's ThreadPoolExecutor workers) holds
+    # glibc's malloc-arena lock at the fork instant. The child only CALLS
+    # already-resolved functions.
+    _PR_SET_NO_NEW_PRIVS = 38
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl.restype = ctypes.c_int
+        libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong,
+                               ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+        lib.seccomp_init.restype = ctypes.c_void_p
+        lib.seccomp_init.argtypes = [ctypes.c_uint32]
+        lib.seccomp_load.restype = ctypes.c_int
+        lib.seccomp_load.argtypes = [ctypes.c_void_p]
+        lib.seccomp_release.restype = None
+        lib.seccomp_release.argtypes = [ctypes.c_void_p]
+    except (OSError, AttributeError):
+        return False
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.filterwarnings(
+            "ignore", category=DeprecationWarning,
+            message=r".*fork.*may lead to deadlocks.*",
+        )
+        pid = os.fork()
+    if pid == 0:
+        # ===== CHILD ===== (calls only — no dlopen/CDLL)
+        try:
+            if libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+                os._exit(1)
+            ctx = lib.seccomp_init(_SCMP_ACT_ALLOW)
+            if not ctx:
+                os._exit(1)
+            rc = lib.seccomp_load(ctx)
+            lib.seccomp_release(ctx)
+            os._exit(0 if rc == 0 else 1)
+        except BaseException:
+            os._exit(1)
+    # ===== PARENT =====
+    try:
+        _, status = os.waitpid(pid, 0)
+    except ChildProcessError:
+        return False
+    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
+
 def check_seccomp_available() -> bool:
-    """Check whether libseccomp is loadable. Cached per process."""
+    """Check whether libseccomp is loadable AND seccomp_load() functions.
+    Cached per process."""
     with state._cache_lock:
         if state._libseccomp_cache is not None:
             return bool(state._libseccomp_cache)
@@ -233,8 +298,17 @@ def check_seccomp_available() -> bool:
             logger.debug(f"Sandbox: libseccomp load failed: {e}")
             state._libseccomp_cache = 0
             return False
+        # Functional self-test (see _seccomp_functional_selftest): loadable
+        # libseccomp is necessary but not sufficient. A host where the
+        # kernel rejects seccomp_load() must report unavailable here so
+        # seccomp is skipped, rather than dying mid-spawn with empty output.
+        if not _seccomp_functional_selftest(lib):
+            logger.debug("Sandbox: libseccomp loads but seccomp_load() "
+                         "self-test failed — treating seccomp as unavailable")
+            state._libseccomp_cache = 0
+            return False
         state._libseccomp_cache = lib
-        logger.debug("Sandbox: libseccomp available")
+        logger.debug("Sandbox: libseccomp available (functional self-test passed)")
         return True
 
 
