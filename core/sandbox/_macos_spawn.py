@@ -106,6 +106,22 @@ logger = logging.getLogger(__name__)
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 
+# The macOS seatbelt shim (libexec/raptor-seatbelt-shim). Interposed around
+# sandbox-exec to give the macOS backend the two guarantees the Linux backend
+# already has: fail-loud setup detection (an unspoofable in-sandbox readiness
+# byte) and orphan teardown (a death-pipe watcher that SIGKILLs the sandbox
+# process group when the orchestrator is hard-killed — macOS has no pid-ns
+# kernel cascade). See that file's docstring for the full design.
+SEATBELT_SHIM = str(
+    Path(__file__).resolve().parents[2] / "libexec" / "raptor-seatbelt-shim"
+)
+
+# Must match the `printf K` in the /bin/sh inner trampoline (built in
+# run_sandboxed). The trampoline writes this one byte to the status pipe
+# once it is running inside the applied profile; its absence means the
+# profile did not apply (fail loud).
+_READY_BYTE = b"K"
+
 
 def is_available() -> bool:
     """True iff /usr/bin/sandbox-exec exists. Caller (context.py) is
@@ -327,8 +343,30 @@ def run_sandboxed(cmd: List[str], *,
     else:
         preexec = base_preexec
 
-    # 4. Wrap cmd with sandbox-exec.
-    sandbox_cmd = [SANDBOX_EXEC, "-p", profile] + list(cmd)
+    # 4. Wrap cmd with sandbox-exec, interposed by the seatbelt shim.
+    #    Layout (outermost first):
+    #      outer shim (UNSANDBOXED python watcher: fail-loud + teardown)
+    #        -> sandbox-exec applies the SBPL profile
+    #          -> /bin/sh trampoline (INSIDE the profile) writes the
+    #             readiness byte to fd 3, closes it (so the untrusted target
+    #             never inherits the status pipe), then execs the target.
+    #    The inner trampoline is /bin/sh, not python: its startup deps
+    #    (exec /bin/sh + libSystem + dyld cache) are a strict SUBSET of any
+    #    dynamically-linked target's, so "no readiness byte" can only mean
+    #    the profile cannot run the target either (a genuine setup failure),
+    #    never "our trampoline needs files the target doesn't." The profile
+    #    is pinned to always permit /bin/sh (seatbelt.build_profile). fd 3 is
+    #    wired to the status pipe by the outer shim before exec.
+    #    Invoke the outer shim via this interpreter (+ -I) rather than its
+    #    shebang: macOS /usr/bin/python3 is the Command-Line-Tools stub, so
+    #    relying on the shebang is unsafe; sys.executable is RAPTOR's python.
+    #    It runs UNSANDBOXED, so its stdlib reads are never restricted.
+    import sys as _sys
+    _py = _sys.executable or "/usr/bin/python3"
+    _inner = ["/bin/sh", "-c", 'printf K >&3; exec 3>&-; exec "$@"',
+              "raptor-seatbelt-rdy"] + list(cmd)
+    _sandboxed = [SANDBOX_EXEC, "-p", profile, "--"] + _inner
+    sandbox_cmd = [_py, "-I", SEATBELT_SHIM] + _sandboxed
 
     # 5. Audit mode: start log streamer BEFORE the workload to capture
     #    kernel sandbox events. Stop after workload exits.
@@ -366,7 +404,35 @@ def run_sandboxed(cmd: List[str], *,
                 ),
             )
 
+    # 5b. Status + death pipes for the seatbelt shim.
+    #     status: the inner shim writes one readiness byte after the profile
+    #             applies; its absence => fail loud (sandbox did not engage).
+    #     death:  the outer shim watches it; when THIS orchestrator process
+    #             dies (incl. SIGKILL/OOM/crash), every write-end copy closes,
+    #             the outer shim reads EOF and SIGKILLs the sandbox group.
+    #     Both are passed via pass_fds (subprocess clears CLOEXEC on those) so
+    #     status_w reaches the inner shim and death_r reaches the outer shim.
+    #     We hold death_w for the whole synchronous run, so EOF (=> teardown)
+    #     fires only when this process actually dies — never on a healthy run.
+    status_r, status_w = os.pipe()
+    death_r, death_w = os.pipe()
+    child_env["_RAPTOR_STATUS_FD"] = str(status_w)
+    child_env["_RAPTOR_DEATH_FD"] = str(death_r)
+    # The seatbelt shim is RAPTOR's own dispatch helper and refuses to run
+    # without a trust marker (guards against a human/attacker invoking the
+    # internal script directly). THIS code path is the trusted invoker, so
+    # assert the marker explicitly instead of depending on bin/raptor having
+    # exported it into the ambient env — get_safe_env() preserves it when set,
+    # but a direct API or test caller (no bin/raptor, no CLAUDECODE) would
+    # otherwise trip the gate and every macOS sandbox run would fail loud.
+    # The marker authorizes the OUTER (unsandboxed) shim ONLY: the shim strips
+    # it — and the fd markers — from the environment before exec'ing
+    # sandbox-exec, so nothing _RAPTOR_* ever crosses into the sandboxed
+    # target's env. See raptor-seatbelt-shim's child branch.
+    child_env["_RAPTOR_TRUSTED"] = "1"
+
     # 6. Run.
+    ready = b""
     try:
         result = subprocess.run(
             sandbox_cmd,
@@ -378,8 +444,27 @@ def run_sandboxed(cmd: List[str], *,
             stdin=stdin,
             preexec_fn=preexec,
             start_new_session=start_new_session,
+            pass_fds=(status_w, death_r),
         )
     finally:
+        # Close our copies. status_w MUST be closed before reading status_r,
+        # else a profile-apply failure (no byte written) would block the read
+        # forever (write ends still open). After this close the only remaining
+        # status write end was the inner shim's, already gone, so the read
+        # returns the byte if present or EOF (b"") if not.
+        for _fd in (status_w, death_r, death_w):
+            try:
+                os.close(_fd)
+            except OSError:
+                pass
+        try:
+            ready = os.read(status_r, 1)
+        except OSError:
+            ready = b""
+        try:
+            os.close(status_r)
+        except OSError:
+            pass
         if audit_streamer is not None:
             try:
                 audit_streamer.stop()
@@ -401,6 +486,25 @@ def run_sandboxed(cmd: List[str], *,
                     "resources may have leaked from this sandbox call",
                     exc_info=True,
                 )
+
+    # 6b. Fail-loud signal for context.py (mirrors the Linux exec-status
+    #     pipe's result._setup_status contract):
+    #       None      -> target was reached inside the applied profile;
+    #                    the result is genuine.
+    #       ("E", ..) -> the in-sandbox readiness byte never arrived =>
+    #                    sandbox-exec did not apply the profile / the inner
+    #                    shim never ran => caller raises SandboxSetupError.
+    #     Unlike Linux there is no Landlock layer to degrade to, so the only
+    #     safe response to "did not engage" is to fail loud — never silently
+    #     run unsandboxed.
+    if ready == _READY_BYTE:
+        result._setup_status = None
+    else:
+        result._setup_status = (
+            "E",
+            "seatbelt profile did not apply: the in-sandbox readiness byte "
+            "was not received from raptor-seatbelt-shim",
+        )
 
     # 7. Attach sandbox_info — caller (context.py) populates the rest;
     #    we just guarantee the attribute exists so callers don't have

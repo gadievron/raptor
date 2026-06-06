@@ -272,6 +272,14 @@ def build_profile(*,
             # /bin/echo, /bin/sh, /bin/ls etc.; without these in the
             # read allowlist, restrict_reads=True breaks every
             # subprocess that runs a /bin or /sbin tool.
+            #
+            # LOAD-BEARING for the seatbelt shim: the fail-loud readiness
+            # signal runs a /bin/sh trampoline INSIDE this profile (see
+            # _macos_spawn + libexec/raptor-seatbelt-shim). /bin must stay
+            # readable+exec here, else /bin/sh can't start and every run
+            # would wrongly look like a sandbox setup failure. Keeping
+            # /bin/sh's deps (a strict subset of any target's) permitted is
+            # exactly what makes "no readiness byte" mean a genuine failure.
             "/bin", "/sbin",
         )
         # /dev is NOT included wholesale — same posture as Linux

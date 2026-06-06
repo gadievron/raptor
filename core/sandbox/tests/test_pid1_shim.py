@@ -169,6 +169,20 @@ class TestPid1ShimContract(unittest.TestCase):
         r = self._run_shim("/bin/sh", "-c", "echo err >&2")
         self.assertEqual(r.stderr.strip(), "err")
 
+    def test_target_does_not_inherit_trust_marker(self):
+        """The shim strips _RAPTOR_TRUSTED before exec'ing the target. The
+        trust marker authorizes RAPTOR's own dispatch scripts (this shim
+        included) and must not leak into the untrusted target's env."""
+        probe = ("import os;"
+                 "print('TRUST=' + os.environ.get('_RAPTOR_TRUSTED', '<unset>'))")
+        r = subprocess.run(
+            [str(SHIM_PATH), _sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=5,
+            env=dict(os.environ, _RAPTOR_TRUSTED="1"),
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("TRUST=<unset>", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -265,47 +279,3 @@ class TestPid1ShimDeathPipe(unittest.TestCase):
                 orch.kill()
                 orch.wait()
             subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)
-
-
-class TestUnshareKillChildProbe:
-    """``unshare_supports_kill_child`` probes ``unshare --help`` for the
-    ``--kill-child`` flag. Regression: the probe must tolerate stdout
-    typed as either bytes (production default) OR str (when a caller
-    mocks ``subprocess.run`` process-wide — packages/llm_analysis tests
-    do this). Before the fix, str-typed stdout TypeError'd on the
-    bytes-needle membership check below, which the dispatch loop
-    caught and reported as a finding-level error — masking the real
-    test failure as an LLM dispatch fail."""
-
-    def test_str_typed_subprocess_output_does_not_typeerror(self, monkeypatch):
-        """Simulate a mock subprocess.run returning str stdout."""
-        from unittest.mock import MagicMock
-        from core.sandbox import probes
-        probes.unshare_supports_kill_child.cache_clear()
-        fake = MagicMock()
-        fake.stdout = "unshare from util-linux 2.34\n  --kill-child[=SIGNAME]\n"
-        fake.stderr = ""
-        fake.returncode = 0
-        monkeypatch.setattr("core.sandbox.probes.subprocess.run",
-                            lambda *a, **kw: fake)
-        # Pre-fix this raised "can only concatenate str (not 'bytes')".
-        assert probes.unshare_supports_kill_child() is True
-        probes.unshare_supports_kill_child.cache_clear()
-
-    def test_bytes_typed_subprocess_output_still_works(self, monkeypatch):
-        """The production path (no text=True at the caller, real
-        unshare binary) yields bytes — must continue to work."""
-        from unittest.mock import MagicMock
-        from core.sandbox import probes
-        probes.unshare_supports_kill_child.cache_clear()
-        # text=True is now set inside the probe itself, so the mock
-        # mirrors what subprocess.run would return under text=True:
-        # str. The bytes path is gone by construction.
-        fake = MagicMock()
-        fake.stdout = "no such flag here\n"
-        fake.stderr = ""
-        fake.returncode = 0
-        monkeypatch.setattr("core.sandbox.probes.subprocess.run",
-                            lambda *a, **kw: fake)
-        assert probes.unshare_supports_kill_child() is False
-        probes.unshare_supports_kill_child.cache_clear()

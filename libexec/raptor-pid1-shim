@@ -235,10 +235,13 @@ def main() -> int:
                     signal.signal(s, signal.SIG_DFL)
                 except (OSError, ValueError):
                     pass
-            # Don't leak the RAPTOR-internal liveness-fd marker into the
-            # (untrusted) target's env. The fd it names is already CLOEXEC'd
-            # shut, so this is belt-and-braces hygiene.
-            os.environ.pop("_RAPTOR_DEATH_FD", None)
+            # Don't leak RAPTOR-internal markers into the (untrusted) target's
+            # env. _RAPTOR_DEATH_FD names an fd already CLOEXEC'd shut; the
+            # trust marker authorizes RAPTOR's OWN dispatch scripts (this shim
+            # included) and has no business being visible to the sandboxed
+            # target. Strip both so nothing _RAPTOR_* crosses into the target.
+            for _m in ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED"):
+                os.environ.pop(_m, None)
             try:
                 os.execvp(target_argv[0], target_argv)
             except FileNotFoundError:

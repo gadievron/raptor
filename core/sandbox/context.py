@@ -1660,6 +1660,22 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     strict_env=strict_env,
                 )
                 used_spawn = True
+                # Fail-loud parity with the Linux exec-status pipe. The macOS
+                # seatbelt shim reports via result._setup_status:
+                #   None     -> target reached inside the applied profile.
+                #   ("E", m) -> the in-sandbox readiness byte never arrived =>
+                #               sandbox-exec did not apply the profile. There
+                #               is no Landlock layer to degrade to on macOS, so
+                #               the only safe response is to fail loud rather
+                #               than silently run unsandboxed ("0 findings").
+                _mac_status = getattr(result, "_setup_status", None)
+                if _mac_status is not None and _mac_status[0] == "E":
+                    from .errors import SandboxSetupError
+                    from .probes import ENGAGE_FAIL_INSTRUCTIONS
+                    raise SandboxSetupError(
+                        f"sandbox seatbelt setup failed: {_mac_status[1]}",
+                        ENGAGE_FAIL_INSTRUCTIONS,
+                    )
             elif spawn_eligible:
                 try:
                     from . import _spawn as _spawn_mod
