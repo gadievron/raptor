@@ -10,6 +10,7 @@ respectively, because those tests are syscall-level (ctypes) rather than
 subprocess-level.
 """
 
+import functools
 import logging
 import os
 import shutil
@@ -100,6 +101,27 @@ ENGAGE_FAIL_INSTRUCTIONS = (
     "disable isolation entirely (last resort). RAPTOR will not silently "
     "downgrade for you."
 )
+
+
+@functools.lru_cache(maxsize=1)
+def unshare_supports_kill_child() -> bool:
+    """Whether this host's ``unshare`` supports ``--kill-child`` (util-linux
+    ≥ 2.32, 2018). Used as belt-and-braces teardown: ``unshare --kill-child=
+    SIGKILL`` kills its pid-1 child (and thus cascades the pid-ns) if unshare
+    itself dies. The primary orphan-teardown is the death-pipe in
+    raptor-pid1-shim; this just covers "unshare killed directly". Probed via
+    ``--help`` (cheap, no namespace creation) and cached for the process; a
+    host without the flag silently runs without it.
+    """
+    try:
+        from core.config import RaptorConfig
+        out = subprocess.run(
+            [_resolve_sandbox_binary("unshare"), "--help"],
+            capture_output=True, timeout=5, env=RaptorConfig.get_safe_env(),
+        )
+        return b"--kill-child" in (out.stdout or b"") + (out.stderr or b"")
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
 
 
 def check_unshare_engages(unshare_flags) -> tuple:
