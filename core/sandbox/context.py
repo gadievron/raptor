@@ -1351,11 +1351,23 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # binaries that run under our Landlock+seccomp but skip the
             # actual unshare, leaving the child in the host's net/pid/ipc
             # namespaces (= full outbound network).
-            from .probes import _resolve_sandbox_binary
+            from .probes import (
+                _resolve_sandbox_binary,
+                unshare_supports_kill_child,
+            )
             unshare_cmd = [_resolve_sandbox_binary("unshare"),
                            "--user", "--pid", "--fork", "--ipc"]
             if block_network:
                 unshare_cmd.append("--net")
+            # Belt-and-braces orphan teardown: if `unshare` is killed
+            # directly (orchestrator still alive), --kill-child SIGKILLs the
+            # pid-1 shim → kernel cascades the pid-ns. The PRIMARY teardown
+            # (orchestrator hard-killed mid-run) is the death-pipe the shim
+            # watches; see the `need_unshare` block at the subprocess.run
+            # call. Gated on a cached capability probe (older util-linux
+            # lacks the flag) so we never feed `unshare` an unknown option.
+            if unshare_supports_kill_child():
+                unshare_cmd.append("--kill-child=SIGKILL")
             # prlimit wrapper: sits INSIDE the unshare chain so
             # RLIMIT_NPROC counts against the ns-local UID (nobody =
             # zero existing processes). prlimit is part of util-linux
@@ -1978,7 +1990,39 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         # path run.
                         pass
                 if not _audit_landlock_engaged:
-                    result = subprocess.run(full_cmd, **kwargs)
+                    if need_unshare:
+                        # Orphan-teardown: the shim (pid-1 of the new pid-ns)
+                        # would otherwise outlive an ORCHESTRATOR that is
+                        # hard-killed (SIGKILL/OOM/crash) mid-run — the
+                        # blocking subprocess.run can't run cleanup, the
+                        # `unshare` intermediate reparents to init, and the
+                        # ns leaks. Hand the shim the READ end of a liveness
+                        # pipe; we hold the WRITE end here for exactly this
+                        # call. If this process dies, the write end closes →
+                        # the shim reads EOF → it exits → the kernel cascade-
+                        # SIGKILLs the whole pid-ns. The fd is a one-bit
+                        # liveness signal (nothing is written); write end is
+                        # CLOEXEC (os.pipe default) so no child inherits it,
+                        # read end is passed only to the shim via pass_fds
+                        # and the shim CLOEXEC's it away from the target.
+                        _death_r, _death_w = os.pipe()
+                        try:
+                            _dk = dict(kwargs)
+                            _dk["pass_fds"] = (
+                                tuple(_dk.get("pass_fds") or ()) + (_death_r,)
+                            )
+                            _denv = dict(_dk.get("env") or os.environ)
+                            _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
+                            _dk["env"] = _denv
+                            result = subprocess.run(full_cmd, **_dk)
+                        finally:
+                            for _dfd in (_death_r, _death_w):
+                                try:
+                                    os.close(_dfd)
+                                except OSError:
+                                    pass
+                    else:
+                        result = subprocess.run(full_cmd, **kwargs)
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
