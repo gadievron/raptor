@@ -5,6 +5,7 @@ No Claude Code, no LLM — pure Python.
 """
 
 import argparse
+import json
 import os
 import stat as _stat
 import sys
@@ -1117,7 +1118,6 @@ def _handle_threat_model(mgr, args) -> None:
         project_threat_model_report_path,
         project_threat_model_paths,
         render_markdown,
-        render_report,
         save_model,
         save_report,
     )
