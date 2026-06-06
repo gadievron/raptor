@@ -265,3 +265,47 @@ class TestPid1ShimDeathPipe(unittest.TestCase):
                 orch.kill()
                 orch.wait()
             subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)
+
+
+class TestUnshareKillChildProbe:
+    """``unshare_supports_kill_child`` probes ``unshare --help`` for the
+    ``--kill-child`` flag. Regression: the probe must tolerate stdout
+    typed as either bytes (production default) OR str (when a caller
+    mocks ``subprocess.run`` process-wide — packages/llm_analysis tests
+    do this). Before the fix, str-typed stdout TypeError'd on the
+    bytes-needle membership check below, which the dispatch loop
+    caught and reported as a finding-level error — masking the real
+    test failure as an LLM dispatch fail."""
+
+    def test_str_typed_subprocess_output_does_not_typeerror(self, monkeypatch):
+        """Simulate a mock subprocess.run returning str stdout."""
+        from unittest.mock import MagicMock
+        from core.sandbox import probes
+        probes.unshare_supports_kill_child.cache_clear()
+        fake = MagicMock()
+        fake.stdout = "unshare from util-linux 2.34\n  --kill-child[=SIGNAME]\n"
+        fake.stderr = ""
+        fake.returncode = 0
+        monkeypatch.setattr("core.sandbox.probes.subprocess.run",
+                            lambda *a, **kw: fake)
+        # Pre-fix this raised "can only concatenate str (not 'bytes')".
+        assert probes.unshare_supports_kill_child() is True
+        probes.unshare_supports_kill_child.cache_clear()
+
+    def test_bytes_typed_subprocess_output_still_works(self, monkeypatch):
+        """The production path (no text=True at the caller, real
+        unshare binary) yields bytes — must continue to work."""
+        from unittest.mock import MagicMock
+        from core.sandbox import probes
+        probes.unshare_supports_kill_child.cache_clear()
+        # text=True is now set inside the probe itself, so the mock
+        # mirrors what subprocess.run would return under text=True:
+        # str. The bytes path is gone by construction.
+        fake = MagicMock()
+        fake.stdout = "no such flag here\n"
+        fake.stderr = ""
+        fake.returncode = 0
+        monkeypatch.setattr("core.sandbox.probes.subprocess.run",
+                            lambda *a, **kw: fake)
+        assert probes.unshare_supports_kill_child() is False
+        probes.unshare_supports_kill_child.cache_clear()

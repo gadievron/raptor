@@ -115,11 +115,19 @@ def unshare_supports_kill_child() -> bool:
     """
     try:
         from core.config import RaptorConfig
+        # ``text=True`` keeps stdout/stderr as str regardless of caller-
+        # imposed mocks. Help text is plain ASCII, no encoding concern; the
+        # explicit text mode also stops ``str + b""`` blowing up under any
+        # global ``subprocess.run`` mock that returns str-typed stdout (the
+        # llm_analysis test_orchestrator pipeline patches subprocess.run
+        # process-wide, and bytes-typed defaults would TypeError on the
+        # membership check below).
         out = subprocess.run(
             [_resolve_sandbox_binary("unshare"), "--help"],
-            capture_output=True, timeout=5, env=RaptorConfig.get_safe_env(),
+            capture_output=True, text=True, timeout=5,
+            env=RaptorConfig.get_safe_env(),
         )
-        return b"--kill-child" in (out.stdout or b"") + (out.stderr or b"")
+        return "--kill-child" in (out.stdout or "") + (out.stderr or "")
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
