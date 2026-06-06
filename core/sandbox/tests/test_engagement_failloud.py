@@ -125,6 +125,14 @@ class TestSubprocessBoundaryTranslation:
 
         monkeypatch.setattr(scanner.subprocess, "Popen",
                             lambda *a, **k: _FakeProc())
+        # run_codeql returns [] early if `codeql` isn't on PATH (the case in
+        # CI), never reaching the Popen + exit-code translation under test.
+        # Force it "present" so the real path runs regardless of host.
+        _real_which = scanner.shutil.which
+        monkeypatch.setattr(
+            scanner.shutil, "which",
+            lambda name: "/usr/bin/codeql" if name == "codeql" else _real_which(name),
+        )
         repo = tmp_path / "repo"
         repo.mkdir()
         out = tmp_path / "out"
