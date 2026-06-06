@@ -42,6 +42,7 @@ EXCLUDED_DIR_NAMES: Set[str] = {
     "build",
     "dist",
     "out",
+    ".out",
     "_build",
 
     # Python virtualenvs / caches

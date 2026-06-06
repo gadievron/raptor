@@ -28,51 +28,33 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 from ..models import Confidence, Dependency, Manifest, PinStyle
+from . import _hook_patterns, _intree_resolve
 
 logger = logging.getLogger(__name__)
 
 _LIFECYCLE_KEYS = (
+    # Fires on every ``npm install`` of the package.
     "preinstall", "install", "postinstall",
-    "prepare", "prepublish", "prepublishOnly",
+    # ``prepare`` fires after ``npm install`` (no args) AND before
+    # ``npm publish``.  Both surfaces are attack-relevant.
+    "prepare",
+    # ``prepublish`` is deprecated but on npm < 4 also ran at install
+    # time.  Kept for legacy-tarball coverage.
+    "prepublish",
+    # NOTE: ``prepublishOnly`` is INTENTIONALLY EXCLUDED.  Per npm
+    # docs (https://docs.npmjs.com/cli/v10/using-npm/scripts) it
+    # fires only on ``npm publish`` and NEVER at install time, so
+    # an install-hook-class signal here is wrong-by-construction
+    # (FP-flooded rails' ``actioncable`` / ``activestorage``
+    # sub-packages on stress sweep — both use ``prepublishOnly`` for
+    # legitimate copy-source-tree prep).
 )
 
-# Patterns we treat as actively-malicious-shaped. False positives are
-# tolerable here — operators get a row to triage, not a build break.
-# Each entry is (regex, short reason).
-_DANGEROUS_PATTERNS = (
-    (re.compile(r"\bcurl\s+[^|]*\s*\|\s*(?:bash|sh|zsh)\b"),
-     "curl piped to shell"),
-    (re.compile(r"\bwget\s+[^|]*\s*\|\s*(?:bash|sh)\b"),
-     "wget piped to shell"),
-    (re.compile(r"\bnc\s+(?:-[^ ]+\s+)*[\w.\-]+\s+\d+"),
-     "netcat to remote host"),
-    (re.compile(r"\bbash\s+-c\s+[\"']?\$\("),
-     "bash -c with command substitution"),
-    (re.compile(r"\beval\s*\("),
-     "eval() call"),
-    (re.compile(r"\bnode\s+-e\b"),
-     "node -e (inline JS execution)"),
-    (re.compile(r"\bpython\s+-c\b"),
-     "python -c (inline code execution)"),
-    (re.compile(r"base64\s+(?:-d|--decode)\s*\|"),
-     "base64 piped to decoder"),
-    (re.compile(r"echo\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64"),
-     "long base64 blob piped"),
-    # Legacy npm token exfiltration via env vars.
-    (re.compile(r"\$\{?NPM_TOKEN\}?"),
-     "references NPM_TOKEN"),
-    (re.compile(r"process\.env\.[A-Z_]*TOKEN"),
-     "references *TOKEN env var"),
-    # Shell to a non-standard registry mirror.
-    (re.compile(r"https?://[\w.\-]*(?:bit\.ly|tinyurl|pastebin|raw\.githubusercontent)"),
-     "URL to a paste/CDN host"),
-)
 
 
 @dataclass(frozen=True)
@@ -82,6 +64,20 @@ class InstallHookHit:
     script_key: str            # "postinstall" / "preinstall" / ...
     script_body: str           # raw command string
     reasons: List[str]         # zero or more dangerous-pattern hits
+    # In-tree targets the hook body references — see
+    # ``_intree_resolve``.  Empty list when the body references no
+    # in-tree paths (the legitimate ``node-gyp rebuild`` case).
+    # When any entry is a ``binary``, this hook is the Iron Worm
+    # archetype: a lifecycle script executing a payload bundled in
+    # the package's own tarball.  ``binary_in_package`` (Phase 3)
+    # independently flags the same path; composite scoring then
+    # promotes the pair to critical.
+    intree_targets: tuple = ()
+    # Phase 5 conjunction flags — composite scoring promotes when
+    # BOTH are set AND the host package isn't in the publish-helpers
+    # allowlist.  Iron Worm + npm-credential-stealer shapes.
+    reads_credentials: bool = False
+    has_publish_action: bool = False
 
 
 def scan_manifests(
@@ -94,9 +90,64 @@ def scan_manifests(
     for m in manifests:
         if m.path.name != "package.json" or m.is_lockfile:
             continue
-        host = _host_dep(deps_list, m) or _placeholder_for_manifest(m)
+        # The install hook is OWNED BY the package itself, not by
+        # any of its dependencies.  Synthesize a host dep using the
+        # package's OWN name from ``data.name``; only fall back to
+        # the placeholder name when the manifest lacks one.  The
+        # previous behaviour returned the FIRST dep declared in the
+        # manifest, which mis-attributed (e.g. rails actioncable's
+        # hook came back as belonging to spark-md5, its first
+        # dependency, not to @rails/actioncable itself).
+        host = _resolve_host(m, deps_list)
         out.extend(_scan_one(m.path, host))
     return out
+
+
+def _resolve_host(
+    manifest: Manifest, deps: List[Dependency],
+) -> Dependency:
+    """Return a Dependency whose ``name`` is the package's OWN name.
+
+    Strategy:
+      1. Read ``data.name`` from the manifest.
+      2. If a dep in ``deps`` matches that name AND is declared at
+         this manifest path, return it (preserves the parser's
+         confidence / pin metadata).
+      3. Otherwise synthesise a placeholder with the package's
+         own name.
+      4. Fallback to the generic placeholder when reading the name
+         fails.
+    """
+    try:
+        text = manifest.path.read_text(encoding="utf-8", errors="replace")
+        data = _json.loads(text)
+    except (OSError, _json.JSONDecodeError):
+        return _placeholder_for_manifest(manifest)
+    if not isinstance(data, dict):
+        return _placeholder_for_manifest(manifest)
+    pkg_name = data.get("name")
+    if not isinstance(pkg_name, str) or not pkg_name:
+        return _placeholder_for_manifest(manifest)
+    for d in deps:
+        if (d.declared_in == manifest.path
+                and d.name == pkg_name):
+            return d
+    return Dependency(
+        ecosystem=manifest.ecosystem,
+        name=pkg_name,
+        version=(data.get("version")
+                 if isinstance(data.get("version"), str) else None),
+        declared_in=manifest.path,
+        scope="main",
+        is_lockfile=False,
+        pin_style=PinStyle.UNKNOWN,
+        direct=True,
+        purl=f"pkg:{manifest.ecosystem.lower()}/{pkg_name}",
+        parser_confidence=Confidence(
+            "high",
+            reason="package's own name from manifest data.name",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -136,12 +187,44 @@ def _scan_one(path: Path, host: Dependency) -> List[InstallHookFinding]:
         body = scripts.get(key)
         if not isinstance(body, str) or not body.strip():
             continue
-        reasons = [why for rgx, why in _DANGEROUS_PATTERNS
-                   if rgx.search(body)]
-        hit = InstallHookHit(script_key=key,
-                             script_body=body.strip(),
-                             reasons=reasons)
-        if reasons:
+        analysis = _hook_patterns.analyse_body(body)
+        # Resolve in-tree path references from the body.  Adversarial
+        # safety + classification logic lives in
+        # :mod:`_intree_resolve`.  Failures here are silent — never
+        # fail a scan on a path-resolution edge case.
+        try:
+            intree_targets = tuple(
+                _intree_resolve.resolve_intree_targets(body, path.parent),
+            )
+        except Exception as exc:                     # pragma: no cover
+            logger.debug(
+                "sca.supply_chain.install_hooks: intree resolve raised %r "
+                "for %s — continuing without intree evidence",
+                exc, path,
+            )
+            intree_targets = ()
+        intree_has_binary = any(
+            t.is_executable_payload for t in intree_targets
+        )
+        hit = InstallHookHit(
+            script_key=key,
+            script_body=body.strip(),
+            reasons=analysis.reasons,
+            intree_targets=intree_targets,
+            reads_credentials=analysis.reads_credentials,
+            has_publish_action=analysis.has_publish_action,
+        )
+        # Phase 5 worm-shape: install hook reads credentials AND
+        # invokes a publish action.  Suppress when the host package
+        # is in the publish-helpers allowlist (semantic-release et
+        # al. legitimately do both at runtime; the malicious shape
+        # is doing it from an INSTALL hook on an unrelated package).
+        worm_shape = (
+            analysis.reads_credentials
+            and analysis.has_publish_action
+            and not _hook_patterns.is_publish_helper(host)
+        )
+        if analysis.reasons:
             out.append(InstallHookFinding(
                 dependency=host,
                 hit=hit,
@@ -149,6 +232,43 @@ def _scan_one(path: Path, host: Dependency) -> List[InstallHookFinding]:
                 confidence=Confidence(
                     "high",
                     reason="install hook matches known-dangerous pattern",
+                ),
+            ))
+        elif worm_shape:
+            # Standalone-high: an install hook that BOTH reads
+            # credentials AND invokes a publish action is the
+            # self-replication footprint.  Composite scoring on top
+            # promotes further when paired with BINARY/EGRESS.
+            out.append(InstallHookFinding(
+                dependency=host,
+                hit=hit,
+                severity="high",
+                confidence=Confidence(
+                    "high",
+                    reason=(
+                        "install hook reads credentials AND invokes "
+                        "a publish action (self-replication shape)"
+                    ),
+                ),
+            ))
+        elif intree_has_binary:
+            # Hook executes a binary that ships in the package's own
+            # source tree.  Promote from ``low`` (the generic "hook
+            # present" branch) to ``medium`` standalone; composite
+            # scoring (Phase 1) then pairs this HOOK family signal
+            # with the BINARY family signal that
+            # :mod:`binary_in_package` (Phase 3) emits at the same
+            # path → critical.
+            out.append(InstallHookFinding(
+                dependency=host,
+                hit=hit,
+                severity="medium",
+                confidence=Confidence(
+                    "high",
+                    reason=(
+                        "install hook executes a binary that ships in "
+                        "the same source tree"
+                    ),
                 ),
             ))
         else:
@@ -162,13 +282,6 @@ def _scan_one(path: Path, host: Dependency) -> List[InstallHookFinding]:
                 ),
             ))
     return out
-
-
-def _host_dep(deps: List[Dependency], manifest: Manifest) -> Optional[Dependency]:
-    for d in deps:
-        if d.declared_in == manifest.path:
-            return d
-    return None
 
 
 def _placeholder_for_manifest(manifest: Manifest) -> Dependency:

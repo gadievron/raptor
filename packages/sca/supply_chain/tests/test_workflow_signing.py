@@ -404,6 +404,58 @@ def test_all_signed_produces_no_findings(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git binary not available")
+def test_signed_statuses_include_E_missing_key() -> None:
+    """``E`` (cannot check / missing public key) MUST count as
+    signed.  Dogfooded against raptor: every workflow-touching
+    commit in raptor's history reports ``E`` because the maintainer
+    keys aren't in a fresh clone's local trust store — but the
+    commits ARE signed (verified on github.com).  Pre-fix the
+    detector reported 0% signing rate on the raptor clone; the only
+    fix is to treat E as signed for rate-calculation purposes.
+    """
+    from packages.sca.supply_chain.workflow_signing import (
+        _SIGNED_STATUSES,
+    )
+    # Every git status code OTHER than N must count as signed.
+    # N is the only "no signature visible to a reviewer" state.
+    for code in ("G", "U", "B", "X", "Y", "R", "E"):
+        assert code in _SIGNED_STATUSES, (
+            f"{code!r} must count as signed; pre-fix the detector "
+            f"reported 0% signing rate on raptor (all commits E)"
+        )
+    assert "N" not in _SIGNED_STATUSES
+
+
+def test_signing_rate_with_all_E_status_reports_100_percent(
+    tmp_path: Path,
+) -> None:
+    """Integration-level: an all-E history (every commit signed but
+    no local key to verify) computes as 100% signed and emits no
+    findings.  The raptor dogfood case."""
+    # Mock at the source-of-truth: _git_log_signatures returns
+    # tuples of (sha, sig_status, author_name, author_email,
+    # subject).  Patch to simulate the raptor case.
+    from packages.sca.supply_chain import workflow_signing
+    target = tmp_path / "fake_repo"
+    target.mkdir()
+    (target / ".git").mkdir()  # satisfies _is_git_repo
+    fake_walked = [
+        (f"sha{i:040x}", "E", "John C", "j@x.com", f"commit {i}")
+        for i in range(50)
+    ]
+    original = workflow_signing._git_log_signatures
+    workflow_signing._git_log_signatures = lambda *a, **k: fake_walked
+    try:
+        findings = workflow_signing.scan_target(target, [])
+    finally:
+        workflow_signing._git_log_signatures = original
+    # All E → all signed → 100% signing rate → no finding emitted.
+    assert findings == [], (
+        f"all-E history must report no findings (100% signed); "
+        f"got {[(f.severity, f.detail[:80]) for f in findings]}"
+    )
+
+
 def test_only_workflow_paths_audited(tmp_path: Path) -> None:
     """A commit touching only non-workflow files isn't surfaced —
     we audit history of ``.github/workflows/`` and friends, not

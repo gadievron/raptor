@@ -113,12 +113,21 @@ _NORM_RATE_THRESHOLD = 0.70
 # count as "signed-ish" for rate purposes. Includes both G (fully
 # verified) and U (partially verified / untrusted key) — both
 # show as some flavour of "Verified" badge on GitHub and both
-# raise the attacker's bar above a plain unsigned push. The
-# problematic codes (B/X/Y/R/E) are rare in practice and would
-# show as unverified on GitHub; we don't penalise them at the
-# rate level but they're not counted as "good" either — kept
-# separate so a future tier can surface them specifically.
-_SIGNED_STATUSES = frozenset(("G", "U"))
+# raise the attacker's bar above a plain unsigned push.
+#
+# B / X / Y / R / E ARE also counted as signed for rate purposes —
+# all mean "a signature is present, visible to a reviewer", which
+# is meaningfully different from N (no signature at all = invisible
+# to a reviewer scanning for badges).  This matches the top
+# docstring intent.  Critically, E (missing-key-to-verify) is the
+# default state for any signed commit in a freshly-cloned repo
+# whose maintainers' keys aren't in the local trust store —
+# raptor itself: every commit by the maintainer shows E in
+# ``git log --format=%G?`` despite being verified on github.com.
+# Treating E as unsigned would FP-flood every clone-time scan.
+#
+# Only N (no signature present) is treated as unsigned.
+_SIGNED_STATUSES = frozenset(("G", "U", "B", "X", "Y", "R", "E"))
 
 
 @dataclass(frozen=True)

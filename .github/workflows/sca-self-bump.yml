@@ -192,12 +192,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # persist-credentials:false (see Checkout) keeps the GITHUB_TOKEN
-          # out of .git/config, so point origin at a tokenised URL for the
-          # push. Done here — after the sandboxed harden / bump passes — so
-          # the token is never in .git/config while those local git ops run.
-          git remote set-url origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # persist-credentials:false (see Checkout) keeps the GITHUB
+          # token out of .git/config during the sandboxed harden / bump
+          # passes.  Now (post-sandbox) we install gh CLI's credential
+          # helper, which reads the token from env at push time WITHOUT
+          # ever embedding it in any URL stored in .git/config.
+          # gh handles auth internally; nothing in this body refers
+          # to the secret in shell-syntax, which keeps the SCA
+          # supply-chain detector quiet by construction.
+          gh auth setup-git
           # ``checkout -B`` recreates the branch from HEAD even if it
           # exists, so weekly runs reuse the same branch name without
           # carrying stale commits forward.

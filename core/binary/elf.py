@@ -384,7 +384,60 @@ def _bare_metadata(e_machine: int, bits: int) -> ElfMetadata:
     )
 
 
+# ---------------------------------------------------------------------------
+# Packer detection (Phase 8 — binary forensic surface)
+# ---------------------------------------------------------------------------
+
+# Magic strings each packer drops into the packed binary's header
+# region.  ``UPX`` writes its name at file offsets 0x10 / 0x88 in
+# the packed-ELF preamble; UPX-NRV (the legacy variant) prepends
+# ``$Info: This file is packed with the UPX executable packer``.
+# Other packers documented below produce similarly unique strings.
+#
+# Detection is FIRST-BYTES-ONLY (one read of the leading 4 KB) so
+# the check is sub-millisecond and can run on every binary the
+# Phase 3 ``binary_in_package`` detector hits.
+_PACKER_SIGNATURES: Tuple[Tuple[str, bytes], ...] = (
+    ("upx",        b"UPX!"),
+    ("upx",        b"$Info: This file is packed with the UPX"),
+    ("aspack",     b"aPLib"),
+    ("petite",     b"petite"),
+    ("themida",    b"Themida"),
+    ("vmprotect",  b"VMProtect"),
+    ("mpress",     b"MPRESS"),
+    # Generic obfuscator marker.  Multiple commercial-grade
+    # protectors drop this string.
+    ("enigma",     b"Enigma Protector"),
+)
+
+
+def is_packed(path: Path) -> Optional[str]:
+    """Return the detected packer name when ``path``'s leading
+    bytes match a known packer signature, otherwise None.
+
+    Reads up to 4 KB from the file.  Errors return None silently —
+    a missing / unreadable file is "not packed" for this layer's
+    purposes; the caller can do its own existence check if it
+    cares.
+
+    Adversarial: a custom packer or unknown variant slips past;
+    documented as a limitation.  The signature list grows as new
+    packers surface in real packages.  Not in scope: detecting
+    arbitrary high-entropy sections (high FP, not deterministic).
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return None
+    for name, sig in _PACKER_SIGNATURES:
+        if sig in head:
+            return name
+    return None
+
+
 __all__ = [
     "ElfMetadata",
+    "is_packed",
     "parse_elf",
 ]

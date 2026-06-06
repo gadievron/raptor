@@ -38,20 +38,27 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from ..models import (
+    Confidence,
     Dependency,
     Manifest,
     SupplyChainFinding,
 )
 from . import artefacts as _artefacts
+from . import binary_in_package as _binary_in_package
 from . import exfil_destinations as _exfil
 from . import gha_drift as _gha_drift
+from . import gha_secret_flow as _gha_secret_flow
 from . import gha_freshness as _gha_freshness
 from . import gha_sunset as _gha_sunset
 from . import git_drift as _git_drift
 from . import cargo_build_scripts as _cargo_build
+from . import commit_provenance as _commit_provenance
+from . import composer_lifecycle_hooks as _composer_lifecycle_hooks
 from . import install_hooks as _install_hooks
 from . import orphan_commit_dep as _orphan_commit_dep
 from . import python_imports as _python_imports
+from . import python_lifecycle_hooks as _python_lifecycle_hooks
+from . import rubygems_lifecycle_hooks as _rubygems_lifecycle_hooks
 from . import registry_metadata as _registry_metadata
 from . import sentinel as _sentinel
 from . import slopsquat as _slopsquat
@@ -95,6 +102,26 @@ def evaluate(
     for hit in _install_hooks.scan_manifests(manifests_list, deps_list):
         out.append(_install_hook_to_finding(hit))
 
+    for plh in _python_lifecycle_hooks.scan_manifests(
+        manifests_list, deps_list,
+    ):
+        out.append(_python_lifecycle_to_finding(plh))
+
+    for clh in _composer_lifecycle_hooks.scan_manifests(
+        manifests_list, deps_list,
+    ):
+        out.append(_composer_lifecycle_to_finding(clh))
+
+    for rlh in _rubygems_lifecycle_hooks.scan_target(
+        target, manifests_list, deps_list,
+    ):
+        out.append(_rubygems_lifecycle_to_finding(rlh))
+
+    for cpf in _commit_provenance.scan_target(
+        target, manifests_list, deps_list,
+    ):
+        out.append(_commit_provenance_to_finding(cpf))
+
     for och in _orphan_commit_dep.scan_manifests(manifests_list, deps_list):
         out.append(_orphan_commit_to_finding(och))
 
@@ -125,6 +152,11 @@ def evaluate(
     for art in _artefacts.scan_target(target, manifests_list):
         out.append(_artefact_to_finding(art))
 
+    for bip in _binary_in_package.scan_target(
+        target, manifests_list, deps_list,
+    ):
+        out.append(_binary_in_package_to_finding(bip))
+
     for it in _python_imports.scan_target(
         target, manifests_list, cache=cache,
     ):
@@ -135,6 +167,11 @@ def evaluate(
 
     for gha in _gha_drift.scan_target(target, manifests_list):
         out.append(_gha_drift_to_finding(gha))
+
+    for sf in _gha_secret_flow.scan_target(
+        target, manifests_list, deps_list,
+    ):
+        out.append(_gha_secret_flow_to_finding(sf))
 
     # Sunset detector consumes the Dependency rows already emitted
     # by ``parsers.inline_installs.parse_gha_workflow`` (ecosystem
@@ -184,6 +221,14 @@ def evaluate(
     # Each signal alone is moderate noise; the conjunction is the
     # actual attack signature.
     _escalate_cross_detector(out)
+
+    # Generalised composite scoring across distinct detector families
+    # (see ``composite.py`` for the family map + promotion rules).
+    # Runs AFTER the slopsquat-specific escalation above so any
+    # per-stack severity changes are already in place before the
+    # family-level chokepoint sees them.
+    from . import composite as _composite  # local to avoid cycles
+    out = _composite.apply(out)
 
     return out
 
@@ -321,9 +366,153 @@ def _install_hook_to_finding(
             "script_key": hit.hit.script_key,
             "script_body": _truncate(hit.hit.script_body),
             "reasons": list(hit.hit.reasons),
+            # In-tree path references the hook body resolves to —
+            # populated by ``_intree_resolve``.  Each entry includes
+            # the path relative to the project root + the magic-byte
+            # classification.  Composite scoring (Phase 1) pairs the
+            # ``intree_has_binary`` signal with ``binary_in_package``
+            # findings on the same dep to escalate to critical.
+            "intree_targets": [
+                {"path": str(t.path), "kind": t.kind}
+                for t in hit.hit.intree_targets
+            ],
+            "intree_has_binary": any(
+                t.is_executable_payload for t in hit.hit.intree_targets
+            ),
+            # Phase 5 conjunction flags — composite scoring uses these
+            # to detect the worm/credential-stealer shape (HOOK family
+            # base plus the C+G conjunction within a single hook).
+            "reads_credentials": hit.hit.reads_credentials,
+            "has_publish_action": hit.hit.has_publish_action,
         },
         severity=hit.severity,             # type: ignore[arg-type]
         confidence=hit.confidence,
+    )
+
+
+def _python_lifecycle_to_finding(
+    plh: _python_lifecycle_hooks.PythonLifecycleFinding,
+) -> SupplyChainFinding:
+    """``setup.py`` execution is the Python equivalent of an install
+    hook — emit under the ``install_hook_suspicious`` kind so
+    composite scoring's HOOK family picks it up."""
+    why = ", ".join(plh.hit.reasons) if plh.hit.reasons else "hook present"
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:install_hook_suspicious:"
+            f"{plh.dependency.ecosystem}:{plh.dependency.name}:"
+            f"setup.py:{plh.dependency.declared_in}"
+        ),
+        kind="install_hook_suspicious",
+        dependency=plh.dependency,
+        detail=(
+            f"`setup.py` executes at install time; "
+            f"reason: {why}; body: {_truncate(plh.hit.script_body)}"
+        ),
+        evidence={
+            "script_key": plh.hit.script_key,
+            "script_body": _truncate(plh.hit.script_body),
+            "reasons": list(plh.hit.reasons),
+            "reads_credentials": plh.hit.reads_credentials,
+            "has_publish_action": plh.hit.has_publish_action,
+            "ecosystem": "PyPI",
+        },
+        severity=plh.severity,                # type: ignore[arg-type]
+        confidence=plh.confidence,
+    )
+
+
+def _composer_lifecycle_to_finding(
+    clh: _composer_lifecycle_hooks.ComposerLifecycleFinding,
+) -> SupplyChainFinding:
+    why = ", ".join(clh.hit.reasons) if clh.hit.reasons else "hook present"
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:install_hook_suspicious:"
+            f"{clh.dependency.ecosystem}:{clh.dependency.name}:"
+            f"{clh.hit.script_key}:{clh.dependency.declared_in}"
+        ),
+        kind="install_hook_suspicious",
+        dependency=clh.dependency,
+        detail=(
+            f"`scripts.{clh.hit.script_key}` runs at composer "
+            f"install time; reason: {why}; body: "
+            f"{_truncate(clh.hit.script_body)}"
+        ),
+        evidence={
+            "script_key": clh.hit.script_key,
+            "script_body": _truncate(clh.hit.script_body),
+            "reasons": list(clh.hit.reasons),
+            "reads_credentials": clh.hit.reads_credentials,
+            "has_publish_action": clh.hit.has_publish_action,
+            "ecosystem": "Composer",
+        },
+        severity=clh.severity,                # type: ignore[arg-type]
+        confidence=clh.confidence,
+    )
+
+
+def _commit_provenance_to_finding(
+    cpf: _commit_provenance.CommitProvenanceFinding,
+) -> SupplyChainFinding:
+    h = cpf.hit
+    short_sha = h.commit_sha[:12]
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:commit_provenance_drift:{h.commit_sha}"
+        ),
+        kind="commit_provenance_drift",
+        dependency=cpf.dependency,
+        detail=(
+            f"commit {short_sha} touching dependency manifest(s) "
+            f"claims bot/automation identity "
+            f"({h.author_name} <{h.author_email}>), is unsigned, "
+            f"and has author/committer date skew of {h.skew_days} days "
+            f"— forgery-shape conjunction worth review"
+        ),
+        evidence={
+            "commit_sha": h.commit_sha,
+            "sig_status": h.sig_status,
+            "author_name": h.author_name,
+            "author_email": h.author_email,
+            "author_date": h.author_date_iso,
+            "committer_date": h.committer_date_iso,
+            "skew_days": h.skew_days,
+            "subject": _truncate(h.subject, limit=200),
+            "paths_touched": list(h.paths_touched),
+        },
+        severity=cpf.severity,                # type: ignore[arg-type]
+        confidence=cpf.confidence,
+    )
+
+
+def _rubygems_lifecycle_to_finding(
+    rlh: _rubygems_lifecycle_hooks.RubyGemsLifecycleFinding,
+) -> SupplyChainFinding:
+    why = ", ".join(rlh.hit.reasons) if rlh.hit.reasons else "hook present"
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:install_hook_suspicious:"
+            f"{rlh.dependency.ecosystem}:{rlh.dependency.name}:"
+            f"{rlh.hit.script_key}"
+        ),
+        kind="install_hook_suspicious",
+        dependency=rlh.dependency,
+        detail=(
+            f"`{rlh.hit.script_key}` runs at gem install time "
+            f"(native extension build); reason: {why}; body: "
+            f"{_truncate(rlh.hit.script_body)}"
+        ),
+        evidence={
+            "script_key": rlh.hit.script_key,
+            "script_body": _truncate(rlh.hit.script_body),
+            "reasons": list(rlh.hit.reasons),
+            "reads_credentials": rlh.hit.reads_credentials,
+            "has_publish_action": rlh.hit.has_publish_action,
+            "ecosystem": "RubyGems",
+        },
+        severity=rlh.severity,                # type: ignore[arg-type]
+        confidence=rlh.confidence,
     )
 
 
@@ -599,6 +788,99 @@ def _artefact_to_finding(
         evidence={"path": str(art.path)},
         severity=art.severity,             # type: ignore[arg-type]
         confidence=art.confidence,
+    )
+
+
+def _gha_secret_flow_to_finding(
+    sf: _gha_secret_flow.SecretFlowHit,
+) -> SupplyChainFinding:
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:gha_secret_flow:"
+            f"{sf.workflow_path.name}:{sf.job_id}:"
+            f"{sf.step_index}:{sf.sink_kind}"
+        ),
+        kind="gha_secret_flow",
+        dependency=sf.dependency,
+        detail=sf.detail,
+        evidence={
+            "workflow_path": str(sf.workflow_path),
+            "job_id": sf.job_id,
+            "step_index": sf.step_index,
+            "sink_kind": sf.sink_kind,
+            "secret_names": list(sf.secret_names),
+        },
+        severity=sf.severity,                       # type: ignore[arg-type]
+        confidence=Confidence(
+            # ``tojson_secrets`` is the near-zero-FP anchor → high.
+            # ``computed_access`` and ``run_block`` are
+            # interpretation-sensitive → medium.  Others vary.
+            "high" if sf.sink_kind == "tojson_secrets" else "medium",
+            reason="static workflow-level taint shape",
+        ),
+    )
+
+
+def _binary_in_package_to_finding(
+    bip: _binary_in_package.BinaryHit,
+) -> SupplyChainFinding:
+    """Convert ``BinaryHit`` to ``SupplyChainFinding``.
+
+    Severity defaults to ``medium`` standalone — the composite
+    chokepoint promotes it to ``critical`` when ``install_hooks``
+    fires on the same dep with ``intree_has_binary`` evidence
+    (the Iron Worm A∧B archetype).
+
+    Phase 8 standalone promotions:
+      * A packed binary (UPX, Themida, VMProtect, ...) → high
+        regardless of other signals — packers are rare on
+        legitimate native modules.
+      * A populated high-severity capability bucket
+        (``exec``, ``network``, ``runtime_privilege``,
+        ``kernel_trace``) → high — these are the rootkit /
+        sandbox-escape / RCE / exfil vocabulary.
+    """
+    forensic = dict(bip.forensic_evidence)
+    severity = "medium"
+    promotion_reasons: List[str] = []
+    if "packer" in forensic:
+        severity = "high"
+        promotion_reasons.append(
+            f"binary is packed with {forensic['packer']}"
+        )
+    if forensic.get("high_severity_buckets"):
+        severity = "high"
+        promotion_reasons.append(
+            "imports include high-severity capability bucket(s): "
+            + ", ".join(forensic["high_severity_buckets"])
+        )
+    evidence = {
+        "path": bip.relpath,
+        "family": bip.family,
+    }
+    evidence.update(forensic)
+    if promotion_reasons:
+        evidence["forensic_promotion_reasons"] = promotion_reasons
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:supplychain:binary_in_package:"
+            f"{bip.dependency.ecosystem}:{bip.dependency.name}:"
+            f"{bip.relpath}"
+        ),
+        kind="binary_in_package",
+        dependency=bip.dependency,
+        detail=(
+            f"{bip.family.upper()} binary in published package tree at "
+            f"`{bip.relpath}`; not in any opt-in legitimate location"
+            + (f" — {'; '.join(promotion_reasons)}"
+               if promotion_reasons else "")
+        ),
+        evidence=evidence,
+        severity=severity,                  # type: ignore[arg-type]
+        confidence=Confidence(
+            "high",
+            reason="magic-byte classified; outside opt-in allowlist",
+        ),
     )
 
 
