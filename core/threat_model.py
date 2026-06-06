@@ -18,9 +18,118 @@ from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
 
 SCHEMA_VERSION = 2
+# Range of schema versions ``from_dict`` will accept. Anything
+# outside refuses to load rather than silently coerce; an out-of-
+# range version usually means the file is from a future RAPTOR
+# release or has been tampered with.
+SCHEMA_VERSION_MIN = 1
+SCHEMA_VERSION_MAX = SCHEMA_VERSION
+
 JSON_FILENAME = "threat-model.json"
 MARKDOWN_FILENAME = "THREAT_MODEL.md"
 REPORT_FILENAME = "threat-model-report.md"
+
+# Caps applied at adversarial-input boundaries. The threat model
+# is a small operator-authored document; sizes well beyond these
+# limits almost always mean a hostile or malformed input is
+# trying to make RAPTOR allocate forever or smuggle content
+# through a markdown / Mermaid / prompt renderer.
+_MAX_LIST_ENTRIES = 256                # any *list* field
+_MAX_STRING_BYTES = 4 * 1024           # any list entry / field value
+_MAX_NOTES_BYTES = 16 * 1024           # operator-prose notes field
+_MAX_EVIDENCE_RAW_BYTES = 32 * 1024    # ``raw`` evidence dict per outcome
+_EVIDENCE_RAW_KEY_ALLOWLIST = frozenset({
+    # Keys ``link_verified_outcomes`` is allowed to copy from
+    # ``data["evidence"]`` into the on-disk threat-model JSON.
+    # Everything else is dropped so an attacker who pre-stages a
+    # malicious evidence blob in ``run_dir`` can't smuggle
+    # arbitrary keys (including envelope-marker shaped keys) into
+    # the model.
+    "summary", "kind", "tool", "command", "exit_code",
+    "stdout_excerpt", "stderr_excerpt",
+    "url", "path", "line", "duration_ms",
+    "sandbox_outcome", "sanitizer", "rule_id",
+})
+
+
+def _clip_str(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
+    """Coerce ``value`` to str, strip control chars, cap length.
+
+    Used at every adversarial-input boundary entering the
+    threat model. Strips the C1 control-char range
+    (``escape_nonprintable``) and bounds total length. Returns
+    empty string on None.
+    """
+    if value is None:
+        return ""
+    s = escape_nonprintable(str(value))
+    if len(s) > byte_cap:
+        s = s[:byte_cap]
+    return s
+
+
+def _safe_for_render(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
+    """Sanitise a string for inclusion in a markdown bullet,
+    Mermaid label, or operator-facing report.
+
+    Strip structural characters BEFORE running
+    ``escape_nonprintable`` — otherwise the C1-control escape
+    converts real newlines into ``\x0a`` text and the
+    structural-strip becomes a no-op.
+
+    Defends against:
+    * markdown injection — newlines that could open a forged
+      ``## Heading`` section
+    * fenced-block escape — backticks
+    * markdown table escape — pipes
+    * Mermaid statement break — ``]`` / ``;`` / ``{`` / ``}``
+      that would let a label close its own node and forge new
+      Mermaid statements
+    * HTML / angle-bracket runs
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    # Structural-character strip FIRST, on the raw string.
+    s = s.replace("\r", " ").replace("\n", " ")
+    s = s.replace("`", "ʼ").replace("|", "ǀ")
+    s = s.replace("<", "‹").replace(">", "›")
+    s = s.replace("]", "❳").replace("[", "❲")
+    s = s.replace("{", "❴").replace("}", "❵")
+    s = s.replace(";", "·")
+    # NOW apply C1-control-character escape + length cap.
+    s = escape_nonprintable(s)
+    if len(s) > byte_cap:
+        s = s[:byte_cap]
+    return s
+
+
+def _clip_str_list(values: Any) -> list[str]:
+    """Variant of ``_coerce_str_list`` that also caps each entry's
+    byte length and the total entry count. Defends against
+    hostile JSON inputs claiming ``"focus_areas": [str * 1_000_000]``
+    or single entries 100 MB long."""
+    raw = _coerce_str_list(values)
+    capped = [_clip_str(v) for v in raw[:_MAX_LIST_ENTRIES]]
+    return capped
+
+
+def _resolve_inside(path: Path, project_out: Path) -> Optional[Path]:
+    """Return ``path.resolve()`` only if it lives inside
+    ``project_out.resolve()``. Defends against attacker-tampered
+    ``project.threat_model_path`` pointing at ``/etc/shadow`` or
+    elsewhere outside the project's expected output area.
+
+    Returns None when the path resolves outside (caller refuses
+    the I/O).
+    """
+    try:
+        resolved = Path(path).resolve()
+        project_root = Path(project_out).resolve()
+        resolved.relative_to(project_root)
+        return resolved
+    except (OSError, ValueError):
+        return None
 
 
 @dataclass
@@ -102,14 +211,43 @@ class ThreatModel:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ThreatModel":
         def _list(key: str) -> list[str]:
-            return _coerce_str_list(data.get(key))
+            # Caps each entry's byte length AND the total entry
+            # count. Defends against hostile JSON inputs of
+            # arbitrary size — see ``_clip_str_list``.
+            return _clip_str_list(data.get(key))
+
+        # Validate schema version range. Pre-fix
+        # ``int(data.get("version") or SCHEMA_VERSION)`` raised
+        # ``ValueError`` uncaught on ``{"version": "evil"}`` and
+        # silently accepted any int regardless of how far ahead /
+        # behind it was. Anything outside [MIN, MAX] either came
+        # from a future RAPTOR release or is tampered.
+        raw_version = data.get("version")
+        if raw_version is None:
+            version = SCHEMA_VERSION
+        else:
+            try:
+                version = int(raw_version)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"threat-model version must be an integer, got "
+                    f"{type(raw_version).__name__}"
+                )
+            if not (
+                SCHEMA_VERSION_MIN <= version <= SCHEMA_VERSION_MAX
+            ):
+                raise ValueError(
+                    f"threat-model schema version {version} outside "
+                    f"supported range "
+                    f"[{SCHEMA_VERSION_MIN}, {SCHEMA_VERSION_MAX}]"
+                )
 
         now = datetime.now(timezone.utc).isoformat()
         return cls(
-            version=int(data.get("version") or SCHEMA_VERSION),
-            project_name=str(data.get("project_name") or ""),
-            target=str(data.get("target") or ""),
-            summary=str(data.get("summary") or ""),
+            version=version,
+            project_name=_clip_str(data.get("project_name")),
+            target=_clip_str(data.get("target")),
+            summary=_clip_str(data.get("summary"), byte_cap=_MAX_NOTES_BYTES),
             assets=_list("assets"),
             entry_points=_list("entry_points"),
             trust_boundaries=_list("trust_boundaries"),
@@ -131,10 +269,10 @@ class ThreatModel:
             assumptions=_records("assumptions", data),
             evidence=_records("evidence", data),
             accepted_risks=_records("accepted_risks", data),
-            notes=str(data.get("notes") or ""),
-            source=str(data.get("source") or "operator"),
-            created_at=str(data.get("created_at") or now),
-            updated_at=str(data.get("updated_at") or now),
+            notes=_clip_str(data.get("notes"), byte_cap=_MAX_NOTES_BYTES),
+            source=_clip_str(data.get("source")) or "operator",
+            created_at=_clip_str(data.get("created_at")) or now,
+            updated_at=_clip_str(data.get("updated_at")) or now,
         )
 
 
@@ -371,7 +509,36 @@ def load_model(path: Path) -> Optional[ThreatModel]:
     return ThreatModel.from_dict(data)
 
 
-def save_model(model: ThreatModel, json_path: Path, markdown_path: Path) -> None:
+def save_model(
+    model: ThreatModel,
+    json_path: Path,
+    markdown_path: Path,
+    *,
+    expected_mtime: Optional[float] = None,
+) -> None:
+    """Persist the model to disk. When ``expected_mtime`` is
+    provided, refuses to write if the on-disk file's mtime has
+    changed — defends against the lost-update race where two
+    concurrent /agentic runs (or /agentic + ``threat-model lint``)
+    each load, mutate, and save without coordinating.
+
+    Callers that loaded the model should capture
+    ``json_path.stat().st_mtime`` at load time and pass it in.
+    Callers writing a brand-new model leave ``expected_mtime``
+    None (the no-op path).
+    """
+    if expected_mtime is not None and json_path.exists():
+        try:
+            actual_mtime = json_path.stat().st_mtime
+        except OSError:
+            actual_mtime = expected_mtime
+        if actual_mtime != expected_mtime:
+            raise RuntimeError(
+                f"threat model at {json_path} was modified by another "
+                f"writer (expected mtime {expected_mtime}, found "
+                f"{actual_mtime}); refusing to overwrite. Reload and "
+                f"retry."
+            )
     model.updated_at = datetime.now(timezone.utc).isoformat()
     json_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(json_path, model.to_dict())
@@ -654,6 +821,46 @@ def diff_context_map(model: ThreatModel, context_map: dict[str, Any]) -> dict[st
     }
 
 
+def _sanitise_raw_evidence(value: Any) -> dict[str, Any]:
+    """Bound + key-allowlist the ``raw`` evidence dict that gets
+    written into the on-disk threat-model JSON.
+
+    ``link_verified_outcomes`` reads outcome dicts produced by
+    ``collect_outcomes(run_dir)``. Pre-fix the entire
+    ``data["evidence"]`` dict was pasted verbatim — with no key
+    allowlist and no size cap. An attacker who can pre-stage an
+    outcome record (e.g. by writing a doctored file under a
+    run dir before /agentic processes it) could smuggle arbitrary
+    key/value pairs into the model and from there into every
+    subsequent ``render_markdown`` / ``render_report`` / ``--json``
+    consumer.
+
+    Keep only keys in ``_EVIDENCE_RAW_KEY_ALLOWLIST``; cap each
+    string value at ``_MAX_STRING_BYTES`` and the total dict at
+    ``_MAX_EVIDENCE_RAW_BYTES``.
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    running = 0
+    for k, v in value.items():
+        key = str(k)
+        if key not in _EVIDENCE_RAW_KEY_ALLOWLIST:
+            continue
+        if isinstance(v, (int, float, bool)) or v is None:
+            sanitised: Any = v
+        else:
+            sanitised = _clip_str(v)
+        running += len(key) + len(str(sanitised))
+        if running > _MAX_EVIDENCE_RAW_BYTES:
+            # Hit the cap — surface the truncation explicitly so
+            # operators reading the model see something happened.
+            out["_truncated"] = True
+            break
+        out[key] = sanitised
+    return out
+
+
 def link_verified_outcomes(model: ThreatModel, outcomes: Iterable[Any]) -> ThreatModel:
     """Attach oracle outcomes to the threat ledger in-place."""
     for outcome in outcomes:
@@ -673,7 +880,7 @@ def link_verified_outcomes(model: ThreatModel, outcomes: Iterable[Any]) -> Threa
             "file": data.get("file"),
             "reproducible": bool(data.get("reproducible")),
             "summary": _outcome_summary(data),
-            "raw": data.get("evidence") or {},
+            "raw": _sanitise_raw_evidence(data.get("evidence")),
         }
         model.evidence = _merge_records(model.evidence, [ev])
         for threat in model.threats:
@@ -702,17 +909,62 @@ def load_for_target(target: Path) -> Optional[ThreatModel]:
                 project = candidate
         if project is None:
             return None
-        configured = getattr(project, "threat_model_path", "")
-        json_path = Path(configured) if configured else project_threat_model_paths(project)[0]
+        json_path = _project_threat_model_json_path(project)
+        if json_path is None:
+            return None
         return load_model(json_path)
     except Exception:
         return None
 
 
+def _project_threat_model_json_path(project: Any) -> Optional[Path]:
+    """Resolve the threat-model JSON path for ``project`` with
+    containment defence.
+
+    ``project.threat_model_path`` is operator/tamper-influenceable
+    (it's read from ``~/.raptor/projects/<name>.json``). If an
+    attacker writes ``threat_model_path = "/etc/shadow"`` into
+    that file, every reader / writer of the threat model would
+    otherwise touch that arbitrary path.
+
+    Containment rule: the resolved path MUST live inside
+    ``project.output_dir``. Anything outside is refused (returns
+    None; caller treats as "no threat model").
+    """
+    output_dir = Path(getattr(project, "output_dir", "") or "")
+    if not str(output_dir):
+        return None
+    configured = getattr(project, "threat_model_path", "")
+    if configured:
+        candidate = Path(configured)
+        # Reject absolute paths from the JSON outright; only
+        # relative paths to be resolved against output_dir are
+        # legitimate.
+        if candidate.is_absolute():
+            resolved = _resolve_inside(candidate, output_dir)
+        else:
+            resolved = _resolve_inside(output_dir / candidate, output_dir)
+        if resolved is None:
+            # Attacker-tampered path; refuse rather than fall
+            # back silently.
+            return None
+        return resolved
+    return _resolve_inside(
+        project_threat_model_paths(project)[0], output_dir,
+    )
+
+
 def _render_list(title: str, values: list[str]) -> str:
+    # Escape per-bullet via ``_safe_for_render`` — strips newlines
+    # (otherwise a hostile entry could open a forged ``## Heading``
+    # section in the operator's markdown), neutralises backticks
+    # (fenced-block escape) and pipes (table-row escape). Defends
+    # against markdown injection through any field that ingests
+    # target-derived prose (focus_areas, known_bug_shapes,
+    # entry_points names from the context-map, etc.).
     lines = [f"## {title}", ""]
     if values:
-        lines.extend(f"- {v}" for v in values)
+        lines.extend(f"- {_safe_for_render(v)}" for v in values)
     else:
         lines.append("- TBC")
     lines.append("")
@@ -1160,7 +1412,14 @@ def _mermaid_id(value: str) -> str:
 
 
 def _mermaid_label(value: Any) -> str:
-    text = escape_nonprintable(str(value))
+    # Defends against Mermaid label-escape attacks where a
+    # hostile label like ``"]:::class`` or ``"]; flowchart LR; pwned``
+    # would otherwise break out of the node and forge new graph
+    # statements. ``_safe_for_render`` strips newlines + pipes +
+    # backticks before we apply the Mermaid quote-escape, so the
+    # final label can't smuggle a node-terminator + new
+    # statement.
+    text = _safe_for_render(value)
     return text.replace("\\", "\\\\").replace('"', '\\"')[:90]
 
 

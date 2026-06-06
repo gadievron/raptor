@@ -190,3 +190,195 @@ def test_load_for_target_does_not_use_unrelated_active_project(tmp_path):
 
     with patch("core.project.project.ProjectManager", return_value=FakeManager()):
         assert load_for_target(target) is None
+
+
+# ---------------------------------------------------------------
+# Security defences — added when PR #776 review surfaced the
+# substrate issues (path traversal / silent-coerce / unbounded
+# raw evidence / markdown+Mermaid injection / concurrent writes).
+# ---------------------------------------------------------------
+
+
+def test_from_dict_rejects_hostile_version_string():
+    from core.threat_model import ThreatModel
+    import pytest
+    with pytest.raises(ValueError, match="version"):
+        ThreatModel.from_dict({
+            "project_name": "x", "target": "/x",
+            "version": "evil",
+        })
+
+
+def test_from_dict_rejects_out_of_range_version():
+    from core.threat_model import ThreatModel
+    import pytest
+    with pytest.raises(ValueError, match="schema version"):
+        ThreatModel.from_dict({
+            "project_name": "x", "target": "/x",
+            "version": 999,
+        })
+
+
+def test_from_dict_caps_oversized_list_entries():
+    # Hostile JSON claims a million-entry focus_areas list, each
+    # entry 100 KB. Should be capped at _MAX_LIST_ENTRIES (256)
+    # and _MAX_STRING_BYTES per entry, not allocate forever.
+    from core.threat_model import ThreatModel
+    huge_value = "A" * (10 * 1024 * 1024)  # 10 MB single entry
+    model = ThreatModel.from_dict({
+        "project_name": "x", "target": "/x",
+        "focus_areas": [huge_value] * 1000,
+    })
+    assert len(model.focus_areas) <= 256
+    assert all(len(v) <= 4 * 1024 for v in model.focus_areas)
+
+
+def test_render_markdown_escapes_newline_injection(tmp_path):
+    # Adversarial focus_area: opens a new ## section via embedded
+    # newline. Pre-fix the renderer interpolated raw, forging
+    # operator-readable section headings at line-start. Markdown
+    # only treats ``## X`` as a heading at line-start, so the
+    # security property is "the ## Forged Section text does NOT
+    # appear at the start of any line." Inline (mid-bullet) is
+    # just text.
+    from core.threat_model import (
+        ThreatModel, render_markdown,
+    )
+    model = ThreatModel(
+        project_name="demo", target="/x",
+        focus_areas=["benign\n## Forged Section\nexfil"],
+    )
+    md = render_markdown(model)
+    # No line in the rendered markdown begins with "## Forged".
+    assert not any(
+        line.lstrip().startswith("## Forged") for line in md.splitlines()
+    )
+    assert "Forged Section" in md  # text preserved, structure not
+
+
+def test_render_markdown_escapes_fenced_block_injection():
+    from core.threat_model import (
+        ThreatModel, render_markdown,
+    )
+    model = ThreatModel(
+        project_name="demo", target="/x",
+        focus_areas=["foo```\nfake fenced\n```bar"],
+    )
+    md = render_markdown(model)
+    # Backticks should be replaced with the safe lookalike.
+    assert "```" not in md.replace("```\n", "").replace("\n```", "")
+
+
+def test_mermaid_label_strips_breakout_characters():
+    from core.threat_model import _mermaid_label
+    hostile = 'foo"]; flowchart LR; pwned -->|x|'
+    label = _mermaid_label(hostile)
+    # Mermaid statement terminator and pipe-bar both neutralised.
+    assert "]; flowchart" not in label
+    assert "|x|" not in label
+
+
+def test_sanitise_raw_evidence_drops_unallowed_keys():
+    from core.threat_model import _sanitise_raw_evidence
+    hostile = {
+        "summary": "ok",       # allowlisted
+        "tool": "sandbox",     # allowlisted
+        "secret_field": "x",   # NOT allowlisted — must drop
+        "trusted_data": "y",   # NOT allowlisted — must drop
+    }
+    out = _sanitise_raw_evidence(hostile)
+    assert "summary" in out and "tool" in out
+    assert "secret_field" not in out
+    assert "trusted_data" not in out
+
+
+def test_sanitise_raw_evidence_caps_total_size():
+    from core.threat_model import _sanitise_raw_evidence
+    # All keys allowlisted but each value is huge — total size
+    # cap kicks in via the _truncated marker.
+    hostile = {
+        "summary": "A" * 100_000,
+        "tool": "B" * 100_000,
+        "command": "C" * 100_000,
+    }
+    out = _sanitise_raw_evidence(hostile)
+    # Either the truncation marker is set, OR the total is
+    # bounded — both are valid outcomes of the cap.
+    assert out.get("_truncated") or sum(
+        len(str(v)) for v in out.values()
+    ) <= 32 * 1024 + 100  # +slack for the truncated marker
+
+
+def test_save_model_refuses_concurrent_overwrite(tmp_path):
+    # Two writers race: writer 1 loads, writer 2 loads + saves,
+    # writer 1 tries to save with the stale expected_mtime ->
+    # should refuse.
+    from core.threat_model import ThreatModel, save_model
+    json_path = tmp_path / "tm.json"
+    md_path = tmp_path / "tm.md"
+    model = ThreatModel(project_name="demo", target="/x")
+    save_model(model, json_path, md_path)
+    stale_mtime = json_path.stat().st_mtime
+
+    # Concurrent writer changes the file (simulate via touch +
+    # rewrite).
+    import time
+    time.sleep(0.05)
+    save_model(
+        ThreatModel(project_name="demo", target="/x", notes="updated"),
+        json_path, md_path,
+    )
+
+    # First writer tries to save with the stale mtime — refused.
+    import pytest
+    with pytest.raises(RuntimeError, match="modified by another"):
+        save_model(
+            ThreatModel(project_name="demo", target="/x", notes="lost"),
+            json_path, md_path,
+            expected_mtime=stale_mtime,
+        )
+
+
+def test_project_threat_model_json_path_refuses_traversal(tmp_path):
+    # Operator-tamper-influenced project.json sets
+    # threat_model_path to an absolute path outside output_dir.
+    # Must be refused.
+    from core.threat_model import _project_threat_model_json_path
+    proj_out = tmp_path / "proj_out"
+    proj_out.mkdir()
+    proj = SimpleNamespace(
+        name="demo",
+        target=str(tmp_path / "target"),
+        output_dir=str(proj_out),
+        threat_model_path="/etc/shadow",
+    )
+    assert _project_threat_model_json_path(proj) is None
+
+
+def test_project_threat_model_json_path_refuses_relative_escape(tmp_path):
+    from core.threat_model import _project_threat_model_json_path
+    proj_out = tmp_path / "proj_out"
+    proj_out.mkdir()
+    proj = SimpleNamespace(
+        name="demo",
+        target=str(tmp_path / "target"),
+        output_dir=str(proj_out),
+        threat_model_path="../../etc/passwd",
+    )
+    assert _project_threat_model_json_path(proj) is None
+
+
+def test_project_threat_model_json_path_accepts_in_tree_relative(tmp_path):
+    # Relative path that resolves INSIDE output_dir is fine.
+    from core.threat_model import _project_threat_model_json_path
+    proj_out = tmp_path / "proj_out"
+    proj_out.mkdir()
+    proj = SimpleNamespace(
+        name="demo",
+        target=str(tmp_path / "target"),
+        output_dir=str(proj_out),
+        threat_model_path="custom/tm.json",
+    )
+    result = _project_threat_model_json_path(proj)
+    assert result is not None
+    assert result.is_relative_to(proj_out.resolve())

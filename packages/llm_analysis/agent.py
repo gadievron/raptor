@@ -933,9 +933,24 @@ class AutonomousSecurityAgentV2:
             from core.security.prompt_envelope import UntrustedBlock
             threat_model = load_for_target(vuln.repo_path)
             if threat_model:
+                # Distinguish operator-authored vs auto-derived
+                # models. A context-map / agentic-derived model
+                # has its title / source / sink fields built from
+                # /understand --map output, which is itself an LLM
+                # reading the UNTRUSTED target repo. A malicious
+                # symbol name in the target code can therefore
+                # ride into this block. Label accordingly so the
+                # analyst prompt weighs it as untrusted upstream
+                # signal, not as the operator's trusted threat
+                # model.
+                source = (threat_model.source or "operator").lower()
+                if source in ("operator", "manual"):
+                    kind_label = "operator-threat-model"
+                else:
+                    kind_label = "untrusted-derived-threat-model"
                 extra_blocks.append(UntrustedBlock(
                     content=prompt_context(threat_model),
-                    kind="operator-threat-model",
+                    kind=kind_label,
                     origin="project-threat-model",
                 ))
         except Exception:

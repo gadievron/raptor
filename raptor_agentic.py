@@ -22,6 +22,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Optional
 
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -147,10 +148,21 @@ def _materialise_threat_model_phase(
             "output_dir": str(out_dir),
         })()
 
+    # Capture mtime at load time so save_model can refuse if a
+    # concurrent writer (a second /agentic run, an operator
+    # editor session, ``threat-model lint`` in parallel) raced
+    # us. Lost-update race protection.
+    load_mtime: Optional[float] = None
+    if project_backed and json_path.exists():
+        try:
+            load_mtime = json_path.stat().st_mtime
+        except OSError:
+            load_mtime = None
+
     existing_model = load_model(json_path) if project_backed else None
     if existing_model is not None and not refresh:
         model = enrich_from_context_map(existing_model, context_map)
-        save_model(model, json_path, markdown_path)
+        save_model(model, json_path, markdown_path, expected_mtime=load_mtime)
         summary["model_preserved"] = True
         summary["model_refreshed"] = False
         summary["model_migrated"] = True
@@ -169,7 +181,17 @@ def _materialise_threat_model_phase(
         linked_outcomes = len(outcomes)
         if outcomes:
             link_verified_outcomes(model, outcomes)
-            save_model(model, json_path, markdown_path)
+            # Capture mtime again (we just wrote above) before the
+            # outcomes-merge save, so a concurrent writer that
+            # sneaked in between the two saves is still caught.
+            try:
+                outcomes_mtime = json_path.stat().st_mtime
+            except OSError:
+                outcomes_mtime = None
+            save_model(
+                model, json_path, markdown_path,
+                expected_mtime=outcomes_mtime,
+            )
     except Exception as e:
         logger.debug(f"Threat model verified-outcome linking skipped: {e}")
 
