@@ -31,6 +31,7 @@ import httpx
 import pytest
 
 from core.llm.dispatcher.auth import (
+    BedrockTransformError,
     CredentialStore,
     build_rules,
 )
@@ -238,6 +239,32 @@ def test_runtime_sigv4_invoke_path(upstream, tmp_path):
     assert f"/{_REGION}/bedrock/aws4_request" in auth
 
 
+def test_runtime_rejects_count_tokens_path(upstream, tmp_path):
+    """count_tokens has no InvokeModel equivalent — short-circuit at
+    the dispatcher rather than burn a network round trip to AWS just
+    to get a different opaque 4xx back.  Error mentions
+    ``RAPTOR_BEDROCK_API=mantle`` so the operator knows where to go."""
+    endpoint, _ = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-runtime-ct-reject",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d, {"model": _MODEL, "messages": []},
+            path="/bedrock/runtime/v1/messages/count_tokens",
+        )
+        assert resp.status_code == 400
+        assert "RAPTOR_BEDROCK_API=mantle" in resp.json()["error"]
+    finally:
+        d.shutdown()
+
+
 def test_runtime_rejects_streaming(upstream, tmp_path):
     """InvokeModel doesn't have a JSON-line streaming protocol (the
     streaming sibling is ``InvokeModelWithResponseStream`` with a
@@ -269,6 +296,95 @@ def test_runtime_rejects_streaming(upstream, tmp_path):
         assert "RAPTOR_BEDROCK_API=mantle" in resp.json()["error"]
     finally:
         d.shutdown()
+
+
+def test_mantle_rejects_path_traversal():
+    """A compromised worker sending a raw HTTP request with ``..``
+    segments in the path field — bypassing httpx's client-side URL
+    normalisation — would otherwise reach an arbitrary URL under the
+    Bedrock host with the parent's bearer/SigV4 attached.  ``..``
+    segments must be rejected at the ``prepare_request`` hook BEFORE
+    signing.
+
+    Tested by calling ``_bedrock_prepare`` directly — httpx in the
+    integration helper sanitises ``..`` client-side so the
+    dispatcher only ever sees a normalised path through that path.
+    The threat we care about is a raw socket-level forge, which this
+    direct call models faithfully."""
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION,
+        endpoint="https://example.invalid",
+    )
+    rule = build_rules(store)["bedrock"]
+    for path in (
+        "/mantle/v1/messages/../../foo",
+        "/runtime/v1/messages/../../foo",
+        "/v1/messages/../etc/passwd",
+    ):
+        with pytest.raises(BedrockTransformError) as ei:
+            rule.prepare_request("POST", path, {}, b"{}")
+        assert ei.value.status == 400
+        assert "path traversal" in ei.value.message
+
+
+def test_mantle_rejects_unknown_path(upstream, tmp_path):
+    """Mantle's surface is finite: ``/v1/messages`` and
+    ``/v1/messages/count_tokens``.  Forwarding anything else gets a
+    confusing AWS 4xx — reject upfront with operator-actionable
+    guidance."""
+    endpoint, _ = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-mantle-unknown",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d, {"model": _MODEL, "messages": []},
+            path="/bedrock/mantle/v1/models",
+        )
+        assert resp.status_code == 400
+        assert "not a supported Mantle endpoint" in resp.json()["error"]
+    finally:
+        d.shutdown()
+
+
+def test_anthropic_version_null_overwritten(upstream, tmp_path):
+    """A worker (or operator) supplying ``anthropic_version: null`` —
+    common JSON-templating typo — must NOT be forwarded verbatim.
+    Mantle rejects null with an opaque 4xx, so we treat anything
+    that isn't a non-empty string as "operator wants the default"
+    and fill in the canonical value."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-aver-null",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "messages": [],
+                "anthropic_version": None,
+            },
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    sent = json.loads(captured()["body"])
+    assert sent["anthropic_version"] == "bedrock-2023-05-31"
 
 
 def test_runtime_targets_bedrock_runtime_host(tmp_path, monkeypatch):
@@ -725,6 +841,333 @@ def test_bedrock_signing_failure_returns_502(tmp_path, monkeypatch):
 
     audit = (tmp_path / "audit.jsonl").read_text()
     assert "provider.transform_error" in audit
+
+
+# ---------------------------------------------------------------------------
+# Bearer-token expiry — JWT exp decode + pre-flight rejection
+# ---------------------------------------------------------------------------
+
+
+def _make_jwt_with_exp(exp_unix: int) -> str:
+    """Build a syntactically-valid (but unsigned) JWT carrying a single
+    ``exp`` claim — only the payload is parsed by our decoder; header
+    and signature can be anything dot-separated."""
+    import base64 as _b64
+    payload = json.dumps({"exp": exp_unix}).encode("utf-8")
+    payload_b64 = _b64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    return f"header.{payload_b64}.signature"
+
+
+def test_decode_bedrock_bearer_exp_jwt():
+    """JWT-shaped tokens with an exp claim are decoded to a unix
+    timestamp.  Long-term API keys (opaque non-JWT strings) return
+    None.  Garbage returns None."""
+    from core.llm.dispatcher.auth import _decode_bedrock_bearer_exp
+
+    assert _decode_bedrock_bearer_exp(_make_jwt_with_exp(1234567890)) == 1234567890
+    # opaque long-term key
+    assert _decode_bedrock_bearer_exp("ABSK-long-term-opaque-key") is None
+    # malformed
+    assert _decode_bedrock_bearer_exp("") is None
+    assert _decode_bedrock_bearer_exp("not.enough") is None
+    assert _decode_bedrock_bearer_exp("a.b.c.d") is None
+    assert _decode_bedrock_bearer_exp("a.!!!notbase64.c") is None
+
+
+def test_credential_store_caches_bearer_exp_at_init(monkeypatch):
+    """exp is decoded once at construction so the hot path doesn't
+    re-parse on every request."""
+    import time as _t
+    future = int(_t.time()) + 3600
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", _make_jwt_with_exp(future))
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    store = CredentialStore()
+    assert store.bedrock_bearer_exp() == future
+    assert store.bedrock_bearer_expired() is False
+
+
+def test_credential_store_bearer_expired_true_when_exp_past():
+    """An already-expired JWT bearer flips ``bedrock_bearer_expired()``."""
+    import time as _t
+    past = int(_t.time()) - 60
+    store = CredentialStore()
+    store.set_aws(bearer_token=_make_jwt_with_exp(past))
+    assert store.bedrock_bearer_expired() is True
+
+
+def test_credential_store_opaque_bearer_never_expired():
+    """Long-term API keys are opaque strings — no exp signal, never
+    treated as expired."""
+    store = CredentialStore()
+    store.set_aws(bearer_token="ABSK-opaque-long-term")
+    assert store.bedrock_bearer_exp() is None
+    assert store.bedrock_bearer_expired() is False
+
+
+def test_dispatcher_rejects_expired_bearer_preflight(tmp_path):
+    """Mantle path with an expired JWT bearer fails fast (401 + clear
+    operator guidance) BEFORE any network call.  Saves the round trip
+    and surfaces an actionable error instead of opaque AWS 401."""
+    import time as _t
+    past = int(_t.time()) - 60
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token=_make_jwt_with_exp(past),
+        region=_REGION,
+        endpoint="https://example.invalid",
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-expired-mantle",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d, {"model": _MODEL, "messages": []},
+            path="/bedrock/mantle/v1/messages",
+        )
+        assert resp.status_code == 401
+        assert "expired" in resp.json()["error"]
+        # Same gate on the runtime path.
+        resp2 = _post_bedrock(
+            d, {"model": _MODEL, "messages": []},
+            path="/bedrock/runtime/v1/messages",
+        )
+        assert resp2.status_code == 401
+        assert "expired" in resp2.json()["error"]
+    finally:
+        d.shutdown()
+
+
+def test_bedrock_session_warnings_short_bearer(monkeypatch):
+    """JWT bearer expiring before the expected run duration gets a
+    countdown warning with the operator escape hatch."""
+    import time as _t
+    soon = int(_t.time()) + 600   # 10 minutes
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", _make_jwt_with_exp(soon))
+    store = CredentialStore()
+    warnings = store.bedrock_session_warnings(expected_run_seconds=3600)
+    assert any(
+        "expires in" in w and "long-term API key" in w for w in warnings
+    )
+
+
+def test_bedrock_session_warnings_unmanaged_asia_env(monkeypatch):
+    """ASIA env credentials with no profile + no creds file get the
+    'configure aws sso' guidance."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ASIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "session")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setattr(
+        "core.llm.dispatcher.auth.Path.is_file",
+        lambda self: False,
+    )
+    store = CredentialStore()
+    warnings = store.bedrock_session_warnings()
+    assert any("short-lived" in w and "aws configure sso" in w for w in warnings)
+
+
+def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
+    """AKIA env creds + no bearer + botocore importable = the well-
+    trodden setup, no warnings.  Mocked here so the test passes both
+    in CI (no botocore) and on dev hosts (where it is installed) —
+    we're only asserting the behaviour when botocore IS available."""
+    import sys as _sys
+    import types as _types
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    # Mock botocore as importable so the SigV4-without-botocore
+    # warning doesn't fire in CI environments that don't have it
+    # installed — irrelevant for what this test asserts.
+    if "botocore" not in _sys.modules:
+        monkeypatch.setitem(
+            _sys.modules, "botocore", _types.ModuleType("botocore"),
+        )
+    # Drop the no-creds-file requirement so this test doesn't depend
+    # on whether the dev host has ~/.aws/credentials.  We're only
+    # asserting that AKIA + no bearer + botocore = silent.
+    monkeypatch.setattr(
+        "core.llm.dispatcher.auth.Path.is_file",
+        lambda self: False,
+    )
+    monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
+    store = CredentialStore()
+    assert store.bedrock_session_warnings() == []
+
+
+def test_bedrock_session_warnings_sigv4_intent_without_botocore(monkeypatch):
+    """When SigV4 credentials are configured (env keys, profile, or
+    shared credentials file) but ``botocore`` isn't importable, warn
+    loudly at startup — otherwise the operator's first request would
+    be a confusing 503."""
+    import builtins as _b
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+
+    real_import = _b.__import__
+    def _no_botocore(name, *a, **k):
+        if name == "botocore" or name.startswith("botocore."):
+            raise ImportError("no botocore in this test")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(_b, "__import__", _no_botocore)
+
+    store = CredentialStore()
+    warnings = store.bedrock_session_warnings()
+    assert any(
+        "botocore" in w and "pip install" in w for w in warnings
+    ), f"expected botocore warning, got {warnings!r}"
+
+
+def test_bedrock_session_warnings_bearer_only_no_botocore_warning(monkeypatch):
+    """Bearer-only operators don't need botocore — no warning even
+    when it's absent."""
+    import builtins as _b
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-opaque")
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setattr(
+        "core.llm.dispatcher.auth.Path.is_file",
+        lambda self: False,
+    )
+
+    real_import = _b.__import__
+    def _no_botocore(name, *a, **k):
+        if name == "botocore" or name.startswith("botocore."):
+            raise ImportError("no botocore in this test")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(_b, "__import__", _no_botocore)
+
+    store = CredentialStore()
+    warnings = store.bedrock_session_warnings()
+    assert not any("botocore" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Credential lookup order — chain-prefers-refreshable for short-lived
+# ---------------------------------------------------------------------------
+
+
+@needs_botocore
+def test_credential_lookup_prefers_chain_when_profile_set(monkeypatch):
+    """AWS_PROFILE pins the chain regardless of env-supplied static
+    creds.  Profiles back SSO / role assumption, which return
+    RefreshableCredentials — operators using a profile signal they
+    want refresh."""
+    import botocore.credentials as _bc
+    import botocore.session as _bs
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAENV")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "envsecret")
+    monkeypatch.setenv("AWS_PROFILE", "myrole")
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    store = CredentialStore()
+
+    chain_creds = _bc.Credentials("AKIACHAIN", "chainsecret", None)
+    fake_session_created = {}
+
+    class _FakeSession:
+        def __init__(self, profile=None):
+            fake_session_created["profile"] = profile
+        def get_credentials(self):
+            return chain_creds
+        def get_config_variable(self, *a, **k):
+            return _REGION
+
+    monkeypatch.setattr(_bs, "Session", _FakeSession)
+    result = store._resolve_aws_credentials()
+    assert result is not None
+    creds, region = result
+    assert creds.access_key == "AKIACHAIN"   # chain wins
+    assert fake_session_created["profile"] == "myrole"
+
+
+@needs_botocore
+def test_credential_lookup_prefers_chain_when_env_looks_short_lived(monkeypatch):
+    """ASIA env creds → try chain first; fall back to env if chain
+    returns nothing.  This handles the "operator pasted temp creds
+    but also has SSO configured" case without forcing them to unset env."""
+    import botocore.credentials as _bc
+    import botocore.session as _bs
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ASIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "envsecret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "envtoken")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    store = CredentialStore()
+
+    chain_creds = _bc.Credentials("ASIACHAIN", "chainsecret", "chaintoken")
+    class _Session:
+        def __init__(self, profile=None): pass
+        def get_credentials(self): return chain_creds
+        def get_config_variable(self, *a, **k): return _REGION
+    monkeypatch.setattr(_bs, "Session", _Session)
+    result = store._resolve_aws_credentials()
+    assert result is not None
+    creds, _region = result
+    assert creds.access_key == "ASIACHAIN"  # chain wins
+
+
+@needs_botocore
+def test_credential_lookup_falls_back_to_env_when_chain_empty(monkeypatch):
+    """ASIA env creds + chain returns nothing → env snapshot wins.
+    Operator with only env vars still gets to make requests; refresh
+    just isn't available (covered by startup warning separately)."""
+    import botocore.session as _bs
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ASIAONLYENV")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "envsecret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "envtoken")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    store = CredentialStore()
+
+    class _EmptySession:
+        def __init__(self, profile=None): pass
+        def get_credentials(self): return None
+        def get_config_variable(self, *a, **k): return None
+    monkeypatch.setattr(_bs, "Session", _EmptySession)
+    result = store._resolve_aws_credentials()
+    assert result is not None
+    creds, _region = result
+    assert creds.access_key == "ASIAONLYENV"
+
+
+@needs_botocore
+def test_credential_lookup_long_lived_akia_stays_static(monkeypatch):
+    """AKIA env keys + no session token + no profile → static
+    snapshot.  The chain is NOT consulted (no point — AKIA never
+    expires, and operators with both AKIA env and a profile likely
+    want the env to win)."""
+    import botocore.session as _bs
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAONLYENV")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "envsecret")
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_REGION", _REGION)
+    store = CredentialStore()
+
+    chain_called = []
+    class _Session:
+        def __init__(self, profile=None): chain_called.append(True)
+        def get_credentials(self): return None
+        def get_config_variable(self, *a, **k): return None
+    monkeypatch.setattr(_bs, "Session", _Session)
+    result = store._resolve_aws_credentials()
+    assert result is not None
+    creds, _region = result
+    assert creds.access_key == "AKIAONLYENV"
+    assert chain_called == []   # AKIA path doesn't consult chain
+
 
 def test_aws_secrets_popped_from_env(monkeypatch):
     """AWS secret env vars are read-and-erased at CredentialStore
