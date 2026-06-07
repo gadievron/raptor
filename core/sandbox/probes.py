@@ -93,12 +93,42 @@ def _resolve_sandbox_binary(name: str) -> str:
 # to operators verbatim (also reused by context.py when it raises
 # SandboxSetupError), so it must name the concrete escape hatch. Policy:
 # RAPTOR never silently downgrades — the operator chooses.
+# Namespace layer can't engage (unshare user/pid/ipc/net). This layer backs
+# the network/PID/IPC isolation, so EVERY network-blocking profile (full,
+# debug, network-only) needs it and fails here the same way — network-only
+# does NOT help. The only profile that avoids the namespace layer is `none`.
 ENGAGE_FAIL_INSTRUCTIONS = (
-    "the requested sandbox isolation cannot engage on this host (common on "
-    "rootless podman / distrobox / nested user namespaces). Re-run with "
-    "`--sandbox network-only` to keep network-egress blocking while dropping "
-    "the namespace layers that won't load here, or `--sandbox none` to "
-    "disable isolation entirely (last resort). RAPTOR will not silently "
+    "the sandbox namespace layer cannot engage on this host (common on "
+    "rootless podman / distrobox / nested user namespaces, where the kernel "
+    "restricts unprivileged user-namespace creation). This layer backs the "
+    "network / PID / IPC isolation, so every network-blocking profile "
+    "(full, debug, network-only) needs it and fails here the same way — "
+    "`--sandbox network-only` will NOT help. Either enable unprivileged user "
+    "namespaces on the host (distro-specific — e.g. the "
+    "kernel.unprivileged_userns_clone or "
+    "kernel.apparmor_restrict_unprivileged_userns sysctl, or the container "
+    "runtime's userns policy), or re-run with `--sandbox none` to run "
+    "without namespace isolation (resource limits only — last resort). "
+    "RAPTOR will not silently downgrade for you."
+)
+
+# A hardening layer (Landlock or seccomp) passed its probe but failed to
+# APPLY. Unlike the namespace layer, these ARE dropped by network-only, so
+# it is a genuine downgrade here (keeps network + namespace isolation).
+LAYER_FAIL_INSTRUCTIONS = (
+    "a sandbox hardening layer (Landlock or seccomp) passed its probe but "
+    "could not apply on this host. Re-run with `--sandbox network-only` to "
+    "drop Landlock and seccomp while keeping network and namespace "
+    "isolation, or `--sandbox none` to disable isolation entirely (last "
+    "resort). RAPTOR will not silently downgrade for you."
+)
+
+# macOS seatbelt (sandbox-exec) could not apply its profile. There is no
+# Landlock/namespace layering to fall back to — `none` is the only downgrade.
+SEATBELT_FAIL_INSTRUCTIONS = (
+    "the macOS seatbelt sandbox (sandbox-exec) could not apply its profile "
+    "on this host. Re-run with `--sandbox none` to run without isolation "
+    "(resource limits only — last resort). RAPTOR will not silently "
     "downgrade for you."
 )
 

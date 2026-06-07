@@ -39,9 +39,32 @@ class TestEngagementGateRaises:
             with pytest.raises(SandboxSetupError) as ei:
                 run(["echo", "hi"], capture_output=True, text=True)
         msg = str(ei.value)
-        # Actionable, explicit-downgrade-only guidance.
-        assert "--sandbox network-only" in msg
+        # Actionable, explicit-downgrade-only guidance. For a NAMESPACE
+        # engagement failure, network-only ALSO needs the namespace, so the
+        # message must point to `--sandbox none` and must NOT offer
+        # network-only as a fix (it would fail the same way).
+        assert "--sandbox none" in msg
+        assert "NOT help" in msg  # explicitly disclaims network-only
         assert "will not silently downgrade" in msg
+
+    def test_instruction_strings_route_by_failure_kind(self):
+        """The three downgrade-guidance strings must give the right remedy:
+        namespace failure -> none (network-only disclaimed); hardening-layer
+        failure -> network-only is valid; macOS seatbelt -> none."""
+        from core.sandbox.probes import (
+            ENGAGE_FAIL_INSTRUCTIONS,
+            LAYER_FAIL_INSTRUCTIONS,
+            SEATBELT_FAIL_INSTRUCTIONS,
+        )
+        # Namespace can't engage: only `none` avoids it; network-only disclaimed.
+        assert "--sandbox none" in ENGAGE_FAIL_INSTRUCTIONS
+        assert "NOT help" in ENGAGE_FAIL_INSTRUCTIONS
+        # Landlock/seccomp apply failure: network-only IS a real downgrade.
+        assert "--sandbox network-only" in LAYER_FAIL_INSTRUCTIONS
+        assert "NOT help" not in LAYER_FAIL_INSTRUCTIONS
+        # macOS seatbelt: no layering to fall back to -> none.
+        assert "--sandbox none" in SEATBELT_FAIL_INSTRUCTIONS
+        assert "network-only" not in SEATBELT_FAIL_INSTRUCTIONS
 
     def test_failure_does_not_return_empty_result(self):
         # The whole point: a setup failure must NOT come back as a

@@ -1671,10 +1671,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 _mac_status = getattr(result, "_setup_status", None)
                 if _mac_status is not None and _mac_status[0] == "E":
                     from .errors import SandboxSetupError
-                    from .probes import ENGAGE_FAIL_INSTRUCTIONS
+                    from .probes import SEATBELT_FAIL_INSTRUCTIONS
                     raise SandboxSetupError(
                         f"sandbox seatbelt setup failed: {_mac_status[1]}",
-                        ENGAGE_FAIL_INSTRUCTIONS,
+                        SEATBELT_FAIL_INSTRUCTIONS,
                     )
             elif spawn_eligible:
                 try:
@@ -1764,14 +1764,25 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         _setup_status = getattr(result, "_setup_status", None)
                         if _setup_status is not None and _setup_status[0] in ("L", "S", "U"):
                             from .errors import SandboxSetupError
-                            from .probes import ENGAGE_FAIL_INSTRUCTIONS
+                            from .probes import (
+                                ENGAGE_FAIL_INSTRUCTIONS,
+                                LAYER_FAIL_INSTRUCTIONS,
+                            )
                             _layer = {"L": "Landlock", "S": "seccomp",
                                       "U": "namespace unshare"}.get(
                                           _setup_status[0], _setup_status[0])
+                            # Namespace (U) failures need the same remedy as the
+                            # engagement gate — network-only also needs the
+                            # namespace, so only `none` avoids it. Landlock/
+                            # seccomp (L/S) ARE dropped by network-only, so it
+                            # is a real downgrade for those.
+                            _instr = (ENGAGE_FAIL_INSTRUCTIONS
+                                      if _setup_status[0] == "U"
+                                      else LAYER_FAIL_INSTRUCTIONS)
                             raise SandboxSetupError(
                                 f"sandbox {_layer} setup failed in the spawn "
                                 f"child: {_setup_status[1]}",
-                                ENGAGE_FAIL_INSTRUCTIONS,
+                                _instr,
                             )
                         # Degrade-to-Landlock-only on a mount-ns ('M') or
                         # in-sandbox exec ('X') failure reported by the exec-
