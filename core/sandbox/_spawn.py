@@ -85,6 +85,75 @@ CLONE_NEWPID  = getattr(os, "CLONE_NEWPID",  0x20000000)
 CLONE_NEWNET  = getattr(os, "CLONE_NEWNET",  0x40000000)
 
 
+def _write_setup_status(fd: int, category: bytes, reason: str = "") -> None:
+    """Fork-safe write of a typed setup-failure status to the exec-status
+    pipe.
+
+    ``category`` is a single byte identifying WHICH step failed:
+        b'M' mount-ns   b'L' Landlock   b'S' seccomp
+        b'U' unshare (pid-ns)           b'X' target exec
+    ``reason`` is a short diagnostic. The whole payload is one ``os.write``
+    well under PIPE_BUF (4096) so it lands atomically. Runs in a dying
+    child after fork — must not raise and must not touch the Python logger
+    (not fork-safe), so swallow everything.
+    """
+    try:
+        payload = category + b":" + reason.encode("utf-8", "replace")[:512]
+        os.write(fd, payload)
+    except BaseException:
+        pass
+
+
+def _parse_setup_status(raw: bytes):
+    """Parse the exec-status payload (``<cat>:<reason>``) the child wrote.
+
+    Returns ``None`` for empty input (EOF ⇒ the target execed; genuine
+    result), else ``(category, reason)`` where category is one of
+    M/L/S/U/X. Kept standalone for unit-testing the contract.
+    """
+    if not raw:
+        return None
+    return (
+        chr(raw[0]),
+        raw[2:].decode("utf-8", "replace") if len(raw) > 2 else "",
+    )
+
+
+def _drain_status_pipe(status_r: int, parent_fds: set):
+    """Non-blocking read of the exec-status pipe, then close it. Returns the
+    parsed (category, reason) or None.
+
+    MUST be called on EVERY parent exit path (including timeout/exception) so
+    status_r never leaks — an fd leak here exhausts the table over a long
+    scan and breaks all subsequent sandboxing. NON-BLOCKING is load-bearing
+    under concurrency: a sibling thread's fork can transiently inherit our
+    status_w (it's CLOEXEC, so closed at the sibling's exec, but held open
+    until then), which would keep EOF from arriving — we must not block on
+    it. Any real status from OUR child was written before it was reaped
+    (above), so it is already buffered and a non-blocking read sees it; a
+    sibling cannot inject data (it never writes our status_w).
+    """
+    raw = b""
+    try:
+        while len(raw) < 1024:
+            try:
+                chunk = os.read(status_r, 256)
+            except BlockingIOError:
+                break  # no (more) data — EOF-equivalent for our purposes
+            if not chunk:
+                break
+            raw += chunk
+    except OSError:
+        raw = b""
+    finally:
+        try:
+            os.close(status_r)
+        except OSError:
+            pass
+        parent_fds.discard(status_r)
+    return _parse_setup_status(raw)
+
+
 def mount_ns_available() -> bool:
     """Return True if the full mount-ns+newuidmap path is usable here.
 
@@ -710,6 +779,42 @@ def run_sandboxed(
         p_go_r, p_go_w = os.pipe()
         _parent_fds.update({p_go_r, p_go_w})
 
+        # Exec-status pipe. The child writes a typed status — which setup
+        # step failed (mount/Landlock/seccomp/unshare) or that exec itself
+        # failed — to status_w BEFORE exiting; on a SUCCESSFUL execvpe the
+        # write end auto-closes (PEP 446 default O_CLOEXEC) and the parent
+        # reads EOF. This is the unspoofable, unambiguous "did the target
+        # exec, and if not exactly why" signal that replaces the brittle
+        # exit-code + stderr-emptiness heuristics. The target cannot forge
+        # it: status_w is close-on-exec, so it's gone before the target
+        # runs. status_w is NOT marked inheritable-across-exec (unlike the
+        # tracer's t_ready_w) precisely so the EOF-on-success contract holds.
+        status_r, status_w = os.pipe()
+        # SECURITY INVARIANT: status_w MUST stay close-on-exec (non-
+        # inheritable). That is the ONE thing that makes the status
+        # unspoofable — it guarantees the fd is gone from the target's fd
+        # table before the target runs, so the target can neither forge a
+        # setup status nor suppress a real one. os.pipe() sets CLOEXEC by
+        # default (PEP 446) and we never flip it; this guard trips loudly
+        # if a future change ever marks it inheritable, rather than
+        # silently re-opening the spoofing hole. NOT a bare `assert`
+        # (stripped under -O) — a real check for a security invariant.
+        if os.get_inheritable(status_w):
+            os.close(status_r)
+            os.close(status_w)
+            raise RuntimeError(
+                "sandbox exec-status pipe write-end is inheritable — the "
+                "target could forge/suppress setup status; refusing to use "
+                "the mount-ns spawn path (see core/sandbox/_spawn.py)."
+            )
+        # Parent reads status_r NON-BLOCKING (see _drain_status_pipe): under
+        # concurrency a sibling fork can transiently hold our status_w open,
+        # so a blocking read could hang a worker until the sibling's target
+        # exits. Our child's status (if any) is written before it's reaped,
+        # so it's already buffered when we read.
+        os.set_blocking(status_r, False)
+        _parent_fds.update({status_r, status_w})
+
         # Output capture pipes (optional).
         if capture_output:
             out_r, out_w = os.pipe()
@@ -786,6 +891,15 @@ def run_sandboxed(
         # Close the ends of the pipes we don't use.
         os.close(p_ready_r)
         os.close(p_go_w)
+        # Exec-status pipe: the child only WRITES (status_w); close the
+        # read end. status_w is kept open through setup and auto-closes on
+        # a successful execvpe (its default O_CLOEXEC) → parent reads EOF.
+        os.close(status_r)
+        # Which setup step we're about to attempt — the BaseException
+        # catch-all below writes this category to status_w so the parent
+        # knows whether to degrade (mount) or fail loud (Landlock/seccomp/
+        # unshare). Default 'U' (fail-loud) for any pre-mount step.
+        _status_step = b"U"
         # Tracer-ready pipe: target child doesn't read from or write to
         # this pipe; the tracer subprocess writes one end and the main
         # parent reads the other. Close both inherited ends so the pipe
@@ -922,13 +1036,21 @@ def run_sandboxed(
             # newuidmap by this point.
             try:
                 if os.read(p_go_r, 1) != b"G":
+                    # Parent failed before signalling go (it has already
+                    # raised + killed us). Write a status anyway so the pipe
+                    # is self-sufficient and never relies on caller ordering.
+                    _write_setup_status(status_w, b"U", "no go signal")
                     os._exit(125)
             finally:
                 os.close(p_go_r)
 
             # Child is now uid 0 in the new ns.
             if os.getuid() != 0:
-                # newuidmap didn't take — parent must have failed.
+                # newuidmap silently didn't map (parent wrote go but the
+                # uid map didn't take). The parent IS waiting to reap and
+                # WILL read the status pipe, so this 'U' makes it fail loud
+                # rather than EOF-misread the 124 as a genuine result.
+                _write_setup_status(status_w, b"U", "newuidmap did not map")
                 os._exit(124)
 
             # rlimits as early as possible so later setup is constrained.
@@ -961,6 +1083,7 @@ def run_sandboxed(
             # root — otherwise Landlock's allowlist would cover a path
             # the child can't reach (ENOENT before EACCES).
             if target or output:
+                _status_step = b"M"
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
                                root_path=_root_dir,
@@ -1015,10 +1138,14 @@ def run_sandboxed(
             # Step 10: Landlock. Must run BEFORE seccomp so seccomp
             # inherits PR_SET_NO_NEW_PRIVS.
             if landlock_fn:
+                _status_step = b"L"
                 landlock_fn()
             # Step 11: seccomp.
             if seccomp_fn:
+                _status_step = b"S"
                 seccomp_fn()
+            # Step 12 (below): pid-ns unshare.
+            _status_step = b"U"
 
             # Step 12: pid-ns via a second fork. NEWPID only takes
             # effect on a subsequent fork. This fork runs INSIDE the
@@ -1072,8 +1199,14 @@ def run_sandboxed(
                     # owns the sandbox spawn surface).
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
+                    # Target (or a dep) not reachable in the sandboxed view
+                    # — typically a mount-ns bind set too narrow. Signal
+                    # 'X' so the parent retries Landlock-only (real result
+                    # if it was a bind gap; same 127 if genuinely missing).
+                    _write_setup_status(status_w, b"X", "exec: file not found")
                     os._exit(127)
                 except PermissionError:
+                    _write_setup_status(status_w, b"X", "exec: permission denied")
                     os._exit(126)
                 os._exit(125)  # unreachable
             else:
@@ -1106,7 +1239,15 @@ def run_sandboxed(
                     os._exit(128 + sig)
                 os._exit(255)
         except BaseException:
-            # Last-chance diagnostic to stderr before aborting.
+            # Setup failed before exec. Signal WHICH step (status_w) so the
+            # parent can degrade (mount) or fail loud (Landlock/seccomp/
+            # unshare) deterministically — unspoofably, regardless of exit
+            # code or stderr. Then the last-chance stderr diagnostic.
+            _tb = traceback.format_exc().strip()
+            _write_setup_status(
+                status_w, _status_step,
+                _tb.splitlines()[-1] if _tb else "",
+            )
             try:
                 os.write(2, f"RAPTOR sandbox child failure:\n{traceback.format_exc()}\n".encode())
             except Exception:
@@ -1123,6 +1264,12 @@ def run_sandboxed(
         _parent_fds.discard(p_ready_w)
         os.close(p_go_r)
         _parent_fds.discard(p_go_r)
+        # Exec-status pipe: the parent only READS (status_r); close the
+        # write end now (BEFORE the tracer fork below) so the tracer
+        # subprocess can never inherit it and hold it open — otherwise the
+        # parent's EOF-on-success read would block forever.
+        os.close(status_w)
+        _parent_fds.discard(status_w)
         if capture_output:
             os.close(out_w)
             _parent_fds.discard(out_w)
@@ -1431,6 +1578,9 @@ def run_sandboxed(
     # time.monotonic() for deadline math — see _reap_tracer() above for the
     # NTP/wall-clock-jump rationale; same hazard applies here.
     deadline = time.monotonic() + timeout if timeout else None
+    # Exec-status verdict — populated in the finally so the pipe is read and
+    # status_r reclaimed on EVERY exit path (success, timeout, exception).
+    setup_status = None
     try:
         if capture_output:
             import select
@@ -1485,6 +1635,14 @@ def run_sandboxed(
         except ChildProcessError:
             status = 0
     finally:
+        # Drain + close the exec-status pipe FIRST so status_r is reclaimed
+        # even if a cleanup step below raises — an unclosed status_r leaks
+        # one fd per timed-out call and eventually exhausts the table,
+        # breaking all subsequent sandboxing. The child is reaped by now
+        # (success: waitpid above; timeout: _kill_and_reap before the raise),
+        # so any status byte is already buffered. On timeout the target had
+        # execed (hence the timeout) → no status → None.
+        setup_status = _drain_status_pipe(status_r, _parent_fds)
         # Audit-mode tracer cleanup: target has exited (or been killed
         # via timeout), so the tracer's traced set will become empty
         # and it'll exit naturally. Wait for it to reap; if it doesn't
@@ -1510,14 +1668,23 @@ def run_sandboxed(
     else:
         returncode = -1
 
+    # setup_status was drained from the exec-status pipe in the finally above
+    # (on every exit path). Bytes ⇒ the child reported a setup failure BEFORE
+    # exec (M/L/S/U/X); None ⇒ the target actually execed, so the
+    # returncode/output are a genuine result. Unspoofable: status_w is
+    # close-on-exec, gone before the target runs.
     stdout_out = stderr_out = None
     if capture_output:
         stdout_out = stdout_buf.decode() if text else stdout_buf
         stderr_out = stderr_buf.decode() if text else stderr_buf
 
-    return subprocess.CompletedProcess(
+    cp = subprocess.CompletedProcess(
         args=list(cmd),
         returncode=returncode,
         stdout=stdout_out,
         stderr=stderr_out,
     )
+    # Authoritative setup-failure signal for context.py's decision table
+    # (degrade on M/X, fail loud on L/S/U). None ⇒ target execed.
+    cp._setup_status = setup_status
+    return cp

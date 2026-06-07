@@ -35,6 +35,7 @@ from core.logging import get_logger
 # (CVE-2024-32002 family: hostile per-repo .git/config).
 from core.git.clone import safe_git_command
 from core.git import get_safe_git_env
+from core.sandbox import SandboxSetupError
 from packages.codeql.build_detector import BuildSystem
 from packages.codeql.tunables import CodeQLTunables
 
@@ -1020,6 +1021,9 @@ class DatabaseManager:
                 duration_seconds=time.time() - start_time,
                 cached=False,
             )
+
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
 
         except Exception as e:
             errors.append(f"Unexpected error: {str(e)}")

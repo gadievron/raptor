@@ -169,6 +169,113 @@ class TestPid1ShimContract(unittest.TestCase):
         r = self._run_shim("/bin/sh", "-c", "echo err >&2")
         self.assertEqual(r.stderr.strip(), "err")
 
+    def test_target_does_not_inherit_trust_marker(self):
+        """The shim strips _RAPTOR_TRUSTED before exec'ing the target. The
+        trust marker authorizes RAPTOR's own dispatch scripts (this shim
+        included) and must not leak into the untrusted target's env."""
+        probe = ("import os;"
+                 "print('TRUST=' + os.environ.get('_RAPTOR_TRUSTED', '<unset>'))")
+        r = subprocess.run(
+            [str(SHIM_PATH), _sys.executable, "-c", probe],
+            capture_output=True, text=True, timeout=5,
+            env=dict(os.environ, _RAPTOR_TRUSTED="1"),
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("TRUST=<unset>", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPid1ShimDeathPipe(unittest.TestCase):
+    """Orphan-teardown: the shim watches an orchestrator-liveness ('death')
+    pipe and tears the pid-ns down when the orchestrator dies — covering the
+    SIGKILL/OOM/crash case that no graceful cleanup can."""
+
+    def setUp(self):
+        if not SHIM_PATH.is_file() or not os.access(SHIM_PATH, os.X_OK):
+            self.skipTest("shim missing/not executable")
+
+    def test_death_pipe_eof_exits_shim(self):
+        """Direct (no pid-ns): when the death-pipe write end closes (EOF),
+        the shim stops waiting on its long target and exits with the
+        teardown code. The kernel cascade to the target is covered by the
+        integration test below."""
+        marker = "raptor_shimdeath_7271"
+        death_r, death_w = os.pipe()
+        env = dict(os.environ, _RAPTOR_TRUSTED="1",
+                   _RAPTOR_DEATH_FD=str(death_r))
+        proc = subprocess.Popen(
+            [str(SHIM_PATH), "/bin/sleep", marker.split("_")[-1]],
+            pass_fds=(death_r,), env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            os.close(death_r)  # parent holds only the write end
+            import time
+            time.sleep(0.5)    # let the shim fork the target + enter watch
+            os.close(death_w)  # EOF → shim must tear down
+            try:
+                rc = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.fail("shim did not exit after death-pipe EOF")
+            self.assertEqual(rc, 137,  # _DEATH_TEARDOWN_EXIT
+                             "shim should exit with the teardown code on EOF")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            subprocess.run(["pkill", "-9", "-f", marker.split("_")[-1]],
+                           capture_output=True)
+
+    def test_orphan_teardown_on_orchestrator_kill(self):
+        """Integration: an orchestrator running a long target through the
+        subprocess/shim sandbox path, then SIGKILLed mid-run (OOM/crash
+        simulation), must leave NO lingering sandbox processes — the shim
+        reads EOF and the kernel cascade-SIGKILLs the pid-ns."""
+        import time
+        marker = "313339"
+
+        def lineage():
+            out = subprocess.run(["pgrep", "-af", marker],
+                                 capture_output=True, text=True).stdout
+            return [ln for ln in out.splitlines() if "pgrep" not in ln]
+
+        orch = subprocess.Popen(
+            ["python3", "-c",
+             "from core.sandbox import sandbox\n"
+             "with sandbox(block_network=True) as run:\n"
+             "    run(['/bin/sleep','%s'], capture_output=True, text=True)\n"
+             % marker],
+            cwd=str(Path(__file__).resolve().parents[3]),
+            env=dict(os.environ, _RAPTOR_TRUSTED="1"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            # Only proceed once the SHIM actually wraps the target — i.e. the
+            # subprocess/pid-ns path engaged. On a no-namespace runner the
+            # target would run bare (no shim, no death-pipe), which has no
+            # teardown guarantee and isn't what this test covers → skip.
+            for _ in range(150):
+                time.sleep(0.1)
+                if any("raptor-pid1-shim" in p and marker in p
+                       for p in lineage()):
+                    break
+            else:
+                self.skipTest("subprocess/shim sandbox path did not engage "
+                              "here (namespaces unavailable)")
+            orch.send_signal(signal.SIGKILL)
+            orch.wait()
+            # Poll up to 5s for full teardown.
+            for _ in range(50):
+                time.sleep(0.1)
+                if not lineage():
+                    break
+            self.assertEqual(lineage(), [],
+                             "sandbox lineage leaked after orchestrator kill")
+        finally:
+            if orch.poll() is None:
+                orch.kill()
+                orch.wait()
+            subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)

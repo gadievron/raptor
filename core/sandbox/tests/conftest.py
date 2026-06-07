@@ -45,6 +45,7 @@ def _sandbox_state_guard():
         "_net_and_tcp_allowlist_warned",
         "_seccomp_arch_missing_warned", "_mount_unavailable_warned",
         "_ptrace_unavailable_warned", "_audit_warned_no_spawn",
+        "_engage_probe_indeterminate_warned",
         # Availability caches — deliberately EXCLUDING _landlock_cache:
         # check_landlock_available() does a functional self-test that
         # forks a child. Forking after other threads have started (e.g.
@@ -87,6 +88,12 @@ def _sandbox_state_guard():
     # populates it (or expects it empty) must not see entries left
     # over from a sibling test.
     saved_spec_cache = dict(mod._speculative_failure_cache)
+    # _unshare_engage_cache is a dict too — same deep-copy treatment as
+    # _speculative_failure_cache so a test that forces a flag-set to
+    # "not engaging" (to exercise the SandboxSetupError fail-loud path)
+    # doesn't leak the poisoned verdict into later tests on a host where
+    # the namespaces actually work.
+    saved_engage_cache = dict(mod._unshare_engage_cache)
     saved_active_run = summary_mod._active_run_dir
     try:
         yield
@@ -95,6 +102,8 @@ def _sandbox_state_guard():
             setattr(mod, name, value)
         mod._speculative_failure_cache.clear()
         mod._speculative_failure_cache.update(saved_spec_cache)
+        mod._unshare_engage_cache.clear()
+        mod._unshare_engage_cache.update(saved_engage_cache)
         # Restore via the public setter so the module's threading.Lock
         # is honoured (set_active_run_dir also resets _denial_count,
         # which is harmless — a per-test counter reset is appropriate).

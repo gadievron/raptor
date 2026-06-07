@@ -50,10 +50,12 @@ from core.function_taxonomy import (
     FORMAT_STRING_FUNCS,
     INTEGER_PARSE_FUNCS,
     IPC_FUNCS,
+    KERNEL_TRACE_FUNCS,
     MEMORY_COPY_FUNCS,
     NETWORK_INGEST_FUNCS,
     PARSER_FUNCS,
     PROCESS_BOUNDARY_FUNCS,
+    RUNTIME_PRIVILEGE_FUNCS,
     SCAN_FAMILY_FUNCS,
     STREAM_INPUT_FUNCS,
     STRING_OVERFLOW_FUNCS,
@@ -71,7 +73,17 @@ logger = logging.getLogger(__name__)
 # fingerprinted under v1 may legitimately have these capabilities
 # but they were not surfaced — re-fingerprint rather than diff across
 # the bump.
-FINGERPRINT_SCHEMA_VERSION = 2
+# v3: added runtime_privilege / kernel_trace buckets — supply-chain
+# forensic surface (setuid / bpf / ptrace / perf_event_open et al.).
+# Same re-fingerprint guidance as v1→v2.
+#
+# Migration is operator-transparent: ``fingerprint_store._load_fingerprint``
+# treats any stored fingerprint whose ``schema_version`` doesn't equal
+# the current ``FINGERPRINT_SCHEMA_VERSION`` as "no baseline" and
+# the next scan re-fingerprints from bytes.  No manual cache flush
+# needed; the first scan after the bump pays the re-fingerprint cost
+# (sub-millisecond per binary via :mod:`core.binary.elf`).
+FINGERPRINT_SCHEMA_VERSION = 3
 
 
 # Per-bucket capability classification. Single source of truth —
@@ -92,12 +104,20 @@ BUCKETS: Tuple[Tuple[str, FrozenSet[str]], ...] = (
     ("stream_input", STREAM_INPUT_FUNCS),
     ("process_boundary", PROCESS_BOUNDARY_FUNCS),
     ("ipc", IPC_FUNCS),
+    # Added in v3 — supply-chain forensic surface.
+    ("runtime_privilege", RUNTIME_PRIVILEGE_FUNCS),
+    ("kernel_trace", KERNEL_TRACE_FUNCS),
 )
 
 # Buckets that warrant high-severity treatment when they appear
 # as a NEW addition (drift detection, bump capability-delta).
 # ``exec`` is RCE-flavoured; ``network`` is exfil-flavoured.
-HIGH_SEVERITY_BUCKETS: FrozenSet[str] = frozenset({"exec", "network"})
+# ``runtime_privilege`` and ``kernel_trace`` are the supply-chain
+# forensic flavour — their presence in a package's native binary
+# is rare and high-signal regardless of the host being a delta.
+HIGH_SEVERITY_BUCKETS: FrozenSet[str] = frozenset({
+    "exec", "network", "runtime_privilege", "kernel_trace",
+})
 
 
 def bucket_imports(imports: Set[str]) -> Dict[str, Set[str]]:

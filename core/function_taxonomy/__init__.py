@@ -218,6 +218,71 @@ IPC_FUNCS: FrozenSet[str] = frozenset({
 })
 
 
+# === Runtime privilege manipulation / sandbox escape ===
+# Symbols a worm / rootkit payload typically links against to
+# elevate privilege, escape namespace isolation, or load kernel
+# code at install time.  These are not normal capabilities for a
+# package's native dependency; their presence in a published
+# tarball is a strong supply-chain signal under Phase 3
+# binary-in-package detection.
+#
+# Not used as a taint source — used as a SHAPE classifier in
+# :mod:`core.binary.fingerprint` so consumers (the binary-in-package
+# evidence generator, drift detection, composite scoring's BINARY
+# family promotion) can flag binaries that import these symbols.
+#
+# Deliberately EXCLUDED — too ubiquitous to be signal:
+#   * ``clone`` / ``clone3`` — libpthread links transitively; any
+#     threaded program imports them
+#   * ``prctl`` — used by glibc internals for thread naming and
+#     by many normal programs (rust binaries, go binaries)
+#   * ``fork`` / ``execve`` — already in EXEC_FUNCS; the supply-
+#     chain signal there is the EXEC bucket, not duplicated here
+RUNTIME_PRIVILEGE_FUNCS: FrozenSet[str] = frozenset({
+    # POSIX privilege manipulation — rare in normal package binaries
+    "setuid", "setgid", "seteuid", "setegid",
+    "setresuid", "setresgid", "setreuid", "setregid",
+    "setfsuid", "setfsgid",
+    "capset",
+    # Linux namespace / container primitives — only container tools
+    # import these directly; a published npm/PyPI package binary
+    # doing so is anomalous.
+    "unshare", "setns",
+    "chroot", "pivot_root",
+    "mount", "umount", "umount2",
+    # eBPF / kernel-side execution — extremely rare in legit deps
+    "bpf",
+    "bpf_prog_load",
+    "bpf_create_map", "bpf_map_create",
+    # Kernel module load — only kernel-driver tools
+    "init_module", "finit_module", "delete_module",
+    # Kexec — replace running kernel
+    "kexec_load", "kexec_file_load",
+    # Process tracing (rootkit hide / debugger interpose).
+    # Legitimate debuggers (gdb / lldb / strace) do import it,
+    # but none of those should ship in a normal package tarball.
+    "ptrace",
+    "setdomainname", "sethostname",
+})
+
+
+# === Kernel tracing / observability hijack ===
+# Symbols associated with kernel-level tracing, performance
+# counters, or cross-process memory inspection — the substrate
+# rootkits use to interpose on other processes (read secrets,
+# inject code) without ptrace's user-visible signal.
+KERNEL_TRACE_FUNCS: FrozenSet[str] = frozenset({
+    # Performance / tracing subsystem
+    "perf_event_open",
+    # Cross-process memory access
+    "process_vm_readv", "process_vm_writev",
+    # User-faulting (memory page fault interception)
+    "userfaultfd",
+    # Kernel-side keyring access
+    "add_key", "request_key", "keyctl",
+})
+
+
 # === Kernel / userspace boundary (kernel-side only) ===
 # Functions called by KERNEL CODE (drivers, syscalls, kernel modules)
 # to read attacker-controlled data from less-privileged userspace.
@@ -437,6 +502,8 @@ __all__ = [
     "PROCESS_BOUNDARY_FUNCS",
     "PROCESS_BOUNDARY_MARKERS",
     "IPC_FUNCS",
+    "RUNTIME_PRIVILEGE_FUNCS",
+    "KERNEL_TRACE_FUNCS",
     "KERNEL_USERSPACE_FUNCS",
     "DEVICE_CONTROL_FUNCS",
     "PARSER_FUNCS",

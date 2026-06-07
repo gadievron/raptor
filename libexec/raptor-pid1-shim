@@ -82,6 +82,45 @@ if not (os.environ.get("CLAUDECODE")
 
 
 
+# Shim exit code used when the orchestrator-liveness pipe goes EOF (the
+# orchestrator died) and the shim tears the pid-ns down. Nobody meaningful
+# reaps it (the orchestrator is gone); distinct from the target's own codes
+# and the 254/255 sentinels purely for post-mortem log clarity.
+_DEATH_TEARDOWN_EXIT = 137
+
+
+def _resolve_death_fd():
+    """Resolve the orchestrator-liveness ("death") pipe read-end fd, or None.
+
+    context.py creates ONE pipe per orchestrator process, keeps the WRITE end
+    open for the orchestrator's whole lifetime, and passes the READ end down
+    to this shim (Popen ``pass_fds`` + the ``_RAPTOR_DEATH_FD`` env var). When
+    the orchestrator — and every copy of the write end — dies, INCLUDING on
+    SIGKILL / OOM / crash that no cleanup handler can catch, this read end
+    goes EOF; the shim then exits and the kernel cascade-SIGKILLs the pid-ns.
+
+    Security/hygiene: this fd is a one-bit liveness signal for the trusted
+    shim only — nothing is ever written to it, so it carries no data and is
+    no IPC/side channel. Set CLOEXEC so the sandboxed (untrusted) target,
+    forked + exec'd below, never inherits it; non-blocking so the post-select
+    read can never stall the shim.
+    """
+    raw = os.environ.get("_RAPTOR_DEATH_FD")
+    if not raw:
+        return None
+    try:
+        fd = int(raw)
+        os.fstat(fd)  # validate it's a real, open fd
+    except (ValueError, OSError):
+        return None
+    try:
+        os.set_inheritable(fd, False)  # CLOEXEC → target can't inherit it
+        os.set_blocking(fd, False)
+    except OSError:
+        return None
+    return fd
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         # No target argv supplied — operator bug.
@@ -92,6 +131,12 @@ def main() -> int:
         return 2
 
     target_argv = sys.argv[1:]
+
+    # Orchestrator-liveness pipe (read end), or None when not configured.
+    # Resolved BEFORE the fork so the CLOEXEC set here is in place for the
+    # target's exec; we additionally close it explicitly in the target
+    # branch below (belt-and-braces — the target subtree never holds it).
+    death_fd = _resolve_death_fd()
 
     # Install signal handlers BEFORE fork. The shim runs as pid-1
     # in the new pid namespace, where the kernel's default
@@ -120,7 +165,16 @@ def main() -> int:
 
     child = os.fork()
     if child == 0:
-        # Target branch. We want the target to be the session leader
+        # Target branch — close the death-pipe read end immediately so it
+        # never reaches the (untrusted) target or its descendants. CLOEXEC
+        # would drop it at the grandchild's exec anyway; this also keeps the
+        # non-exec intermediate (pid-2) from holding a stray copy.
+        if death_fd is not None:
+            try:
+                os.close(death_fd)
+            except OSError:
+                pass
+        # We want the target to be the session leader
         # of its pid-ns — matches pre-shim behaviour where target was
         # pid-1 and (under start_new_session=True from the Popen
         # preexec) effectively the session leader. `ps -o sid` then
@@ -181,6 +235,13 @@ def main() -> int:
                     signal.signal(s, signal.SIG_DFL)
                 except (OSError, ValueError):
                     pass
+            # Don't leak RAPTOR-internal markers into the (untrusted) target's
+            # env. _RAPTOR_DEATH_FD names an fd already CLOEXEC'd shut; the
+            # trust marker authorizes RAPTOR's OWN dispatch scripts (this shim
+            # included) and has no business being visible to the sandboxed
+            # target. Strip both so nothing _RAPTOR_* crosses into the target.
+            for _m in ("_RAPTOR_DEATH_FD", "_RAPTOR_TRUSTED"):
+                os.environ.pop(_m, None)
             try:
                 os.execvp(target_argv[0], target_argv)
             except FileNotFoundError:
@@ -224,21 +285,64 @@ def main() -> int:
     # Reap until the target is seen. Other zombies (if target
     # forked) are collected but their status is discarded.
     target_status = None
-    while True:
-        try:
-            reaped_pid, status = os.waitpid(-1, 0)
-        except ChildProcessError:
-            # No children left — target must have been reaped
-            # already (shouldn't happen with our single-fork
-            # layout, but be defensive).
-            break
-        except InterruptedError:
-            # A forwarded signal interrupted waitpid. Loop.
-            continue
-        if reaped_pid == child:
-            target_status = status
-            break
-        # Orphan reaped; continue waiting for target.
+    if death_fd is None:
+        # No liveness pipe configured — original blocking reap (unchanged).
+        while True:
+            try:
+                reaped_pid, status = os.waitpid(-1, 0)
+            except ChildProcessError:
+                # No children left — target must have been reaped
+                # already (shouldn't happen with our single-fork
+                # layout, but be defensive).
+                break
+            except InterruptedError:
+                # A forwarded signal interrupted waitpid. Loop.
+                continue
+            if reaped_pid == child:
+                target_status = status
+                break
+            # Orphan reaped; continue waiting for target.
+    else:
+        # Liveness pipe configured: multiplex the reap with a watch on the
+        # orchestrator-death fd. When the orchestrator (and every copy of
+        # the write end) dies — including SIGKILL/OOM/crash that no cleanup
+        # handler can catch — this read end goes EOF; the shim exits and the
+        # kernel cascade-SIGKILLs the whole pid-ns (target + descendants).
+        # select() with a short timeout also lets us notice the target
+        # exiting (SIGCHLD is ignored by default, so it won't interrupt the
+        # wait); a forwarded signal interrupting select() just re-loops.
+        import select as _select
+        while target_status is None:
+            try:
+                ready, _, _ = _select.select([death_fd], [], [], 0.1)
+            except InterruptedError:
+                ready = ()
+            if ready:
+                try:
+                    _alive = os.read(death_fd, 256)
+                except BlockingIOError:
+                    _alive = b"x"          # spurious wake, not EOF
+                except OSError:
+                    _alive = b""           # fd error → fail safe to teardown
+                if not _alive:
+                    # EOF → orchestrator gone → tear the pid-ns down.
+                    os._exit(_DEATH_TEARDOWN_EXIT)
+            # Reap whatever has exited (non-blocking).
+            no_children = False
+            while True:
+                try:
+                    reaped_pid, status = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    no_children = True
+                    break
+                if reaped_pid == 0:
+                    break                  # nothing ready right now
+                if reaped_pid == child:
+                    target_status = status
+                    break
+                # Orphan reaped; keep going.
+            if no_children:
+                break
 
     if target_status is None:
         # Fell out without seeing target — shouldn't happen. Report

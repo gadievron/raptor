@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
 
 from core.json import load_json, save_json
 from core.config import RaptorConfig
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.progress import HackerProgress
@@ -2621,4 +2622,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SandboxSetupError as e:
+        # Emit the dedicated exit code so the /agentic parent translates it
+        # into a fail-loud abort instead of treating an empty report as a
+        # silent "analysis produced no output".
+        print(f"\n✗ Analysis aborted — sandbox isolation could not engage.\n{e}",
+              file=sys.stderr)
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

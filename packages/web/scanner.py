@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
 from core.logging import get_logger
 from core.llm.providers import LLMProvider
@@ -319,4 +320,11 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SandboxSetupError as e:
+        print(
+            f"\nRAPTOR: web scan aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

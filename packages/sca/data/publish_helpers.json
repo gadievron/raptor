@@ -1,0 +1,25 @@
+{
+  "_comment": "Allowlist of well-known publish-tool packages. These packages LEGITIMATELY read publishing credentials and invoke registry publish commands at runtime (when users invoke them). The malicious shape (worm signature G) is doing it from an INSTALL hook before any user action; install_hooks's allowlist suppression checks the PACKAGE NAME against this list and won't fire G-shape promotion for entries here.",
+  "names": [
+    "semantic-release",
+    "@semantic-release/*",
+    "release-it",
+    "np",
+    "lerna",
+    "nx",
+    "@changesets/cli",
+    "changesets",
+    "gh-pages",
+    "aegir",
+    "pkg",
+    "@vercel/ncc",
+    "publint",
+    "release-please",
+    "twine",
+    "build",
+    "auto",
+    "@auto-it/*",
+    "@beemo/cli",
+    "monodeploy"
+  ]
+}

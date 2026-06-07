@@ -1248,6 +1248,47 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         and not use_seatbelt
                         and (block_network or use_mount or restrict_reads))
 
+        # Representative engagement gate. The availability probes that set
+        # `use_sandbox` test a NARROWER op (`unshare --user --net`) than the
+        # command below actually performs (`unshare --user --pid --fork
+        # --ipc [--net]`). On rootless podman / distrobox (nested userns)
+        # the narrow probe can pass while the full flag-set fails: the
+        # wrapper exits BEFORE exec, the target never runs, and the call
+        # would return empty output that a consumer reads as "0 findings".
+        # Verify the EXACT flag-set engages (cached per flag-set) and fail
+        # LOUD if it doesn't — RAPTOR does not silently downgrade; the
+        # operator picks `--sandbox network-only`/`none`. Covers the
+        # subprocess `unshare` path here AND the _spawn fork path (same
+        # userns/pidns/ipcns/netns kernel capability); the mount-ns layer
+        # is additionally gated by check_mount_available() upstream.
+        if need_unshare:
+            from .errors import SandboxSetupError
+            from .probes import (
+                ENGAGE_FAIL_INSTRUCTIONS,
+                check_unshare_engages,
+            )
+            _engage_flags = ["--user", "--pid", "--fork", "--ipc"]
+            if block_network:
+                _engage_flags.append("--net")
+            _engages, _engage_reason = check_unshare_engages(_engage_flags)
+            if _engages is False:
+                # Definitive kernel refusal (rootless podman / nested userns).
+                raise SandboxSetupError(
+                    f"sandbox namespace setup failed "
+                    f"(unshare {' '.join(_engage_flags)}): {_engage_reason}",
+                    ENGAGE_FAIL_INSTRUCTIONS,
+                )
+            if _engages is None:
+                # Probe couldn't RUN (transient load) — NOT a verdict. Do
+                # NOT abort a possibly-working scan; proceed and let a real
+                # engagement failure surface at spawn (exec-status pipe).
+                if state.warn_once("_engage_probe_indeterminate_warned"):
+                    logger.warning(
+                        "Sandbox: engagement probe could not run (%s) — "
+                        "proceeding; a real namespace failure will still be "
+                        "caught at spawn.", _engage_reason,
+                    )
+
         # Log active sandbox layers for this command. Cache the Landlock
         # probe locally so we don't reacquire the cache lock 2-3× per run().
         landlock_available = check_landlock_available()
@@ -1310,11 +1351,23 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # binaries that run under our Landlock+seccomp but skip the
             # actual unshare, leaving the child in the host's net/pid/ipc
             # namespaces (= full outbound network).
-            from .probes import _resolve_sandbox_binary
+            from .probes import (
+                _resolve_sandbox_binary,
+                unshare_supports_kill_child,
+            )
             unshare_cmd = [_resolve_sandbox_binary("unshare"),
                            "--user", "--pid", "--fork", "--ipc"]
             if block_network:
                 unshare_cmd.append("--net")
+            # Belt-and-braces orphan teardown: if `unshare` is killed
+            # directly (orchestrator still alive), --kill-child SIGKILLs the
+            # pid-1 shim → kernel cascades the pid-ns. The PRIMARY teardown
+            # (orchestrator hard-killed mid-run) is the death-pipe the shim
+            # watches; see the `need_unshare` block at the subprocess.run
+            # call. Gated on a cached capability probe (older util-linux
+            # lacks the flag) so we never feed `unshare` an unknown option.
+            if unshare_supports_kill_child():
+                unshare_cmd.append("--kill-child=SIGKILL")
             # prlimit wrapper: sits INSIDE the unshare chain so
             # RLIMIT_NPROC counts against the ns-local UID (nobody =
             # zero existing processes). prlimit is part of util-linux
@@ -1607,6 +1660,22 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     strict_env=strict_env,
                 )
                 used_spawn = True
+                # Fail-loud parity with the Linux exec-status pipe. The macOS
+                # seatbelt shim reports via result._setup_status:
+                #   None     -> target reached inside the applied profile.
+                #   ("E", m) -> the in-sandbox readiness byte never arrived =>
+                #               sandbox-exec did not apply the profile. There
+                #               is no Landlock layer to degrade to on macOS, so
+                #               the only safe response is to fail loud rather
+                #               than silently run unsandboxed ("0 findings").
+                _mac_status = getattr(result, "_setup_status", None)
+                if _mac_status is not None and _mac_status[0] == "E":
+                    from .errors import SandboxSetupError
+                    from .probes import SEATBELT_FAIL_INSTRUCTIONS
+                    raise SandboxSetupError(
+                        f"sandbox seatbelt setup failed: {_mac_status[1]}",
+                        SEATBELT_FAIL_INSTRUCTIONS,
+                    )
             elif spawn_eligible:
                 try:
                     from . import _spawn as _spawn_mod
@@ -1682,50 +1751,52 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             start_new_session=kwargs.get("start_new_session", True),
                         )
                         used_spawn = True
-                        # Speculative-C retry: if tool_paths was supplied
-                        # and the call exited 126/127 with empty stderr,
-                        # the bind set was almost certainly insufficient
-                        # (typical Python tool: bin dir bound but stdlib
-                        # at sys.prefix/lib/pythonX.Y was not — Python
-                        # dies at `import encodings` before its stderr
-                        # handler initialises). 126/127 with NON-empty
-                        # stderr is a normal tool failure (semgrep
-                        # arg-parse error, etc.) — leave alone. Empty
-                        # stderr is the give-away that the process
-                        # never reached its error path.
-                        #
-                        # On detection: re-run via the Landlock-only
-                        # subprocess path (works without mount-ns
-                        # bind-tree visibility). This makes the
-                        # tool_paths contract speculative — caller
-                        # passes a best-guess bind set, we try it, if
-                        # it doesn't work we degrade silently to B's
-                        # fallback. Worst-case isolation matches the
-                        # B-only outcome.
-                        _stderr_text = result.stderr or b""
-                        if isinstance(_stderr_text, bytes):
-                            _stderr_text = _stderr_text.decode(
-                                "utf-8", errors="replace")
-                        # Strip ``RAPTOR:``-prefixed lines before the
-                        # emptiness test. Those are deliberate
-                        # post-fork diagnostics from the sandbox itself
-                        # (see core/sandbox/_fork_safe_warn.py) — e.g.
-                        # the benign ``mount_ns: target remount-ro
-                        # failed; relying on Landlock`` warning, which
-                        # fires on most Linux hosts and would
-                        # otherwise defeat this gate. The convention
-                        # is documented; no tool legitimately emits
-                        # the prefix, and an attacker who could spoof
-                        # it would only re-trigger this same fallback
-                        # — they can already do that today by exiting
-                        # 126 with empty stderr.
-                        _stderr_text = "\n".join(
-                            ln for ln in _stderr_text.splitlines()
-                            if not ln.lstrip().startswith("RAPTOR:")
-                        )
-                        if (tool_paths
-                                and result.returncode in (126, 127)
-                                and not _stderr_text.strip()):
+                        # Authoritative setup-failure signal from the exec-
+                        # status pipe (core/sandbox/_spawn.py) — unspoofable
+                        # by the target, unambiguous vs exit codes/stderr:
+                        #   None  → the target execed; result is genuine.
+                        #   L/S/U → Landlock/seccomp/namespace-unshare failed
+                        #           to APPLY though its probe passed → a real
+                        #           "can't engage" → fail loud.
+                        #   M/X   → mount-ns setup, or exec inside the
+                        #           sandbox, failed → degrade to Landlock-only
+                        #           (handled by the block below).
+                        _setup_status = getattr(result, "_setup_status", None)
+                        if _setup_status is not None and _setup_status[0] in ("L", "S", "U"):
+                            from .errors import SandboxSetupError
+                            from .probes import (
+                                ENGAGE_FAIL_INSTRUCTIONS,
+                                LAYER_FAIL_INSTRUCTIONS,
+                            )
+                            _layer = {"L": "Landlock", "S": "seccomp",
+                                      "U": "namespace unshare"}.get(
+                                          _setup_status[0], _setup_status[0])
+                            # Namespace (U) failures need the same remedy as the
+                            # engagement gate — network-only also needs the
+                            # namespace, so only `none` avoids it. Landlock/
+                            # seccomp (L/S) ARE dropped by network-only, so it
+                            # is a real downgrade for those.
+                            _instr = (ENGAGE_FAIL_INSTRUCTIONS
+                                      if _setup_status[0] == "U"
+                                      else LAYER_FAIL_INSTRUCTIONS)
+                            raise SandboxSetupError(
+                                f"sandbox {_layer} setup failed in the spawn "
+                                f"child: {_setup_status[1]}",
+                                _instr,
+                            )
+                        # Degrade-to-Landlock-only on a mount-ns ('M') or
+                        # in-sandbox exec ('X') failure reported by the exec-
+                        # status pipe. 'X' is the common tool_paths case: the
+                        # bind set was insufficient (typical Python tool: bin
+                        # dir bound but stdlib at sys.prefix/lib was not), so
+                        # the target couldn't exec inside the mount-ns view.
+                        # Re-run via the Landlock-only subprocess path (works
+                        # without mount-ns bind-tree visibility) — worst-case
+                        # isolation matches the Landlock-only outcome. The
+                        # signal is authoritative and unspoofable (a tool can
+                        # no longer defeat OR forge this via stderr; the old
+                        # rc==126/127 + empty-stderr heuristic could be both).
+                        if _setup_status is not None and _setup_status[0] in ("M", "X"):
                             # Populate the per-cmd cache so future
                             # calls for the same binary skip mount-ns
                             # directly (saves the doubled subprocess
@@ -1764,17 +1835,17 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                 # Companion DEBUG with the diagnostic
                                 # detail for operators investigating.
                                 logger.debug(
-                                    "Sandbox: %r mount-ns failed at "
-                                    "exec (rc=%d, no stderr — typical "
-                                    "of tools whose native deps live "
-                                    "outside the tool_paths bind set: "
-                                    "Python with sys.prefix/lib not "
-                                    "bound, semgrep with semgrep-core "
-                                    "outside install root, etc.). "
-                                    "Cached so subsequent calls to "
-                                    "this binary skip mount-ns "
+                                    "Sandbox: %r mount-ns setup/exec "
+                                    "failed (exec-status=%s — e.g. tools "
+                                    "whose native deps live outside the "
+                                    "tool_paths bind set: Python with "
+                                    "sys.prefix/lib not bound, semgrep "
+                                    "with semgrep-core outside install "
+                                    "root; or a host where the mount op "
+                                    "is denied). Cached so subsequent "
+                                    "calls to this binary skip mount-ns "
                                     "directly.",
-                                    cmd[0], result.returncode,
+                                    cmd[0], _setup_status,
                                 )
                             else:
                                 logger.debug(
@@ -1946,7 +2017,39 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         # path run.
                         pass
                 if not _audit_landlock_engaged:
-                    result = subprocess.run(full_cmd, **kwargs)
+                    if need_unshare:
+                        # Orphan-teardown: the shim (pid-1 of the new pid-ns)
+                        # would otherwise outlive an ORCHESTRATOR that is
+                        # hard-killed (SIGKILL/OOM/crash) mid-run — the
+                        # blocking subprocess.run can't run cleanup, the
+                        # `unshare` intermediate reparents to init, and the
+                        # ns leaks. Hand the shim the READ end of a liveness
+                        # pipe; we hold the WRITE end here for exactly this
+                        # call. If this process dies, the write end closes →
+                        # the shim reads EOF → it exits → the kernel cascade-
+                        # SIGKILLs the whole pid-ns. The fd is a one-bit
+                        # liveness signal (nothing is written); write end is
+                        # CLOEXEC (os.pipe default) so no child inherits it,
+                        # read end is passed only to the shim via pass_fds
+                        # and the shim CLOEXEC's it away from the target.
+                        _death_r, _death_w = os.pipe()
+                        try:
+                            _dk = dict(kwargs)
+                            _dk["pass_fds"] = (
+                                tuple(_dk.get("pass_fds") or ()) + (_death_r,)
+                            )
+                            _denv = dict(_dk.get("env") or os.environ)
+                            _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
+                            _dk["env"] = _denv
+                            result = subprocess.run(full_cmd, **_dk)
+                        finally:
+                            for _dfd in (_death_r, _death_w):
+                                try:
+                                    os.close(_dfd)
+                                except OSError:
+                                    pass
+                    else:
+                        result = subprocess.run(full_cmd, **kwargs)
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
 from core.config import RaptorConfig
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.run.output import unique_run_suffix
 from core.run.safe_io import safe_run_mkdir
 from core.logging import get_logger
@@ -890,6 +891,14 @@ def run_single_semgrep(
 
         return str(sarif), success
 
+    except SandboxSetupError:
+        # Sandbox isolation could not engage on this host. Do NOT mask it
+        # as an empty SARIF — that is the exact "0 findings in 0 files"
+        # silent-failure this exception exists to prevent. Propagate so
+        # the scan fails loud; the operator picks an explicit profile
+        # (`--sandbox network-only`). Every pack would hit the same host
+        # condition, so failing on the first is correct.
+        raise
     except Exception as e:
         logger.error(f"Semgrep scan '{name}' failed: {e}")
         # Write empty SARIF on error. Same encoding posture as the
@@ -1013,6 +1022,12 @@ def semgrep_scan_parallel(
                 if progress_callback:
                     progress_callback(f"Completed {completed}/{total} scans")
 
+            except SandboxSetupError:
+                # Isolation could not engage — every pack hits the same
+                # host condition, so don't demote it to a per-pack failure
+                # (which would still emit a "scanned, found nothing" run).
+                # Propagate so the whole scan fails loud.
+                raise
             except Exception as exc:
                 logger.error(f"Semgrep scan '{name}' raised exception: {exc}")
                 failed_scans.append(name)
@@ -1231,6 +1246,17 @@ def run_codeql(
     except OSError as e:
         logger.warning(f"failed to invoke codeql agent: {e}")
         return []
+
+    if returncode == SANDBOX_ENGAGE_EXIT_CODE:
+        # The codeql agent subprocess reported the sandbox could not engage.
+        # Propagate as a hard failure rather than silently returning [] — the
+        # /scan __main__ handler turns this into a fail-loud exit-3 abort.
+        raise SandboxSetupError(
+            "the codeql agent subprocess reported the sandbox could not "
+            f"engage (exit {SANDBOX_ENGAGE_EXIT_CODE})",
+            "re-run with --sandbox network-only (or --sandbox none). "
+            "RAPTOR will not silently downgrade.",
+        )
 
     if returncode != 0:
         # Surface the agent's stderr tail so the operator can see
@@ -2070,4 +2096,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SandboxSetupError as e:
+        # Fail loud with the actionable message, not a traceback. The scan
+        # did NOT run — never let this look like a clean "0 findings".
+        print(
+            f"\nRAPTOR: scan aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

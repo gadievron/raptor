@@ -10,7 +10,9 @@ respectively, because those tests are syscall-level (ctypes) rather than
 subprocess-level.
 """
 
+import functools
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -87,6 +89,165 @@ def _resolve_sandbox_binary(name: str) -> str:
         )
 
 
+# Actionable instruction appended to engagement-failure reasons. Surfaced
+# to operators verbatim (also reused by context.py when it raises
+# SandboxSetupError), so it must name the concrete escape hatch. Policy:
+# RAPTOR never silently downgrades — the operator chooses.
+# Namespace layer can't engage (unshare user/pid/ipc/net). This layer backs
+# the network/PID/IPC isolation, so EVERY network-blocking profile (full,
+# debug, network-only) needs it and fails here the same way — network-only
+# does NOT help. The only profile that avoids the namespace layer is `none`.
+ENGAGE_FAIL_INSTRUCTIONS = (
+    "the sandbox namespace layer cannot engage on this host (common on "
+    "rootless podman / distrobox / nested user namespaces, where the kernel "
+    "restricts unprivileged user-namespace creation). This layer backs the "
+    "network / PID / IPC isolation, so every network-blocking profile "
+    "(full, debug, network-only) needs it and fails here the same way — "
+    "`--sandbox network-only` will NOT help. Either enable unprivileged user "
+    "namespaces on the host (distro-specific — e.g. the "
+    "kernel.unprivileged_userns_clone or "
+    "kernel.apparmor_restrict_unprivileged_userns sysctl, or the container "
+    "runtime's userns policy), or re-run with `--sandbox none` to run "
+    "without namespace isolation (resource limits only — last resort). "
+    "RAPTOR will not silently downgrade for you."
+)
+
+# A hardening layer (Landlock or seccomp) passed its probe but failed to
+# APPLY. Unlike the namespace layer, these ARE dropped by network-only, so
+# it is a genuine downgrade here (keeps network + namespace isolation).
+LAYER_FAIL_INSTRUCTIONS = (
+    "a sandbox hardening layer (Landlock or seccomp) passed its probe but "
+    "could not apply on this host. Re-run with `--sandbox network-only` to "
+    "drop Landlock and seccomp while keeping network and namespace "
+    "isolation, or `--sandbox none` to disable isolation entirely (last "
+    "resort). RAPTOR will not silently downgrade for you."
+)
+
+# macOS seatbelt (sandbox-exec) could not apply its profile. There is no
+# Landlock/namespace layering to fall back to — `none` is the only downgrade.
+SEATBELT_FAIL_INSTRUCTIONS = (
+    "the macOS seatbelt sandbox (sandbox-exec) could not apply its profile "
+    "on this host. Re-run with `--sandbox none` to run without isolation "
+    "(resource limits only — last resort). RAPTOR will not silently "
+    "downgrade for you."
+)
+
+
+@functools.lru_cache(maxsize=1)
+def unshare_supports_kill_child() -> bool:
+    """Whether this host's ``unshare`` supports ``--kill-child`` (util-linux
+    ≥ 2.32, 2018). Used as belt-and-braces teardown: ``unshare --kill-child=
+    SIGKILL`` kills its pid-1 child (and thus cascades the pid-ns) if unshare
+    itself dies. The primary orphan-teardown is the death-pipe in
+    raptor-pid1-shim; this just covers "unshare killed directly". Probed via
+    ``--help`` (cheap, no namespace creation) and cached for the process; a
+    host without the flag silently runs without it.
+    """
+    try:
+        from core.config import RaptorConfig
+        # ``text=True`` keeps stdout/stderr as str regardless of caller-
+        # imposed mocks. Help text is plain ASCII, no encoding concern; the
+        # explicit text mode also stops ``str + b""`` blowing up under any
+        # global ``subprocess.run`` mock that returns str-typed stdout (the
+        # llm_analysis test_orchestrator pipeline patches subprocess.run
+        # process-wide, and bytes-typed defaults would TypeError on the
+        # membership check below).
+        out = subprocess.run(
+            [_resolve_sandbox_binary("unshare"), "--help"],
+            capture_output=True, text=True, timeout=5,
+            env=RaptorConfig.get_safe_env(),
+        )
+        return "--kill-child" in (out.stdout or "") + (out.stderr or "")
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def check_unshare_engages(unshare_flags) -> tuple:
+    """Return (engages, reason) for the EXACT unshare flag-set a real run uses.
+
+    ``check_net_available()`` / ``check_mount_available()`` test NARROWER
+    operations (``unshare --user --net``) than a sandboxed run actually
+    performs (``unshare --user --pid --fork --ipc [--net]``). On rootless
+    podman / distrobox (nested userns) the narrow probe can pass while the
+    full flag-set fails — the wrapper then exits BEFORE exec, the target
+    command never runs, and the run silently returns empty output, which a
+    consumer reads as "0 findings". This runs the ACTUAL flag-set against
+    ``true`` so engagement is decided by the same kernel capability the
+    real run depends on. Namespace creation is a deterministic kernel
+    check (not data-dependent), so a pass here means the real wrapper will
+    engage too.
+
+    ``unshare_flags`` is the namespace flag list WITHOUT the ``unshare``
+    binary or the ``-- cmd`` tail, e.g.
+    ``("--user","--pid","--fork","--ipc","--net")``.
+
+    Returns ``(engages, reason)`` where ``engages`` is tri-state:
+      True  — the flag-set engaged (cached).
+      False — a DEFINITIVE kernel refusal: ``unshare`` ran and exited
+              non-zero (the rootless-podman/nested-userns case). Cached.
+              The caller fails loud on this.
+      None  — the probe itself could not RUN (timeout under fork/memory
+              pressure, transient OSError). NOT an engagement verdict and
+              NOT cached. The caller must NOT fail loud on this — a 5s
+              timeout on a trivial `unshare true` means the box is
+              overloaded, not that namespaces are unavailable; aborting a
+              scan that would have succeeded is the worse failure. A real
+              engagement failure still surfaces at spawn (exec-status pipe).
+    """
+    key = tuple(unshare_flags)
+    # Fast path under a BRIEF lock. The slow probe (an up-to-5s subprocess)
+    # then runs OUTSIDE the lock so it never stalls every other thread's
+    # cache op under concurrent first-use. Worst case is a few redundant
+    # probes across racing threads — benign, and de-duped by setdefault on
+    # publish (the first writer wins; racers adopt its verdict).
+    with state._cache_lock:
+        cached = state._unshare_engage_cache.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        unshare_path = _resolve_sandbox_binary("unshare")
+    except FileNotFoundError as e:
+        # util-linux missing → namespaces genuinely can't engage → fail loud.
+        with state._cache_lock:
+            return state._unshare_engage_cache.setdefault(key, (False, str(e)))
+
+    # Absolute `true` keeps the probe consistent with the module's
+    # no-PATH-trust posture. A poisoned PATH shadowing `true` could at
+    # worst make engagement look FAILED (fail-closed), never falsely
+    # succeed, so the fallback to a bare name is acceptable.
+    true_bin = next(
+        (p for p in ("/usr/bin/true", "/bin/true") if Path(p).exists()),
+        "true",
+    )
+    try:
+        from core.config import RaptorConfig
+        proc = subprocess.run(
+            [unshare_path, *key, "--", true_bin],
+            capture_output=True, timeout=5,
+            env=RaptorConfig.get_safe_env(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        # Probe INFRASTRUCTURE failure (timeout under fork/memory pressure,
+        # transient OSError) — NOT a definitive kernel refusal. Return None
+        # (couldn't determine), NOT False: the caller must not fail loud, and
+        # we do NOT cache it, so the next call re-probes. A genuine
+        # deterministic refusal returns a non-zero returncode below (False).
+        return (None, f"engagement probe could not run: {e}")
+    if proc.returncode == 0:
+        result = (True, "")
+    else:
+        reason = (proc.stderr or b"").decode("utf-8", "replace").strip()
+        if not reason:
+            reason = (
+                f"unshare {' '.join(key)} exited {proc.returncode} "
+                f"with no diagnostic"
+            )
+        result = (False, reason)
+    with state._cache_lock:
+        return state._unshare_engage_cache.setdefault(key, result)
+
+
 def check_net_available() -> bool:
     """Check if network isolation via user namespaces is available.
 
@@ -159,6 +320,42 @@ def check_net_available() -> bool:
         return True
 
 
+def _mount_ns_functional_selftest() -> bool:
+    """Fork a child and actually ``unshare(CLONE_NEWUSER|CLONE_NEWNS)`` to
+    verify the kernel permits creating a user+mount namespace at runtime.
+
+    The other ``check_mount_available()`` signals — uidmap binaries present,
+    AppArmor sysctl != 1 — are necessary but NOT sufficient: an outer-container
+    seccomp policy, a non-AppArmor LSM (SELinux), or a nested-userns mount
+    restriction can still refuse ``unshare(CLONE_NEWNS)``. Without this test
+    such a host reports mount-ns available, the _spawn child then dies on
+    ``os.unshare`` (exit 126 + empty stdout) — a silent "0 findings". Testing
+    it here means a NEWNS-incapable host instead falls back to Landlock-only
+    and still produces real results. Same approach as the Landlock and seccomp
+    functional self-tests. Child is ``os.unshare`` + ``os._exit`` only.
+    """
+    _CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
+    _CLONE_NEWNS = getattr(os, "CLONE_NEWNS", 0x00020000)
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.filterwarnings(
+            "ignore", category=DeprecationWarning,
+            message=r".*fork.*may lead to deadlocks.*",
+        )
+        pid = os.fork()
+    if pid == 0:
+        try:
+            os.unshare(_CLONE_NEWUSER | _CLONE_NEWNS)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    try:
+        _, status = os.waitpid(pid, 0)
+    except ChildProcessError:
+        return False
+    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
+
 def check_mount_available() -> bool:
     """Check if mount namespace isolation is available.
 
@@ -227,16 +424,34 @@ def check_mount_available() -> bool:
         # the AppArmor check — no need to re-fork a functional test.
         have_newuidmap = shutil.which("newuidmap") is not None
         have_newgidmap = shutil.which("newgidmap") is not None
-        state._mount_available_cache = have_newuidmap and have_newgidmap
-        if (not state._mount_available_cache
-                and state.warn_once("_mount_unavailable_warned")):
-            logger.info(
-                "Sandbox: mount-namespace isolation UNAVAILABLE — "
-                "the `uidmap` package is not installed (newuidmap / "
-                "newgidmap missing). Fallback: Landlock-only. "
-                "To enable, run: sudo apt install uidmap"
-            )
-        return state._mount_available_cache
+        if not (have_newuidmap and have_newgidmap):
+            if state.warn_once("_mount_unavailable_warned"):
+                logger.info(
+                    "Sandbox: mount-namespace isolation UNAVAILABLE — "
+                    "the `uidmap` package is not installed (newuidmap / "
+                    "newgidmap missing). Fallback: Landlock-only. "
+                    "To enable, run: sudo apt install uidmap"
+                )
+            state._mount_available_cache = False
+            return False
+
+        # Functional test (see _mount_ns_functional_selftest): binary presence
+        # + AppArmor-sysctl=0 are necessary but not sufficient — the kernel can
+        # still refuse unshare(CLONE_NEWNS) (outer seccomp / SELinux / nested
+        # userns). If it does, report unavailable so we degrade to Landlock-
+        # only rather than dying mid-spawn with empty output.
+        if not _mount_ns_functional_selftest():
+            if state.warn_once("_mount_unavailable_warned"):
+                logger.info(
+                    "Sandbox: mount-namespace isolation UNAVAILABLE — "
+                    "unshare(CLONE_NEWNS) refused at runtime (outer seccomp / "
+                    "LSM / nested-userns restriction). Fallback: Landlock-only."
+                )
+            state._mount_available_cache = False
+            return False
+
+        state._mount_available_cache = True
+        return True
 
 
 def check_seatbelt_available() -> bool:

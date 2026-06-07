@@ -1682,59 +1682,49 @@ class TestToolPathsKwarg(unittest.TestCase):
 
 
 class TestSpeculativeToolPathsRetry(unittest.TestCase):
-    """When tool_paths was supplied AND the resulting mount-ns call
-    exits 126/127 with empty stderr, the sandbox infers the bind set
-    was insufficient (typical Python tool: bin dir bound, stdlib at
-    sys.prefix/lib not bound — Python dies before its stderr handler
-    starts) and re-runs via Landlock-only fallback.
+    """When the mount-ns spawn child reports (via the exec-status pipe)
+    that mount setup failed ('M') or the target couldn't exec inside the
+    sandbox ('X' — typically a tool_paths bind set too narrow), the sandbox
+    degrades to the Landlock-only fallback. The decision is driven by the
+    UNSPOOFABLE exec-status signal, NOT by exit code or stderr content
+    (which a target can both defeat and forge).
 
-    These are structural-pin tests — we verify the contract is
-    documented in source rather than the runtime mechanism (which
-    requires real mount-ns prereqs).
+    Structural-pin tests — the runtime mechanism needs real mount-ns
+    prereqs, so we verify the contract is present in source.
     """
 
-    def test_retry_branch_is_documented_in_source(self):
-        """The speculative-retry block MUST be present in context.py.
-        Pinned by source-grep so a future refactor that drops the
-        retry surfaces in CI immediately.
-        """
+    def test_degrade_branch_is_driven_by_exec_status(self):
+        """The degrade-to-Landlock-only branch MUST gate on the exec-status
+        signal (M/X categories), not the old exit-code/stderr heuristic."""
         from pathlib import Path
         from core.sandbox import context as _ctx
         src = Path(_ctx.__file__).read_text()
-        for required in ("Speculative-C retry",
-                         "tool_paths",
-                         "(126, 127)",
+        for required in ("_setup_status",
+                         '_setup_status[0] in ("M", "X")',
                          "Landlock-only"):
             self.assertIn(required, src,
-                          f"speculative-C retry: missing {required!r}")
+                          f"status-driven degrade: missing {required!r}")
 
-    def test_signature_filter_uses_empty_stderr_check(self):
-        """The retry must NOT fire when stderr is non-empty — those
-        are normal tool failures (arg-parse errors etc.) we should
-        leave alone. Pinned by source-grep on the .strip() guard."""
+    def test_fail_loud_branch_for_core_layers(self):
+        """A Landlock/seccomp/unshare APPLY failure ('L'/'S'/'U') must fail
+        loud (SandboxSetupError), not degrade."""
         from pathlib import Path
         from core.sandbox import context as _ctx
         src = Path(_ctx.__file__).read_text()
-        # The exact pattern the retry uses to gate on empty stderr.
-        self.assertIn("not _stderr_text.strip()", src,
-                      "speculative-C retry must filter on empty stderr")
+        for required in ('_setup_status[0] in ("L", "S", "U")',
+                         "SandboxSetupError"):
+            self.assertIn(required, src,
+                          f"fail-loud branch: missing {required!r}")
 
-    def test_raptor_prefix_lines_dont_block_retry(self):
-        """``RAPTOR:``-prefixed lines (sandbox-internal post-fork
-        diagnostics from ``warn_post_fork``) MUST be stripped before
-        the emptiness test — otherwise the benign mount-ns
-        ``remount-ro failed; relying on Landlock`` warning, which
-        fires on most Linux hosts, defeats the retry and Semgrep
-        runs out of the sandbox with no findings.
-
-        Pinned by source-grep so a refactor that drops the
-        prefix-filter doesn't silently regress."""
+    def test_degrade_decision_does_not_read_stderr(self):
+        """The spoofable heuristic is GONE: the degrade decision must no
+        longer depend on stderr emptiness or RAPTOR:-prefix stripping — a
+        target could forge those to force an isolation downgrade."""
         from pathlib import Path
         from core.sandbox import context as _ctx
         src = Path(_ctx.__file__).read_text()
-        self.assertIn('startswith("RAPTOR:")', src,
-                      "speculative-C retry must skip RAPTOR:-prefixed "
-                      "sandbox diagnostics in the emptiness check")
+        self.assertNotIn("not _stderr_text.strip()", src,
+                         "spoofable empty-stderr degrade gate must be gone")
 
 
 class TestSpeculativeFailureCache(unittest.TestCase):

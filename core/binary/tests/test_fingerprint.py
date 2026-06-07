@@ -121,6 +121,7 @@ class TestBucketTaxonomy:
             "memory_copy", "format_string", "alloc", "parser",
             "integer_parse", "toctou",
             "stream_input", "process_boundary", "ipc",
+            "runtime_privilege", "kernel_trace",
         ]
 
     def test_high_severity_buckets_subset_of_buckets(self):

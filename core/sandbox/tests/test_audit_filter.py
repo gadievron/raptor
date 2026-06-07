@@ -663,13 +663,20 @@ class TestConftestSnapshotMatchesState:
         # from the regex check despite being properly snapshotted.
         # Added by PR #265 (mount-ns auto-fallback per-cmd cache).
         "_speculative_failure_cache",
+        # Same deep-copy mechanism (saved_engage_cache = dict(...)) — the
+        # per-flag-set engagement cache backing check_unshare_engages.
+        "_unshare_engage_cache",
     }
 
     def test_every_state_var_is_snapshotted_or_excluded(self):
         import re
+        from pathlib import Path
         from core.sandbox import state
-        # Pull the snapshot list literal from conftest source.
-        with open("core/sandbox/tests/conftest.py") as f:
+        # Pull the snapshot list literal from conftest source. Absolute,
+        # __file__-anchored so it survives a sibling suite leaving the
+        # process in a different cwd.
+        _conftest = Path(__file__).resolve().parent / "conftest.py"
+        with open(_conftest) as f:
             cf_src = f.read()
         snapshot_names = set(re.findall(
             r'"(_[a-z][a-z0-9_]*)"', cf_src,

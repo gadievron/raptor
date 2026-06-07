@@ -163,6 +163,17 @@ def _classify(
             return None
         if (stat.st_size >= _BIN_IN_TESTS_MIN_BYTES
                 and _is_binary(path)):
+            # Align with the binary-opt-in allowlist shared with
+            # :mod:`binary_in_package` (Phase 3).  When a path
+            # matches an allowlist pattern (eg ``tests/fixtures/**``,
+            # ``testdata/**``) the binary is a known-convention
+            # fixture; don't fire here either, otherwise the two
+            # detectors give contradictory verdicts on the same
+            # path.  Attacker placements that bypass the convention
+            # (``tests/setup_bun.js``, ``tests/payload.bin`` at the
+            # tests/ root) still fire.
+            if _allowlisted_binary(path, target):
+                return None
             return _make_finding(
                 path, target, manifests,
                 kind="binary_in_tests",
@@ -401,6 +412,35 @@ def _project_host_dep(
             reason="placeholder for project-artefact finding host",
         ),
     )
+
+
+def _allowlisted_binary(path: Path, target: Path) -> bool:
+    """Cross-detector consistency: when ``binary_in_package``'s
+    opt-in allowlist (``data/binary_opt_in_locations.json``) treats
+    this path as a known-convention fixture / build output, do not
+    emit a ``binary_in_tests`` row either.
+
+    Best-effort: any failure (file read, import, classify error)
+    returns False so the surrounding detector falls back to
+    emitting (better noisy than silently missing).
+    """
+    try:
+        from . import binary_in_package
+        try:
+            rel = path.resolve().relative_to(target.resolve())
+        except ValueError:
+            return False
+        # ``binary_in_package._path_matches_allowlist`` takes the
+        # relative path + the first bytes (for magic_required entries
+        # like ``.wasm``).  Read just enough to satisfy that signature.
+        try:
+            with path.open("rb") as fh:
+                head = fh.read(256)
+        except OSError:
+            return False
+        return binary_in_package._path_matches_allowlist(rel, head)
+    except Exception:                              # pragma: no cover
+        return False
 
 
 def _looks_like_test_path(path: Path, target: Path) -> bool:

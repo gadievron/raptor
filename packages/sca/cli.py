@@ -43,6 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+
 from .pipeline import run_sca
 
 logger = logging.getLogger(__name__)
@@ -487,4 +489,11 @@ def _format_transitive_line(result) -> Optional[str]:
 
 
 if __name__ == "__main__":               # pragma: no cover — entrypoint
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SandboxSetupError as e:
+        print(
+            f"\nRAPTOR: SCA aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

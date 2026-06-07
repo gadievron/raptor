@@ -419,6 +419,7 @@ SupplyChainKind = Literal[
     "low_bus_factor",
     "install_hook_suspicious",
     "binary_in_tests",
+    "binary_in_package",
     "large_obfuscated_artefact",
     "disguised_filename",
     "known_exfil_destination",
@@ -428,6 +429,7 @@ SupplyChainKind = Literal[
     "gha_action_ref_drift",
     "gha_action_sunset",
     "gha_action_outdated",
+    "gha_secret_flow",
     "version_diff_anomaly",
     "sentinel_match",
     "platform_compat_regression",
@@ -440,6 +442,7 @@ SupplyChainKind = Literal[
     "workflow_unsigned_commit",
     "branch_protection_missing_signed_commits",
     "slopsquat_suspect",
+    "commit_provenance_drift",
 ]
 
 

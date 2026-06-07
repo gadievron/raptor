@@ -10,7 +10,7 @@ Instead of hardcoded seeds, this module:
 """
 
 import re
-from core.sandbox import run_trusted as _run_trusted  # read-only tools only (strings)
+from core.sandbox import run_trusted as _run_trusted, SandboxSetupError  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -139,6 +139,8 @@ class CorpusGenerator:
 
                 logger.info(f"Binary analysis complete: {len(analysis['formats_detected'])} formats, {len(self.detected_commands)} commands detected")
 
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except Exception as e:
             logger.warning(f"Binary analysis failed: {e}")
 

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.config import RaptorConfig
 from core.json import save_json
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
@@ -398,6 +399,14 @@ Examples:
     except KeyboardInterrupt:
         print("\n\nWorkflow interrupted by user")
         sys.exit(130)
+    except SandboxSetupError as e:
+        # Fail loud with the actionable message — the analysis did NOT run,
+        # so never let it look like a clean pass.
+        print(
+            f"\n✗ Run aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         print(f"\n✗ Fatal error: {e}")

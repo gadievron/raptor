@@ -9,7 +9,7 @@ build commands for CodeQL database creation.
 import os
 import re
 import subprocess
-from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
+from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted, SandboxSetupError
 # _run_trusted: read-only tools (--version checks) — no namespace overhead.
 # Build-detection work compiles/executes untrusted content: each call site
 # passes target=output=<repo_path> so Landlock engages alongside seccomp +
@@ -1271,6 +1271,8 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 tail = stderr_lines[-1] if stderr_lines else "(no stderr)"
                 logger.warning(f"Build script crashed: {tail}")
                 return None
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except (subprocess.TimeoutExpired, Exception) as e:
             logger.warning(f"Build script never ran ({e!r}) — treating as 'didn't run'")
             return None

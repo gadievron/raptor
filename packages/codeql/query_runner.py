@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.sandbox import SandboxSetupError
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
@@ -502,6 +503,9 @@ class QueryRunner:
                 errors=errors,
                 suite_name=suite_name,
             )
+
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
 
         except Exception as e:
             error = f"Unexpected error: {str(e)}"

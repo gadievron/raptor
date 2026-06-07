@@ -1,0 +1,271 @@
+#!/usr/bin/python3 -I
+"""RAPTOR seatbelt outer-watcher shim for the macOS sandbox-exec path.
+
+-I (isolated mode) is belt-and-braces: get_safe_env() strips PYTHON* env
+already, but -I makes python ignore PYTHON* regardless, so an attacker-
+influenced PYTHONPATH can't inject a sitecustomize.py into OUR interpreter
+between execve and main(). This shim runs UNSANDBOXED (outside the seatbelt
+profile), so it can read its stdlib freely — the profile-readability concern
+applies only to the in-sandbox trampoline, which is /bin/sh, not python.
+
+Why this exists
+---------------
+The macOS backend (`core/sandbox/_macos_spawn.py`) runs the target under
+`sandbox-exec -p <profile> -- <target>`. That gives isolation but leaves
+two gaps the Linux backend already closes:
+
+  1. Fail-loud setup detection. If `sandbox-exec` fails to APPLY the
+     profile it exits before running the target. We want an UNSPOOFABLE
+     positive proof that the target was reached INSIDE the sandbox, so a
+     profile-apply failure can't masquerade as a normal "0 findings" run.
+
+  2. Orphan teardown. macOS has no pid-namespace (so no kernel cascade when
+     an init dies) and no PR_SET_PDEATHSIG. If the orchestrator is hard-
+     killed (SIGKILL/OOM/crash) mid-run, the blocking subprocess.run can't
+     clean up and `sandbox-exec` + target reparent to launchd and leak.
+
+Design (two cooperating pieces)
+-------------------------------
+This file is the OUTER watcher. It runs unsandboxed as subprocess.run's
+direct child, and is handed the full sandbox-exec invocation as its argv:
+
+    raptor-seatbelt-shim  sandbox-exec -p <profile> -- \
+        /bin/sh -c 'printf K >&3; exec 3>&-; exec "$@"' rdy <target...>
+
+It forks that command into its OWN process group and watches the
+orchestrator-liveness ("death") pipe. When the orchestrator dies, every
+copy of the death-pipe write end closes, the outer shim reads EOF and
+SIGKILLs the sandbox process group (replacing the Linux pid-ns cascade
+with an explicit killpg — the outer shim has signal rights because it runs
+OUTSIDE the seatbelt profile). It also wires the status-pipe write end to
+fd 3 in the child before exec, so the in-sandbox /bin/sh trampoline can
+write the readiness byte through it.
+
+The INNER trampoline is `/bin/sh` (constructed by _macos_spawn), NOT this
+shim: it writes one readiness byte to fd 3 (proving the profile applied —
+sh ran inside it), closes fd 3 (`exec 3>&-`, so the untrusted target never
+inherits the status pipe), then execs the target. /bin/sh is chosen
+because its startup dependencies (exec /bin/sh + libSystem + the dyld
+shared cache) are a strict SUBSET of any dynamically-linked target's — so
+"no readiness byte" can only mean the profile cannot run the target
+either, i.e. a genuine setup failure. (The profile is pinned to always
+permit /bin/sh; see seatbelt.build_profile.) A python trampoline would add
+stdlib-read dependencies the target lacks, creating a false-failure mode
+under restrict_reads.
+
+This is the macOS analogue of `raptor-pid1-shim` (the Linux subprocess
+path) and the `_spawn.py` exec-status pipe (the Linux mount-ns path).
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import sys
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+# Fixed fd the in-sandbox /bin/sh trampoline writes the readiness byte to.
+# The outer shim dup2's the status pipe onto this fd (inheritable) in the
+# child before exec, so it survives sandbox-exec's exec into /bin/sh. Kept
+# in sync with the `>&3` in _macos_spawn's trampoline.
+_STATUS_CHILD_FD = 3
+
+# Outer-shim exit code when the death pipe goes EOF (orchestrator died) and
+# the shim tears the sandbox process group down. Nobody meaningful reaps it
+# (the orchestrator is gone); distinct from target codes for log clarity.
+_DEATH_TEARDOWN_EXIT = 137
+
+
+def _resolve_death_fd():
+    """Resolve the orchestrator-liveness ("death") pipe read-end fd, or None.
+
+    Validated via fstat; set non-blocking so the post-select read can never
+    stall the shim. This fd is held ONLY by the outer shim (never crosses
+    into the sandbox) and carries no data — it is a one-bit liveness signal.
+    """
+    raw = os.environ.get("_RAPTOR_DEATH_FD")
+    if not raw:
+        return None
+    try:
+        fd = int(raw)
+        os.fstat(fd)
+    except (ValueError, OSError):
+        return None
+    try:
+        os.set_blocking(fd, False)
+    except OSError:
+        return None
+    return fd
+
+
+def _resolve_status_fd():
+    """Resolve the status pipe write-end fd (a plain int), or None."""
+    raw = os.environ.get("_RAPTOR_STATUS_FD")
+    if not raw:
+        return None
+    try:
+        fd = int(raw)
+        os.fstat(fd)
+    except (ValueError, OSError):
+        return None
+    return fd
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv:
+        sys.stderr.write("raptor-seatbelt-shim: missing sandbox-exec argv\n")
+        return 2
+
+    death_fd = _resolve_death_fd()
+    status_fd = _resolve_status_fd()
+
+    # Forward common termination signals to the child group rather than
+    # dying and orphaning it.
+    child_holder = {}
+
+    def _forward(sig, _frame):
+        pid = child_holder.get("pid")
+        if pid:
+            try:
+                os.killpg(pid, sig)
+            except (ProcessLookupError, OSError):
+                try:
+                    os.kill(pid, sig)
+                except (ProcessLookupError, OSError):
+                    pass
+
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(s, _forward)
+        except (OSError, ValueError):
+            pass
+
+    child = os.fork()
+    if child == 0:
+        # Child: become a NEW process-group leader so the outer shim can
+        # killpg the whole sandbox subtree in one shot. Close the death fd
+        # first (the child never watches it; closing first also frees the
+        # number in case it collided with _STATUS_CHILD_FD). Then place the
+        # status write end on the fixed fd the /bin/sh trampoline writes to,
+        # inheritable so it survives sandbox-exec's exec, and drop the
+        # original number so the untrusted target can't inherit it.
+        if death_fd is not None:
+            try:
+                os.close(death_fd)
+            except OSError:
+                pass
+        if status_fd is not None:
+            try:
+                if status_fd != _STATUS_CHILD_FD:
+                    os.dup2(status_fd, _STATUS_CHILD_FD, inheritable=True)
+                    os.close(status_fd)
+                else:
+                    os.set_inheritable(_STATUS_CHILD_FD, True)
+            except OSError:
+                pass
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
+        # Strip RAPTOR-internal markers so NOTHING crosses into the sandbox.
+        # The trust marker authorizes THIS (unsandboxed) dispatch shim only —
+        # it must not be visible to the sandboxed target. The fd markers are
+        # already consumed (death fd closed above; status fd dup'd onto fd 3).
+        # Popping here means sandbox-exec -> /bin/sh -> target inherit a clean
+        # env with no _RAPTOR_* names.
+        for _m in ("_RAPTOR_TRUSTED", "_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD"):
+            os.environ.pop(_m, None)
+        try:
+            os.execvp(argv[0], argv)
+        except FileNotFoundError:
+            os._exit(127)
+        except PermissionError:
+            os._exit(126)
+        os._exit(125)
+
+    child_holder["pid"] = child
+    # The outer (watcher) process doesn't need the status write end; closing
+    # it here means the orchestrator's post-run read sees EOF promptly when
+    # no byte was written.
+    if status_fd is not None:
+        try:
+            os.close(status_fd)
+        except OSError:
+            pass
+    # Mirror the child into its own pgrp from the parent side too, to close
+    # the fork→setpgid race (whichever wins, the child leads group == child).
+    try:
+        os.setpgid(child, child)
+    except OSError:
+        pass
+
+    def _teardown_and_exit():
+        # Orchestrator gone → SIGKILL the sandbox process group, then the
+        # process directly (covers the window before the child's setpgid),
+        # reap briefly, and exit.
+        for killer in (lambda: os.killpg(child, signal.SIGKILL),
+                       lambda: os.kill(child, signal.SIGKILL)):
+            try:
+                killer()
+            except (ProcessLookupError, OSError):
+                pass
+        try:
+            os.waitpid(child, 0)
+        except (ChildProcessError, OSError):
+            pass
+        os._exit(_DEATH_TEARDOWN_EXIT)
+
+    if death_fd is None:
+        # No liveness pipe — plain blocking reap (still mirrors child status).
+        while True:
+            try:
+                _, status = os.waitpid(child, 0)
+                break
+            except InterruptedError:
+                continue
+            except ChildProcessError:
+                return 254
+    else:
+        import select as _select
+        status = None
+        while status is None:
+            try:
+                ready, _, _ = _select.select([death_fd], [], [], 0.1)
+            except InterruptedError:
+                ready = ()
+            if ready:
+                try:
+                    alive = os.read(death_fd, 256)
+                except BlockingIOError:
+                    alive = b"x"        # spurious wake, not EOF
+                except OSError:
+                    alive = b""         # fd error → fail safe to teardown
+                if not alive:
+                    _teardown_and_exit()
+            try:
+                reaped, st = os.waitpid(child, os.WNOHANG)
+            except ChildProcessError:
+                return 254
+            if reaped == child:
+                status = st
+
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return 255
+
+
+if __name__ == "__main__":
+    sys.exit(main())

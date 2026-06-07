@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.hash import sha256_file
 from core.json import save_json
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
@@ -852,4 +853,11 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SandboxSetupError as e:
+        print(
+            f"\nRAPTOR: fuzzing aborted — sandbox isolation could not engage.\n{e}",
+            file=sys.stderr,
+        )
+        sys.exit(SANDBOX_ENGAGE_EXIT_CODE)

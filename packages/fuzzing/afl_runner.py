@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 
-from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
+from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted, SandboxSetupError
 # _run_trusted: read-only tools (strings, --help checks) — no namespace overhead.
 # Full sandbox for afl-fuzz / afl-showmap (execute untrusted binary): network
 # block + Landlock (target=output=self.output_dir — AFL reads and writes the
@@ -961,6 +961,8 @@ class AFLRunner:
                 logger.warning(f"afl-showmap failed: {result.stderr}")
                 return {}
 
+        except SandboxSetupError:
+            raise  # sandbox isolation could not engage — fail loud, never mask as a benign result
         except Exception as e:
             logger.warning(f"Error running afl-showmap: {e}")
             return {}
