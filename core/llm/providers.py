@@ -3023,6 +3023,60 @@ def create_provider(config: ModelConfig) -> LLMProvider:
     provider = config.provider.lower()
     if provider in ("claudecode", "claude_code", "claude-code"):
         return ClaudeCodeLLMProvider(config)
+    if provider == "bedrock":
+        # AWS Bedrock — routed via the dispatcher's bedrock rule.  Two
+        # API surfaces are available; the operator chooses with
+        # ``ModelConfig.bedrock_api`` (default = Mantle):
+        #
+        # * ``"mantle"`` — Bedrock Mantle's Anthropic-Messages endpoint
+        #   (``bedrock-mantle.<region>.api.aws/anthropic/v1/messages``).
+        #   Bare model IDs (``anthropic.claude-opus-4-8``), native SSE
+        #   streaming, tool use, prompt caching.
+        # * ``"runtime"`` — Legacy InvokeModel
+        #   (``bedrock-runtime.<region>.amazonaws.com/model/<id>/
+        #   invoke``).  Required for models not on Mantle or for
+        #   cross-region inference profile IDs (``us.``/``eu.``/
+        #   ``global.``).
+        #
+        # In both cases the worker speaks plain Anthropic Messages; the
+        # dispatcher attaches AWS auth (bearer or SigV4) and rewrites
+        # the request to match the chosen API's contract.
+        if not ANTHROPIC_SDK_AVAILABLE:
+            raise RuntimeError(
+                "Bedrock provider requires: pip install anthropic"
+            )
+        if not os.environ.get("RAPTOR_LLM_SOCKET"):
+            raise RuntimeError(
+                "Bedrock provider requires the RAPTOR LLM dispatcher "
+                "(RAPTOR_LLM_SOCKET).  Workers do not hold AWS "
+                "credentials; the dispatcher attaches them at the "
+                "parent's trust boundary."
+            )
+        api = getattr(config, "bedrock_api", "mantle") or "mantle"
+        if api not in ("mantle", "runtime"):
+            raise RuntimeError(
+                f"Bedrock provider: unknown bedrock_api={api!r}; "
+                "expected 'mantle' or 'runtime'"
+            )
+        # AnthropicProvider already wires through the dispatcher when
+        # RAPTOR_LLM_SOCKET is set; we just swap its client for the
+        # Bedrock-routed one so the request goes to
+        # ``/bedrock/<api>/...`` not ``/anthropic/...`` in the
+        # dispatcher.  Same Anthropic SDK shape everywhere — body +
+        # response unchanged.
+        from core.llm.dispatcher.client import make_bedrock_client
+        provider_instance = AnthropicProvider(config)
+        provider_instance.client = make_bedrock_client(
+            api=api, timeout=config.timeout,
+        )
+        if INSTRUCTOR_AVAILABLE:
+            provider_instance.instructor_client = instructor.from_anthropic(
+                provider_instance.client,
+            )
+        logger.debug(
+            "Bedrock provider: routing via dispatcher /bedrock/%s", api,
+        )
+        return provider_instance
     if provider == "anthropic":
         if ANTHROPIC_SDK_AVAILABLE:
             return AnthropicProvider(config)

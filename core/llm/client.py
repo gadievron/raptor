@@ -327,14 +327,16 @@ def _pinned_llm_config(model_name: str) -> 'LLMConfig':
 
     if "/" in model_name:
         provider, model_name = model_name.split("/", 1)
-    elif model_name.startswith("claude"):
-        provider = "anthropic"
-    elif "gemini" in model_name:
-        provider = "gemini"
-    elif model_name.startswith("gpt"):
-        provider = "openai"
     else:
-        provider = "anthropic"
+        # Use the canonical routing-provider resolver so Bedrock-shaped
+        # IDs (``us.anthropic.claude-...``, ``eu.anthropic.claude-...``)
+        # correctly resolve to ``provider="bedrock"`` and downstream
+        # ``create_provider`` picks the dispatcher's bedrock path.
+        # The crude prefix-match this replaced returned ``"anthropic"``
+        # for ``eu.anthropic.claude-*`` (no prefix match → fell through
+        # to default), silently routing the request to direct Anthropic.
+        from core.security.llm_family import provider_of as _provider_of
+        provider = _provider_of(model_name) or "anthropic"
 
     # Credential discovery, in this order:
     #   1. env-var-based provider builder (covers the common case)

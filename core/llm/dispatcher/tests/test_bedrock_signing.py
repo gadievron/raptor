@@ -1,17 +1,22 @@
-"""Bedrock SigV4 signing-proxy tests for ``core/llm/dispatcher``.
+"""Bedrock dispatcher tests — Mantle Anthropic-Messages auth-forward.
 
-The dispatcher rewrites a worker's stock-Anthropic ``/v1/messages``
-request into a Bedrock ``InvokeModel`` call and SigV4-signs it with the
-parent's AWS credentials (the worker holds none). These tests drive a
-real ``httpx`` client (and the real Anthropic SDK) through the UDS, point
-the bedrock rule at a captive local upstream, and assert on what the
-dispatcher forwarded: the body/path transform and a well-formed SigV4
-``Authorization`` header.
+The dispatcher's bedrock rule forwards a worker's Anthropic-shape
+``/v1/messages`` request to AWS Bedrock Mantle's
+``/anthropic/v1/messages`` endpoint, attaching either the static bearer
+token (``AWS_BEARER_TOKEN_BEDROCK``) or a SigV4 signature with the
+parent's AWS credentials.  No body transformation: the worker speaks
+plain Anthropic Messages, the dispatcher just signs and forwards.
 
-``botocore`` is an optional, parent-only dependency. The signing tests
-skip when it's absent; the unconfigured-503 and env-hygiene tests run
-unconditionally so CI (which has no botocore) still exercises the
-graceful-degradation path and the credential-scrub guarantee.
+These tests drive a real ``httpx`` client (and the real Anthropic SDK)
+through the UDS, point the bedrock rule at a captive local upstream,
+and assert on what the dispatcher forwarded: path prefixed correctly,
+body verbatim, and the right auth header for each mode.
+
+``botocore`` is an optional, parent-only dependency.  The SigV4
+signing tests skip when it's absent; the unconfigured-503, bearer-
+auth, and env-hygiene tests run unconditionally so CI (which has no
+botocore) still exercises the graceful-degradation path and the
+credential-scrub guarantee.
 """
 
 from __future__ import annotations
@@ -20,14 +25,12 @@ import json
 import os
 import re
 import threading
-import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
 import pytest
 
 from core.llm.dispatcher.auth import (
-    BedrockTransformError,
     CredentialStore,
     build_rules,
 )
@@ -50,9 +53,10 @@ needs_botocore = pytest.mark.skipif(
 _FAKE_AK = "AKIAIOSFODNN7EXAMPLE"
 _FAKE_SK = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 _REGION = "us-east-1"
-# A realistic Bedrock model id — the colon must survive into the path as
-# %3A (matching boto3's own URL-encoding of modelId).
-_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+# Mantle accepts bare model IDs — no date suffix, no ``-v1:0`` version,
+# no regional prefix.  (Per AWS docs:
+# ``client.messages.create(model="anthropic.claude-opus-4-8", ...)``.)
+_MODEL = "anthropic.claude-opus-4-8"
 
 _MESSAGES_RESPONSE = {
     "id": "msg_bedrock_test",
@@ -67,7 +71,7 @@ _MESSAGES_RESPONSE = {
 
 
 # ---------------------------------------------------------------------------
-# Captive upstream — stands in for bedrock-runtime.<region>.amazonaws.com
+# Captive upstream — stands in for bedrock-mantle.<region>.api.aws
 # ---------------------------------------------------------------------------
 
 
@@ -118,32 +122,182 @@ def _bedrock_store(endpoint: str) -> CredentialStore:
     return store
 
 
-def _post_bedrock(dispatcher: LLMDispatcher, body: dict) -> httpx.Response:
+def _post_bedrock(
+    dispatcher: LLMDispatcher,
+    body: dict,
+    *,
+    path: str = "/bedrock/v1/messages",
+) -> httpx.Response:
+    """Post an Anthropic Messages request to the dispatcher's bedrock
+    prefix.  Worker sends standard Anthropic shape; dispatcher forwards
+    to Mantle (``/anthropic/v1/messages``) with AWS auth attached."""
     socket_path, fd = dispatcher.allocate_worker(label="bedrock-test")
     token = os.read(fd, 64).decode().strip()
     os.close(fd)
     transport = httpx.HTTPTransport(uds=str(dispatcher.socket_path))
     with httpx.Client(transport=transport, timeout=10.0) as c:
         return c.post(
-            "http://_/bedrock/v1/messages",
+            f"http://_{path}",
             headers={
                 _TOKEN_HEADER: token,
                 "Content-Type": "application/json",
-                # Worker SDK leftovers the dispatcher must NOT forward:
+                # Worker SDK leftover the dispatcher must NOT forward:
                 "x-api-key": "dummy-not-used",
-                "anthropic-version": "2023-06-01",
             },
             content=json.dumps(body).encode("utf-8"),
         )
 
 
 # ---------------------------------------------------------------------------
-# Signing + transform (need botocore)
+# Runtime (InvokeModel) path — explicit ``/bedrock/runtime/...``
+# ---------------------------------------------------------------------------
+
+
+_RUNTIME_INVOKE_RESPONSE = {
+    "id": "msg_bedrock_invoke",
+    "type": "message",
+    "role": "assistant",
+    "model": _MODEL,
+    "content": [{"type": "text", "text": "pong"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+def test_runtime_bearer_invoke_path(upstream, tmp_path):
+    """Worker addresses ``/bedrock/runtime/v1/messages``; dispatcher
+    rewrites to ``/model/<id>/invoke``, fills in ``anthropic_version``,
+    and forwards with bearer auth.  The model field is MOVED into the
+    URL path (no longer in the body)."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-runtime", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-runtime-bearer",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            path="/bedrock/runtime/v1/messages",
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+
+    req = captured()
+    assert req is not None
+    # InvokeModel URL pattern: /model/<urlencoded-id>/invoke
+    assert req["path"] == f"/model/{_MODEL}/invoke"
+    sent = json.loads(req["body"])
+    assert "model" not in sent  # moved into URL
+    assert sent["anthropic_version"] == "bedrock-2023-05-31"
+    assert sent["max_tokens"] == 8
+    hdrs = req["headers"]
+    assert hdrs["authorization"] == "Bearer ABSK-runtime"
+    assert "x-amz-date" not in hdrs  # bearer auth, not SigV4
+
+
+@needs_botocore
+def test_runtime_sigv4_invoke_path(upstream, tmp_path):
+    """Same runtime path with SigV4 auth instead of bearer."""
+    endpoint, captured = upstream
+    d = LLMDispatcher(
+        run_id="bedrock-runtime-sigv4",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=_bedrock_store(endpoint),
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            path="/bedrock/runtime/v1/messages",
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    req = captured()
+    assert req["path"] == f"/model/{_MODEL}/invoke"
+    hdrs = req["headers"]
+    assert hdrs["authorization"].startswith("AWS4-HMAC-SHA256 ")
+    auth = hdrs["authorization"]
+    assert f"Credential={_FAKE_AK}/" in auth
+    assert f"/{_REGION}/bedrock/aws4_request" in auth
+
+
+def test_runtime_rejects_streaming(upstream, tmp_path):
+    """InvokeModel doesn't have a JSON-line streaming protocol (the
+    streaming sibling is ``InvokeModelWithResponseStream`` with a
+    different response framing).  The dispatcher rejects with a clean
+    400 + actionable error message rather than forwarding."""
+    endpoint, _ = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-stream", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-runtime-stream-reject",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "stream": True,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            path="/bedrock/runtime/v1/messages",
+        )
+        assert resp.status_code == 400
+        # Operator guidance: use Mantle for streaming.
+        assert "RAPTOR_BEDROCK_API=mantle" in resp.json()["error"]
+    finally:
+        d.shutdown()
+
+
+def test_runtime_targets_bedrock_runtime_host(tmp_path, monkeypatch):
+    """The runtime path's endpoint URL is the legacy bedrock-runtime
+    host, NOT bedrock-mantle.  Verified by intercepting
+    ``aws_bedrock_endpoint("runtime")`` — proves API selection drives
+    host selection at the store layer, not just at the rule layer."""
+    store = CredentialStore()
+    store.set_aws(bearer_token="ABSK", region="us-east-1")
+    mantle_url = store.aws_bedrock_endpoint("mantle")
+    runtime_url = store.aws_bedrock_endpoint("runtime")
+    assert mantle_url == "https://bedrock-mantle.us-east-1.api.aws"
+    assert runtime_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    # Default (no api) → mantle, matching the operator-default contract.
+    assert store.aws_bedrock_endpoint() == mantle_url
+
+
+# ---------------------------------------------------------------------------
+# Mantle path — signing + path-prefix forwarding (need botocore)
 # ---------------------------------------------------------------------------
 
 
 @needs_botocore
-def test_bedrock_transform_and_sigv4(upstream, tmp_path):
+def test_messages_sigv4_forward(upstream, tmp_path):
+    """A SigV4-signed Messages request: model + messages forwarded
+    verbatim, path prefixed with ``/anthropic`` (``/v1/messages`` →
+    ``/anthropic/v1/messages``), SigV4 headers correctly attached,
+    worker's stale x-api-key header dropped.  ``anthropic_version``
+    is injected (see ``test_anthropic_version_*``)."""
     endpoint, captured = upstream
     d = LLMDispatcher(
         run_id="bedrock-sig",
@@ -167,50 +321,42 @@ def test_bedrock_transform_and_sigv4(upstream, tmp_path):
     req = captured()
     assert req is not None, "upstream never received the forwarded request"
 
-    # Path: model moved out of the body into /model/<encoded-id>/invoke.
-    assert req["path"] == f"/model/{urllib.parse.quote(_MODEL, safe='')}/invoke"
+    # Path forwarded with /anthropic prefix — Mantle, not InvokeModel.
+    assert req["path"] == "/anthropic/v1/messages"
 
-    # Body: model removed, anthropic_version added, payload preserved.
+    # Body forwarded — model stays in body, anthropic_version filled
+    # in (Mantle requires it), original Anthropic shape preserved.
     sent = json.loads(req["body"])
-    assert "model" not in sent
+    assert sent["model"] == _MODEL
     assert sent["anthropic_version"] == "bedrock-2023-05-31"
     assert sent["max_tokens"] == 16
     assert sent["messages"] == [{"role": "user", "content": "ping"}]
 
-    # Headers: worker's anthropic auth gone; SigV4 present; the signed
-    # content-type/accept were actually transmitted on the wire (not just
-    # declared in SignedHeaders — a dispatcher that signed then dropped
-    # them would otherwise slip through).
+    # Headers: worker's stale x-api-key gone; SigV4 present.
     hdrs = req["headers"]
     assert "x-api-key" not in hdrs
-    assert "anthropic-version" not in hdrs
+    assert hdrs.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
     assert "x-amz-date" in hdrs
     assert hdrs.get("content-type") == "application/json"
-    assert hdrs.get("accept") == "application/json"
 
     auth = hdrs["authorization"]
-    assert auth.startswith("AWS4-HMAC-SHA256 ")
     assert f"Credential={_FAKE_AK}/" in auth
     assert f"/{_REGION}/bedrock/aws4_request" in auth
     sig = re.search(r"Signature=([0-9a-f]{64})\b", auth)
     assert sig, f"no 64-hex signature in {auth!r}"
-    signed = re.search(r"SignedHeaders=([^,]+)", auth).group(1).split(";")
-    # Match boto3's bedrock-runtime InvokeModel signed-header set exactly.
-    # host is signed but never forged by us — httpx's URL-derived Host
-    # must equal what SigV4 signed.
-    assert set(signed) == {"accept", "content-type", "host", "x-amz-date"}
 
 
 @needs_botocore
-def test_bedrock_signature_matches_wire_request(upstream, tmp_path, monkeypatch):
-    """Cryptographic verification, not just structural: freeze botocore's
-    clock, capture the EXACT method/path/host/headers/body the dispatcher
-    transmitted, independently re-sign that wire request, and assert the
-    recomputed SigV4 ``Authorization`` is byte-identical. AWS verifies a
-    request by performing this same recomputation, so a match proves the
+def test_messages_signature_matches_wire_request(
+    upstream, tmp_path, monkeypatch,
+):
+    """Cryptographic verification: freeze botocore's clock, capture the
+    EXACT path/host/headers/body the dispatcher transmitted,
+    independently re-sign that wire request, and assert the recomputed
+    SigV4 ``Authorization`` is byte-identical.  AWS verifies a request
+    by performing this same recomputation, so a match proves the
     signature is valid for what actually went on the wire — and would
-    FAIL if httpx altered the path encoding between signing and sending
-    (the sign-here / send-there split's main risk)."""
+    FAIL if httpx altered the path encoding between signing and sending."""
     import datetime as _dt
 
     import botocore.auth as _ba
@@ -246,73 +392,113 @@ def test_bedrock_signature_matches_wire_request(upstream, tmp_path, monkeypatch)
     wire_url = f"http://{host}{req['path']}"
     check = AWSRequest(
         method="POST", url=wire_url, data=req["body"],
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
     )
-    SigV4Auth(Credentials(_FAKE_AK, _FAKE_SK), "bedrock", _REGION).add_auth(check)
+    SigV4Auth(
+        Credentials(_FAKE_AK, _FAKE_SK), "bedrock", _REGION,
+    ).add_auth(check)
     assert check.headers["X-Amz-Date"] == req["headers"]["x-amz-date"]
     assert check.headers["Authorization"] == req["headers"]["authorization"]
 
 
-@needs_botocore
-def test_bedrock_sdk_roundtrip(upstream, tmp_path):
-    """The strongest E2E: the real Anthropic SDK, pointed at /bedrock via
-    make_bedrock_client, gets a parsed Message back."""
-    anthropic = pytest.importorskip("anthropic")  # noqa: F841
+def test_anthropic_sdk_roundtrip(upstream, tmp_path):
+    """The strongest CI-friendly E2E: the real Anthropic SDK, pointed at
+    ``/bedrock`` via :func:`make_bedrock_client`, gets a parsed Message
+    back via the dispatcher's bearer-auth path.  No botocore needed
+    (bearer mode short-circuits SigV4)."""
+    pytest.importorskip("anthropic")
     from core.llm.dispatcher.client import make_bedrock_client
 
     endpoint, _ = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-roundtrip", region=_REGION, endpoint=endpoint,
+    )
     d = LLMDispatcher(
         run_id="bedrock-sdk",
         audit_path=tmp_path / "audit.jsonl",
-        creds=_bedrock_store(endpoint),
+        creds=store,
     )
     try:
         socket_path, fd = d.allocate_worker(label="bedrock-sdk")
         token = os.read(fd, 64).decode().strip()
         os.close(fd)
-        client = make_bedrock_client(socket_path=str(d.socket_path), token=token)
-        msg = client.messages.create(
+        client = make_bedrock_client(
+            socket_path=str(d.socket_path), token=token,
+        )
+        result = client.messages.create(
             model=_MODEL,
             max_tokens=16,
             messages=[{"role": "user", "content": "ping"}],
         )
-        assert msg.content[0].text == "pong"
-        assert msg.role == "assistant"
+        assert result.content[0].text == "pong"
+        assert result.stop_reason == "end_turn"
     finally:
         d.shutdown()
 
 
-@needs_botocore
-def test_bedrock_streaming_rejected(upstream):
-    endpoint, _ = upstream
-    rule = build_rules(_bedrock_store(endpoint))["bedrock"]
-    body = json.dumps(
-        {"model": _MODEL, "max_tokens": 8, "stream": True, "messages": []}
-    ).encode()
-    with pytest.raises(BedrockTransformError) as ei:
-        rule.prepare_request("POST", "/v1/messages", {}, body)
-    assert ei.value.status == 400
-    assert "stream" in ei.value.message.lower()
+def test_streaming_messages_passes_through(upstream, tmp_path):
+    """``stream=true`` is forwarded verbatim — Mantle supports SSE
+    natively via the standard Anthropic streaming protocol.  The
+    dispatcher does not transform/reject; it just forwards the body
+    flag through."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-stream", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-stream",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "stream": True,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+        )
+        # The captive upstream returns JSON (not SSE), so the dispatcher
+        # gets 200 — the important assertion is that the dispatcher
+        # didn't REJECT streaming with a 400 like the old InvokeModel
+        # path did.
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    sent = json.loads(captured()["body"])
+    assert sent["stream"] is True   # forwarded verbatim
 
 
-@needs_botocore
-def test_bedrock_missing_model_rejected(upstream):
-    endpoint, _ = upstream
-    rule = build_rules(_bedrock_store(endpoint))["bedrock"]
-    body = json.dumps({"max_tokens": 8, "messages": []}).encode()
-    with pytest.raises(BedrockTransformError) as ei:
-        rule.prepare_request("POST", "/v1/messages", {}, body)
-    assert ei.value.status == 400
-    assert "model" in ei.value.message.lower()
-
-
-@needs_botocore
-def test_bedrock_invalid_json_rejected(upstream):
-    endpoint, _ = upstream
-    rule = build_rules(_bedrock_store(endpoint))["bedrock"]
-    with pytest.raises(BedrockTransformError) as ei:
-        rule.prepare_request("POST", "/v1/messages", {}, b"{not json")
-    assert ei.value.status == 400
+def test_count_tokens_path_forwarded(upstream, tmp_path):
+    """The dispatcher forwards arbitrary paths under ``/bedrock/`` with
+    the ``/anthropic`` prefix — not just ``/v1/messages``.
+    ``/v1/messages/count_tokens`` is the obvious second one (used by
+    SDKs for context budgeting)."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-models", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-count",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d, {}, path="/bedrock/v1/messages/count_tokens",
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    assert captured()["path"] == "/anthropic/v1/messages/count_tokens"
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +506,73 @@ def test_bedrock_invalid_json_rejected(upstream):
 # ---------------------------------------------------------------------------
 
 
-def test_bedrock_bearer_token_auth(upstream, tmp_path):
-    """Bedrock API-key path: a static ``Authorization: Bearer`` header,
-    no SigV4 (no ``x-amz-date``), no botocore — but the same body/path
-    transform as the SigV4 path. Mirrors what the AWS SDKs send when
-    ``AWS_BEARER_TOKEN_BEDROCK`` is set."""
+def test_anthropic_version_injected_when_missing(upstream, tmp_path):
+    """Mantle inherits Bedrock InvokeModel's ``anthropic_version``
+    requirement (``"bedrock-2023-05-31"``).  The Anthropic SDK doesn't
+    add the field (the public API doesn't need it), so the dispatcher
+    injects it on the way to Mantle when the worker omitted it."""
     endpoint, captured = upstream
     store = CredentialStore()
-    store.set_aws(bearer_token="ABSK-test-token-xyz", region=_REGION, endpoint=endpoint)
+    store.set_aws(
+        bearer_token="ABSK-aver", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-aver",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d, {"model": _MODEL, "max_tokens": 8, "messages": []}
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    sent = json.loads(captured()["body"])
+    assert sent["anthropic_version"] == "bedrock-2023-05-31"
+
+
+def test_anthropic_version_operator_value_preserved(upstream, tmp_path):
+    """An operator who deliberately set a different ``anthropic_version``
+    (e.g. a future-dated schema version) should see their value
+    forwarded — the dispatcher only fills the slot when missing."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-aver", region=_REGION, endpoint=endpoint,
+    )
+    d = LLMDispatcher(
+        run_id="bedrock-aver-pre",
+        audit_path=tmp_path / "audit.jsonl",
+        creds=store,
+    )
+    try:
+        resp = _post_bedrock(
+            d,
+            {
+                "model": _MODEL,
+                "max_tokens": 8,
+                "messages": [],
+                "anthropic_version": "bedrock-2099-12-31",
+            },
+        )
+        assert resp.status_code == 200
+    finally:
+        d.shutdown()
+    sent = json.loads(captured()["body"])
+    assert sent["anthropic_version"] == "bedrock-2099-12-31"
+
+
+def test_messages_bearer_auth(upstream, tmp_path):
+    """Bedrock API-key path: a static ``Authorization: Bearer`` header,
+    no SigV4, no botocore — body and path forwarded verbatim.  Mirrors
+    what the AWS SDKs send when ``AWS_BEARER_TOKEN_BEDROCK`` is set."""
+    endpoint, captured = upstream
+    store = CredentialStore()
+    store.set_aws(
+        bearer_token="ABSK-test-token-xyz",
+        region=_REGION, endpoint=endpoint,
+    )
     d = LLMDispatcher(
         run_id="bedrock-bearer",
         audit_path=tmp_path / "audit.jsonl",
@@ -348,14 +593,15 @@ def test_bedrock_bearer_token_auth(upstream, tmp_path):
         d.shutdown()
 
     req = captured()
-    assert req["path"] == f"/model/{urllib.parse.quote(_MODEL, safe='')}/invoke"
+    assert req["path"] == "/anthropic/v1/messages"
     hdrs = req["headers"]
     assert hdrs.get("authorization") == "Bearer ABSK-test-token-xyz"
     assert "x-amz-date" not in hdrs  # bearer auth, not SigV4
     assert hdrs.get("content-type") == "application/json"
-    assert hdrs.get("accept") == "application/json"
+    # Body forwarded — model stays in body, Anthropic shape preserved,
+    # ``anthropic_version`` injected by the dispatcher.
     sent = json.loads(req["body"])
-    assert "model" not in sent
+    assert sent["model"] == _MODEL
     assert sent["anthropic_version"] == "bedrock-2023-05-31"
 
 
@@ -459,7 +705,9 @@ def test_bedrock_signing_failure_returns_502(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("simulated credential refresh failure")
 
-    monkeypatch.setattr(auth_mod, "_build_signed_bedrock_request", _boom)
+    monkeypatch.setattr(
+        auth_mod, "_build_signed_mantle_request", _boom,
+    )
 
     d = LLMDispatcher(
         run_id="bedrock-502",
@@ -477,7 +725,6 @@ def test_bedrock_signing_failure_returns_502(tmp_path, monkeypatch):
 
     audit = (tmp_path / "audit.jsonl").read_text()
     assert "provider.transform_error" in audit
-
 
 def test_aws_secrets_popped_from_env(monkeypatch):
     """AWS secret env vars are read-and-erased at CredentialStore

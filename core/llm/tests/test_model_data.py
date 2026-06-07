@@ -99,3 +99,76 @@ def test_every_priced_model_has_limits() -> None:
         f"models in MODEL_COSTS but not MODEL_LIMITS: {only_in_costs}")
     assert not only_in_limits, (
         f"models in MODEL_LIMITS but not MODEL_COSTS: {only_in_limits}")
+
+
+# ---------------------------------------------------------------------------
+# Bedrock model-id support — limits + price helpers handle Bedrock
+# prefixes without needing per-region duplicate entries.  Future Claude
+# additions only require the bare entry; Bedrock variants pick up
+# automatically.
+# ---------------------------------------------------------------------------
+
+def test_context_window_handles_bedrock_regional_prefix():
+    from core.llm.model_data import context_window_for
+    bare = context_window_for("claude-opus-4-7")
+    assert context_window_for("us.anthropic.claude-opus-4-7") == bare
+    assert context_window_for("eu.anthropic.claude-opus-4-7") == bare
+    assert context_window_for("au.anthropic.claude-opus-4-7") == bare
+    assert context_window_for("apac.anthropic.claude-opus-4-7") == bare
+    assert context_window_for("global.anthropic.claude-opus-4-7") == bare
+
+
+def test_max_output_handles_bedrock_regional_prefix():
+    from core.llm.model_data import max_output_for
+    bare = max_output_for("claude-haiku-4-5")
+    assert max_output_for("us.anthropic.claude-haiku-4-5") == bare
+    assert max_output_for("global.anthropic.claude-haiku-4-5") == bare
+
+
+def test_price_for_global_bedrock_matches_direct_api():
+    """``global.anthropic.<model>`` should price identically to the
+    direct-API form (AWS docs: global CRIS = direct Anthropic pricing)."""
+    from core.llm.model_data import price_for
+    bare = price_for("claude-opus-4-7")
+    assert price_for("global.anthropic.claude-opus-4-7") == bare
+    assert price_for("global.anthropic.claude-sonnet-4-6") \
+        == price_for("claude-sonnet-4-6")
+    assert price_for("global.anthropic.claude-haiku-4-5") \
+        == price_for("claude-haiku-4-5")
+
+
+def test_price_for_regional_bedrock_applies_surcharge():
+    """For models with a known global-CRIS SKU, regional prefix gets
+    the ~10% surcharge per AWS pricing page."""
+    from core.llm.model_data import price_for
+    bare_in, bare_out = price_for("claude-opus-4-7")
+    for prefix in ("us.", "eu.", "au.", "apac."):
+        in_price, out_price = price_for(
+            f"{prefix}anthropic.claude-opus-4-7",
+        )
+        assert abs(in_price - bare_in * 1.10) < 1e-9, (
+            f"{prefix}anthropic.claude-opus-4-7 input price "
+            f"{in_price} != {bare_in} × 1.10"
+        )
+        assert abs(out_price - bare_out * 1.10) < 1e-9
+
+
+def test_price_for_regional_bedrock_no_surcharge_when_geo_only():
+    """For a model NOT on the global-CRIS allowlist, regional prefix
+    is the base — no 1.10× surcharge (per owen10380's nuance: geo-only
+    models have no cheaper global baseline)."""
+    from core.llm.model_data import price_for
+    # claude-opus-4-1 is older; assume no global. SKU until verified.
+    bare = price_for("claude-opus-4-1")
+    # Regional with bare-not-in-CRIS-list → 1.0× multiplier
+    assert price_for("us.anthropic.claude-opus-4-1") == bare
+
+
+def test_price_for_unknown_bedrock_model_returns_default():
+    """A Bedrock id whose BARE name isn't in MODEL_COSTS returns the
+    default — no spurious cost tracking from a hallucinated entry."""
+    from core.llm.model_data import price_for
+    assert price_for("us.anthropic.claude-opus-9-9") == (0.0, 0.0)
+    assert price_for(
+        "us.anthropic.claude-opus-9-9", default=(-1.0, -1.0),
+    ) == (-1.0, -1.0)

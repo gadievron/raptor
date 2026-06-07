@@ -52,6 +52,13 @@ except ImportError as _e:
     logger.debug("google-genai SDK probe failed: %s", _e)
     GENAI_SDK_AVAILABLE = False
 
+try:
+    import boto3 as _boto3_module  # noqa: F401 — availability probe
+    BOTO3_SDK_AVAILABLE = True
+except ImportError as _e:
+    logger.debug("boto3 SDK probe failed: %s", _e)
+    BOTO3_SDK_AVAILABLE = False
+
 
 @dataclass
 class LLMAvailability:
@@ -469,12 +476,20 @@ def _config_has_keyed_models() -> bool:
     AND the required SDK is installed to talk to its provider.
     """
     from .model_data import PROVIDER_ENV_KEYS
+    from core.security.llm_family import provider_of
 
     for entry in _read_config_models():
         if not isinstance(entry, dict):
             continue
 
         provider = entry.get("provider", "")
+        # When the operator config omits ``provider`` but specifies
+        # a Bedrock-shaped model id, derive the routing provider
+        # via ``provider_of`` so the entry is recognised here.
+        if not provider:
+            model_name = entry.get("model", "")
+            if model_name:
+                provider = provider_of(model_name)
 
         # Check SDK availability for this provider
         if provider == "anthropic":
@@ -489,6 +504,16 @@ def _config_has_keyed_models() -> bool:
         elif provider in ("openai", "mistral"):
             if not OPENAI_SDK_AVAILABLE:
                 continue
+        elif provider == "bedrock":
+            # Bedrock entries are usable via the dispatcher (no SDK
+            # in this process) OR via direct SigV4 (boto3 in this
+            # process).  Either path counts.  Without this branch,
+            # an operator with AWS credentials + a config-file Bedrock
+            # model + no dispatcher route + boto3 installed would
+            # fail detection (the May 28 review's "direct-SigV4 gap").
+            if not (bool(os.getenv("RAPTOR_LLM_SOCKET"))
+                    or BOTO3_SDK_AVAILABLE):
+                continue
         else:
             if not OPENAI_SDK_AVAILABLE:
                 continue
@@ -498,6 +523,15 @@ def _config_has_keyed_models() -> bool:
             return True
         env_key = PROVIDER_ENV_KEYS.get(provider)
         if env_key and os.getenv(env_key):
+            return True
+        # Bedrock auth signals: bearer token OR AWS access keys.
+        # AWS_REGION alone is NOT signal — it's set for unrelated
+        # reasons on any AWS user's machine.
+        if provider == "bedrock" and (
+            os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+            or (os.getenv("AWS_ACCESS_KEY_ID")
+                and os.getenv("AWS_SECRET_ACCESS_KEY"))
+        ):
             return True
 
     return False
@@ -533,7 +567,28 @@ def detect_llm_availability() -> LLMAvailability:
     has_gemini = bool(os.getenv("GEMINI_API_KEY")) and (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
     has_mistral = bool(os.getenv("MISTRAL_API_KEY")) and OPENAI_SDK_AVAILABLE
 
-    has_cloud_keys = has_anthropic or has_openai or has_gemini or has_mistral
+    # AWS Bedrock — gate on EXPLICIT opt-in only, NOT bare AWS_REGION
+    # (which is set for countless unrelated reasons on any AWS user's
+    # box and would FP-fire detection on AWS users who don't run RAPTOR
+    # against Bedrock).  Recognised explicit signals:
+    #   * ``AWS_BEARER_TOKEN_BEDROCK`` — the AWS-recommended bearer
+    #     token; its presence is an unambiguous statement of intent.
+    #   * A config-file model with a Bedrock-shaped name AND any
+    #     AWS-credential signal (checked downstream in
+    #     ``_config_has_keyed_models``).
+    # Direct (non-dispatcher) Bedrock use requires botocore; the
+    # dispatcher route handles signing in the parent and only needs
+    # the env signal here.  Without dispatcher AND without botocore
+    # there's no usable Bedrock path even if the env signal is present,
+    # so we additionally require either ``has_dispatcher_route`` (set
+    # below) OR ``BOTO3_SDK_AVAILABLE`` for ``has_bedrock`` to count.
+    # ``has_dispatcher_route`` is computed a few lines down; we wire
+    # the join after both are known.
+    has_bedrock_signal = bool(os.getenv("AWS_BEARER_TOKEN_BEDROCK"))
+
+    has_cloud_keys = (
+        has_anthropic or has_openai or has_gemini or has_mistral
+    )
 
     # Phase B credential-isolation: a worker spawned via the
     # dispatcher has ``RAPTOR_LLM_SOCKET`` set but no API keys in
@@ -546,6 +601,17 @@ def detect_llm_availability() -> LLMAvailability:
     # silently degrade ``--sequential`` runs to ClaudeCodeProvider /
     # manual-review even though the operator configured an API key.
     has_dispatcher_route = bool(os.getenv("RAPTOR_LLM_SOCKET"))
+
+    # Bedrock signal counts only when a usable Bedrock path exists:
+    # via the dispatcher (parent does the signing) or direct via
+    # botocore.  Bearer-token-via-dispatcher requires no SDK in this
+    # process; SigV4-via-dispatcher requires botocore in the parent
+    # process (which the dispatcher checks separately) — both modes
+    # only need ``has_dispatcher_route`` here.
+    has_bedrock = has_bedrock_signal and (
+        has_dispatcher_route or BOTO3_SDK_AVAILABLE
+    )
+    has_cloud_keys = has_cloud_keys or has_bedrock
 
     # Check config file for models with valid keys (no import from config.py
     # needed — just check if any model entry has an API key, either inline
@@ -604,3 +670,19 @@ def _warn_unusable_keys():
                     f"{env_var} is set but the {sdk_name} SDK is not installed. "
                     f"Install with: pip install {sdk_name.split(' or ')[0]}"
                 )
+
+    # Bedrock: warn ONLY when the operator has set the explicit
+    # AWS_BEARER_TOKEN_BEDROCK opt-in signal AND no usable path is
+    # available (no dispatcher route, no boto3).  Gating on bare
+    # AWS_REGION here would FP-warn every AWS user who happens to
+    # have the env var set for unrelated reasons; that's what we're
+    # avoiding by keying off the bearer-token signal.
+    if os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
+        has_dispatcher_route = bool(os.getenv("RAPTOR_LLM_SOCKET"))
+        if not has_dispatcher_route and not BOTO3_SDK_AVAILABLE:
+            logger.warning(
+                "AWS_BEARER_TOKEN_BEDROCK is set but neither the dispatcher "
+                "(RAPTOR_LLM_SOCKET) nor boto3 is available for Bedrock "
+                "calls.  Install boto3 (pip install boto3) or run via the "
+                "RAPTOR dispatcher."
+            )

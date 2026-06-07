@@ -399,21 +399,90 @@ def _build_claudecode_config() -> Optional['ModelConfig']:
     )
 
 
+def _build_bedrock_config() -> Optional['ModelConfig']:
+    """Builder for AWS Bedrock — fires when the explicit opt-in signal
+    (``AWS_BEARER_TOKEN_BEDROCK``) is present.  Returns a bare Bedrock
+    model id; Bedrock Mantle (the dispatcher's upstream) routes by
+    hostname (``bedrock-mantle.<region>.api.aws``), not by model-id
+    prefix — so model IDs are bare (``anthropic.claude-haiku-4-5``)
+    regardless of region.
+
+    Without this, ``has_bedrock=True`` in detection.py would report
+    "LLM available" but ``_get_default_primary_model()`` would fall
+    through to the next provider, leaving operators with a detection-
+    selection mismatch (PR #696 review point 2).
+
+    Credential-isolation contract: when running under the dispatcher
+    (the supported deployment), ``CredentialStore.__init__`` has
+    ALREADY read-and-popped ``AWS_BEARER_TOKEN_BEDROCK`` from env by
+    the time any worker constructs ``LLMConfig()``.  This builder
+    then sees ``os.getenv(...)`` return ``None`` and returns ``None``;
+    ``has_dispatcher_route`` carries detection and the dispatcher
+    injects auth at the request level from the parent-held bearer.
+    The api_key field below is populated ONLY in the direct (non-
+    dispatcher) startup path — when CredentialStore hasn't run.  In
+    that path the bearer ends up in the parent's in-process LLMConfig
+    but workers spawned from that parent inherit an env without the
+    bearer (CredentialStore popped it when the dispatcher was later
+    initialized) so credential isolation is preserved across the
+    process boundary regardless.
+    """
+    bearer = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+    if not bearer:
+        return None
+    # Use the same bare default Anthropic chooses.  Operator can
+    # override via config file to pick a different Claude tier.
+    bare_default = PROVIDER_DEFAULT_MODELS.get("anthropic", "")
+    if not bare_default:
+        return None
+    model_name = f"anthropic.{bare_default}"
+    limits = MODEL_LIMITS.get(bare_default, {})
+    costs = MODEL_COSTS.get(bare_default, {})
+    avg_cost_per_1k = (
+        (costs.get("input", 0.005) + costs.get("output", 0.025)) / 2
+    )
+    # Read the per-run Bedrock API default.  Per-model overrides live
+    # in models.json (handled by ``_model_config_from_entry``).
+    # Unrecognised values fall back to mantle with a quiet log — we
+    # don't hard-fail here because the builder runs at import time and
+    # a noisy traceback would block startup over a typo.
+    bedrock_api = (os.getenv("RAPTOR_BEDROCK_API") or "mantle").lower()
+    if bedrock_api not in ("mantle", "runtime"):
+        bedrock_api = "mantle"
+    return ModelConfig(
+        provider="bedrock",
+        model_name=model_name,
+        # Bearer token IS the auth; carried in api_key so downstream
+        # providers can pick it up via the dispatcher.
+        api_key=bearer,
+        max_tokens=limits.get("max_output", _DEFAULT_MAX_OUTPUT_FRONTIER),
+        max_context=limits.get("max_context", _DEFAULT_MAX_CONTEXT_FRONTIER),
+        temperature=0.7,
+        cost_per_1k_tokens=avg_cost_per_1k,
+        bedrock_api=bedrock_api,
+    )
+
+
 _PROVIDER_BUILDERS = {
     "anthropic":  _build_anthropic_config,
     "openai":     lambda: _build_openai_compat_config("openai"),
     "gemini":     lambda: _build_openai_compat_config("gemini"),
     "mistral":    lambda: _build_openai_compat_config("mistral"),
+    "bedrock":    _build_bedrock_config,
     "ollama":     _build_ollama_config,
     "claudecode": _build_claudecode_config,
 }
 
 # Default order. Anthropic first (cache-control + task-budget beta —
-# the only provider where those matter natively). Ollama before
+# the only provider where those matter natively).  Bedrock surfaces
+# after the direct cloud providers — operators who opt-in to Bedrock
+# explicitly via ``AWS_BEARER_TOKEN_BEDROCK`` will hit it before the
+# autodetect falls through to Ollama / Claude Code.  Ollama before
 # claudecode because Ollama is a deliberate operator setup; CC is the
 # absolute last resort.
 _DEFAULT_PROVIDER_ORDER = (
-    "anthropic", "openai", "gemini", "mistral", "ollama", "claudecode",
+    "anthropic", "openai", "gemini", "mistral", "bedrock",
+    "ollama", "claudecode",
 )
 
 
@@ -502,9 +571,22 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
 
     API key resolution: inline api_key → provider env var.
     Other config fields (timeout, max_context, max_output) are honoured.
+
+    When the entry omits ``provider`` but specifies a model id whose
+    shape implies a routing provider (Bedrock-prefixed Claude / Meta
+    / Mistral / Cohere), the provider is derived via :func:`provider_of`
+    so config-file entries like
+    ``{"model": "us.anthropic.claude-opus-4-7"}`` route via Bedrock
+    automatically without the operator having to spell out
+    ``"provider": "bedrock"``.
     """
+    from core.security.llm_family import provider_of as _provider_of
     provider = entry.get("provider", "")
     model_name = entry.get("model", "")
+    if not provider and model_name:
+        derived = _provider_of(model_name)
+        if derived:
+            provider = derived
     if not model_name and provider:
         model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
 
@@ -513,6 +595,12 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         env_key = PROVIDER_ENV_KEYS.get(provider)
         if env_key:
             api_key = os.getenv(env_key)
+    # Bedrock-routed entries pick up the bearer (when present) the
+    # same way other providers pick up their env-var key — gives
+    # operators a single way to express "use this Bedrock model"
+    # in config without also setting an explicit provider field.
+    if not api_key and provider == "bedrock":
+        api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
     limits = MODEL_LIMITS.get(model_name, {})
     costs = MODEL_COSTS.get(model_name, {})
@@ -530,6 +618,19 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         api_base = f"{ollama_base.rstrip('/')}/v1"
     else:
         api_base = PROVIDER_ENDPOINTS.get(provider)
+    # Bedrock-only: per-model API surface override.  Falls back to
+    # ``RAPTOR_BEDROCK_API`` env (mantle default).  Unrecognised values
+    # snap to mantle, same defensive shape as ``_build_bedrock_config``.
+    if provider == "bedrock":
+        bedrock_api = (
+            entry.get("bedrock_api")
+            or os.getenv("RAPTOR_BEDROCK_API")
+            or "mantle"
+        ).lower()
+        if bedrock_api not in ("mantle", "runtime"):
+            bedrock_api = "mantle"
+    else:
+        bedrock_api = "mantle"
     return ModelConfig(
         provider=provider,
         model_name=model_name,
@@ -541,6 +642,7 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
         temperature=0.7,
         cost_per_1k_tokens=cost_per_1k,
         role=entry.get("role") or None,
+        bedrock_api=bedrock_api,
     )
 
 
@@ -906,6 +1008,16 @@ class ModelConfig:
     cost_per_1k_tokens: float = 0.0  # Fallback rate — used only when model not in MODEL_COSTS
     enabled: bool = True
     role: Optional[str] = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"
+    # Bedrock-only: which Bedrock surface to route this model through.
+    # ``"mantle"`` (default) → ``bedrock-mantle.<region>.api.aws/anthropic/
+    # v1/messages`` (native Anthropic Messages API, bare model IDs, full
+    # feature support).  ``"runtime"`` → legacy InvokeModel at
+    # ``bedrock-runtime.<region>.amazonaws.com/model/<id>/invoke``
+    # (required for models not on Mantle or for cross-region inference
+    # profile IDs).  Ignored for non-Bedrock providers.  Set globally via
+    # ``RAPTOR_BEDROCK_API`` or per-model via the ``bedrock_api`` field
+    # in ``models.json``.
+    bedrock_api: str = "mantle"
 
 
 def _shared_prefix_len(a: str, b: str) -> int:
