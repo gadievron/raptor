@@ -970,14 +970,24 @@ def test_bedrock_session_warnings_unmanaged_asia_env(monkeypatch):
 
 
 def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
-    """AKIA env creds + no bearer + botocore installed (test
-    environment has it) = the well-trodden setup, no warnings."""
+    """AKIA env creds + no bearer + botocore importable = the well-
+    trodden setup, no warnings.  Mocked here so the test passes both
+    in CI (no botocore) and on dev hosts (where it is installed) —
+    we're only asserting the behaviour when botocore IS available."""
+    import sys as _sys
+    import types as _types
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
-    store = CredentialStore()
+    # Mock botocore as importable so the SigV4-without-botocore
+    # warning doesn't fire in CI environments that don't have it
+    # installed — irrelevant for what this test asserts.
+    if "botocore" not in _sys.modules:
+        monkeypatch.setitem(
+            _sys.modules, "botocore", _types.ModuleType("botocore"),
+        )
     # Drop the no-creds-file requirement so this test doesn't depend
     # on whether the dev host has ~/.aws/credentials.  We're only
     # asserting that AKIA + no bearer + botocore = silent.
@@ -986,6 +996,7 @@ def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
         lambda self: False,
     )
     monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
+    store = CredentialStore()
     assert store.bedrock_session_warnings() == []
 
 
@@ -1044,6 +1055,7 @@ def test_bedrock_session_warnings_bearer_only_no_botocore_warning(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@needs_botocore
 def test_credential_lookup_prefers_chain_when_profile_set(monkeypatch):
     """AWS_PROFILE pins the chain regardless of env-supplied static
     creds.  Profiles back SSO / role assumption, which return
@@ -1077,6 +1089,7 @@ def test_credential_lookup_prefers_chain_when_profile_set(monkeypatch):
     assert fake_session_created["profile"] == "myrole"
 
 
+@needs_botocore
 def test_credential_lookup_prefers_chain_when_env_looks_short_lived(monkeypatch):
     """ASIA env creds → try chain first; fall back to env if chain
     returns nothing.  This handles the "operator pasted temp creds
@@ -1103,6 +1116,7 @@ def test_credential_lookup_prefers_chain_when_env_looks_short_lived(monkeypatch)
     assert creds.access_key == "ASIACHAIN"  # chain wins
 
 
+@needs_botocore
 def test_credential_lookup_falls_back_to_env_when_chain_empty(monkeypatch):
     """ASIA env creds + chain returns nothing → env snapshot wins.
     Operator with only env vars still gets to make requests; refresh
@@ -1127,6 +1141,7 @@ def test_credential_lookup_falls_back_to_env_when_chain_empty(monkeypatch):
     assert creds.access_key == "ASIAONLYENV"
 
 
+@needs_botocore
 def test_credential_lookup_long_lived_akia_stays_static(monkeypatch):
     """AKIA env keys + no session token + no profile → static
     snapshot.  The chain is NOT consulted (no point — AKIA never
