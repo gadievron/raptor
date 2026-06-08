@@ -15,6 +15,7 @@ If external LLM fails entirely, falls back to CC dispatch automatically.
 
 import copy
 import logging
+import os
 import shutil
 import threading
 import time
@@ -170,6 +171,22 @@ class CostTracker:
             if self._thinking_tokens > 0:
                 summary["thinking_tokens"] = self._thinking_tokens
             return summary
+
+
+def _calibrated_aggregation_enabled() -> bool:
+    """Feature flag for the Phase 3 calibrated-aggregation wire-up.
+
+    Default: enabled. Set ``RAPTOR_CALIBRATED_AGGREGATION=0``
+    (or ``""`` / ``false`` / ``no``) to disable. The flag exists so
+    operators can opt out if the additional EM cost ever becomes
+    noticeable on very large finding sets, or if an integration
+    surface needs the strict pre-Phase-3 schema for a transition
+    period.
+    """
+    raw = os.environ.get("RAPTOR_CALIBRATED_AGGREGATION")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("", "0", "false", "no", "off")
 
 
 def _finalize_results_for_emit(results: list) -> None:
@@ -824,6 +841,49 @@ def orchestrate(
             if key not in primary and source.get(key) is not None:
                 primary[key] = source.get(key)
         results_by_id[fid] = primary
+
+    # --- Calibrated aggregation (Dawid–Skene) ---------------------------
+    # Phase 3 of the calibrated-aggregation arc
+    # (docs/design-aggregation-dominators-wp.md). Attaches a per-finding
+    # ``calibrated_aggregation`` field carrying a posterior P(true-positive)
+    # and credible interval inferred from the multi-model panel verdicts.
+    # Purely additive — does not alter ``is_exploitable`` or any existing
+    # field. The vote-based consensus pipeline (consensus.py) is unchanged
+    # and still updates the scorecard; Phase 4 closes that circularity
+    # in a separate change.
+    #
+    # Opt-out: set ``RAPTOR_CALIBRATED_AGGREGATION=0`` (or any falsy value).
+    # Default is ON. The feature is structurally safe to enable by default
+    # because it can only add a field; consumers that don't know about it
+    # ignore it.
+    if _calibrated_aggregation_enabled():
+        try:
+            from core.llm.multi_model.calibrated_aggregation import (
+                calibrate_results, verdict_to_json,
+            )
+            verdicts = calibrate_results(results_by_id)
+            n_ds = sum(
+                1 for v in verdicts.values()
+                if v.aggregation_method == "dawid_skene"
+            )
+            n_vote = len(verdicts) - n_ds
+            for fid, verdict in verdicts.items():
+                primary = results_by_id.get(fid)
+                if primary is not None:
+                    primary["calibrated_aggregation"] = verdict_to_json(verdict)
+            logger.info(
+                "Calibrated aggregation: %d D–S, %d vote-fallback (%d total)",
+                n_ds, n_vote, len(verdicts),
+            )
+        except Exception as exc:
+            # The feature is additive — if it fails for any reason we
+            # drop it silently rather than abort the orchestrator. The
+            # log line gives operators something to grep for if the
+            # field goes missing.
+            logger.warning(
+                "Calibrated aggregation failed; skipping: %s: %s",
+                type(exc).__name__, exc, exc_info=True,
+            )
 
     # Multi-model collapse detection. The exclude_fallback_to guard above
     # prevents most cases where a primary's failure routes silently into

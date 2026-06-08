@@ -134,6 +134,23 @@ def record_consensus_outcomes(
         rule_id = str(result.get("rule_id") or "unknown")
         decision_class = f"{decision_class_prefix}:{rule_id}"
 
+        # Phase 4 of the calibrated-aggregation arc: if the orchestrator
+        # attached a Dawid–Skene posterior to this finding (which it
+        # does by default — see ``packages/llm_analysis/orchestrator.py``
+        # ``_calibrated_aggregation_enabled``), grade dissenters against
+        # that posterior instead of against raw majority. The legacy
+        # majority path stays in place for vote-fallback findings and
+        # for any consumer that disabled the Phase 3 wire-up.
+        calibrated = result.get("calibrated_aggregation") or {}
+        use_calibrated = (
+            calibrated.get("aggregation_method") == "dawid_skene"
+            and isinstance(calibrated.get("posterior_true_positive"), (int, float))
+        )
+        posterior = (
+            float(calibrated["posterior_true_positive"])
+            if use_calibrated else None
+        )
+
         # Look up this finding's per-model result list (when the
         # caller supplied one) so we can attribute reasoning to the
         # actual minority model rather than mis-attributing the
@@ -143,8 +160,20 @@ def record_consensus_outcomes(
         )
 
         for model, verdict in verdicts.items():
+            # Two grading paths:
+            #   - legacy:    verdict vs majority → discrete correct/incorrect
+            #   - posterior: verdict vs P(true exploitable) → soft credits
+            #                summing to 1.0 (the standard soft-label
+            #                fractional update; correct_credit = p when
+            #                verdict matches positive, (1-p) otherwise).
             with_majority = (verdict == majority_says_exploitable)
             outcome = "correct" if with_majority else "incorrect"
+            if use_calibrated:
+                # If verdict says exploitable, "correct" credit is p
+                # (probability the latent label IS positive); "incorrect"
+                # credit is 1-p. Mirror for verdict==False.
+                correct_credit = posterior if verdict else (1.0 - posterior)
+                incorrect_credit = 1.0 - correct_credit
             # This model's per-finding result — used both for the resolved
             # model snapshot (model_version) and, on disagreement, the sample.
             this_model_result = next(
@@ -156,7 +185,16 @@ def record_consensus_outcomes(
             # None when unavailable so the cell stays alias-keyed, never guessed.
             model_version = (this_model_result or {}).get("resolved_model")
             sample = None
-            if outcome == "incorrect" and this_model_result is not None:
+            # Sample-attachment trigger: the model disagreed with the
+            # "truth signal" the cell is being graded against. Under
+            # legacy that's the majority; under posterior it's whether
+            # this model's incorrect-credit exceeds its correct-credit
+            # (equivalent to: verdict disagrees with posterior > 0.5).
+            disagrees_with_truth = (
+                (use_calibrated and incorrect_credit > correct_credit)
+                or (not use_calibrated and outcome == "incorrect")
+            )
+            if disagrees_with_truth and this_model_result is not None:
                 # Capture the minority model's OWN reasoning. If we
                 # can't find it in ``per_finding_results`` (caller
                 # didn't supply, or the per-model record is missing),
@@ -164,22 +202,35 @@ def record_consensus_outcomes(
                 # primary's reasoning — that would mis-attribute the
                 # majority's text to the dissenter.
                 reasoning = str(this_model_result.get("reasoning") or "")
+                truth_label = (
+                    f"posterior {posterior:.2f}" if use_calibrated
+                    else f"majority of {len(verdicts)} models voted "
+                         f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
+                )
                 sample = {
                     "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
-                    "other_reasoning": (
-                        f"majority of {len(verdicts)} models voted "
-                        f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
-                    ),
+                    "other_reasoning": truth_label,
                 }
             try:
-                scorecard.record_event(
-                    decision_class=decision_class,
-                    model=model,
-                    event_type=EventType.MULTI_MODEL_CONSENSUS,
-                    outcome=outcome,
-                    model_version=model_version,
-                    sample=sample,
-                )
+                if use_calibrated:
+                    scorecard.record_event_soft(
+                        decision_class=decision_class,
+                        model=model,
+                        event_type=EventType.MULTI_MODEL_CONSENSUS_CALIBRATED,
+                        correct=correct_credit,
+                        incorrect=incorrect_credit,
+                        model_version=model_version,
+                        sample=sample,
+                    )
+                else:
+                    scorecard.record_event(
+                        decision_class=decision_class,
+                        model=model,
+                        event_type=EventType.MULTI_MODEL_CONSENSUS,
+                        outcome=outcome,
+                        model_version=model_version,
+                        sample=sample,
+                    )
                 n_recorded += 1
             except Exception as e:                       # noqa: BLE001
                 # WARNING (not DEBUG): operators rarely run with

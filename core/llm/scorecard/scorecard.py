@@ -150,6 +150,24 @@ class EventType:
     # class so it's a universal "how often does this model follow the schema"
     # axis, decoupled from any task-specific reliability cell.
     SCHEMA_VALID = "schema_valid"
+    # Phase 4 of the calibrated-aggregation arc — sister of
+    # MULTI_MODEL_CONSENSUS. The legacy slot accumulates discrete
+    # correct/incorrect counts against a majority-vote-derived truth signal,
+    # which is structurally circular (majority defines truth → truth grades
+    # dissenters → grades update scorecard → scorecard is unused at the next
+    # vote). This slot accumulates *posterior-weighted* fractional updates
+    # against the Dawid–Skene posterior on the panel verdict; the truth
+    # signal is the latent label inferred jointly with model reliabilities
+    # rather than a vote of equally-weighted models. See
+    # ``docs/design-aggregation-dominators-wp.md`` Phase 4 and
+    # ``core/llm/scorecard/consensus.py``.
+    #
+    # Bucket entries on this slot are floats, not ints. Cells with legacy
+    # ``multi_model_consensus`` data only are pre-Phase-4 (or
+    # vote-fallback findings — see ``calibrated_aggregation`` schema in
+    # ``docs/ARCHITECTURE.md``). Cells with both have a mixed history;
+    # the audit CLI can compare drift between the two.
+    MULTI_MODEL_CONSENSUS_CALIBRATED = "multi_model_consensus_calibrated"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -161,6 +179,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.REASONING_DIVERGENCE,
     EventType.EXPLOIT_INTENT_MATCH,
     EventType.SCHEMA_VALID,
+    EventType.MULTI_MODEL_CONSENSUS_CALIBRATED,
 )
 
 
@@ -464,6 +483,78 @@ class ModelScorecard:
                 # because operators inspecting samples want the
                 # latest failure modes — older samples may reflect
                 # an earlier model snapshot.
+                if len(samples) > MAX_DISAGREEMENT_SAMPLES:
+                    cell["disagreement_samples"] = (
+                        samples[-MAX_DISAGREEMENT_SAMPLES:]
+                    )
+
+    def record_event_soft(
+        self,
+        decision_class: str,
+        model: str,
+        event_type: str,
+        correct: float,
+        incorrect: float,
+        *,
+        model_version: Optional[str] = None,
+        sample: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Record one *fractional* observation for a
+        ``(model, decision_class)`` cell.
+
+        Sister of :meth:`record_event` for posterior-weighted updates
+        — Phase 4 of the calibrated-aggregation arc. Where
+        ``record_event`` increments either ``correct`` or
+        ``incorrect`` by 1, this method adds the given floats to both
+        slots atomically under the same lock.
+
+        Mathematical contract: ``correct`` and ``incorrect`` are both
+        non-negative; their sum is *not* required to equal 1 (the
+        caller decides whether to soft-label or whether the credit
+        sums to less than one because of low-confidence findings).
+
+        Bucket entries become floats on first contact. Legacy
+        integer-only buckets read fine — Python's JSON layer accepts
+        both, freshness.py uses ``float()`` coercion, and Wilson UB
+        is valid on fractional successes/failures by construction.
+
+        ``sample`` semantics mirror ``record_event``: appended only
+        when ``incorrect > correct`` (closest analogue to "outcome ==
+        incorrect" in the binary case) and only when
+        ``retain_samples`` is true.
+        """
+        if event_type not in ALL_EVENT_TYPES:
+            raise ValueError(
+                f"unknown event_type {event_type!r} — must be one of "
+                f"{sorted(ALL_EVENT_TYPES)}"
+            )
+        if correct < 0.0 or incorrect < 0.0:
+            raise ValueError(
+                f"correct / incorrect must be non-negative; "
+                f"got correct={correct}, incorrect={incorrect}"
+            )
+        with self._with_lock() as data:
+            cell = self._ensure_cell(data, model, decision_class)
+            now_iso = _now_iso()
+            bucket = cell["events"][event_type].setdefault(
+                bucket_key(now_iso), {"correct": 0, "incorrect": 0}
+            )
+            # Coerce existing entries to float before adding — the legacy
+            # path may have left an int in place from a prior write.
+            bucket["correct"] = _safe_float(bucket.get("correct"), 0.0) + correct
+            bucket["incorrect"] = _safe_float(bucket.get("incorrect"), 0.0) + incorrect
+            cell["last_seen_at"] = now_iso
+            if model_version:
+                cell["model_version"] = model_version
+            if (incorrect > correct
+                    and self.retain_samples
+                    and sample is not None):
+                samples = cell.setdefault("disagreement_samples", [])
+                samples.append({
+                    "ts": _now_iso(),
+                    "event_type": event_type,
+                    **sample,
+                })
                 if len(samples) > MAX_DISAGREEMENT_SAMPLES:
                     cell["disagreement_samples"] = (
                         samples[-MAX_DISAGREEMENT_SAMPLES:]
@@ -895,9 +986,17 @@ class ModelScorecard:
                 wc, wi = weighted_counts(
                     buckets, freshness_half_life_days,
                     datetime.now(timezone.utc))
-                c, i = round(wc), round(wi)
             else:
-                c, i = flatten_counts(buckets)
+                wc, wi = flatten_counts(buckets)
+            # Phase 4 (calibrated-aggregation) introduced float-valued
+            # buckets for posterior-weighted updates; ``flatten_counts``
+            # now returns floats. The DecisionClassStats CLI surface
+            # stays int-typed for clean display — round here. Wilson UB
+            # math is invariant under this rounding for cells with
+            # ``total >= 10`` (where the gate fires); pre-gate
+            # ``learning`` cells are unaffected by ±0.5 fractional
+            # rounding in the counts.
+            c, i = int(round(wc)), int(round(wi))
             events[et] = _EventCounts(correct=c, incorrect=i)
         return DecisionClassStats(
             decision_class=decision_class,
@@ -1144,12 +1243,20 @@ class ModelScorecard:
             # RaptorLogger takes a single pre-formatted message string,
             # not %-style positional args. Build the message here so
             # the log line stays one greppable line.
+            # Round the events totals for display — flatten_counts
+            # returns floats (Phase 4 calibrated buckets contribute
+            # fractional values); the log line is purely informational
+            # and integers read more cleanly here. The underlying
+            # cells / on-disk JSON retain their actual fractional
+            # values.
+            ec_display = int(round(events_correct))
+            ei_display = int(round(events_incorrect))
             logger.info(
                 f"scorecard auto-GC: dropped {total_dropped} cells "
                 f"across {len(per_model_counts)} deprecated model(s) "
                 f"({per_model_str}); totals: "
-                f"{events_correct + events_incorrect} events purged "
-                f"({events_correct} correct, {events_incorrect} "
+                f"{ec_display + ei_display} events purged "
+                f"({ec_display} correct, {ei_display} "
                 "incorrect)"
             )
 

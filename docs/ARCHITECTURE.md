@@ -435,6 +435,36 @@ python3 packages/llm_analysis/agent.py \
 - `exploits/` - Generated exploit code (if requested)
 - `patches/` - Proposed secure fixes (if requested)
 
+**Calibrated Aggregation Output** (Phase 3 of the calibrated-aggregation arc — see `docs/design-aggregation-dominators-wp.md`):
+
+Each finding in `orchestrated_report.json` gains an additive `calibrated_aggregation` field carrying a Dawid–Skene calibrated posterior over the panel verdict. Shape:
+
+```json
+"calibrated_aggregation": {
+  "posterior_true_positive": 0.87,
+  "credible_interval": [0.42, 0.97],
+  "n_models": 3,
+  "decision_class": "agentic:py/sql-injection",
+  "aggregation_method": "dawid_skene",        // or "vote"
+  "aggregation_fallback_reason": null,         // string when vote fallback
+  "converged": true,
+  "model_reliabilities": [
+    {"model": "haiku", "alpha": 0.91, "beta": 0.88},
+    {"model": "sonnet", "alpha": 0.94, "beta": 0.95}
+  ]
+}
+```
+
+- `aggregation_method = "dawid_skene"` when the finding had ≥2 valid panel members; the EM estimator (`core/llm/multi_model/dawid_skene.py`) infers per-model `(α, β)` confusion matrices and a per-finding latent-label posterior.
+- `aggregation_method = "vote"` when there's no panel (single-model run, all-error panel). `aggregation_fallback_reason` is populated (`"no_panel"`, `"insufficient_panel_size_1"`, etc.) and `posterior_true_positive` degenerates to `1.0` / `0.0` matching the legacy `is_exploitable` boolean.
+- `model_reliabilities` is per-decision-class — the same model can have different `(α, β)` on `py/sql-injection` vs `cpp/uncontrolled-format`. Phase 4 will read this for posterior-weighted scorecard updates.
+
+The existing `is_exploitable`, `multi_model_analyses`, and `ruling` fields are untouched; downstream consumers that don't read `calibrated_aggregation` keep working.
+
+Opt out: set `RAPTOR_CALIBRATED_AGGREGATION=0` in the environment. The block at `orchestrator.py:~830` is wrapped in a `try / except` — if D–S fails for any reason, the field is dropped silently and a `WARNING` is logged.
+
+**Phase 4 follow-on**: when `calibrated_aggregation` is present on a finding with `aggregation_method = "dawid_skene"`, `core/llm/scorecard/consensus.py` routes the scorecard update through the new `multi_model_consensus_calibrated` event slot via `ModelScorecard.record_event_soft`. Per-model credits are soft-labelled (`correct_credit = p if verdict else (1-p)`; `incorrect_credit = 1 - correct_credit`), breaking the circularity in the legacy `multi_model_consensus` slot (which defined "truth" by majority vote). The legacy slot is untouched for vote-fallback findings and pre-Phase-3 runs, so cells with mixed history retain both signals. The audit CLI (`libexec/raptor-scorecard-audit`) surfaces both slots.
+
 **LLM Abstraction**:
 ```
 llm/
