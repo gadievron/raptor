@@ -15,18 +15,39 @@ the worker's (dummy) auth header and injects the real one. **AWS
 Bedrock** is the exception — it uses sigv4 request signing (a per-request
 signature over method/path/headers/body/timestamp), which can't be
 relayed as a static header. Bedrock is handled by a ``prepare_request``
-hook on its rule: the dispatcher rewrites the worker's stock-Anthropic
-``/v1/messages`` request into Bedrock's ``/model/<id>/invoke`` shape, then
-attaches auth in one of two modes —
+hook on its rule.
+
+The hook supports two Bedrock surfaces, selected by URL prefix the
+worker addresses:
+
+  * **Mantle** (default) — ``bedrock-mantle.<region>.api.aws/
+    anthropic/v1/messages``.  Native Anthropic Messages API with bare
+    model IDs (``anthropic.claude-opus-4-8``), native SSE streaming,
+    tool use, prompt caching.  Workers point at
+    ``http://_/bedrock/mantle`` (or the unprefixed ``http://_/bedrock``
+    for backward compatibility).  The worker's ``/v1/messages`` path
+    is rewritten to Mantle's ``/anthropic/v1/messages``; the body's
+    ``anthropic_version`` is filled in when missing.
+
+  * **Runtime** (legacy InvokeModel) — ``bedrock-runtime.<region>.
+    amazonaws.com/model/<id>/invoke``.  Required for models not yet
+    on Mantle, for cross-region inference profile IDs
+    (``us.``/``eu.``/``global.``), and for compliance-pinned
+    ARN-versioned IDs.  Workers point at ``http://_/bedrock/runtime``.
+    The body's ``model`` field is moved into the URL path and
+    ``anthropic_version`` filled in.  Non-streaming only — operators
+    wanting streaming should use Mantle.
+
+For both surfaces, the hook attaches auth in one of two modes:
 
   * **Bedrock API key** (``AWS_BEARER_TOKEN_BEDROCK``) — a static
     ``Authorization: Bearer <token>`` header. No botocore, no signing;
     same shape as every other bearer provider. Takes precedence over
     SigV4 when present (matching the AWS SDKs). Needs a region only for
     the regional host.
-  * **SigV4** — sign the rewritten request with the parent's AWS
-    credentials via botocore's ``SigV4Auth`` (access key / secret /
-    session token, or the resolved profile/SSO/IMDS chain).
+  * **SigV4** — sign the request with the parent's AWS credentials
+    via botocore's ``SigV4Auth`` (access key / secret / session token,
+    or the resolved profile/SSO/IMDS chain).
 
 The worker keeps using the plain Anthropic SDK with no boto3 in its
 address space, and the parent's ``AWS_*`` secrets (keys and bearer token)
@@ -35,8 +56,7 @@ provider key — so they never flow to spawned workers. ``botocore`` is an
 optional, parent-only dependency needed **only for the SigV4 mode**; the
 bearer-token mode works without it. When no usable auth (or region)
 resolves, the bedrock rule reports ``503 provider not configured`` like
-any unconfigured provider. Non-streaming ``InvokeModel`` only — Bedrock's
-streaming endpoint uses a different response framing and is out of scope.
+any unconfigured provider.
 
 Out of scope for the proxy-based dispatcher:
 
@@ -50,14 +70,20 @@ Out of scope for the proxy-based dispatcher:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import logging
 import os
 import sys
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Mapping, Optional
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -143,6 +169,40 @@ class ProviderRule:
 _UNRESOLVED = object()
 
 
+def _decode_bedrock_bearer_exp(token: str) -> int | None:
+    """Best-effort ``exp`` claim extraction from an AWS Bedrock bearer
+    token.  Bedrock short-term API keys are JWT-shaped (three dot-
+    separated base64url segments, middle segment is the payload).
+    Long-term API keys are opaque strings without an exp claim — we
+    return ``None`` for those and the caller treats it as "no expiry
+    signal, assume long-lived".
+
+    Signature is NOT verified — that's AWS's job at the request layer.
+    We read the exp purely so we can pre-flight check at the parent
+    process (warn at startup if the run is likely to outlast the
+    token; reject at request time if the token has already expired,
+    so we don't burn a network round trip and surface an opaque
+    AWS 401 to the worker)."""
+    if not isinstance(token, str) or not token:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        pad = "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+    except (ValueError, TypeError, binascii.Error, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    exp = payload.get("exp")
+    if isinstance(exp, bool):  # bool is a subtype of int, exclude it
+        return None
+    if isinstance(exp, (int, float)):
+        return int(exp)
+    return None
+
+
 def _read_env(var: str) -> str | None:
     """Read an env var and immediately erase it from the process env.
 
@@ -214,6 +274,11 @@ class CredentialStore:
             os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
         )
         self._aws_endpoint: str | None = os.environ.get("AWS_ENDPOINT_URL_BEDROCK")
+        # Operator-pinned profile name (botocore picks up
+        # ``AWS_PROFILE`` automatically inside Session(), but reading it
+        # explicitly lets us prefer-chain-over-env when the operator
+        # set it deliberately — a profile is always refresh-capable).
+        self._aws_profile: str | None = os.environ.get("AWS_PROFILE")
         # Resolved (credentials, region, endpoint) tuple, or None once we
         # know Bedrock isn't usable. ``_UNRESOLVED`` until first lookup.
         # The lock serialises first-resolution across the threading
@@ -222,6 +287,14 @@ class CredentialStore:
         # hit IMDS) should run once, not once per concurrent first call.
         self._aws_signer_cache: object = _UNRESOLVED
         self._aws_signer_lock = threading.Lock()
+        # Bedrock bearer-token expiry timestamp (unix seconds) if the
+        # token is a JWT with an ``exp`` claim; ``None`` for opaque
+        # long-term API keys (no expiry signal — assume long-lived).
+        # Decoded once at startup so the hot path can pre-flight check
+        # without re-parsing on every request.
+        self._aws_bearer_exp: int | None = _decode_bedrock_bearer_exp(
+            self._keys.get("aws_bearer_token") or ""
+        )
 
     def get(self, provider: str) -> str | None:
         return self._keys.get(provider)
@@ -256,39 +329,213 @@ class CredentialStore:
             self._keys["aws_session_token"] = session_token
         if bearer_token is not None:
             self._keys["aws_bearer_token"] = bearer_token
+            self._aws_bearer_exp = _decode_bedrock_bearer_exp(bearer_token)
         if region is not None:
             self._aws_region = region
         if endpoint is not None:
             self._aws_endpoint = endpoint
         self._aws_signer_cache = _UNRESOLVED
 
-    def aws_bedrock_endpoint(self) -> str | None:
-        """Return the Bedrock-runtime base URL, or ``None`` if no region
-        is known. Region comes from ``AWS_REGION`` / ``AWS_DEFAULT_REGION``
-        (or :meth:`set_aws`); it isn't a secret. Used by the bearer-token
-        path, which needs the regional host but does no botocore work."""
+    def bedrock_bearer_exp(self) -> int | None:
+        """Return the bearer token's ``exp`` claim (unix seconds) if it
+        was JWT-shaped, else ``None``.  Decoded once at construction;
+        no parsing on the hot path."""
+        return self._aws_bearer_exp
+
+    def bedrock_session_warnings(
+        self, *, expected_run_seconds: int = 1800,
+    ) -> list[str]:
+        """Inspect the Bedrock credential state and return a list of
+        operator-actionable warning strings.  Empty when there's
+        nothing to flag.
+
+        Detects two cases that cause "scan dies mid-run with an opaque
+        AWS error":
+
+        * The bearer token is a JWT with an ``exp`` claim that falls
+          inside ``expected_run_seconds`` from now.  Operator gets a
+          token-specific countdown + the long-term-API-key escape
+          hatch.
+        * ``AWS_SESSION_TOKEN`` is set OR the access key looks
+          short-lived (``ASIA…``) and there's NO ``AWS_PROFILE`` /
+          ``AWS_CONFIG_FILE`` / ``~/.aws/credentials`` for the chain
+          to refresh from.  Operator gets the
+          "configure aws sso / profile" guidance.
+
+        ``expected_run_seconds`` is a hint from the launcher — e.g.
+        30 min for ``/scan``, 4 hr for ``/agentic``.  Default is 30 min
+        so commands that don't yet pass a hint still warn on really
+        short tokens (< 30 min)."""
+        warnings: list[str] = []
+        exp = self._aws_bearer_exp
+        if exp is not None:
+            remaining = int(exp - time.time())
+            if remaining <= 0:
+                warnings.append(
+                    "AWS_BEARER_TOKEN_BEDROCK has already expired "
+                    "(exp was %d seconds ago).  Regenerate the token "
+                    "in the Bedrock console, or switch to a long-term "
+                    "API key (Bedrock → API Keys → Long-term)."
+                    % (-remaining)
+                )
+            elif remaining < expected_run_seconds:
+                warnings.append(
+                    "AWS_BEARER_TOKEN_BEDROCK expires in %d minutes "
+                    "but this run may take up to %d minutes.  Long "
+                    "scans will fail when the token expires.  Use a "
+                    "long-term API key (Bedrock → API Keys → Long-term)"
+                    " or switch to SigV4 with a profile / SSO "
+                    "(auto-refreshes)." % (
+                        remaining // 60, expected_run_seconds // 60,
+                    )
+                )
+        # SigV4-without-botocore case — operator signalled SigV4
+        # intent (any of: env access keys, AWS_PROFILE, shared
+        # credentials file) but botocore isn't importable in the
+        # parent process.  The dispatcher will 503 every Bedrock
+        # request; warn upfront so the operator doesn't burn a run
+        # to discover it.  Bearer mode doesn't trigger this — bearer
+        # auth needs no botocore.
+        has_bearer = bool(self._keys.get("aws_bearer_token"))
+        if not has_bearer:
+            sigv4_intent = bool(
+                self._keys.get("aws_access_key_id")
+                or self._aws_profile
+                or (Path.home() / ".aws" / "credentials").is_file()
+                or os.environ.get("AWS_SHARED_CREDENTIALS_FILE")
+            )
+            if sigv4_intent:
+                try:
+                    import botocore  # noqa: F401
+                except ImportError:
+                    warnings.append(
+                        "AWS Bedrock SigV4 credentials are configured "
+                        "but ``botocore`` is not installed in the parent "
+                        "process.  Install it: ``pip install botocore`` "
+                        "(or ``pip install boto3`` which pulls it in).  "
+                        "Bearer mode (``AWS_BEARER_TOKEN_BEDROCK``) does "
+                        "NOT require botocore."
+                    )
+        looks_short_lived = bool(
+            self._keys.get("aws_session_token")
+            or (
+                isinstance(self._keys.get("aws_access_key_id"), str)
+                and (self._keys.get("aws_access_key_id") or "").startswith("ASIA")
+            )
+        )
+        if looks_short_lived and not self._aws_profile:
+            # Is there a credentials file botocore can refresh from?
+            home_creds = Path.home() / ".aws" / "credentials"
+            has_creds_file = home_creds.is_file() or bool(
+                os.environ.get("AWS_SHARED_CREDENTIALS_FILE"),
+            )
+            if not has_creds_file:
+                warnings.append(
+                    "AWS env credentials look short-lived "
+                    "(AWS_SESSION_TOKEN set or ASIA-style access key) "
+                    "but no AWS_PROFILE / ~/.aws/credentials configured.  "
+                    "These will NOT auto-refresh; long scans will fail "
+                    "mid-run when the STS session ends.  Configure "
+                    "'aws configure sso' (recommended) or set "
+                    "~/.aws/credentials with a refresh-capable profile "
+                    "and unset the env vars."
+                )
+        return warnings
+
+    def bedrock_bearer_expired(self, *, skew_seconds: int = 30) -> bool:
+        """True iff the bearer is a JWT whose ``exp`` has passed.  A
+        small clock-skew window (default 30s) errs on the side of
+        rejecting borderline tokens at the dispatcher — better a
+        clear "token expired" than a network round trip that surfaces
+        an opaque AWS 401.  Opaque (non-JWT) bearer tokens always
+        return ``False`` — they have no expiry signal."""
+        exp = self._aws_bearer_exp
+        if exp is None:
+            return False
+        return time.time() + skew_seconds >= exp
+
+    def aws_bedrock_endpoint(self, api: str = "mantle") -> str | None:
+        """Return the Bedrock base URL for the chosen ``api``, or
+        ``None`` if no region is known.  Region comes from
+        ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` (or :meth:`set_aws`);
+        it isn't a secret. Used by the bearer-token path, which needs
+        the regional host but does no botocore work.
+
+        ``api`` selects between the two Bedrock surfaces:
+
+        * ``"mantle"`` (default) — Bedrock Mantle's Anthropic-Messages
+          endpoint at ``bedrock-mantle.<region>.api.aws``, serving
+          ``/anthropic/v1/messages``.  Bare model IDs
+          (``anthropic.claude-opus-4-8`` — no date/version/region
+          prefix).  Native streaming, tool use, prompt caching.
+
+        * ``"runtime"`` — Legacy bedrock-runtime ``InvokeModel`` at
+          ``bedrock-runtime.<region>.amazonaws.com``, serving
+          ``/model/<id>/invoke``.  Accepts both bare model IDs and
+          cross-region inference profile IDs
+          (``us.anthropic.claude-x``, ``global.anthropic.claude-x``).
+          Required for models not yet on Mantle.
+
+        ``AWS_ENDPOINT_URL_BEDROCK`` overrides the host for both APIs
+        — for local-stub testing.  Operators running stubs for both
+        APIs simultaneously should run two dispatchers (one per
+        API), each with its own ``AWS_ENDPOINT_URL_BEDROCK``."""
         if not self._aws_region:
             return None
-        return (
-            self._aws_endpoint
-            or f"https://bedrock-runtime.{self._aws_region}.amazonaws.com"
-        )
+        if self._aws_endpoint:
+            return self._aws_endpoint
+        if api == "runtime":
+            return f"https://bedrock-runtime.{self._aws_region}.amazonaws.com"
+        return f"https://bedrock-mantle.{self._aws_region}.api.aws"
 
-    def aws_signer(self):
-        """Return ``(credentials, region, endpoint_base)`` for SigV4
-        signing, or ``None`` when Bedrock isn't usable (botocore missing,
-        no resolvable credentials, or no region). Resolved once and
-        cached — including a cached ``None`` so we don't re-probe the
-        botocore credential chain on every request."""
+    def aws_signer(self, api: str = "mantle"):
+        """Return ``(credentials, region, endpoint)`` for SigV4 signing
+        against the chosen ``api``, or ``None`` when Bedrock isn't
+        usable (botocore missing, no resolvable credentials, no region).
+        Credentials + region are resolved once and cached; the endpoint
+        is built per-call so the same dispatcher can route requests to
+        either API surface without a second botocore probe."""
         if self._aws_signer_cache is _UNRESOLVED:
             with self._aws_signer_lock:
                 # Double-checked: another thread may have resolved it
                 # while we waited on the lock.
                 if self._aws_signer_cache is _UNRESOLVED:
-                    self._aws_signer_cache = self._resolve_aws_signer()
-        return self._aws_signer_cache
+                    self._aws_signer_cache = self._resolve_aws_credentials()
+        if self._aws_signer_cache is None:
+            return None
+        credentials, region = self._aws_signer_cache
+        endpoint = self.aws_bedrock_endpoint(api)
+        if endpoint is None:
+            return None
+        return (credentials, region, endpoint)
 
-    def _resolve_aws_signer(self):
+    def _resolve_aws_credentials(self):
+        """Resolve ``(credentials, region)`` from botocore.
+
+        Lookup order is tuned so long RAPTOR scans "just work" regardless
+        of how the operator configured AWS:
+
+        1. If ``AWS_PROFILE`` is set → use botocore's chain with that
+           profile.  Profiles backed by SSO, role-assumption, or shared-
+           config return ``RefreshableCredentials`` that auto-refresh on
+           every access, so mid-scan session expiry is handled.
+
+        2. If env carries a session token (``AWS_SESSION_TOKEN`` set, or
+           an ``ASIA…`` access key shape) → try the chain FIRST so SSO/
+           IMDS/profile-derived credentials win over an env snapshot the
+           operator might have set hours ago.  Fall back to the static
+           env creds only if the chain doesn't resolve.  This is the
+           "operator pasted temp creds into env" case — they typically
+           also have a profile or SSO cache that refreshes; we should
+           prefer that without making them unset env.
+
+        3. Static env creds otherwise (``AKIA…`` long-lived keys).
+           These don't expire; no refresh story needed.
+
+        4. Bare chain fallback if env doesn't have credentials at all.
+
+        Endpoint URL is built per-request (see :meth:`aws_signer`) since
+        the same creds + region serve both Mantle and runtime."""
         try:
             import botocore.credentials
             import botocore.session
@@ -300,36 +547,144 @@ class CredentialStore:
         st = self._keys.get("aws_session_token")
         region = self._aws_region
 
+        def _from_chain() -> tuple[object, str | None]:
+            try:
+                session = botocore.session.Session(
+                    profile=self._aws_profile,
+                )
+                creds = session.get_credentials()
+            except Exception:
+                return None, None
+            chain_region = None
+            try:
+                chain_region = session.get_config_variable("region")
+            except Exception:
+                pass
+            return creds, chain_region
+
         credentials = None
-        if ak and sk:
-            # Static creds the parent supplied via env (already erased
-            # from os.environ) or via set_aws().
+        looks_short_lived = bool(
+            st or (isinstance(ak, str) and ak.startswith("ASIA"))
+        )
+
+        if self._aws_profile or (looks_short_lived and not (ak and sk)):
+            # Case 1 — profile pinned.
+            credentials, chain_region = _from_chain()
+            if region is None:
+                region = chain_region
+        elif looks_short_lived and ak and sk:
+            # Case 2 — env has temp creds but chain (SSO/profile) is
+            # likely fresher; prefer chain, fall back to env snapshot.
+            credentials, chain_region = _from_chain()
+            if credentials is None:
+                credentials = botocore.credentials.Credentials(ak, sk, st)
+            if region is None:
+                region = chain_region
+        elif ak and sk:
+            # Case 3 — long-lived static (AKIA) env creds.
             credentials = botocore.credentials.Credentials(ak, sk, st)
         else:
-            # No static keys: fall back to botocore's natural credential
-            # chain (shared config/profile, SSO cache, container creds,
-            # IMDS instance role). The parent is the trust boundary, so
-            # the full chain is appropriate here. RefreshableCredentials
-            # transparently re-fetch on access, so SSO/IMDS rotation is
-            # handled per request.
-            try:
-                session = botocore.session.Session()
-                credentials = session.get_credentials()
-                if not region:
-                    region = session.get_config_variable("region")
-            except Exception:
-                credentials = None
+            # Case 4 — no env keys at all; full chain.
+            credentials, chain_region = _from_chain()
+            if region is None:
+                region = chain_region
 
         if credentials is None or not region:
             return None
-        endpoint = (
-            self._aws_endpoint
-            or f"https://bedrock-runtime.{region}.amazonaws.com"
-        )
-        return (credentials, region, endpoint)
+        return (credentials, region)
 
 
 _BEDROCK_ANTHROPIC_VERSION = "bedrock-2023-05-31"
+
+
+def _ensure_anthropic_version(body: bytes) -> bytes:
+    """Add ``anthropic_version`` to a JSON request body if missing.
+
+    Mantle inherits this field requirement from the legacy InvokeModel
+    Bedrock surface — the request body must declare which Anthropic
+    API version the body schema follows.  The public Anthropic SDK
+    doesn't add this field (the direct API doesn't need it), so the
+    dispatcher injects it on the way to Mantle.  An operator-supplied
+    value is preserved.  Non-JSON / empty bodies (e.g.
+    ``/v1/messages/count_tokens`` POST with no body, or a GET) pass
+    through untouched — Mantle returns its own 4xx if the surface
+    requires a body."""
+    if not body:
+        return body
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body
+    if not isinstance(payload, dict):
+        return body
+    # Only treat the field as operator-supplied when it's a non-empty
+    # string.  ``None``, ``""``, numbers, or other types are typos that
+    # would otherwise pass through and surface as opaque Bedrock 4xx
+    # errors — fill in our default so the request succeeds.
+    existing = payload.get("anthropic_version")
+    if isinstance(existing, str) and existing:
+        return body
+    payload["anthropic_version"] = _BEDROCK_ANTHROPIC_VERSION
+    return json.dumps(payload).encode("utf-8")
+
+
+def _build_bearer_mantle_request(
+    bearer_token: str, endpoint: str, path: str, body: bytes,
+) -> PreparedRequest:
+    """Attach a static ``Authorization: Bearer <token>`` header for the
+    Bedrock Mantle Anthropic-Messages endpoint.  No body transformation:
+    the worker's Anthropic-shape request is forwarded verbatim.  Per
+    the Bedrock docs, ``bedrock-mantle.<region>.api.aws`` exposes
+    ``/anthropic/v1/messages`` as the native Anthropic Messages surface
+    for all Claude models on Bedrock, with bare model IDs (no date
+    suffix, no ``-v1:0`` version)."""
+    url = endpoint.rstrip("/") + path
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {bearer_token}",
+    }
+    return PreparedRequest(method="POST", url=url, headers=headers, body=body)
+
+
+def _build_signed_mantle_request(
+    credentials, region: str, endpoint: str, path: str, body: bytes,
+) -> PreparedRequest:
+    """SigV4-sign a Mantle request.  The signing service name for the
+    Mantle endpoint is ``bedrock`` (same as bedrock-runtime); only the
+    target URL differs."""
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    url = endpoint.rstrip("/") + path
+    aws_req = AWSRequest(
+        method="POST", url=url, data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    SigV4Auth(credentials, "bedrock", region).add_auth(aws_req)
+    forwarded = dict(aws_req.headers.items())
+    for drop in ("Host", "host", "Content-Length", "content-length"):
+        forwarded.pop(drop, None)
+    return PreparedRequest(method="POST", url=url, headers=forwarded, body=body)
+
+
+# ---------------------------------------------------------------------------
+# Bedrock runtime (legacy InvokeModel) request builders
+# ---------------------------------------------------------------------------
+#
+# These three helpers ship the non-Mantle path: ``bedrock-runtime.
+# <region>.amazonaws.com/model/<id>/invoke`` with the model id moved
+# from the body into the URL path and ``anthropic_version`` set in the
+# body.  Operators select this surface by pointing
+# :func:`make_bedrock_client` at the ``runtime`` URL prefix (or by
+# setting ``RAPTOR_BEDROCK_API=runtime`` / the per-model ``bedrock_api``
+# field).  Same SigV4 signing scheme as Mantle; the streaming-rejected
+# semantics are intrinsic to ``InvokeModel`` (non-streaming only — the
+# streaming sibling ``InvokeModelWithResponseStream`` uses a different
+# response framing and isn't currently routed).
 
 
 def _transform_bedrock_request(endpoint: str, body: bytes) -> tuple[str, bytes]:
@@ -348,12 +703,16 @@ def _transform_bedrock_request(endpoint: str, body: bytes) -> tuple[str, bytes]:
         raise BedrockTransformError(400, "bedrock: request body is not valid JSON")
     if not isinstance(payload, dict):
         raise BedrockTransformError(400, "bedrock: request body must be a JSON object")
-    # v1 is non-streaming only. The Anthropic SDK sets ``stream`` in the
-    # body for ``messages.stream``/``create(stream=True)``; Bedrock's
-    # streaming endpoint uses different response framing (out of scope).
+    # InvokeModel is non-streaming only. The Anthropic SDK sets ``stream``
+    # in the body for ``messages.stream``/``create(stream=True)``;
+    # Bedrock's streaming endpoint uses different response framing
+    # (``InvokeModelWithResponseStream``) and is out of scope for this
+    # path.  Operators wanting streaming on Bedrock should use Mantle.
     if payload.get("stream"):
         raise BedrockTransformError(
-            400, "bedrock: streaming is not supported (non-streaming InvokeModel only)"
+            400,
+            "bedrock: streaming is not supported on the InvokeModel path "
+            "(use RAPTOR_BEDROCK_API=mantle for native SSE streaming)",
         )
     payload.pop("stream", None)
     model = payload.pop("model", None)
@@ -365,11 +724,11 @@ def _transform_bedrock_request(endpoint: str, body: bytes) -> tuple[str, bytes]:
     return url, new_body
 
 
-def _build_signed_bedrock_request(
+def _build_signed_runtime_request(
     credentials, region: str, endpoint: str, body: bytes,
 ) -> PreparedRequest:
-    """Transform + SigV4-sign with the parent's AWS credentials. The
-    signed ``Authorization`` / ``X-Amz-Date`` / ``X-Amz-Security-Token``
+    """Transform + SigV4-sign a bedrock-runtime InvokeModel request.
+    The signed ``Authorization`` / ``X-Amz-Date`` / ``X-Amz-Security-Token``
     headers are returned for verbatim forwarding; ``Host`` and
     ``Content-Length`` are dropped so the HTTP client reproduces exactly
     what SigV4 signed (host from the URL, length from the body).
@@ -381,12 +740,6 @@ def _build_signed_bedrock_request(
     from botocore.awsrequest import AWSRequest
 
     url, new_body = _transform_bedrock_request(endpoint, body)
-    # Sign Content-Type AND Accept (both go into SignedHeaders) to match
-    # boto3's bedrock-runtime InvokeModel request byte-for-byte:
-    # ``SignedHeaders=accept;content-type;host;x-amz-date``. AWS would
-    # accept the three-header form too (it only verifies what we declare
-    # in SignedHeaders), but matching the official client removes any
-    # edge where Bedrock treats an unsigned Accept differently.
     aws_req = AWSRequest(
         method="POST", url=url, data=new_body,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -399,12 +752,13 @@ def _build_signed_bedrock_request(
     return PreparedRequest(method="POST", url=url, headers=forwarded, body=new_body)
 
 
-def _build_bearer_bedrock_request(
+def _build_bearer_runtime_request(
     bearer_token: str, endpoint: str, body: bytes,
 ) -> PreparedRequest:
     """Transform + attach a static ``Authorization: Bearer <token>``
-    header (Bedrock API-key auth). No botocore, no signing — matches what
-    the AWS SDKs send when ``AWS_BEARER_TOKEN_BEDROCK`` is set."""
+    header (Bedrock API-key auth) for a bedrock-runtime InvokeModel
+    request. No botocore, no signing — matches what the AWS SDKs send
+    when ``AWS_BEARER_TOKEN_BEDROCK`` is set."""
     url, new_body = _transform_bedrock_request(endpoint, body)
     headers = {
         "Content-Type": "application/json",
@@ -490,28 +844,157 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
     def _bedrock_prepare(
         method: str, path: str, headers: Mapping[str, str], body: bytes,
     ) -> PreparedRequest:
-        # ``method`` / ``path`` / ``headers`` from the worker's stock
-        # Anthropic request are intentionally discarded: Bedrock always
-        # POSTs to a body-derived path with freshly-attached auth.
-        # Bearer-token (Bedrock API key) wins over SigV4 when present,
-        # matching the AWS SDKs — and needs no botocore.
+        # Two Bedrock surfaces are routed through this rule, chosen by
+        # URL prefix the worker addresses:
+        #
+        #   ``/mantle/...``  → Bedrock Mantle Anthropic Messages
+        #                       (``bedrock-mantle.<region>.api.aws/
+        #                       anthropic/v1/messages``).  Bare model
+        #                       IDs, native streaming, tool use,
+        #                       prompt caching.  Default.
+        #
+        #   ``/runtime/...`` → Bedrock InvokeModel
+        #                       (``bedrock-runtime.<region>.amazonaws.
+        #                       com/model/<id>/invoke``).  Required
+        #                       for models not yet on Mantle, for
+        #                       cross-region inference profile IDs
+        #                       (``us.``/``eu.``/``global.``), and
+        #                       for compliance-pinned ARN-versioned
+        #                       IDs.  Non-streaming only.
+        #
+        # An unprefixed ``/v1/...`` path (the worker's default base URL
+        # without an API segment) routes to Mantle for backward
+        # compatibility — the same shape the standard Anthropic SDK
+        # produces against ``base_url=http://_/bedrock``.  The worker's
+        # ``make_bedrock_client(api="runtime"|"mantle")`` chooses the
+        # URL prefix at construction time.
+        #
+        # Auth is the same for both APIs (bearer or SigV4) — only the
+        # request transformation and endpoint host differ.
+        api = "mantle"
+        bedrock_path = path
+        if path.startswith("/mantle/") or path == "/mantle":
+            api = "mantle"
+            bedrock_path = path[len("/mantle"):] or "/"
+        elif path.startswith("/runtime/") or path == "/runtime":
+            api = "runtime"
+            bedrock_path = path[len("/runtime"):] or "/"
+
+        # Security gate: reject any path with a ``..`` segment before
+        # forwarding.  Without this, a worker could craft
+        # ``/v1/messages/../../some-other-aws-path`` and have httpx
+        # normalise the ``..`` away client-side AFTER we've signed —
+        # the parent's bearer token / SigV4 signature would attach to
+        # an arbitrary URL under the Bedrock host.  Defence-in-depth:
+        # the worker isn't expected to send ``..`` here, but a
+        # compromised worker shouldn't be able to pivot off RAPTOR's
+        # trust boundary.
+        if ".." in bedrock_path.split("/"):
+            raise BedrockTransformError(
+                400, "bedrock: path traversal segment '..' rejected"
+            )
+
+        if api == "mantle":
+            # Mantle: only ``/v1/messages`` and ``/v1/messages/
+            # count_tokens`` are valid worker shapes.  Everything else
+            # is either a typo (`/v1/models` — not exposed by Mantle)
+            # or an attempt to forward to an unintended path.  Reject
+            # explicitly rather than letting an opaque AWS 4xx propagate.
+            if bedrock_path not in (
+                "/v1/messages", "/v1/messages/count_tokens",
+            ):
+                raise BedrockTransformError(
+                    400,
+                    f"bedrock: path {bedrock_path!r} is not a supported "
+                    "Mantle endpoint (expected /v1/messages or "
+                    "/v1/messages/count_tokens)",
+                )
+            # Inject the ``/anthropic`` prefix (Mantle's URL contract)
+            # and fill ``anthropic_version`` into the body when missing
+            # (Mantle inherits the requirement from InvokeModel; the
+            # SDK doesn't add it because the public Anthropic API
+            # doesn't need it).
+            upstream_path = "/anthropic" + bedrock_path
+            upstream_body = _ensure_anthropic_version(body)
+            bearer = creds.get("aws_bearer_token")
+            if bearer:
+                if creds.bedrock_bearer_expired():
+                    # Pre-flight gate: don't burn a network round trip
+                    # if we already know the JWT exp has passed.
+                    raise BedrockTransformError(
+                        401,
+                        "AWS_BEARER_TOKEN_BEDROCK has expired; "
+                        "regenerate the token (Bedrock console) or "
+                        "switch to a long-term API key.",
+                    )
+                endpoint = creds.aws_bedrock_endpoint("mantle")
+                if endpoint is None:
+                    raise BedrockTransformError(
+                        503,
+                        "provider not configured: bedrock (no AWS region)",
+                    )
+                return _build_bearer_mantle_request(
+                    bearer, endpoint.rstrip("/"), upstream_path,
+                    upstream_body,
+                )
+            signer = creds.aws_signer("mantle")
+            if signer is None:
+                raise BedrockTransformError(
+                    503, "provider not configured: bedrock",
+                )
+            credentials, region, endpoint = signer
+            return _build_signed_mantle_request(
+                credentials, region, endpoint.rstrip("/"),
+                upstream_path, upstream_body,
+            )
+
+        # Runtime path — InvokeModel.  The request body's ``model``
+        # becomes the URL path; the body is rewritten by
+        # ``_transform_bedrock_request`` inside the request builders.
+        #
+        # Only ``/v1/messages`` is InvokeModel-translatable.  Other
+        # Anthropic endpoints (``/v1/messages/count_tokens``,
+        # ``/v1/models``) have no InvokeModel equivalent — short-
+        # circuit with a 400 + actionable guidance rather than letting
+        # the worker pay a network round trip to AWS just to get a
+        # different opaque 4xx back.
+        if bedrock_path != "/v1/messages":
+            raise BedrockTransformError(
+                400,
+                f"bedrock: path {bedrock_path!r} is not supported on "
+                "the InvokeModel API (use RAPTOR_BEDROCK_API=mantle "
+                "for /v1/messages/count_tokens and the introspection "
+                "endpoints)",
+            )
         bearer = creds.get("aws_bearer_token")
         if bearer:
-            endpoint = creds.aws_bedrock_endpoint()
+            if creds.bedrock_bearer_expired():
+                raise BedrockTransformError(
+                    401,
+                    "AWS_BEARER_TOKEN_BEDROCK has expired; "
+                    "regenerate the token (Bedrock console) or "
+                    "switch to a long-term API key.",
+                )
+            endpoint = creds.aws_bedrock_endpoint("runtime")
             if endpoint is None:
                 raise BedrockTransformError(
-                    503, "provider not configured: bedrock (no AWS region)"
+                    503,
+                    "provider not configured: bedrock (no AWS region)",
                 )
-            return _build_bearer_bedrock_request(bearer, endpoint, body)
-        signer = creds.aws_signer()
+            return _build_bearer_runtime_request(bearer, endpoint, body)
+        signer = creds.aws_signer("runtime")
         if signer is None:
-            raise BedrockTransformError(503, "provider not configured: bedrock")
+            raise BedrockTransformError(
+                503, "provider not configured: bedrock",
+            )
         credentials, region, endpoint = signer
-        return _build_signed_bedrock_request(credentials, region, endpoint, body)
+        return _build_signed_runtime_request(credentials, region, endpoint, body)
 
     def _bedrock_configured() -> bool:
         # Bearer token (+ a region for the host) OR a resolvable SigV4
-        # signer. Bearer is checked first and cheaply (no botocore probe).
+        # signer.  Bearer is checked first and cheaply (no botocore
+        # probe).  Configured-ness is API-agnostic — both Mantle and
+        # runtime need the same creds + region.
         if creds.get("aws_bearer_token") and creds.aws_bedrock_endpoint():
             return True
         return creds.aws_signer() is not None
@@ -601,7 +1084,7 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             # absolute, region-derived URL. Sentinel keeps the dataclass
             # field populated and makes a stray non-hook forward fail
             # loudly rather than hitting a real endpoint.
-            upstream_base_url="https://bedrock-runtime-not-configured.invalid",
+            upstream_base_url="https://bedrock-mantle-not-configured.invalid",
             inject_headers=lambda: {},
             prepare_request=_bedrock_prepare,
             is_configured=_bedrock_configured,

@@ -618,6 +618,17 @@ def _get_or_start_dispatcher():
         # None slots.
         creds = CredentialStore()
         seed_from_config(creds)
+        # Bedrock UX preflight — surface short-lived bearer tokens,
+        # ASIA env vars that won't refresh, and SigV4 intent without
+        # botocore, BEFORE the operator burns a long run discovering
+        # them.  Silent for the well-trodden setups (no Bedrock
+        # configured, bearer-only with long-term API key, SigV4 with
+        # AKIA + botocore).
+        for _bedrock_warning in creds.bedrock_session_warnings():
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "[Bedrock] %s", _bedrock_warning,
+            )
         _active_dispatcher = LLMDispatcher(
             run_id=f"raptor-{uuid.uuid4().hex[:8]}",
             creds=creds,

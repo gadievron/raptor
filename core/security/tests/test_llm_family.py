@@ -245,3 +245,174 @@ def test_no_cross_family_checker_means_no_retry():
     assert checker is None
     result = validate_response('{malformed', Verdict, llm_call=None)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Bedrock regional + provider prefixes — family_of must strip both
+# ---------------------------------------------------------------------------
+
+def test_bedrock_us_anthropic_resolves_to_anthropic():
+    """The bug the test in PR #696 hid via ``in {"anthropic", "unknown"}``:
+    ``us.anthropic.claude-opus-4-7`` must resolve to ``anthropic``, not
+    ``unknown``.  Without this, the cross-family validator silently
+    treats a Bedrock-Claude producer and a direct-API-Claude checker
+    as ``different families`` and pairs them — the exact failure the
+    Attacker-Moves-Second paper warns against."""
+    assert family_of("us.anthropic.claude-opus-4-7") == "anthropic"
+    assert family_of("eu.anthropic.claude-sonnet-4-6") == "anthropic"
+    assert family_of("au.anthropic.claude-haiku-4-5") == "anthropic"
+    assert family_of("apac.anthropic.claude-opus-4-5") == "anthropic"
+    assert family_of("global.anthropic.claude-opus-4-7") == "anthropic"
+
+
+def test_bedrock_unprefixed_provider_still_resolves():
+    """Even without a regional prefix, ``anthropic.claude-...`` is a
+    Bedrock catalog name (non-callable for on-demand on Claude 4.x,
+    but family detection still needs to map it correctly when it
+    appears in non-call contexts like logs or model selection)."""
+    assert family_of("anthropic.claude-opus-4-7") == "anthropic"
+
+
+def test_bedrock_meta_mistral_cohere_resolve_correctly():
+    """Other Bedrock provider segments map to their respective families."""
+    assert family_of("us.meta.llama-3-2-90b-instruct") == "meta"
+    assert family_of("eu.mistral.mistral-large-2407") == "mistral"
+    assert family_of("us.cohere.command-r-plus") == "cohere"
+
+
+def test_bedrock_amazon_titan_remains_unknown():
+    """``amazon.`` (Titan / Nova) has no Family-literal mapping yet.
+    Documented limitation; would require extending the Family literal."""
+    assert family_of("us.amazon.titan-text-express") == "unknown"
+
+
+def test_same_family_bedrock_claude_and_direct_claude():
+    """The cross-family check that PR #696's review identified as
+    broken — Bedrock-Claude and direct-API Claude must compare equal."""
+    assert same_family(
+        "us.anthropic.claude-opus-4-7", "claude-opus-4-7",
+    ) is True
+    assert same_family(
+        "global.anthropic.claude-opus-4-7",
+        "anthropic/claude-haiku-4-5",
+    ) is True
+
+
+def test_bedrock_cross_family_does_not_match():
+    """A Bedrock-Claude producer + GPT checker IS cross-family."""
+    assert same_family(
+        "us.anthropic.claude-opus-4-7", "gpt-5",
+    ) is False
+
+
+def test_bare_model_id_peels_bedrock_regional_and_provider():
+    """``--model us.anthropic.claude-opus-4-7`` must match the
+    canonical ``claude-opus-4-7`` entry in models.json."""
+    from core.security.llm_family import bare_model_id
+    assert bare_model_id("us.anthropic.claude-opus-4-7") \
+        == "claude-opus-4-7"
+    assert bare_model_id("global.anthropic.claude-haiku-4-5") \
+        == "claude-haiku-4-5"
+    assert bare_model_id("eu.mistral.mistral-large-2407") \
+        == "mistral-large-2407"
+
+
+def test_bare_model_id_preserves_case():
+    """Bedrock IDs are case-sensitive at AWS; ``bare_model_id``
+    must NOT lowercase the result even though it lowercases for
+    matching purposes."""
+    from core.security.llm_family import bare_model_id
+    # Hypothetical mixed-case input — bare result preserves case.
+    result = bare_model_id("us.anthropic.Claude-Opus-4-7")
+    assert result == "Claude-Opus-4-7"
+
+
+# ---------------------------------------------------------------------------
+# provider_of vs family_of decoupling — routing distinct from lineage
+# (issue D/N from the adversarial review).  Co-authored with owen10380
+# whose PR #696 first surfaced the routing-vs-family tension.
+# ---------------------------------------------------------------------------
+
+def test_provider_of_returns_bedrock_for_bedrock_shaped_ids():
+    """The ROUTING provider for ``us.anthropic.claude-opus-4-7`` is
+    ``bedrock`` (so config-file lookups + auth selection pick the
+    Bedrock path).  Distinct from family_of which returns
+    ``anthropic`` (so cross-family validation correctly refuses
+    Bedrock-Claude ↔ direct-Claude pairing)."""
+    from core.security.llm_family import provider_of
+    assert provider_of("us.anthropic.claude-opus-4-7") == "bedrock"
+    assert provider_of("eu.anthropic.claude-sonnet-4-6") == "bedrock"
+    assert provider_of("global.anthropic.claude-haiku-4-5") == "bedrock"
+    assert provider_of("apac.anthropic.claude-opus-4-7") == "bedrock"
+    assert provider_of("au.anthropic.claude-opus-4-7") == "bedrock"
+
+
+def test_provider_of_bedrock_works_for_other_provider_segments():
+    """Bedrock routes Meta / Mistral / Cohere too — all route via
+    Bedrock regardless of underlying family."""
+    from core.security.llm_family import provider_of
+    assert provider_of("us.meta.llama-3-70b") == "bedrock"
+    assert provider_of("eu.mistral.mistral-large-2407") == "bedrock"
+    assert provider_of("us.cohere.command-r-plus") == "bedrock"
+
+
+def test_provider_of_falls_back_to_family_for_direct_api():
+    """Direct-API model IDs use the family-based provider mapping
+    (existing behaviour preserved)."""
+    from core.security.llm_family import provider_of
+    assert provider_of("claude-opus-4-7") == "anthropic"
+    assert provider_of("anthropic/claude-opus-4-7") == "anthropic"
+    assert provider_of("gpt-5") == "openai"
+
+
+def test_family_and_provider_diverge_for_bedrock():
+    """The key safety invariant: family stays ``anthropic`` for the
+    cross-family validator while routing changes to ``bedrock``.
+    Pre-decoupling, the two were coupled via ``provider_of`` calling
+    ``family_of`` — owen10380's PR #696 patched ``provider_of`` to
+    return ``bedrock`` but accidentally left ``family_of`` broken,
+    silently weakening Attacker-Moves-Second.  This decoupling
+    preserves both invariants."""
+    from core.security.llm_family import family_of, provider_of, same_family
+    model = "us.anthropic.claude-opus-4-7"
+    assert family_of(model) == "anthropic"  # security
+    assert provider_of(model) == "bedrock"  # routing
+    # Cross-family checker still treats Bedrock-Claude + direct-Claude
+    # as the SAME family — must NOT be paired as independent checkers.
+    assert same_family(model, "claude-opus-4-7") is True
+
+
+# ---------------------------------------------------------------------------
+# Aggregator + Bedrock combination (Issue A from the adversarial review).
+# Iterated peel handles chained shapes like
+# ``together/us.anthropic.claude-opus-4-7``.  Co-authored with owen10380.
+# ---------------------------------------------------------------------------
+
+def test_aggregator_plus_bedrock_resolves_to_anthropic():
+    """``together/us.anthropic.claude-...`` must resolve to anthropic
+    family.  Pre-fix the family_of returned "unknown" because the
+    aggregator peel ran after the Bedrock peel and the second pass
+    of Bedrock peel never happened."""
+    from core.security.llm_family import family_of
+    assert family_of("together/us.anthropic.claude-opus-4-7") == "anthropic"
+    assert family_of("groq/eu.anthropic.claude-sonnet-4-6") == "anthropic"
+    assert family_of(
+        "openrouter/global.anthropic.claude-haiku-4-5",
+    ) == "anthropic"
+
+
+def test_aggregator_plus_bedrock_routes_via_bedrock():
+    """ROUTING goes via Bedrock even when an aggregator prefix is
+    nominally present — the Bedrock-shape signal dominates."""
+    from core.security.llm_family import provider_of
+    assert provider_of(
+        "together/us.anthropic.claude-opus-4-7",
+    ) == "bedrock"
+
+
+def test_aggregator_chain_plus_bedrock():
+    """Chained aggregators + Bedrock — peel converges within bound."""
+    from core.security.llm_family import family_of
+    assert family_of(
+        "openrouter/together/us.anthropic.claude-opus-4-7",
+    ) == "anthropic"

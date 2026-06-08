@@ -76,6 +76,51 @@ _AGGREGATOR_PREFIXES: tuple[str, ...] = (
 )
 
 
+# AWS Bedrock model identifiers use a different shape from the
+# `provider/model` form: a regional inference-profile prefix
+# (`us.` / `eu.` / `au.` / `apac.` / `global.`) followed by a
+# `<provider>.` segment then the model id, all dot-separated.
+# Family detection must strip the regional prefix and then map
+# the provider segment, otherwise `us.anthropic.claude-opus-4-7`
+# resolves to "unknown" and the cross-family checker (Attacker
+# Moves Second, arXiv 2510.09023) silently treats a Bedrock-Claude
+# producer and a direct-API-Claude checker as "different families"
+# — the exact failure mode the validator exists to prevent.
+#
+# Constants are imported from the single-source-of-truth module so
+# adding a new region or provider segment updates one place.
+from core.llm.bedrock_prefixes import (  # noqa: E402
+    BEDROCK_PROVIDER_SEGMENTS as _BEDROCK_PROVIDER_SEGMENTS,
+    BEDROCK_REGIONAL_PREFIXES as _BEDROCK_REGIONAL_PREFIXES,
+)
+
+# Local mapping segment → Family (Family is a Literal local to this
+# module, can't live in the shared constants module without a
+# circular import).
+_BEDROCK_PROVIDER_PREFIXES: tuple[tuple[str, Family], ...] = (
+    ("anthropic.", "anthropic"),
+    ("meta.",      "meta"),
+    ("mistral.",   "mistral"),
+    ("cohere.",    "cohere"),
+)
+# Sanity: every segment listed in the shared module must have a
+# Family mapping here (or be intentionally Family-less, in which
+# case it's not in BEDROCK_PROVIDER_SEGMENTS).
+assert {p for p, _ in _BEDROCK_PROVIDER_PREFIXES} == set(
+    _BEDROCK_PROVIDER_SEGMENTS,
+), "Bedrock provider segments out of sync with Family mapping"
+
+
+def _strip_bedrock_regional_prefix(needle: str) -> str:
+    """Strip a single Bedrock regional prefix when present.
+    Operates on the LOWERED identifier; caller is responsible for
+    re-applying to the original-case string if needed."""
+    for prefix in _BEDROCK_REGIONAL_PREFIXES:
+        if needle.startswith(prefix):
+            return needle[len(prefix):]
+    return needle
+
+
 _FAMILY_TO_PROVIDER: dict[Family, str] = {
     "anthropic": "anthropic",
     "openai": "openai",
@@ -93,7 +138,46 @@ def provider_for_family(family: Family) -> str:
 
 
 def provider_of(model_id: str) -> str:
-    """Shorthand: model identifier → provider string."""
+    """Model identifier → ROUTING provider string.
+
+    Distinct from :func:`family_of`: family is the model's training
+    lineage (what's the cross-family checker invariant), provider is
+    the routing target (which SDK/endpoint/dispatcher rule handles
+    this request).  The two diverge for Bedrock-routed Claude: family
+    is ``anthropic`` (so cross-family validation correctly refuses to
+    pair a Bedrock-Claude producer with a direct-API-Claude checker),
+    but the ROUTING provider is ``bedrock`` (so config-file lookups,
+    auth selection, and dispatcher routing pick the Bedrock path).
+
+    Order:
+      1. Bedrock-shaped IDs (``<region>.<provider>.<model>``) →
+         ``"bedrock"`` — every Bedrock prefix combination resolves
+         the same way regardless of underlying model family.
+      2. Otherwise fall back to :func:`family_of` → provider mapping,
+         preserving the existing direct-API behaviour.
+    """
+    needle = model_id.lower()
+    # Same iterated peel as family_of so chained shapes like
+    # ``together/us.anthropic.claude-opus-4-7`` resolve to
+    # ``"bedrock"`` routing (the model is Bedrock-routed even when
+    # nominally aggregator-prefixed; the aggregator can't host a
+    # Bedrock-shaped id meaningfully).
+    for _ in range(5):
+        peeled = False
+        before_bedrock = needle
+        needle = _strip_bedrock_regional_prefix(needle)
+        if needle != before_bedrock:
+            peeled = True
+        for prefix, _family in _BEDROCK_PROVIDER_PREFIXES:
+            if needle.startswith(prefix):
+                return "bedrock"
+        for prefix in _AGGREGATOR_PREFIXES:
+            if needle.startswith(prefix):
+                needle = needle[len(prefix):]
+                peeled = True
+                break
+        if not peeled:
+            break
     return provider_for_family(family_of(model_id))
 
 
@@ -131,6 +215,21 @@ def bare_model_id(model_id: str) -> str:
     model under a separate ``provider`` key).
     """
     needle = model_id
+    # Bedrock regional prefix (``us.``/``eu.``/...) peel first, then
+    # the dot-separated Bedrock provider segment.  Mirrors
+    # :func:`family_of`'s peel order so the two helpers stay
+    # consistent on Bedrock identifiers.
+    lowered = needle.lower()
+    for prefix in _BEDROCK_REGIONAL_PREFIXES:
+        if lowered.startswith(prefix):
+            needle = needle[len(prefix):]
+            lowered = lowered[len(prefix):]
+            break
+    for prefix, _family in _BEDROCK_PROVIDER_PREFIXES:
+        if lowered.startswith(prefix):
+            needle = needle[len(prefix):]
+            lowered = lowered[len(prefix):]
+            break
     for _ in range(4):
         peeled = False
         for prefix in _AGGREGATOR_PREFIXES:
@@ -165,11 +264,21 @@ def family_of(model_id: str) -> Family:
     Unknown identifiers return ``"unknown"``.
     """
     needle = model_id.lower()
-    # Peel aggregator prefix(es). Some users chain (e.g.
-    # `openrouter/together/...`); peel iteratively up to a small bound
-    # to avoid pathological loops on adversarial inputs.
-    for _ in range(4):
+    # Iterate both peels (Bedrock regional + aggregator) so chained
+    # shapes like ``together/us.anthropic.claude-opus-4-7`` resolve
+    # correctly.  Bedrock and aggregator prefixes use different
+    # separators (``.`` vs ``/``) and don't overlap in vocabulary,
+    # so a fixed-bound iteration converges in at most a handful of
+    # passes.  Bound at 5 to defend against pathological inputs.
+    for _ in range(5):
         peeled = False
+        before_bedrock = needle
+        needle = _strip_bedrock_regional_prefix(needle)
+        if needle != before_bedrock:
+            peeled = True
+        for prefix, family in _BEDROCK_PROVIDER_PREFIXES:
+            if needle.startswith(prefix):
+                return family
         for prefix in _AGGREGATOR_PREFIXES:
             if needle.startswith(prefix):
                 needle = needle[len(prefix):]

@@ -767,6 +767,48 @@ export ANTHROPIC_API_KEY=sk-ant-api03-...
 # Alternative: OpenAI GPT-4
 export OPENAI_API_KEY=sk-...
 
+# AWS Bedrock (routed through the RAPTOR dispatcher for credential
+# isolation).  Two auth modes — both validated against real Bedrock:
+#   * Bearer token (recommended; no SDK required):
+#       export AWS_BEARER_TOKEN_BEDROCK=<token>
+#       export AWS_REGION=eu-west-1   # picks the regional Bedrock host
+#   * SigV4 (uses your AWS credential chain — env / profile / SSO /
+#     IMDS — for static or rotating credentials):
+#       export AWS_ACCESS_KEY_ID=...
+#       export AWS_SECRET_ACCESS_KEY=...
+#       export AWS_REGION=eu-west-1
+#       pip install boto3              # SigV4 signing in the parent
+#
+# Two Bedrock surfaces are supported, selectable per-run or per-model:
+#
+#   * Mantle (default) — bedrock-mantle.<region>.api.aws.  Native
+#     Anthropic Messages API with bare model IDs
+#     (e.g. ``anthropic.claude-haiku-4-5``).  Full feature support:
+#     SSE streaming, tool use, prompt caching, vision, extended
+#     thinking, computer use.  No regional model-id prefix.
+#   * Runtime (legacy InvokeModel) — bedrock-runtime.<region>.amazonaws.
+#     com.  Required for models not yet on Mantle, for cross-region
+#     inference profile IDs (``us.``/``eu.``/``apac.``/``global.``),
+#     and for compliance-pinned ARN-versioned IDs
+#     (``anthropic.claude-haiku-4-5-20251001-v1:0``).  Non-streaming
+#     only — operators wanting streaming should use Mantle.
+#
+# Switching:
+#
+#   * Globally per run:
+#       export RAPTOR_BEDROCK_API=mantle    # (default)
+#       export RAPTOR_BEDROCK_API=runtime
+#   * Per model in ``~/.config/raptor/models.json``:
+#       { "provider": "bedrock",
+#         "model":    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+#         "bedrock_api": "runtime" }
+#     A per-model field always wins over the env var.
+#
+# Override the default model in ``~/.config/raptor/models.json`` to
+# pick a specific Claude tier or to use the cheaper ``global.`` Cross-
+# region Inference SKU on the runtime path.  Mantle uses bare model
+# IDs; the cross-region routing happens at the hostname layer.
+
 # Testing: Ollama (local)
 # No API key needed, just install Ollama
 # Warning: Exploit code quality is unreliable

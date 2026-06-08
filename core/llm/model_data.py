@@ -33,6 +33,13 @@ Verification provenance for the 2026-05-03 refresh:
     256K ctx per their model cards). All Mistral entries verified.
 """
 
+from .bedrock_prefixes import (
+    BEDROCK_GLOBAL_PREFIX as _BEDROCK_GLOBAL_COST_PREFIX,
+    BEDROCK_PROVIDER_SEGMENTS as _BEDROCK_PROVIDER_SEGMENTS,
+    BEDROCK_REGIONAL_SURCHARGE_PREFIXES as _BEDROCK_REGIONAL_COST_PREFIXES,
+)
+
+
 # Provider API endpoints (Anthropic uses native SDK, no base_url needed)
 PROVIDER_ENDPOINTS = {
     "openai":    "https://api.openai.com/v1",
@@ -216,14 +223,100 @@ PROVIDER_ENV_KEYS = {
 # Lookup helpers
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Bedrock model-id support
+# ---------------------------------------------------------------------------
+#
+# AWS Bedrock surfaces the same underlying Claude (et al.) models under
+# region-prefixed inference-profile IDs: ``us.anthropic.claude-opus-4-7``,
+# ``eu.anthropic.claude-sonnet-4-6``, ``global.anthropic.claude-haiku-4-5``,
+# etc.  Limits are identical to the direct-API form (Bedrock just relays
+# the same model); cost has TWO tiers per the AWS Bedrock pricing page:
+#
+#   * Global Cross-region Inference (``global.<provider>.<model>``) —
+#     matches direct-API pricing exactly.
+#   * Geo / In-region Cross-region (``us./eu./au./apac.<provider>.<model>``)
+#     — approximately 10% surcharge.
+#
+# Per AWS docs the global-CRIS rollout is per-model: only specific Claude
+# variants have a ``global.`` SKU at any moment.  For models that DON'T
+# have a global counterpart, the geo price IS the base (no 1.10×).  We
+# therefore allowlist the models for which we KNOW a global SKU exists
+# (verified directly against the Bedrock pricing page on the date in
+# the module docstring); for non-allowlisted models the multiplier
+# stays at 1.0 and operators only see slight under-counting on the
+# regional form when AWS later adds a global SKU we haven't picked up.
+# The opposite direction (multiplying when no global exists) would
+# overstate cost — worse for operator budgeting trust — so we err
+# conservative.
+
+# Bare model names with a confirmed ``global.<provider>.<bare>`` SKU on
+# the AWS Bedrock pricing page.  When a regional prefix is paired with
+# one of these, apply the 1.10× regional surcharge.  Extend as AWS
+# adds global-CRIS coverage; non-listed models stay at 1.0×.
+_BEDROCK_GLOBAL_CRIS_MODELS: frozenset[str] = frozenset({
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+})
+_BEDROCK_REGIONAL_SURCHARGE = 1.10
+
+
+def _strip_bedrock_prefixes(model: str) -> str:
+    """Strip ``<region>.`` then ``<provider>.`` from a Bedrock model
+    id, returning the bare model name (eg ``claude-opus-4-7``).
+    Returns the input unchanged when no Bedrock prefix is present."""
+    needle = model.lower()
+    for prefix in (
+        *_BEDROCK_REGIONAL_COST_PREFIXES, _BEDROCK_GLOBAL_COST_PREFIX,
+    ):
+        if needle.startswith(prefix):
+            return _strip_bedrock_provider(model[len(prefix):])
+    return _strip_bedrock_provider(model)
+
+
+def _strip_bedrock_provider(model: str) -> str:
+    """Strip the Bedrock provider segment (``anthropic.``, ``meta.``,
+    ...) leaving the bare model name."""
+    for prefix in _BEDROCK_PROVIDER_SEGMENTS:
+        if model.lower().startswith(prefix):
+            return model[len(prefix):]
+    return model
+
+
+def _bedrock_cost_multiplier(model: str) -> float:
+    """Multiplier applied to the bare-name price when ``model`` is a
+    Bedrock id.  ``1.0`` when not Bedrock, when ``global.`` prefixed,
+    or when the bare model has no known global-CRIS SKU.  ``1.10`` for
+    regional prefixes paired with a model that HAS a global SKU."""
+    lowered = model.lower()
+    if lowered.startswith(_BEDROCK_GLOBAL_COST_PREFIX):
+        return 1.0
+    for prefix in _BEDROCK_REGIONAL_COST_PREFIXES:
+        if not lowered.startswith(prefix):
+            continue
+        bare = _strip_bedrock_prefixes(model)
+        if bare in _BEDROCK_GLOBAL_CRIS_MODELS:
+            return _BEDROCK_REGIONAL_SURCHARGE
+        return 1.0
+    return 1.0
+
+
 def context_window_for(model: str) -> int:
     """Total input tokens the model accepts in one request.
 
     Raises ``KeyError`` for unknown models — the tool-use loop's
     context-policy enforcement (truncate vs raise vs summarise) needs
     a definite number; an approximate fallback would silently mis-gate.
+
+    Bedrock-prefixed identifiers (``us.anthropic.claude-opus-4-7``) are
+    looked up by their bare name — context windows are identical to
+    the direct-API form.
     """
     limits = MODEL_LIMITS.get(model)
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
     if limits is None:
         raise KeyError(f"context_window_for: unknown model {model!r}")
     return limits["max_context"]
@@ -232,8 +325,13 @@ def context_window_for(model: str) -> int:
 def max_output_for(model: str) -> int:
     """Maximum tokens the model can emit in one response. Raises
     ``KeyError`` for unknown models — useful for capping ``max_tokens``
-    request kwargs to a value the provider will accept."""
+    request kwargs to a value the provider will accept.
+
+    Bedrock-prefixed identifiers map to the bare name; output limits
+    are identical to the direct-API form."""
     limits = MODEL_LIMITS.get(model)
+    if limits is None:
+        limits = MODEL_LIMITS.get(_strip_bedrock_prefixes(model))
     if limits is None:
         raise KeyError(f"max_output_for: unknown model {model!r}")
     return limits["max_output"]
@@ -250,6 +348,10 @@ def price_for(
     helper converts to per-million which is the unit consumers (loop
     cost tracking, ``max_cost_usd`` enforcement) actually want.
 
+    Bedrock-prefixed identifiers are looked up by their bare name and
+    then multiplied by :func:`_bedrock_cost_multiplier` to account for
+    the regional-CRIS ~10% surcharge over global / direct-API pricing.
+
     Unknown models return ``default`` rather than raising — the caller
     chooses between (a) soft warn + treat as $0 (cost tracking
     degrades cleanly, ``max_cost_usd`` cap effectively disabled) and
@@ -258,9 +360,18 @@ def price_for(
     test the return against ``(0.0, 0.0)`` and act accordingly.
     """
     cost = MODEL_COSTS.get(model)
+    multiplier = 1.0
+    if cost is None:
+        bare = _strip_bedrock_prefixes(model)
+        if bare != model:
+            cost = MODEL_COSTS.get(bare)
+            multiplier = _bedrock_cost_multiplier(model)
     if cost is None:
         return default
-    return (cost["input"] * 1000.0, cost["output"] * 1000.0)
+    return (
+        cost["input"] * 1000.0 * multiplier,
+        cost["output"] * 1000.0 * multiplier,
+    )
 
 
 # Anthropic-specific cache pricing multipliers (vs base input rate).

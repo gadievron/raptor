@@ -186,30 +186,46 @@ def make_anthropic_client(
 
 def make_bedrock_client(
     *,
+    api: str = "mantle",
     socket_path: Optional[str] = None,
     token: Optional[str] = None,
     timeout: Optional[float] = None,
 ):
     """Return a stock ``anthropic.Anthropic`` client whose requests are
-    rewritten + SigV4-signed for AWS Bedrock by the dispatcher.
+    AWS-auth-attached for a Bedrock surface by the dispatcher.
 
-    Identical to :func:`make_anthropic_client` except the base URL points
-    at the ``/bedrock`` prefix. The worker still speaks the plain
-    Anthropic Messages API (``client.messages.create(...)``) and holds no
-    AWS credentials — boto3/botocore never load in the worker's address
-    space. The dispatcher's bedrock rule moves ``model`` into the
-    ``/model/<id>/invoke`` path, adds ``anthropic_version`` to the body,
-    retargets the regional bedrock-runtime host, and signs with the
-    parent's AWS credentials. The Bedrock ``InvokeModel`` response is the
-    same Messages JSON the SDK already parses, so the round trip is
-    invisible at the call site (non-streaming only)."""
+    ``api`` selects which Bedrock surface the dispatcher forwards to:
+
+    * ``"mantle"`` (default) — ``bedrock-mantle.<region>.api.aws/
+      anthropic/v1/messages``, native Anthropic Messages API with bare
+      model IDs (``anthropic.claude-opus-4-8``), native SSE streaming,
+      tool use, prompt caching, computer use.
+    * ``"runtime"`` — ``bedrock-runtime.<region>.amazonaws.com/model/
+      <id>/invoke``, legacy InvokeModel surface.  Required for models
+      not yet on Mantle, for cross-region inference profile IDs
+      (``us.``/``eu.``/``global.``), and for compliance-pinned
+      ARN-versioned IDs.  Non-streaming only.
+
+    Identical shape to :func:`make_anthropic_client` except the base URL
+    points at the ``/bedrock/<api>`` prefix.  The worker speaks plain
+    Anthropic Messages and holds no AWS credentials — boto3/botocore
+    never load in the worker's address space.  The dispatcher's bedrock
+    rule attaches the parent's bearer token (``AWS_BEARER_TOKEN_BEDROCK``)
+    or SigV4-signs with the parent's AWS credentials, and forwards to
+    the selected Bedrock surface.  The response is standard Anthropic
+    Messages JSON regardless of which API was used."""
     import anthropic
 
+    if api not in ("mantle", "runtime"):
+        raise ValueError(
+            f"make_bedrock_client: api must be 'mantle' or 'runtime', "
+            f"got {api!r}"
+        )
     socket_path, token = _resolve_socket_and_token(socket_path, token)
     http = _make_httpx_client(socket_path, token, timeout=timeout)
     return anthropic.Anthropic(
         api_key="dummy-not-used",
-        base_url="http://_/bedrock",
+        base_url=f"http://_/bedrock/{api}",
         http_client=http,
     )
 
