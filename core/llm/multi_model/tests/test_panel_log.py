@@ -21,9 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from core.llm.multi_model import panel_log
 from core.llm.multi_model.panel_log import (
-    PanelRecord,
     discover_reports,
     distinct_models,
     group_by_decision_class,

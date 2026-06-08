@@ -28,7 +28,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from core.llm.multi_model.dawid_skene import (
-    DawidSkeneResult,
     FindingPosterior,
     estimate_partitioned,
 )

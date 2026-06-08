@@ -13,7 +13,6 @@ or a tight-tolerance regression against the reference algorithm.
 """
 from __future__ import annotations
 
-import math
 
 import pytest
 

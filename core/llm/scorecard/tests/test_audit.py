@@ -11,7 +11,6 @@ verdict logic is not over-fitted to a single sample count.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 

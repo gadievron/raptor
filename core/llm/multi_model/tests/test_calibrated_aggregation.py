@@ -15,17 +15,14 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from core.llm.multi_model.calibrated_aggregation import (
     METHOD_DAWID_SKENE,
     METHOD_VOTE,
-    CalibratedVerdict,
     calibrate_results,
     verdict_to_json,
 )
 from core.llm.scorecard.priors import (
-    BetaPrior,
     uniform_prior,
     weak_informative_prior,
 )

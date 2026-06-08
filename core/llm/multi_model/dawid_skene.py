@@ -41,7 +41,7 @@ Implementation notes (verified against Dawid & Skene, 1979 §3):
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
 from core.llm.scorecard.priors import BetaPrior, posterior_update

@@ -23,17 +23,13 @@ from __future__ import annotations
 
 from typing import List
 
-import pytest
 
 from core.llm.multi_model.dawid_skene import (
-    DEFAULT_CLIP_EPSILON,
-    DEFAULT_INITIAL_RELIABILITY,
     estimate,
     estimate_partitioned,
 )
 from core.llm.multi_model.panel_log import PanelRecord
 from core.llm.scorecard.priors import (
-    BetaPrior,
     jeffreys_prior,
     uniform_prior,
     weak_informative_prior,
