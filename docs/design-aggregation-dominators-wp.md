@@ -443,7 +443,7 @@ when tractable; A/B measurement.
 | 2a | A | Panel-log loader (`core/llm/multi_model/panel_log.py`) | **done** (data already on disk in `orchestrated_report.json`) |
 | 2b | A | Dawid–Skene estimator (`core/llm/multi_model/dawid_skene.py`) | **done** (16 property tests pass) |
 | 2c | A | D–S property tests | **done** |
-| 2d | A | Offline replay harness (CLI) | deferred — not on critical path to Phase 3 |
+| 2d | A | Offline replay harness (`libexec/raptor-panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; `RAPTOR_CALIBRATED_AGGREGATION` opt-out) |
 | 4 | A | Posterior-weighted scorecard updates | **done** (new `multi_model_consensus_calibrated` event slot, soft-label credits, legacy slot preserved) |
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |
