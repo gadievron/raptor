@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-02T10:03:51Z",
+    "fetched_at": "2026-06-09T08:59:51Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -6391,6 +6391,13 @@
       "ransomware_use": false,
       "vendor": "Linux"
     },
+    "CVE-2022-0492": {
+      "date_added": "2026-06-02",
+      "kev": true,
+      "product": "Kernel",
+      "ransomware_use": false,
+      "vendor": "Linux"
+    },
     "CVE-2022-0543": {
       "date_added": "2022-03-28",
       "kev": true,
@@ -10437,6 +10444,13 @@
       "ransomware_use": false,
       "vendor": "Android"
     },
+    "CVE-2025-48595": {
+      "date_added": "2026-06-02",
+      "kev": true,
+      "product": "Framework",
+      "ransomware_use": false,
+      "vendor": "Android"
+    },
     "CVE-2025-48633": {
       "date_added": "2025-12-02",
       "kev": true,
@@ -11074,6 +11088,13 @@
       "ransomware_use": false,
       "vendor": "Soliton Systems K.K"
     },
+    "CVE-2026-28318": {
+      "date_added": "2026-06-05",
+      "kev": true,
+      "product": "Serv-U",
+      "ransomware_use": false,
+      "vendor": "SolarWinds"
+    },
     "CVE-2026-3055": {
       "date_added": "2026-03-30",
       "kev": true,
@@ -11200,12 +11221,26 @@
       "ransomware_use": false,
       "vendor": "BerriAI"
     },
+    "CVE-2026-42271": {
+      "date_added": "2026-06-08",
+      "kev": true,
+      "product": "LiteLLM",
+      "ransomware_use": false,
+      "vendor": "BerriAI"
+    },
     "CVE-2026-42897": {
       "date_added": "2026-05-15",
       "kev": true,
       "product": "Microsoft",
       "ransomware_use": false,
       "vendor": "Microsoft"
+    },
+    "CVE-2026-45247": {
+      "date_added": "2026-06-03",
+      "kev": true,
+      "product": "Mirasvit Full Page Cache Warmer",
+      "ransomware_use": false,
+      "vendor": "Mirasvit"
     },
     "CVE-2026-45321": {
       "date_added": "2026-05-27",
@@ -11234,6 +11269,13 @@
       "product": "cPanel Plugin",
       "ransomware_use": false,
       "vendor": "LiteSpeed"
+    },
+    "CVE-2026-50751": {
+      "date_added": "2026-06-08",
+      "kev": true,
+      "product": "Security Gateway",
+      "ransomware_use": false,
+      "vendor": "Check Point"
     },
     "CVE-2026-5281": {
       "date_added": "2026-04-01",
