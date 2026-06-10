@@ -52,7 +52,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 5 | A | Finding-normalisation adapter (SARIF / Semgrep / RAPTOR-native) | **done** (21 tests; SARIF + Semgrep + RAPTOR-native fixtures; end-to-end wrong-variable + safe straight-line; ruff clean) |
 | 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | **done** (9 new tests + binary-oracle back-compat preserved; ruff clean) |
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + E2E corpus + ablation | **done** (13 corpus/wire-up tests; 7-fixture corpus + CORPUS.md ablation table; smt_barrier extended with optional file_path/cwe/language kwargs; ruff clean) |
-| 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | not started |
+| 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/phase-8-substrate-spike/DECISION.md`) |
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | not started |
 | 10 | B | Pointer / alias conservatism | not started |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | not started |
@@ -285,27 +285,56 @@ path's output).
 
 ## Sub-arc B — C/C++ intra-procedural value layer
 
-### Phase 8 — Substrate choice + spike
+### Phase 8 — Substrate choice + spike  *(done — chose tree-sitter)*
 
 **Goal:** decide the platform before building on it.
 
-- Comparison doc: libclang vs tree-sitter vs r2-decomp. Axes:
-  dep weight (libclang needs the LLVM dev headers; tree-sitter
-  needs the C/C++ grammars at build time; r2-decomp needs r2
-  which is already in tree), semantic completeness (libclang sees
-  types and resolves overloads; tree-sitter is surface-level;
-  r2-decomp recovers a pseudo-C that loses some bindings), error
-  mode (libclang fails loudly on compile errors; tree-sitter
-  recovers from partial input; r2-decomp fails on stripped
-  binaries).
-- Throwaway prototype against a 50-line C fixture (sanitizer in
-  if-branch, sanitizer in helper, multi-argument source) under
-  each candidate. Measure node count, def/use accuracy, build
-  cost in CI.
-- Decision recorded in this doc (replace Phase 8 row in the
-  table with `done — chose <X>`).
+**Decision: tree-sitter** (`tree-sitter-c` + `tree-sitter-cpp`).
+Full writeup at `docs/phase-8-substrate-spike/DECISION.md`. Three
+load-bearing reasons:
 
-**Ships:** comparison doc + decision.
+1. **Already the substrate of every existing C/C++ inventory walk**
+   in RAPTOR (`core/inventory/call_graph.py:4162` for C, `:4519`
+   for C++; `core/ast/view.py`'s lazy-imported grammars). Phase 9
+   is reusing existing infrastructure, not adopting a new
+   dependency.
+2. **No build needed.** The gate runs on source. Adding libclang
+   would require either reconstructing the compile DB (often
+   missing) or downgrading to header-less parse, which would cost
+   libclang most of its semantic advantage. r2-decomp needs a
+   built artifact and loses the named-variable bindings the
+   value-bound condition depends on (`safe_other` post-decomp
+   becomes `local_28`).
+3. **Cost shape.** 540 KB of wheels (`tree-sitter`,
+   `tree-sitter-c`, `tree-sitter-cpp`) vs 150 MB of LLVM headers
+   is the difference between "ship in `requirements.txt`" and
+   "docker image change."
+
+**Spike measurements** (60-LOC fixture covering the canonical
+shapes: straight-line, if-branch, wrong-variable, sanitizer-in-
+helper, switch + fallthrough):
+
+- parse time: 1.73 ms cold, no parse errors
+- node count: 387 (~6.5 nodes / LOC)
+- def/use/call_site accuracy: 6 / 6 fixtures recover exactly what
+  Phase 9 needs, including the wrong-variable soundness witness
+  (`handle_wrong`: `safe_other@40` defined, but `render@41` reads
+  `user` — the gate's condition 3 will correctly refuse)
+
+**Limits the substrate doesn't change** (these stay conservative
+under any choice):
+
+- Macros that expand to control flow are opaque — we walk pre-
+  preprocessor source. Phase 10's `may_escape` policy covers what
+  matters.
+- Function-pointer indirection is recognised syntactically; the
+  pointed-at function is unknown. Phase 10 marks the result
+  `may_escape`.
+- K&R-style definitions parse but only ANSI prototypes give
+  parameter extraction. Vanishingly rare.
+
+**Ships:** `docs/phase-8-substrate-spike/{fixture.c,
+prototype_tree_sitter.py, prototype_tree_sitter.out, DECISION.md}`.
 
 **Gates:** Phase 9.
 
@@ -522,9 +551,11 @@ TPs caught that intra-proc-only misses.
   "current code suppresses; new code doesn't" or "current code
   misses; new code catches" — explicit deltas, not just green
   ticks.
-- **Phase 8 substrate dep.** If libclang wins, RAPTOR gains a
-  hard dep on LLVM. Phase 8's decision doc weighs this against
-  the alternatives.
+- **Phase 8 substrate dep.** Resolved: tree-sitter
+  (`tree-sitter`, `tree-sitter-c`, `tree-sitter-cpp` — already in
+  RAPTOR's optional dep set). No LLVM headers required. The cost
+  is bounded by tree-sitter's surface-level parse; Phase 10's
+  conservative `may_escape` policy covers the gap.
 - **Phase 13 summary explosion.** A function with N taintable
   params has a summary of size up to 2^N. Cap at N=8 (typical
   function arity); over-arity functions stay `summary_unknown`.

@@ -1,0 +1,35 @@
+# Phase 8 spike — tree-sitter on fixture.c
+parse_ms: 1.73
+node_count: 387
+has_errors: False
+
+## fn handle_straight  (lines 22-25)
+  defs       (1): [['y', 23]]
+  uses       (3): [['y', 24], ['x', 23], ['x', 23]]
+  call_sites (3): [['render', 24, ('y',)], ['escape_html', 23, ('x',)], ['escape_html', 23, ('x',)]]
+
+## fn handle_branch  (lines 28-36)
+  defs       (2): [['out', 33], ['out', 31]]
+  uses       (4): [['out', 35], ['x', 33], ['x', 33], ['x', 31]]
+  call_sites (3): [['render', 35, ('out',)], ['escape_html', 33, ('x',)], ['escape_html', 33, ('x',)]]
+
+## fn handle_wrong  (lines 39-43)
+  defs       (1): [['safe_other', 40]]
+  uses       (3): [['user', 41], ['other', 40], ['other', 40]]
+  call_sites (3): [['render', 41, ('user',)], ['escape_html', 40, ('other',)], ['escape_html', 40, ('other',)]]
+
+## fn _sanitize  (lines 46-46)
+  defs       (0): []
+  uses       (1): [['s', 46]]
+  call_sites (1): [['escape_html', 46, ('s',)]]
+
+## fn handle_helper  (lines 47-50)
+  defs       (1): [['y', 48]]
+  uses       (3): [['y', 49], ['x', 48], ['x', 48]]
+  call_sites (3): [['render', 49, ('y',)], ['_sanitize', 48, ('x',)], ['_sanitize', 48, ('x',)]]
+
+## fn handle_switch  (lines 53-60)
+  defs       (2): [['out', 56], ['out', 54]]
+  uses       (5): [['x', 58], ['out', 57], ['x', 56], ['x', 56], ['x', 54]]
+  call_sites (4): [['render', 58, ('x',)], ['render', 57, ('out',)], ['escape_html', 56, ('x',)], ['escape_html', 56, ('x',)]]
+
