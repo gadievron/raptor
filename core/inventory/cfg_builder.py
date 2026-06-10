@@ -169,6 +169,13 @@ class PythonCFG:
     return / fall-through path. Internal exits (``raise`` without a
     matching ``except``) also flow to ``exit_node`` so dominance
     questions about the function's true sink are answerable.
+
+    ``params`` is the ordered tuple of parameter names declared by
+    the function (positional, keyword-only, ``*args``, ``**kwargs``).
+    Phase 2's reaching-defs reads this to treat the entry as virtually
+    defining each parameter so a body use of a parameter resolves
+    to the entry as its reaching definer. Empty when the function
+    takes no arguments.
     """
     function_name: str
     file_path: str
@@ -176,6 +183,7 @@ class PythonCFG:
     exit_node: PyCFGNode
     _nodes: Tuple[PyCFGNode, ...]
     _adjacency: Dict[PyCFGNode, Tuple[PyCFGNode, ...]]
+    params: Tuple[str, ...] = ()
 
     @property
     def entry(self) -> PyCFGNode:
@@ -726,7 +734,34 @@ class _PythonCFGBuilder:
             exit_node=self.exit,
             _nodes=tuple(ordered_nodes),
             _adjacency=adjacency,
+            params=_function_params(func),
         )
+
+
+def _function_params(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> Tuple[str, ...]:
+    """Ordered tuple of bare parameter names declared by ``func``.
+
+    Positional-only, then positional-or-keyword, then ``*vararg``,
+    then keyword-only, then ``**kwarg`` — same order Python uses
+    when binding. Defaults / annotations are ignored. Used by Phase
+    2's reaching-defs to treat the entry as virtually defining each
+    parameter so body uses resolve to the entry node.
+    """
+    args = func.args
+    names: List[str] = []
+    for arg in args.posonlyargs:
+        names.append(arg.arg)
+    for arg in args.args:
+        names.append(arg.arg)
+    if args.vararg is not None:
+        names.append(args.vararg.arg)
+    for arg in args.kwonlyargs:
+        names.append(arg.arg)
+    if args.kwarg is not None:
+        names.append(args.kwarg.arg)
+    return tuple(names)
 
 
 def build_python_cfg(
