@@ -54,13 +54,21 @@ from typing import (
     Dict,
     FrozenSet,
     Iterable,
+    Mapping,
+    Optional,
     Set,
+    Tuple,
 )
 
 from core.dataflow.sanitizer_catalog import (
+    SanitizerBinding,
     match_sanitizers_in_cfg,
     nodes_of,
     sanitizer_callables_for_cwe,
+)
+from core.inventory.dataflow import (
+    ReachingDefs,
+    reaching_defs,
 )
 
 
@@ -73,19 +81,37 @@ logger = logging.getLogger(__name__)
 VERDICT_SANITIZER_DOMINATED = "sanitizer_dominated"
 
 
+# Phase 4 suppression-verdict tri-state. The legacy ``suppress: bool``
+# field on :class:`SanitizerCutResult` stays — it's True iff
+# ``verdict == VERDICT_SUPPRESS``. New callers should read ``verdict``
+# directly to distinguish "control-flow argument holds but value
+# binding unproven" (the new candidate_only state) from "the
+# control-flow cut failed entirely."
+VERDICT_SUPPRESS = "suppress"
+VERDICT_CANDIDATE_ONLY = "candidate_only"
+VERDICT_NO_SUPPRESS = "no_suppress"
+
+
 @dataclass(frozen=True)
 class SanitizerCutResult:
     """Outcome of a vertex-cut suppression check.
 
-    ``suppress`` is the headline boolean — True iff every path from
-    every source to the sink crossed a sanitizer. Phase 7b's caller
-    just looks at this and either drops the finding or sends it to
-    the LLM.
+    ``suppress`` is the legacy boolean — True iff every value-bound
+    path from every source to the sink crossed a sanitizer. Phase 7b's
+    record helper reads this to decide whether to drop the finding.
+
+    ``verdict`` is the Phase 4 tri-state — one of
+    :data:`VERDICT_SUPPRESS`, :data:`VERDICT_CANDIDATE_ONLY`,
+    :data:`VERDICT_NO_SUPPRESS`. ``candidate_only`` means the
+    control-flow cut holds but the four-condition value-binding gate
+    didn't — a useful audit / LLM hint without a drop. Defaults to
+    ``"suppress"`` or ``"no_suppress"`` derived from ``suppress``
+    when callers construct the result without specifying verdict, so
+    existing Phase 7 constructors keep working unchanged.
 
     ``cut_set`` is the witnessing set: the sanitizer nodes whose
-    removal disconnected the sink. Empty when ``suppress`` is False
-    (the finding survives) or when no sanitizer candidates were
-    found.
+    removal disconnected the sink. Non-empty only when
+    ``verdict == VERDICT_SUPPRESS``.
 
     ``reason`` is a short human-facing string for the JSONL audit
     record. ``candidate_callables`` is the catalog-derived set the
@@ -96,6 +122,30 @@ class SanitizerCutResult:
     reason: str
     cut_set: FrozenSet
     candidate_callables: FrozenSet[str]
+    verdict: str = ""
+
+    def __post_init__(self) -> None:
+        # Default verdict derives from the legacy ``suppress`` flag
+        # so phase 7 constructors (and any user code that built a
+        # result without specifying verdict) keep working. Use
+        # object.__setattr__ since the dataclass is frozen.
+        if not self.verdict:
+            v = VERDICT_SUPPRESS if self.suppress else VERDICT_NO_SUPPRESS
+            object.__setattr__(self, "verdict", v)
+            return
+        # Explicit verdict — sanity-check consistency with suppress.
+        # candidate_only and no_suppress both leave suppress=False;
+        # suppress=True only pairs with verdict=suppress.
+        if self.suppress and self.verdict != VERDICT_SUPPRESS:
+            raise ValueError(
+                f"suppress=True requires verdict={VERDICT_SUPPRESS!r}, "
+                f"got verdict={self.verdict!r}"
+            )
+        if not self.suppress and self.verdict == VERDICT_SUPPRESS:
+            raise ValueError(
+                f"verdict={VERDICT_SUPPRESS!r} requires suppress=True, "
+                "got suppress=False"
+            )
 
 
 def _bfs_reachable_excluding(
@@ -154,6 +204,120 @@ def sanitizer_cuts_source_to_sink(
     return sink not in reachable
 
 
+def _propagate_taint(
+    graph,
+    rd: ReachingDefs,
+    source_nodes: Iterable,
+    source_symbols: Iterable[str],
+) -> Mapping[Any, FrozenSet[str]]:
+    """Compute the tainted-symbol set at every node's IN.
+
+    Per-def taint is recorded in ``taint[(node, symbol)]``:
+
+    * A def is *initially tainted* if it lives on a source node and
+      its symbol is in ``source_symbols``. For ``cfg.entry`` as a
+      source, the virtual param defs from
+      :class:`PythonCFG.params` get the same treatment.
+    * A def is *transitively tainted* if the defining node's
+      ``uses`` overlap with any tainted symbol at the node's IN.
+
+    The result projects per-node IN-tainted symbol sets — exactly
+    what Phase 4 condition 2 needs to check whether the sanitizer's
+    bare-name inputs intersect the live taint.
+
+    Conservative: a sanitizer's output stays "tainted" under this
+    model because we only mark transitive taint through the node's
+    uses without modelling sanitization. This is fine for condition
+    2 (which checks the sanitizer's IN, before it runs) and Phase 3
+    handles the cleaned-output side via empty ``output_symbols`` on
+    nested calls.
+    """
+    sources_set = set(source_nodes)
+    src_syms = set(source_symbols) if source_symbols else set()
+    if not src_syms:
+        return {n: frozenset() for n in graph.nodes()}
+
+    taint: Dict[Tuple[Any, str], bool] = {}
+
+    # Seed: source_symbols at source nodes (body sources) and the
+    # virtual entry defs for param sources.
+    entry = getattr(graph, "entry", None)
+    params: Tuple[str, ...] = tuple(getattr(graph, "params", ()) or ())
+    for n in graph.nodes():
+        if n not in sources_set:
+            continue
+        node_defs: FrozenSet[str] = getattr(n, "defs", frozenset())
+        for s in node_defs & src_syms:
+            taint[(n, s)] = True
+        if n is entry:
+            for p in params:
+                if p in src_syms:
+                    taint[(n, p)] = True
+
+    # Iterate to fixed point. Monotone: taint only grows.
+    changed = True
+    while changed:
+        changed = False
+        for n in graph.nodes():
+            tainted_in: Set[str] = set()
+            for sym, definers in rd.all_at(n).items():
+                for d in definers:
+                    if taint.get((d, sym), False):
+                        tainted_in.add(sym)
+                        break
+            uses: FrozenSet[str] = getattr(n, "uses", frozenset())
+            if not (uses & tainted_in):
+                continue
+            node_defs = getattr(n, "defs", frozenset())
+            for s in node_defs:
+                if not taint.get((n, s), False):
+                    taint[(n, s)] = True
+                    changed = True
+
+    # Project to per-node IN tainted symbol sets.
+    result: Dict[Any, FrozenSet[str]] = {}
+    for n in graph.nodes():
+        tainted: Set[str] = set()
+        for sym, definers in rd.all_at(n).items():
+            for d in definers:
+                if taint.get((d, sym), False):
+                    tainted.add(sym)
+                    break
+        result[n] = frozenset(tainted)
+    return result
+
+
+def _binding_satisfies_value_gate(
+    binding: SanitizerBinding,
+    rd: ReachingDefs,
+    tainted_at: Mapping[Any, FrozenSet[str]],
+    sink: Any,
+    sink_arg: str,
+) -> bool:
+    """Phase 4 conditions 2 and 3 for one binding.
+
+    Condition 2: at least one of the binding's bare-name inputs is
+    tainted at the binding's node IN. (Condition 1 — catalog match
+    by callable — is already filtered upstream by
+    :func:`match_sanitizers_in_cfg`.)
+
+    Condition 3: the binding's call assigns ``sink_arg`` as one of
+    its outputs AND the binding's node is among the reaching
+    definers of ``sink_arg`` at the sink (i.e. the cleaned value
+    actually arrives at the sink without being overwritten).
+    """
+    # Condition 2 — tainted-input check
+    tainted_in = tainted_at.get(binding.node, frozenset())
+    if not (binding.input_symbols & tainted_in):
+        return False
+    # Condition 3 — output reaches sink arg
+    if sink_arg not in binding.output_symbols:
+        return False
+    if binding.node not in rd.at(sink, sink_arg):
+        return False
+    return True
+
+
 def evaluate_finding(
     graph,
     sources: Iterable,
@@ -161,29 +325,46 @@ def evaluate_finding(
     *,
     cwe: str,
     language: str,
+    source_symbols: Optional[Iterable[str]] = None,
+    sink_arg: Optional[str] = None,
 ) -> SanitizerCutResult:
-    """The full Phase 7 decision for one finding.
+    """Phase 4 suppression decision for one finding.
 
-    1. Look up :func:`sanitizer_callables_for_cwe(cwe, language)`. If
-       empty (CWE not in mapping, or language not in catalog), bail
-       out with ``suppress=False`` — we cannot prove sanitization.
-    2. Find candidate sanitizer nodes in the graph via
-       :func:`match_sanitizers_in_cfg`. The full set is used as the
-       cut candidate; no dominator pre-filtering. A previous draft
-       narrowed to dominators of the sink as a perceived optimisation,
-       but that was incorrect: in the symmetric-sanitize case
-       (sanitizer in BOTH ``if`` and ``else`` branches), neither
-       call dominates the sink individually, yet their union cuts
-       every path. Vertex-cut is a *set* property, not an individual-
-       node property.
-    3. Run :func:`sanitizer_cuts_source_to_sink` with the candidate
-       set. If it disconnects the sink → suppress.
+    Backward-compatible with Phase 7 callers: omit ``source_symbols``
+    and ``sink_arg`` → control-flow-only vertex-cut. Verdict is
+    :data:`VERDICT_SUPPRESS` or :data:`VERDICT_NO_SUPPRESS`; no
+    ``candidate_only`` is emitted because the gate isn't run.
 
-    Including a sanitizer node that's not on any source-to-sink path
-    is harmless — removing more nodes from a BFS can only shrink the
-    reachable set, never grow it. So the algorithm is sound without
-    the pre-filter, and correctly handles the canonical case the
-    lexical check at ``smt_barrier.py:1189`` misses.
+    With value context provided, the four-condition gate:
+
+      1. ``binding.callable ∈ sanitizer_callables_for_cwe`` —
+         already enforced by :func:`match_sanitizers_in_cfg`.
+      2. ``binding.input_symbols ∩ symbols_tainted_at(binding.node)``
+         non-empty — actual taint flows into the sanitizer.
+      3. ``sink_arg ∈ binding.output_symbols`` AND
+         ``binding.node ∈ rd.at(sink, sink_arg)`` — the cleaned
+         value reaches the sink without being overwritten.
+      4. Removing the bindings that satisfy (2) and (3) from the
+         graph cuts every source → sink path.
+
+    Verdict:
+
+    * :data:`VERDICT_SUPPRESS` — all four hold.
+    * :data:`VERDICT_CANDIDATE_ONLY` — control-flow cut over the
+      *full* binding set still holds, but the value-bound subset
+      doesn't cut. The sanitizer is on every path but value binding
+      is unproven. Phase 6 will write this to ``suppressions.jsonl``
+      with ``dropped: false`` so operators can see it.
+    * :data:`VERDICT_NO_SUPPRESS` — control-flow cut fails. At least
+      one path bypasses every catalog sanitizer.
+
+    The C/C++ call-graph case is handled by Phase 3's recognizer:
+    callgraph bindings carry empty input/output symbols, so
+    condition 2 always fails for them. When value context is
+    provided, callgraph findings auto-downgrade to
+    ``candidate_only`` (if control-flow cut held) or
+    ``no_suppress``. Without value context they reach the legacy
+    control-flow path and either suppress or no_suppress as before.
     """
     sources_set = set(sources)
     if not sources_set:
@@ -221,52 +402,99 @@ def evaluate_finding(
             candidate_callables=frozenset(candidate_callables),
         )
 
-    # The full set of catalog-matched sanitizer nodes is the cut
-    # candidate. A previous draft narrowed this with the sink's
-    # dominator set as an "optimisation", but that was incorrect: in
-    # the symmetric-sanitize case (both ``if`` and ``else`` branches
-    # call the same sanitizer), neither call dominates the sink
-    # individually, but their *union* cuts every path. The vertex-cut
-    # property is a property of the set, not of individual members,
-    # so narrowing to dominators silently loses correct suppressions.
-    #
-    # Without narrowing, the worst case is an irrelevant sanitizer
-    # node further down the graph wastefully included in the cut —
-    # which is harmless (removing more nodes can only make BFS
-    # reachability *fewer*, never more).
-    #
-    # Phase 3 changed the recognizer's return type from a set of
-    # nodes to a set of :class:`SanitizerBinding` records (one per
-    # matched call, with input/output symbols for Phase 4's
-    # value-binding gate). For control-flow-only suppression we
-    # project bindings back to their nodes via :func:`nodes_of`. The
-    # vertex-cut consumer was never node-aware in any subtler way,
-    # so this is a pure projection — the suppression decision is
-    # bit-identical to Phase 7's behaviour before the rev.
-    cut_candidates = nodes_of(matched_bindings)
-
-    cuts = sanitizer_cuts_source_to_sink(
-        graph, sources_set, sink, cut_candidates,
+    # Full-set control-flow cut over every matched binding's node.
+    # Computing this once lets us:
+    #   * decide the legacy path (no value context) directly, and
+    #   * judge candidate_only vs no_suppress in the value-bound
+    #     path (candidate_only requires the full-set cut to hold).
+    full_cf_nodes = nodes_of(matched_bindings)
+    full_cf_cut = sanitizer_cuts_source_to_sink(
+        graph, sources_set, sink, full_cf_nodes,
     )
-    if cuts:
+
+    # Legacy control-flow-only path. Suppression bit-identical to
+    # Phase 7 behaviour — Phase 5 wrapper code or older callers
+    # that haven't been taught about value binding land here.
+    if source_symbols is None or sink_arg is None:
+        if full_cf_cut:
+            return SanitizerCutResult(
+                suppress=True,
+                reason=(
+                    f"vertex-cut: sink unreachable from "
+                    f"{len(sources_set)} source(s) after removing "
+                    f"{len(full_cf_nodes)} sanitizer node(s)"
+                ),
+                cut_set=frozenset(full_cf_nodes),
+                candidate_callables=frozenset(candidate_callables),
+                verdict=VERDICT_SUPPRESS,
+            )
+        return SanitizerCutResult(
+            suppress=False,
+            reason=(
+                "vertex-cut: sink still reachable after sanitizer "
+                "removal — at least one path bypasses every catalog "
+                "sanitizer"
+            ),
+            cut_set=frozenset(),
+            candidate_callables=frozenset(candidate_callables),
+            verdict=VERDICT_NO_SUPPRESS,
+        )
+
+    # Value-bound path — Phase 4's four-condition gate. Compute
+    # reaching-defs + taint front, then per-binding gate, then
+    # value-bound vertex cut.
+    rd = reaching_defs(graph)
+    tainted_at = _propagate_taint(graph, rd, sources_set, source_symbols)
+    value_bound_bindings = frozenset(
+        b for b in matched_bindings
+        if _binding_satisfies_value_gate(b, rd, tainted_at, sink, sink_arg)
+    )
+    value_bound_nodes = {b.node for b in value_bound_bindings}
+    value_bound_cut = sanitizer_cuts_source_to_sink(
+        graph, sources_set, sink, value_bound_nodes,
+    )
+
+    if value_bound_cut:
         return SanitizerCutResult(
             suppress=True,
             reason=(
-                f"vertex-cut: sink unreachable from "
+                f"value-bound vertex-cut: sink unreachable from "
                 f"{len(sources_set)} source(s) after removing "
-                f"{len(cut_candidates)} sanitizer node(s)"
+                f"{len(value_bound_nodes)} value-bound sanitizer "
+                f"node(s) (out of {len(matched_bindings)} catalog "
+                f"matches)"
             ),
-            cut_set=frozenset(cut_candidates),
+            cut_set=frozenset(value_bound_nodes),
             candidate_callables=frozenset(candidate_callables),
+            verdict=VERDICT_SUPPRESS,
         )
+
+    if full_cf_cut:
+        return SanitizerCutResult(
+            suppress=False,
+            reason=(
+                f"candidate_only: control-flow cut holds over "
+                f"{len(full_cf_nodes)} catalog match(es) but value "
+                f"binding unproven — "
+                f"{len(matched_bindings) - len(value_bound_bindings)} "
+                "of these candidates lacked tainted input or "
+                "sink-arg reachability"
+            ),
+            cut_set=frozenset(),
+            candidate_callables=frozenset(candidate_callables),
+            verdict=VERDICT_CANDIDATE_ONLY,
+        )
+
     return SanitizerCutResult(
         suppress=False,
         reason=(
-            "vertex-cut: sink still reachable after sanitizer removal — "
-            "at least one path bypasses every catalog sanitizer"
+            "vertex-cut: sink still reachable after sanitizer "
+            "removal — at least one path bypasses every catalog "
+            "sanitizer"
         ),
         cut_set=frozenset(),
         candidate_callables=frozenset(candidate_callables),
+        verdict=VERDICT_NO_SUPPRESS,
     )
 
 
@@ -305,6 +533,9 @@ def record_sanitizer_cut_suppression(
 
 __all__ = [
     "VERDICT_SANITIZER_DOMINATED",
+    "VERDICT_SUPPRESS",
+    "VERDICT_CANDIDATE_ONLY",
+    "VERDICT_NO_SUPPRESS",
     "SanitizerCutResult",
     "sanitizer_cuts_source_to_sink",
     "evaluate_finding",
