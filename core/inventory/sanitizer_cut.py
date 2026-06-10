@@ -59,6 +59,7 @@ from typing import (
 
 from core.dataflow.sanitizer_catalog import (
     match_sanitizers_in_cfg,
+    nodes_of,
     sanitizer_callables_for_cwe,
 )
 
@@ -211,8 +212,8 @@ def evaluate_finding(
             candidate_callables=frozenset(),
         )
 
-    matched_in_graph = match_sanitizers_in_cfg(graph, cwe, language)
-    if not matched_in_graph:
+    matched_bindings = match_sanitizers_in_cfg(graph, cwe, language)
+    if not matched_bindings:
         return SanitizerCutResult(
             suppress=False,
             reason="no sanitizer calls found in this CFG",
@@ -233,7 +234,16 @@ def evaluate_finding(
     # node further down the graph wastefully included in the cut —
     # which is harmless (removing more nodes can only make BFS
     # reachability *fewer*, never more).
-    cut_candidates = matched_in_graph
+    #
+    # Phase 3 changed the recognizer's return type from a set of
+    # nodes to a set of :class:`SanitizerBinding` records (one per
+    # matched call, with input/output symbols for Phase 4's
+    # value-binding gate). For control-flow-only suppression we
+    # project bindings back to their nodes via :func:`nodes_of`. The
+    # vertex-cut consumer was never node-aware in any subtler way,
+    # so this is a pure projection — the suppression decision is
+    # bit-identical to Phase 7's behaviour before the rev.
+    cut_candidates = nodes_of(matched_bindings)
 
     cuts = sanitizer_cuts_source_to_sink(
         graph, sources_set, sink, cut_candidates,

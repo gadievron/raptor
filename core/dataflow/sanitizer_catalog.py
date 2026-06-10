@@ -26,7 +26,16 @@ risks the two going out of sync as new entries are reviewed in.
 """
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Set, TypeVar
+from dataclasses import dataclass
+from typing import (
+    Any,
+    FrozenSet,
+    Iterable,
+    List,
+    Mapping,
+    Set,
+    TypeVar,
+)
 
 from core.dataflow.known_safe_calls import (
     all_entries,
@@ -34,6 +43,55 @@ from core.dataflow.known_safe_calls import (
 
 
 N = TypeVar("N")
+
+
+# ---------------------------------------------------------------------------
+# Symbol-bound binding (Phase 3 of value-binding arc)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SanitizerBinding:
+    """One catalog-matched sanitizer call located in a CFG.
+
+    Where Phase 6 returned just the CFG node, Phase 3 returns the
+    full binding: the node, the matched dotted callable, the
+    *input symbols* the call's args read (bare-name surface from
+    Phase 1's :class:`CallSite.arg_names`), and the *output symbols*
+    the call's return flows into (Phase 1's
+    :class:`CallSite.assigned_names`).
+
+    Phase 4's four-condition gate reads these to decide whether the
+    sanitizer is on the source-to-sink *value* flow — not just the
+    *control* flow. The four conditions:
+
+      1. ``callable`` is in :func:`sanitizer_callables_for_cwe`
+      2. ``input_symbols ∩ symbols_tainted_at(node)`` is non-empty
+      3. ``output_symbols`` reaches the sink arg via reaching-defs
+      4. removing the value-bound subset of bindings cuts every
+         source → sink path
+
+    Bindings synthesised from C/C++ call-graph nodes (no value
+    layer) carry empty ``input_symbols`` / ``output_symbols`` —
+    condition 2 always fails, so Phase 4 downgrades to
+    ``candidate_only`` rather than suppressing.
+    """
+    node: Any
+    callable: str
+    input_symbols: FrozenSet[str]
+    output_symbols: FrozenSet[str]
+    lineno: int
+
+
+def nodes_of(bindings: Iterable[SanitizerBinding]) -> Set[Any]:
+    """Project a binding set down to its underlying CFG nodes.
+
+    Helper for Phase 7's vertex-cut consumer (which works on nodes,
+    not bindings). Two bindings on the same node — e.g. a call site
+    that matches two sink classes for the same CWE — collapse to
+    one entry.
+    """
+    return {b.node for b in bindings}
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +197,10 @@ def all_sanitizer_callables(language: str) -> Set[str]:
 
 
 def _node_calls(node: N) -> Iterable[str]:
-    """Extract the set of callable names from a CFG node.
+    """Extract the set of callable names from a CFG node — the
+    legacy projection used when the node has no Phase-1 ``call_sites``.
 
-    Duck-typed so the same recognizer serves both producers from
+    Duck-typed for both producers from
     :mod:`core.inventory.cfg_builder`:
 
     * :class:`PyCFGNode` — ``calls`` field, frozen set of statement-
@@ -159,31 +218,69 @@ def _node_calls(node: N) -> Iterable[str]:
 
 def match_sanitizers_in_cfg(
     graph, cwe: str, language: str,
-) -> Set:
-    """Return the set of CFG nodes that contain a sanitizer call
-    appropriate for ``cwe`` + ``language``.
+) -> FrozenSet[SanitizerBinding]:
+    """Return the set of :class:`SanitizerBinding` records that
+    correspond to catalog-matched sanitizer calls in ``graph`` for
+    ``cwe`` + ``language``.
 
     The graph must satisfy :class:`core.inventory.dominators.Graph`
-    (``nodes()`` method available). Returned nodes are exactly the
-    ones Phase 7 will remove from the graph in its vertex-cut
-    reachability test.
+    (``nodes()`` available). Each binding carries the node, the
+    matched callable, the call's input/output symbols (from Phase
+    1's :class:`CallSite`), and the call's line number. Multiple
+    matched calls on the same node produce multiple bindings; use
+    :func:`nodes_of` to collapse to the legacy node-set view.
 
-    Returns an empty set when the CWE has no catalog-recognized
+    Recognition fall-backs:
+
+    * **Phase-1 nodes** (``call_sites`` non-empty): one binding per
+      matched :class:`CallSite`, with full ``input_symbols`` and
+      ``output_symbols``.
+    * **Legacy ``PyCFGNode``** (only the old ``calls`` frozenset):
+      one binding per matched name; symbol sets empty. Phase 4 will
+      downgrade to ``candidate_only`` because the value-binding
+      gate's input/output conditions can't fire.
+    * **Call-graph node** (function-granularity, no call_sites and
+      no calls field): one binding for the node itself when its
+      ``name`` matches; symbol sets empty. Same Phase 4 downgrade.
+
+    Returns an empty frozenset when the CWE has no catalog-recognised
     sanitizers — Phase 7 must check this and decline to suppress
     rather than falsely conclude "every path is sanitized".
     """
     sanitizer_names = sanitizer_callables_for_cwe(cwe, language)
     if not sanitizer_names:
-        return set()
-    matched: Set = set()
+        return frozenset()
+    bindings: List[SanitizerBinding] = []
     for node in graph.nodes():
+        call_sites = getattr(node, "call_sites", ()) or ()
+        if call_sites:
+            for cs in call_sites:
+                if cs.name in sanitizer_names:
+                    bindings.append(SanitizerBinding(
+                        node=node,
+                        callable=cs.name,
+                        input_symbols=cs.arg_names,
+                        output_symbols=cs.assigned_names,
+                        lineno=cs.lineno,
+                    ))
+            continue
+        # Legacy / call-graph fallback: matched names with empty
+        # symbol layer. Phase 4 downgrades these to candidate_only.
         node_calls = set(_node_calls(node))
-        if node_calls & sanitizer_names:
-            matched.add(node)
-    return matched
+        for matched_name in node_calls & sanitizer_names:
+            bindings.append(SanitizerBinding(
+                node=node,
+                callable=matched_name,
+                input_symbols=frozenset(),
+                output_symbols=frozenset(),
+                lineno=getattr(node, "lineno", 0),
+            ))
+    return frozenset(bindings)
 
 
 __all__ = [
+    "SanitizerBinding",
+    "nodes_of",
     "sink_classes_for_cwe",
     "sanitizer_callables_for_cwe",
     "all_sanitizer_callables",

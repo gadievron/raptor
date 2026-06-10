@@ -161,7 +161,11 @@ def _cfg(src: str, func: str = "handle"):
 
 
 def test_recognizes_bare_call_sanitizer():
-    """``html.escape(x)`` should be recognized as a CWE-79 sanitizer."""
+    """``html.escape(x)`` should be recognized as a CWE-79 sanitizer.
+
+    Phase 3 rev: the recognizer returns SanitizerBinding records,
+    not nodes. The binding's ``callable`` field carries the matched
+    dotted name."""
     src = (
         "def handle(x):\n"
         "    y = html.escape(x)\n"
@@ -170,8 +174,8 @@ def test_recognizes_bare_call_sanitizer():
     cfg = _cfg(src)
     matched = match_sanitizers_in_cfg(cfg, "CWE-79", "python")
     assert len(matched) == 1
-    node = next(iter(matched))
-    assert "html.escape" in node.calls
+    binding = next(iter(matched))
+    assert binding.callable == "html.escape"
 
 
 def test_recognizes_dotted_attribute_call():
@@ -198,8 +202,11 @@ def test_recognizes_multiple_sanitizers_in_one_function():
     pathtrav_matches = match_sanitizers_in_cfg(cfg, "CWE-22", "python")
     assert len(xss_matches) == 1
     assert len(pathtrav_matches) == 1
-    # They're different nodes — sanitizers are per-CWE.
+    # Different bindings (different callables, different nodes) —
+    # sanitizers are per-CWE.
     assert xss_matches != pathtrav_matches
+    assert next(iter(xss_matches)).callable == "html.escape"
+    assert next(iter(pathtrav_matches)).callable == "werkzeug.security.safe_join"
 
 
 def test_wrong_cwe_does_not_match():
@@ -211,7 +218,7 @@ def test_wrong_cwe_does_not_match():
     )
     cfg = _cfg(src)
     matched = match_sanitizers_in_cfg(cfg, "CWE-89", "python")
-    assert matched == set()
+    assert matched == frozenset()
 
 
 def test_non_sanitizer_call_not_matched():
@@ -224,7 +231,7 @@ def test_non_sanitizer_call_not_matched():
     )
     cfg = _cfg(src)
     matched = match_sanitizers_in_cfg(cfg, "CWE-79", "python")
-    assert matched == set()
+    assert matched == frozenset()
 
 
 def test_no_calls_at_all_returns_empty():
@@ -234,7 +241,7 @@ def test_no_calls_at_all_returns_empty():
     )
     cfg = _cfg(src)
     matched = match_sanitizers_in_cfg(cfg, "CWE-79", "python")
-    assert matched == set()
+    assert matched == frozenset()
 
 
 def test_unknown_cwe_returns_empty_match_set():
@@ -249,7 +256,7 @@ def test_unknown_cwe_returns_empty_match_set():
     )
     cfg = _cfg(src)
     matched = match_sanitizers_in_cfg(cfg, "CWE-99999", "python")
-    assert matched == set()
+    assert matched == frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -284,10 +291,18 @@ def test_recognizer_works_on_callgraph(tmp_path):
     ):
         graph = build_cpp_callgraph([binary], entry="main")
     matched = match_sanitizers_in_cfg(graph, "CWE-79", "java")
-    matched_names = {n.name for n in matched}
-    assert matched_names == {
+    # Call-graph nodes have no ``call_sites`` — the recognizer falls
+    # back to ``node.name`` as both the callable and the matched
+    # identifier. Binding's input/output symbols are empty (no value
+    # layer at function granularity); Phase 4 will downgrade to
+    # ``candidate_only``.
+    matched_callables = {b.callable for b in matched}
+    assert matched_callables == {
         "org.apache.commons.lang3.StringEscapeUtils.escapeHtml4"
     }
+    for b in matched:
+        assert b.input_symbols == frozenset()
+        assert b.output_symbols == frozenset()
 
 
 def test_recognizer_ignores_wrong_language_on_callgraph(tmp_path):
@@ -301,4 +316,4 @@ def test_recognizer_ignores_wrong_language_on_callgraph(tmp_path):
         graph = build_cpp_callgraph([binary], entry="main")
     # Querying with language="java" should not match the python entry.
     matched = match_sanitizers_in_cfg(graph, "CWE-79", "java")
-    assert matched == set()
+    assert matched == frozenset()

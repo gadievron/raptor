@@ -48,7 +48,7 @@ Phase 1 don't drift before Phase 16 lands.
 |------:|---------|-------|--------|
 | 1 | A (Python intra-proc) | Symbol-aware CFG nodes (`CallSite`, `defs`, `uses`, `call_sites`) | **done** (29 tests pass, ruff clean) |
 | 2 | A | Intra-procedural reaching-definitions | **done** (21 tests pass, ruff clean) |
-| 3 | A | Symbol-bound sanitizer recognition (`SanitizerBinding`) | not started |
+| 3 | A | Symbol-bound sanitizer recognition (`SanitizerBinding`) | **done** (16 new tests + 24 existing updated; ruff clean) |
 | 4 | A | Value-bound `evaluate_finding` + tri-state verdict | not started |
 | 5 | A | Finding-normalisation adapter (SARIF / Semgrep / CodeQL) | not started |
 | 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | not started |
