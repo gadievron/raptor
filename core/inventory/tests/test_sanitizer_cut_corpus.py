@@ -55,16 +55,33 @@ _CORPUS_DIR = Path(__file__).parent / "fixtures" / "sanitizer_cut_corpus"
 # header lands there after the docstring + blank line + decorator
 # space. ``source_line == def-line`` triggers Phase 5's
 # function-entry source handling (cfg.entry_node + cfg.params).
+# (filename, cwe, source_line, sink_line, intraproc_verdict, sink_arg,
+#  interproc_verdict)
+#
+# ``intraproc_verdict`` is the verdict with the intra-procedural gate
+# alone (no extra_bindings). ``interproc_verdict`` is the verdict when
+# Phase 14's synthetic inter-procedural bindings are passed through.
+# They differ only for ``sanitizer_in_helper.py`` — the design's
+# promise that the inter-proc phase flips exactly that one case from
+# no_suppress to suppress "without any of the others changing."
+#
+# Source line == handle's def-line → Phase 5 uses params as source.
 _CORPUS_CASES = [
-    # (filename, cwe, source_line, sink_line, expected_verdict, sink_arg)
-    # Source line == handle's def-line → Phase 5 uses params as source.
-    ("straight_line_safe.py", "CWE-79", 11, 13, VERDICT_SUPPRESS, "y"),
-    ("symmetric_sanitize.py", "CWE-79", 16, 21, VERDICT_SUPPRESS, "safe"),
-    ("wrong_variable.py", "CWE-79", 12, 14, VERDICT_CANDIDATE_ONLY, "user"),
-    ("chained_sanitizer.py", "CWE-79", 17, 19, VERDICT_CANDIDATE_ONLY, "y"),
-    ("sanitization_overwritten.py", "CWE-79", 15, 18, VERDICT_CANDIDATE_ONLY, "y"),
-    ("bypass.py", "CWE-79", 12, 17, VERDICT_NO_SUPPRESS, "safe"),
-    ("sanitizer_in_helper.py", "CWE-79", 21, 23, VERDICT_NO_SUPPRESS, "y"),
+    ("straight_line_safe.py", "CWE-79", 11, 13, VERDICT_SUPPRESS, "y",
+     VERDICT_SUPPRESS),
+    ("symmetric_sanitize.py", "CWE-79", 16, 21, VERDICT_SUPPRESS, "safe",
+     VERDICT_SUPPRESS),
+    ("wrong_variable.py", "CWE-79", 12, 14, VERDICT_CANDIDATE_ONLY, "user",
+     VERDICT_CANDIDATE_ONLY),
+    ("chained_sanitizer.py", "CWE-79", 17, 19, VERDICT_CANDIDATE_ONLY, "y",
+     VERDICT_CANDIDATE_ONLY),
+    ("sanitization_overwritten.py", "CWE-79", 15, 18, VERDICT_CANDIDATE_ONLY,
+     "y", VERDICT_CANDIDATE_ONLY),
+    ("bypass.py", "CWE-79", 12, 17, VERDICT_NO_SUPPRESS, "safe",
+     VERDICT_NO_SUPPRESS),
+    # Phase 14 flips this one — intra-proc can't see into _sanitize.
+    ("sanitizer_in_helper.py", "CWE-79", 21, 23, VERDICT_NO_SUPPRESS, "y",
+     VERDICT_SUPPRESS),
 ]
 
 
@@ -79,13 +96,22 @@ def _native_finding(fixture: str, cwe: str, source_line: int, sink_line: int):
 
 
 @pytest.mark.parametrize(
-    "fixture,cwe,source_line,sink_line,expected_verdict,expected_sink_arg",
+    "fixture,cwe,source_line,sink_line,expected_verdict,expected_sink_arg,"
+    "_interproc",
     _CORPUS_CASES,
 )
 def test_corpus_fixture_verdict(
     fixture, cwe, source_line, sink_line, expected_verdict, expected_sink_arg,
+    _interproc,
 ):
-    """Resolve the fixture, run the gate, assert the verdict.
+    """Resolve the fixture, run the INTRA-procedural gate, assert the
+    verdict.
+
+    No ``extra_bindings`` are passed — this is the intra-proc-only
+    baseline. ``sanitizer_in_helper.py`` is ``no_suppress`` here
+    because the gate can't see into the ``_sanitize`` callee. The
+    companion :func:`test_corpus_fixture_verdict_interproc` exercises
+    the Phase 14 path.
 
     The expected_sink_arg is also asserted because Phase 5's sink
     resolution is part of the load-bearing path — a regression
@@ -112,35 +138,82 @@ def test_corpus_fixture_verdict(
     )
 
 
+@pytest.mark.parametrize(
+    "fixture,cwe,source_line,sink_line,_intraproc,expected_sink_arg,"
+    "expected_verdict",
+    _CORPUS_CASES,
+)
+def test_corpus_fixture_verdict_interproc(
+    fixture, cwe, source_line, sink_line, _intraproc, expected_sink_arg,
+    expected_verdict,
+):
+    """Phase 14 — resolve the fixture and run the gate WITH the
+    resolver's inter-procedural synthetic bindings.
+
+    Only ``sanitizer_in_helper.py`` changes verdict relative to the
+    intra-procedural baseline (no_suppress → suppress): its
+    ``_sanitize`` helper cleanly escapes its argument, so the
+    synthetic binding lets the value-bound cut hold. Every other
+    fixture is unchanged — they call ``html.escape`` directly or a
+    non-sanitizing callee, so no synthetic binding is produced."""
+    finding = _native_finding(fixture, cwe, source_line, sink_line)
+    resolved = resolve_finding(finding)
+    assert isinstance(resolved, ResolvedFinding), (
+        f"resolver failed on {fixture}: {resolved}"
+    )
+    result = evaluate_finding(
+        resolved.cfg, [resolved.source_node], resolved.sink_node,
+        cwe=resolved.cwe, language=resolved.language,
+        source_symbols=resolved.source_symbols,
+        sink_arg=resolved.sink_arg,
+        extra_bindings=resolved.inter_proc_bindings,
+    )
+    assert result.verdict == expected_verdict, (
+        f"{fixture}: interproc verdict={result.verdict!r}, "
+        f"expected {expected_verdict!r}. Reason: {result.reason}"
+    )
+
+
 def test_corpus_ablation_summary(capsys):
-    """Print a per-fixture verdict table — the design's 'ablation
-    report' summary in CI-readable form.
+    """Print a per-fixture intra-proc vs inter-proc verdict table —
+    the design's 'ablation report' in CI-readable form.
 
     The numbers in ``CORPUS.md`` are kept in sync with this test
-    output. If a phase changes a verdict, both move together."""
+    output. If a phase changes a verdict, both move together. The
+    only row that differs between the two columns is
+    ``sanitizer_in_helper.py``."""
     rows = []
-    for fixture, cwe, src_line, sink_line, expected, _ in _CORPUS_CASES:
+    mismatches = []
+    for (fixture, cwe, src_line, sink_line, intra_exp, _arg,
+            inter_exp) in _CORPUS_CASES:
         finding = _native_finding(fixture, cwe, src_line, sink_line)
         resolved = resolve_finding(finding)
         if not isinstance(resolved, ResolvedFinding):
-            rows.append((fixture, "(unresolved)", expected, "fail"))
+            rows.append((fixture, "(unresolved)", "(unresolved)", "fail"))
+            mismatches.append(fixture)
             continue
-        result = evaluate_finding(
+        intra = evaluate_finding(
             resolved.cfg, [resolved.source_node], resolved.sink_node,
             cwe=resolved.cwe, language=resolved.language,
             source_symbols=resolved.source_symbols,
             sink_arg=resolved.sink_arg,
         )
-        rows.append((fixture, result.verdict, expected,
-                     "ok" if result.verdict == expected else "MISMATCH"))
+        inter = evaluate_finding(
+            resolved.cfg, [resolved.source_node], resolved.sink_node,
+            cwe=resolved.cwe, language=resolved.language,
+            source_symbols=resolved.source_symbols,
+            sink_arg=resolved.sink_arg,
+            extra_bindings=resolved.inter_proc_bindings,
+        )
+        ok = intra.verdict == intra_exp and inter.verdict == inter_exp
+        if not ok:
+            mismatches.append(fixture)
+        rows.append((fixture, intra.verdict, inter.verdict,
+                     "ok" if ok else "MISMATCH"))
     print()
-    print(f"{'Fixture':<32} {'Got':<18} {'Expected':<18} {'Status':<8}")
-    for fixture, got, expected, status in rows:
-        print(f"{fixture:<32} {got:<18} {expected:<18} {status:<8}")
-    # The test passes iff every fixture matched. Use the same
-    # per-fixture parametrised tests above for granular failure
-    # reporting; this one's job is the table itself.
-    mismatches = [r for r in rows if r[3] != "ok"]
+    print(f"{'Fixture':<32} {'Intra-proc':<18} {'Inter-proc':<18} {'Status':<8}")
+    for fixture, intra, inter, status in rows:
+        print(f"{fixture:<32} {intra:<18} {inter:<18} {status:<8}")
     assert not mismatches, f"{len(mismatches)} fixture(s) mismatched"
 
 

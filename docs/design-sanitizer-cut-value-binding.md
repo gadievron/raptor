@@ -58,7 +58,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
 | 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/python_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
 | 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/python_taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
-| 14 | C | Inter-procedural `evaluate_finding` | not started |
+| 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/python_interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | not started |
 | 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | not started |
 
@@ -611,24 +611,62 @@ coverage (all in-module fns, no `<module>` entry, lambda → unknown).
 
 **Gates:** Phase 14.
 
-### Phase 14 — Inter-procedural `evaluate_finding`
+### Phase 14 — Inter-procedural `evaluate_finding`  *(done)*
 
 **Goal:** a sanitizer in a callee counts toward the gate.
 
-- `evaluate_finding` consults summaries: when the source-to-sink
-  path crosses a call edge, the callee's
-  `taint_out_call_args` (does the cleaned value flow into a
-  parent-frame sink arg?) feeds gate condition 3.
-- Cross-module resolution best-effort via
-  `importlib.util.find_spec`; non-resolvable imports →
-  `candidate_only`.
-- Tests: sanitizer in helper called from the analysed function,
-  sanitizer-only-on-some-branches-of-helper, bypass via callee
-  that doesn't sanitize, recursive sanitization, cross-module
-  call to a known-sanitizer callee.
+**Shipped — synthetic-binding approach.** Rather than teach the
+gate to walk call edges, Phase 14 synthesises a `SanitizerBinding`
+at each in-module helper call whose Phase 13 summary proves the
+helper cleanly sanitizes a parameter for the CWE. The synthetic
+binding carries real `input_symbols` (the call's args at the
+sanitized parameter positions) and `output_symbols` (the names the
+return flows into), so the existing four-condition gate handles it
+exactly like a direct sanitizer call — no gate-logic changes, and
+condition 3 still enforces the wrong-variable check (a helper that
+sanitizes `other` doesn't suppress a finding whose sink reads
+`user`).
 
-**Ships:** inter-proc gate + tests. Corpus run shows additional
-TPs caught that intra-proc-only misses.
+* `core/inventory/python_interproc.py` —
+  `synthetic_sanitizer_bindings(cfg, fn_ast, summaries, cwe,
+  language)`. A binding is emitted for helper-call parameter `i`
+  only if: the callee has a known + converged summary; param `i`
+  taints the return; param `i` NEVER reaches the return directly
+  (no passthrough path); and EVERY callable in param `i`'s effect
+  chain is a CWE catalog sanitizer. These rules make
+  sanitizer-on-some-branches and bypass-via-non-sanitizing-callee
+  produce no binding. Positional arg→param mapping is recovered
+  from the AST (the CFG's frozenset `arg_names` can't order args),
+  so a helper that sanitizes param 1 binds the *second* call arg.
+* `evaluate_finding` gains `extra_bindings` — unioned into the
+  catalog-matched set before the gate. Empty → intra-procedural
+  behaviour, bit-identical to Phase 11.
+* `finding_resolver` computes the bindings for Python findings and
+  stores them on `ResolvedFinding.inter_proc_bindings`. C/C++
+  findings carry an empty set (inter-procedural C/C++ is a future
+  arc).
+
+**Deferred (documented):** cross-module helper resolution
+(`importlib.util.find_spec`) — a callee outside the module call
+graph has no summary, so no synthetic binding; the finding stays
+`no_suppress`/`candidate_only` conservatively. Direct cross-module
+calls to a *catalog* sanitizer name already work through the
+intra-procedural `match_sanitizers_in_cfg` path. `self.method`
+callee resolution is best-effort (only when the dotted call name
+matches a summary key).
+
+**Tests:** `core/inventory/tests/test_python_interproc.py` — 16
+tests: binding generation (helper sanitizer → binding; passthrough
+→ none; some-branches → none; non-sanitizer-in-chain → none; wrong
+CWE → none; multi-arg positional mapping; transitive sanitization;
+dynamic helper → none) and end-to-end verdicts (suppress /
+no_suppress / transitive-suppress / wrong-variable-via-helper not
+suppressed) and resolver integration (bindings populated for
+Python, empty for direct-sanitizer Python, empty for C/C++). The
+Phase 7 corpus gains `test_corpus_fixture_verdict_interproc` and an
+intra-vs-inter A/B `test_corpus_ablation_summary` —
+`sanitizer_in_helper.py` flips no_suppress→suppress, every other
+fixture unchanged.
 
 **Gates:** Phase 15.
 

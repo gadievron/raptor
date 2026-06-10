@@ -88,6 +88,14 @@ class ResolvedFinding:
     branch). Both satisfy :class:`core.inventory.dominators.Graph`
     so evaluate_finding consumes either with no language branch.
     Source / sink node types vary in parallel.
+
+    ``inter_proc_bindings`` (Phase 14) are inter-procedural synthetic
+    sanitizer bindings computed for Python findings whose enclosing
+    function calls an in-module helper that cleanly sanitizes. Pass
+    them as ``evaluate_finding(..., extra_bindings=rf.inter_proc_bindings)``
+    so a sanitizer inside a callee counts toward the cut. Empty for
+    C / C++ (inter-procedural C/C++ is a future arc) and for Python
+    functions with no qualifying helper calls.
     """
     file: str
     enclosing_function: str
@@ -100,6 +108,7 @@ class ResolvedFinding:
     cfg: Union[PythonCFG, CPPCFG]
     source_node: Union[PyCFGNode, CPPCFGNode]
     sink_node: Union[PyCFGNode, CPPCFGNode]
+    inter_proc_bindings: FrozenSet = frozenset()
 
 
 @dataclass(frozen=True)
@@ -413,6 +422,10 @@ def _resolve_from_parsed_python(parsed: _ParsedFinding) -> Resolution:
             ),
         )
 
+    inter_proc = _inter_proc_bindings_python(
+        source_text, fn, cfg, parsed.cwe,
+    )
+
     return ResolvedFinding(
         file=parsed.file,
         enclosing_function=fn.name,
@@ -425,6 +438,45 @@ def _resolve_from_parsed_python(parsed: _ParsedFinding) -> Resolution:
         cfg=cfg,
         source_node=source_node,
         sink_node=sink_node,
+        inter_proc_bindings=inter_proc,
+    )
+
+
+def _inter_proc_bindings_python(
+    source_text: str,
+    fn: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+    cfg: PythonCFG,
+    cwe: str,
+) -> FrozenSet:
+    """Phase 14 — compute inter-procedural synthetic sanitizer
+    bindings for a Python finding's enclosing function.
+
+    Builds the module-local call graph + taint summaries from the
+    same source text, then asks
+    :func:`core.inventory.python_interproc.synthetic_sanitizer_bindings`
+    for bindings at call sites where an in-module helper cleanly
+    sanitizes. Returns an empty frozenset on any failure (best-effort
+    — the intra-procedural verdict still stands). Imports are local
+    so the Phase 12-14 modules aren't loaded for callers that never
+    resolve a Python finding."""
+    try:
+        from core.inventory.python_callgraph import (
+            build_python_module_callgraph,
+        )
+        from core.inventory.python_interproc import (
+            synthetic_sanitizer_bindings,
+        )
+        from core.inventory.python_taint_summaries import (
+            build_taint_summaries,
+        )
+    except ImportError:                                     # pragma: no cover
+        return frozenset()
+    cg = build_python_module_callgraph(source_text)
+    if cg is None:
+        return frozenset()
+    summaries = build_taint_summaries(cg, source_text)
+    return synthetic_sanitizer_bindings(
+        cfg, fn, summaries, cwe, "python",
     )
 
 

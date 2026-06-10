@@ -427,6 +427,7 @@ def evaluate_finding(
     language: str,
     source_symbols: Optional[Iterable[str]] = None,
     sink_arg: Optional[str] = None,
+    extra_bindings: Optional[Iterable[SanitizerBinding]] = None,
 ) -> SanitizerCutResult:
     """Phase 4 suppression decision for one finding.
 
@@ -434,6 +435,16 @@ def evaluate_finding(
     and ``sink_arg`` → control-flow-only vertex-cut. Verdict is
     :data:`VERDICT_SUPPRESS` or :data:`VERDICT_NO_SUPPRESS`; no
     ``candidate_only`` is emitted because the gate isn't run.
+
+    ``extra_bindings`` (Phase 14) are inter-procedural synthetic
+    sanitizer bindings — typically from
+    :func:`core.inventory.python_interproc.synthetic_sanitizer_bindings`.
+    They are unioned into the catalog-matched bindings before the
+    gate runs, so a sanitizer inside an in-module helper counts
+    toward the cut. Each synthetic binding carries real
+    ``input_symbols`` / ``output_symbols`` so it participates in the
+    value-bound gate exactly like a direct sanitizer call. Omitted /
+    empty → intra-procedural behaviour, bit-identical to Phase 11.
 
     With value context provided, the four-condition gate:
 
@@ -494,6 +505,12 @@ def evaluate_finding(
         )
 
     matched_bindings = match_sanitizers_in_cfg(graph, cwe, language)
+    # Phase 14 — fold in inter-procedural synthetic bindings. A
+    # finding whose enclosing function has NO direct catalog
+    # sanitizer but DOES call an in-module helper that sanitizes
+    # reaches the gate only because of these.
+    if extra_bindings:
+        matched_bindings = matched_bindings | frozenset(extra_bindings)
     if not matched_bindings:
         return SanitizerCutResult(
             suppress=False,

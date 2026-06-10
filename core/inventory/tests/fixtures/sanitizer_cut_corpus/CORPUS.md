@@ -18,7 +18,7 @@ shapes the design doc enumerates.
 | `chained_sanitizer.py` | `candidate_only` | falsely suppresses | Phase 3's empty output_symbols on the nested call |
 | `sanitization_overwritten.py` | `candidate_only` | undefined (no AST handling) | Phase 2's reaching-defs catch the rebind |
 | `bypass.py` | `no_suppress` | undefined | Real bug — neither suppresses |
-| `sanitizer_in_helper.py` | `no_suppress` | undefined | Phase 14 (sub-arc C) will rescue this case |
+| `sanitizer_in_helper.py` | `no_suppress` (intra) → `suppress` (inter, Phase 14) | undefined | Phase 14's inter-procedural synthetic binding rescues this |
 
 ## Ablation
 
@@ -34,6 +34,11 @@ expected delta:
   no_suppress). 0 false suppressions on this corpus; 2 confirmed
   drops; 5 sent to the LLM for triage.
 
-When a future inter-procedural phase (Phase 14) lands,
-`sanitizer_in_helper.py` should flip from no_suppress to suppress
-without any of the others changing.
+Phase 14 (inter-procedural) landed: with the resolver's synthetic
+sanitizer bindings passed as `evaluate_finding(...,
+extra_bindings=...)`, `sanitizer_in_helper.py` flips from
+no_suppress to suppress — and none of the others change, because
+they call `html.escape` directly or a non-sanitizing callee and
+so produce no synthetic binding. The
+`test_corpus_fixture_verdict_interproc` test and the
+`test_corpus_ablation_summary` A/B table pin this.
