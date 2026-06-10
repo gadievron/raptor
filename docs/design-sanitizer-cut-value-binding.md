@@ -60,7 +60,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/python_taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
 | 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/python_interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | **done** (33 tests; `core/dataflow/sanitizer_cut_parity.py` — ParityRecord, shadow-log via `RAPTOR_SANITIZER_CUT_PARITY_LOG`, Wilson-CI aggregation, removal-safe gate = rate-criterion AND zero per-finding regression; HORIZON.md + committed first-report.md show value-bound and lexical are complementary so the gate is correctly NOT-yet-cleared; ruff clean) |
-| 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | not started |
+| 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/sanitizer-cut-parity/CLOSURE.md`) |
 
 Sub-arcs A → B → D and A → C → D are sequential. B and C are
 independent of each other; both must land before D starts (D
@@ -738,19 +738,55 @@ complementary-coverage headline, committed-report-in-sync guard).
 
 **Gates:** Phase 16.
 
-### Phase 16 — Lexical fallback removal
+### Phase 16 — Lexical fallback removal  *(done — honest closure)*
 
 **Goal:** close the arc.
 
-- Delete the lexical bodies at `smt_barrier.py:746` and `:940`.
-  All callers go through `evaluate_finding`; `candidate_only`
-  becomes the "we don't know" verdict instead of falling back to
-  lexical.
-- Existing lexical tests rewritten as regression backstops for
-  the value-bound path.
-- One-paragraph design-doc update marking the arc closed.
+**Outcome: the lexical bodies were RETAINED, not deleted — and that
+is the correct result.** Phase 15's parity gate is the explicit
+precondition ("Phase 16 does not ship until parity holds twice in a
+row"), and the first parity report shows it is *not cleared*: the
+lexical check and the value-bound gate are complementary, not
+equivalent. Lexical fires on validator-guard / substitution shapes
+the value-bound gate doesn't cover (`lexical_only > 0`), so deleting
+it would silently drop those suppressions — the exact "remove the
+fallback on vibes" the parity phase exists to prevent.
 
-**Ships:** lexical removal + test rewrite + closure note.
+**Shipped:**
+
+* `RAPTOR_SANITIZER_CUT_NO_LEXICAL` — disables the lexical fallback;
+  `validator_dominates_sink` / `substitution_dominates_sink` then
+  treat any verdict the value-bound gate can't make (candidate_only,
+  resolver failure, uncovered shape) as "we don't know → don't
+  suppress." This is the Phase 16 end-state behaviour the spec
+  described, made reachable as a flag-flip instead of a code
+  deletion. Lexical removal becomes a one-line default change once
+  justified, not a refactor.
+* `smt_barrier.lexical_fallback_status()` — introspection surface
+  reporting whether the fallback is active and why it is retained.
+* Closure tripwire test
+  (`test_lexical_removal_switch.py::test_parity_gate_not_cleared_lexical_must_stay`)
+  asserting the parity baseline gate is NOT cleared. While that
+  holds, the lexical fallback must stay; when it flips, that is the
+  signal that deletion is finally safe.
+* The existing lexical tests are kept as-is — they remain the
+  regression backstops for the retained fallback (no rewrite needed
+  since the bodies stay).
+* `docs/sanitizer-cut-parity/CLOSURE.md` — the closure record:
+  soundness goal achieved, full lexical retirement deferred and
+  gated.
+
+**Remaining for full lexical retirement** (tracked in
+`HORIZON.md` / `CLOSURE.md`): extend the value-bound gate to cover
+validator-guard / substitution shapes (or decide those kinds stay
+lexical permanently); collect two consecutive clearing windows from
+real `/agentic` runs; flip `RAPTOR_SANITIZER_CUT_NO_LEXICAL` to the
+default and delete the `_lexical_*_dominates` bodies.
+
+**Arc status:** **closed for its soundness goal** (the wrong-variable
+hole is closed across Python intra+inter and C/C++, behind the flag,
+with regression witnesses) and **open for full lexical retirement**
+(gated on the live parity tripwire).
 
 **Gates:** nothing — closes the arc.
 

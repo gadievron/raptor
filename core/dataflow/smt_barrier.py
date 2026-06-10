@@ -766,6 +766,54 @@ _SINK_CLASS_TO_CWE = {
 # side acted on when the flag is on").
 _PARITY_LOG_ENV = "RAPTOR_SANITIZER_CUT_PARITY_LOG"
 
+# Phase 16 — lexical-fallback removal switch. When this env var is
+# set, validator_dominates_sink / substitution_dominates_sink do NOT
+# consult the lexical AST heuristic: the value-bound gate's decision
+# is final, and a verdict the gate can't make (candidate_only,
+# resolver failure, a shape the gate doesn't cover) becomes the
+# "we don't know — don't suppress" answer (the finding survives to
+# the LLM) instead of falling back to lexical.
+#
+# This is the END-STATE behaviour of the arc, made reachable as a
+# flag-flip rather than a code deletion. The lexical bodies are
+# RETAINED (the default, flag-off path) because Phase 15's parity
+# gate is not yet cleared: the value-bound gate does not cover the
+# validator-guard / substitution shapes the lexical check handles,
+# so deleting it would silently drop those suppressions. See
+# docs/sanitizer-cut-parity/HORIZON.md. Once the parity gate clears
+# twice on real /agentic data, this flag becomes the default and
+# the lexical bodies can be deleted outright.
+_NO_LEXICAL_ENV = "RAPTOR_SANITIZER_CUT_NO_LEXICAL"
+
+
+def _no_lexical_fallback() -> bool:
+    """True when the lexical fallback is disabled (Phase 16 end-state
+    behaviour). See :data:`_NO_LEXICAL_ENV`."""
+    return _os.environ.get(_NO_LEXICAL_ENV, "").strip().lower() in (
+        "1", "true", "on", "yes",
+    )
+
+
+def lexical_fallback_status() -> dict:
+    """Introspection surface for the arc's closure state. Returns a
+    dict describing whether the lexical fallback is currently active
+    and why it is retained. Consumed by the closure test and useful
+    for operators auditing a run's suppression behaviour."""
+    return {
+        "lexical_fallback_disabled": _no_lexical_fallback(),
+        "retained": not _no_lexical_fallback(),
+        "retention_reason": (
+            "Phase 15 parity gate not cleared — the value-bound gate "
+            "does not cover validator-guard / substitution shapes the "
+            "lexical check handles. Set "
+            f"{_NO_LEXICAL_ENV}=1 to disable the fallback (value-bound "
+            "only); delete the lexical bodies once the parity gate "
+            "clears twice on real data."
+        ),
+        "no_lexical_env": _NO_LEXICAL_ENV,
+        "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
+    }
+
 
 def _maybe_record_parity(
     *,
@@ -950,6 +998,11 @@ def validator_dominates_sink(
     )
     if vb is not None:
         return vb
+    # Phase 16 — with the lexical fallback disabled, a verdict the
+    # value-bound gate can't make becomes "we don't know → don't
+    # suppress" rather than deferring to the lexical heuristic.
+    if _no_lexical_fallback():
+        return False
     return lexical
 
 
@@ -1183,6 +1236,8 @@ def substitution_dominates_sink(
     )
     if vb is not None:
         return vb
+    if _no_lexical_fallback():
+        return False
     return lexical
 
 
