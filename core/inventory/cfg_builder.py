@@ -40,6 +40,7 @@ from typing import (
     Iterable,
     List,
     Optional,
+    Set,
     Tuple,
 )
 
@@ -58,6 +59,41 @@ EXIT_LINENO = -2
 
 
 @dataclass(frozen=True)
+class CallSite:
+    """One call expression nested in a CFG node's statement-level
+    expressions — phase 1 of the value-binding arc.
+
+    ``name`` is the resolved dotted callable name (``html.escape``,
+    ``werkzeug.security.safe_join``). Same resolver as the legacy
+    ``calls`` frozenset on :class:`PyCFGNode`.
+
+    ``arg_names`` is the frozenset of *bare-name* argument
+    identifiers passed positionally or by keyword. Conservatively
+    underestimates: nested calls, subscripts, binops, lambdas, and
+    constants contribute nothing. Attributes contribute their base
+    name (``foo(obj.attr)`` → ``{"obj"}``). The undercount is
+    deliberate — :func:`evaluate_finding` gate condition 2 fires when
+    ``input_symbols ∩ tainted`` is non-empty, so over-counting would
+    over-suppress.
+
+    ``assigned_names`` is the frozenset of LHS names this call's
+    return value flows to. Non-empty only when the call IS the
+    direct RHS of an ``Assign`` / ``AugAssign`` / ``AnnAssign``;
+    nested calls (``y = wrap(f(x))`` — the inner ``f(x)``) have
+    empty ``assigned_names`` because their return value flows
+    into ``wrap``, not into ``y``.
+
+    ``lineno`` is the source line of the call expression itself,
+    which can differ from the enclosing statement's lineno when a
+    multi-line expression wraps.
+    """
+    name: str
+    arg_names: FrozenSet[str]
+    assigned_names: FrozenSet[str]
+    lineno: int
+
+
+@dataclass(frozen=True)
 class PyCFGNode:
     """One node of a Python control-flow graph.
 
@@ -66,16 +102,41 @@ class PyCFGNode:
     ``re.sub(...)`` we record ``re.sub``; for bare calls like
     ``escape(...)`` we record ``escape``). Phase 6 reads this for
     sanitizer matching.
+
+    ``defs`` is the frozenset of names this statement assigns
+    (``Name`` in ``Store`` context anywhere in the statement-level
+    expressions, plus the ``LHS`` of augmented and annotated
+    assignments). Comprehension-local targets are deliberately
+    excluded — they don't leak to the enclosing function's symbol
+    table.
+
+    ``uses`` is the frozenset of names this statement reads
+    (``Name`` in ``Load`` context). Comprehension-local names are
+    likewise excluded.
+
+    ``call_sites`` is the per-statement record of every nested
+    :class:`CallSite`. Ordered by source position so chained calls
+    are observable: ``y = wrap(html.escape(x))`` produces
+    ``call_sites == (html.escape@arg_names={x}, wrap@arg_names={})``
+    with ``wrap`` carrying ``assigned_names={y}``.
+
+    The legacy ``calls`` field is preserved for back-compat with
+    phase 5–7 callers; ``{cs.name for cs in call_sites}`` will agree
+    with it.
     """
     kind: str          # "entry" | "exit" | "stmt"
     lineno: int
     label: str         # short rendering, e.g. "If (x > 0)"
     calls: FrozenSet[str] = frozenset()
+    defs: FrozenSet[str] = frozenset()
+    uses: FrozenSet[str] = frozenset()
+    call_sites: Tuple[CallSite, ...] = ()
 
     def __repr__(self) -> str:                              # pragma: no cover
         return (
             f"PyCFGNode({self.kind}, L{self.lineno}, "
-            f"{self.label!r}, calls={set(self.calls)!r})"
+            f"{self.label!r}, calls={set(self.calls)!r}, "
+            f"defs={set(self.defs)!r}, uses={set(self.uses)!r})"
         )
 
 
@@ -127,50 +188,37 @@ class PythonCFG:
         return self._adjacency.get(node, ())
 
 
-def _extract_calls(stmt: ast.stmt) -> FrozenSet[str]:
-    """Collect callable names referenced *at the statement level*.
+_COMPREHENSION_TYPES = (
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+)
 
-    For compound statements (``If``, ``While``, ``For``, ``Try``,
-    ``With``) only the controlling expressions are walked — *not*
-    the nested body. This matches the CFG node's semantics: each
-    body statement becomes its own CFG node and carries its own
-    calls, so attributing the body's calls to the compound header
-    would falsely double-count them and corrupt Phase 6 sanitizer
-    matching.
 
-    Handles bare calls (``foo()``), attribute calls (``re.sub(...)``),
-    and dotted multi-level access (``self.helper.sanitize(...)``).
-    Star expressions and dynamic patterns (``getattr(...)``) are
-    out of scope — the sanitizer catalogue keys on concrete names.
+def _statement_expr_roots(stmt: ast.stmt) -> List[ast.AST]:
+    """Per-stmt-kind list of expressions that belong to *this* CFG
+    node, excluding nested compound bodies (which become their own
+    nodes).
+
+    Centralised so :func:`_extract_statement_payload` and any future
+    symbol-aware extractor stay in lockstep on what "statement-level"
+    means.
     """
-    expr_roots: List[ast.AST] = []
     if isinstance(stmt, ast.If):
-        expr_roots.append(stmt.test)
-    elif isinstance(stmt, ast.While):
-        expr_roots.append(stmt.test)
-    elif isinstance(stmt, ast.For):
-        expr_roots.extend([stmt.target, stmt.iter])
-    elif isinstance(stmt, ast.Try):
-        return frozenset()  # try has no statement-level expressions
-    elif isinstance(stmt, ast.With):
+        return [stmt.test]
+    if isinstance(stmt, ast.While):
+        return [stmt.test]
+    if isinstance(stmt, ast.For):
+        return [stmt.target, stmt.iter]
+    if isinstance(stmt, ast.Try):
+        return []  # try has no statement-level expressions
+    if isinstance(stmt, ast.With):
+        roots: List[ast.AST] = []
         for item in stmt.items:
-            expr_roots.append(item.context_expr)
+            roots.append(item.context_expr)
             if item.optional_vars is not None:
-                expr_roots.append(item.optional_vars)
-    else:
-        # Straight-line statement (Assign, Expr, Return, Raise, etc.).
-        # The whole stmt subtree is statement-level — there is no
-        # nested body to exclude.
-        expr_roots.append(stmt)
-
-    calls: List[str] = []
-    for root in expr_roots:
-        for child in ast.walk(root):
-            if isinstance(child, ast.Call):
-                name = _resolve_callable_name(child.func)
-                if name is not None:
-                    calls.append(name)
-    return frozenset(calls)
+                roots.append(item.optional_vars)
+        return roots
+    # Straight-line statement: the whole subtree is statement-level.
+    return [stmt]
 
 
 def _resolve_callable_name(node: ast.AST) -> Optional[str]:
@@ -182,6 +230,235 @@ def _resolve_callable_name(node: ast.AST) -> Optional[str]:
             return node.attr
         return f"{base}.{node.attr}"
     return None
+
+
+def _arg_surface_names(call: ast.Call) -> FrozenSet[str]:
+    """Conservative bare-name extraction for one call's arguments.
+
+    Only direct ``Name`` args and the base ``Name`` of direct
+    ``Attribute`` args are counted. Nested ``Call``, ``Subscript``,
+    ``BinOp``, ``Lambda``, ``Constant`` contribute nothing — their
+    "value" isn't a bare symbol, so the gate condition
+    ``input_symbols ∩ tainted`` would over-suppress if we
+    treated their internal names as inputs to the outer call.
+    """
+    names: Set[str] = set()
+    for arg in list(call.args) + [kw.value for kw in call.keywords]:
+        if isinstance(arg, ast.Name) and isinstance(arg.ctx, ast.Load):
+            names.add(arg.id)
+        elif isinstance(arg, ast.Attribute):
+            base: ast.AST = arg
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name) and isinstance(base.ctx, ast.Load):
+                names.add(base.id)
+    return frozenset(names)
+
+
+def _assign_target_names(target: ast.AST) -> FrozenSet[str]:
+    """Collect ``Store``-context bare names from one assignment target.
+
+    Handles ``Name``, ``Tuple``, ``List``. ``Subscript`` and
+    ``Attribute`` targets mutate a base name without rebinding it;
+    their base name is recorded as a def via :func:`_walk_symbols`
+    (the LHS subtree is walked there too) rather than here, because
+    here we are computing "names the call's return flows to" — a
+    subscript or attribute target doesn't capture the return as a
+    fresh name.
+    """
+    names: Set[str] = set()
+    for child in ast.walk(target):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+            names.add(child.id)
+    return frozenset(names)
+
+
+def _statement_assigned_map(stmt: ast.stmt) -> Dict[int, FrozenSet[str]]:
+    """Map ``id(call_node) → assigned LHS names`` for calls whose
+    return value is captured into a fresh LHS name at this stmt.
+
+    Covers ``Assign`` (any LHS shape), ``AugAssign`` (target is
+    always a ``Name`` / ``Subscript`` / ``Attribute``; only ``Name``
+    rebinds), ``AnnAssign`` with a value. ``y, z = f(), g()`` pairs
+    each Tuple LHS element with the same-position Tuple RHS Call.
+    Nested calls and non-call RHS expressions get no entry.
+    """
+    result: Dict[int, FrozenSet[str]] = {}
+    if isinstance(stmt, ast.Assign):
+        lhs_names: Set[str] = set()
+        for target in stmt.targets:
+            lhs_names |= _assign_target_names(target)
+        all_lhs = frozenset(lhs_names)
+        if isinstance(stmt.value, ast.Call):
+            result[id(stmt.value)] = all_lhs
+        elif isinstance(stmt.value, ast.Tuple):
+            # Best-effort position-matched attribution for paired
+            # Tuple LHS / Tuple RHS. Mixed shapes fall back to "all
+            # LHS names" for each Call element.
+            tuple_targets = [
+                t for t in stmt.targets if isinstance(t, ast.Tuple)
+            ]
+            if tuple_targets and len(tuple_targets[0].elts) == len(stmt.value.elts):
+                for lhs_elt, rhs_elt in zip(
+                    tuple_targets[0].elts, stmt.value.elts,
+                ):
+                    if isinstance(rhs_elt, ast.Call):
+                        result[id(rhs_elt)] = _assign_target_names(lhs_elt)
+            else:
+                for rhs_elt in stmt.value.elts:
+                    if isinstance(rhs_elt, ast.Call):
+                        result[id(rhs_elt)] = all_lhs
+    elif isinstance(stmt, ast.AugAssign):
+        if isinstance(stmt.target, ast.Name) and isinstance(
+            stmt.value, ast.Call,
+        ):
+            result[id(stmt.value)] = frozenset({stmt.target.id})
+    elif isinstance(stmt, ast.AnnAssign):
+        if (
+            isinstance(stmt.target, ast.Name)
+            and stmt.value is not None
+            and isinstance(stmt.value, ast.Call)
+        ):
+            result[id(stmt.value)] = frozenset({stmt.target.id})
+    return result
+
+
+def _walk_symbols(
+    root: ast.AST,
+) -> Tuple[FrozenSet[str], FrozenSet[str]]:
+    """Walk one statement-level expression subtree, returning
+    ``(defs, uses)``.
+
+    Comprehension scopes are handled correctly: a comp's generator
+    targets are comp-local and do NOT leak into the enclosing
+    function's def set. Names referenced inside the comp that match
+    a comp-local target are likewise excluded from uses. The first
+    generator's ``iter`` is evaluated in the enclosing scope (the
+    standard Python semantic), so its loads count for the
+    enclosing function.
+    """
+    defs: Set[str] = set()
+    uses: Set[str] = set()
+
+    def _walk(node: ast.AST, comp_local: FrozenSet[str]) -> None:
+        if isinstance(node, _COMPREHENSION_TYPES):
+            new_locals: Set[str] = set(comp_local)
+            for gen in node.generators:
+                for n in ast.walk(gen.target):
+                    if isinstance(n, ast.Name):
+                        new_locals.add(n.id)
+            local_scope = frozenset(new_locals)
+            first = True
+            for gen in node.generators:
+                if first:
+                    _walk(gen.iter, comp_local)
+                    first = False
+                else:
+                    _walk(gen.iter, local_scope)
+                for if_ in gen.ifs:
+                    _walk(if_, local_scope)
+            if isinstance(node, ast.DictComp):
+                _walk(node.key, local_scope)
+                _walk(node.value, local_scope)
+            else:
+                _walk(node.elt, local_scope)
+            return
+        if isinstance(node, ast.Lambda):
+            # Lambda params are lambda-local; the body's free names
+            # are loads in the enclosing scope. Add params to
+            # comp_local for the body walk.
+            lambda_locals = set(comp_local)
+            for arg in node.args.args:
+                lambda_locals.add(arg.arg)
+            for arg in node.args.posonlyargs:
+                lambda_locals.add(arg.arg)
+            for arg in node.args.kwonlyargs:
+                lambda_locals.add(arg.arg)
+            if node.args.vararg is not None:
+                lambda_locals.add(node.args.vararg.arg)
+            if node.args.kwarg is not None:
+                lambda_locals.add(node.args.kwarg.arg)
+            _walk(node.body, frozenset(lambda_locals))
+            return
+        if isinstance(node, ast.Name):
+            if node.id in comp_local:
+                return
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                defs.add(node.id)
+            elif isinstance(node.ctx, ast.Load):
+                uses.add(node.id)
+            return
+        if isinstance(node, ast.NamedExpr):
+            # Walrus ``(y := expr)``: target is a def, expr is a use.
+            if isinstance(node.target, ast.Name):
+                if node.target.id not in comp_local:
+                    defs.add(node.target.id)
+            _walk(node.value, comp_local)
+            return
+        for child in ast.iter_child_nodes(node):
+            _walk(child, comp_local)
+
+    _walk(root, frozenset())
+    return frozenset(defs), frozenset(uses)
+
+
+def _extract_statement_payload(
+    stmt: ast.stmt,
+) -> Tuple[
+    FrozenSet[str],          # calls (legacy)
+    FrozenSet[str],          # defs
+    FrozenSet[str],          # uses
+    Tuple[CallSite, ...],    # call_sites
+]:
+    """Single pass producing every per-node symbol artefact.
+
+    Statement-level expression discipline (compound stmts walk only
+    their controlling expressions, not bodies) is shared with
+    :func:`_statement_expr_roots`. The legacy ``calls`` frozenset is
+    derived from ``call_sites`` so the two views never disagree.
+    """
+    expr_roots = _statement_expr_roots(stmt)
+    assigned_map = _statement_assigned_map(stmt)
+
+    # call_sites in source order
+    site_records: List[Tuple[int, int, CallSite]] = []
+    for root in expr_roots:
+        for child in ast.walk(root):
+            if not isinstance(child, ast.Call):
+                continue
+            name = _resolve_callable_name(child.func)
+            if name is None:
+                continue
+            site = CallSite(
+                name=name,
+                arg_names=_arg_surface_names(child),
+                assigned_names=assigned_map.get(id(child), frozenset()),
+                lineno=child.lineno,
+            )
+            site_records.append((
+                child.lineno, getattr(child, "col_offset", 0), site,
+            ))
+    site_records.sort(key=lambda t: (t[0], t[1]))
+    call_sites = tuple(s for _, _, s in site_records)
+    calls = frozenset(s.name for s in call_sites)
+
+    # defs / uses across all expression roots, then add per-stmt
+    # special-case defs that aren't captured by Store-ctx Name walk:
+    #   For.target — already Store-ctx, picked up by _walk_symbols
+    #   With.items[].optional_vars — already Store-ctx
+    #   AnnAssign.target without value — Store-ctx
+    defs: Set[str] = set()
+    uses: Set[str] = set()
+    for root in expr_roots:
+        d, u = _walk_symbols(root)
+        defs |= d
+        uses |= u
+    # AugAssign target is both def and use even when AST gives it
+    # Store ctx (the read of the prior value is implicit).
+    if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
+        uses.add(stmt.target.id)
+
+    return calls, frozenset(defs), frozenset(uses), call_sites
 
 
 def _short_label(stmt: ast.stmt) -> str:
@@ -241,10 +518,14 @@ class _PythonCFGBuilder:
 
     def _new_node(self, kind: str, stmt: ast.stmt,
                   *, label: Optional[str] = None) -> PyCFGNode:
+        calls, defs, uses, call_sites = _extract_statement_payload(stmt)
         node = PyCFGNode(
             kind=kind, lineno=stmt.lineno,
             label=label or _short_label(stmt),
-            calls=_extract_calls(stmt),
+            calls=calls,
+            defs=defs,
+            uses=uses,
+            call_sites=call_sites,
         )
         self._all_nodes.append(node)
         return node
@@ -561,6 +842,7 @@ def build_cpp_callgraph(
 
 
 __all__ = [
+    "CallSite",
     "PyCFGNode",
     "PythonCFG",
     "CallGraphNode",
