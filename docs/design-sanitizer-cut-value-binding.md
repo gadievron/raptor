@@ -56,7 +56,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
 | 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
-| 12 | C (Python inter-proc) | Module-local Python call graph | not started |
+| 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/python_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
 | 13 | C | Per-function taint summaries | not started |
 | 14 | C | Inter-procedural `evaluate_finding` | not started |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | not started |
@@ -496,24 +496,52 @@ output too).
 
 ## Sub-arc C — Python inter-procedural taint
 
-### Phase 12 — Module-local Python call graph
+### Phase 12 — Module-local Python call graph  *(done)*
 
 **Goal:** know which functions call which, within a module.
 
-- `build_python_callgraph(package_root) -> CallGraph` over the
-  same `Graph[N]` Protocol. Each node is a `PyFunction(name,
-  file, lineno)`.
-- Same-module call resolution by name; cross-module imports
-  recorded as edges to a placeholder `UnresolvedImport(module,
-  name)` node that callers can detect.
-- Lambdas, nested defs, method calls (best-effort on `self.foo`
-  by looking at the enclosing class), decorators (best-effort —
-  the decorated function's caller of its name reaches the
-  wrapped body).
-- Tests on direct call, helper call, class-method call, lambda,
-  closure capture, decorator wrapping.
+**Shipped:** `core/inventory/python_callgraph.py` exposes
+`PyCallGraphNode` (frozen, hashable on `name`+`lineno`, carries
+`params` / `is_method` / `class_name`), `PyModuleCallGraph`
+(implements `Graph[N]`, plus `find(name)` for callee resolution
+and `function_ast(name)` for Phase 13's CFG-building), and
+`build_python_module_callgraph(source) -> Optional[PyModuleCallGraph]`.
 
-**Ships:** call-graph builder + tests.
+Single-file scope (cross-module deferred — the design's "package
+root" framing was ahead of where Phase 12 lands). Resolution
+rules:
+
+* `["f"]` → module-level `f`, or nested `caller.f` when the call
+  is inside `caller`'s body
+* `["self", "m"]` / `["cls", "m"]` → `caller.class_name + "." + m`
+  when the caller is a method
+* `["Class", "m"]` → `Class.m` when defined
+* `["Class"]` → `Class.__init__` when defined (constructor)
+* Anything else (cross-module, longer chains, dynamic dispatch,
+  builtins, `getattr`/`eval`) → no edge
+
+Naming: module-level fns use unqualified name (`foo`); methods
+use `Class.method`; nested fns use `outer.inner` or
+`Class.method.inner`. Lambdas assigned to a name become a node
+named after the LHS; anonymous lambdas in expression position
+are skipped (no static name to resolve from a call site).
+
+A synthetic `<module>` entry has edges to every top-level
+function and to every module-level call's resolvable callee — so
+dominator queries work over the whole module.
+
+**Tests:** `core/inventory/tests/test_python_callgraph.py` — 32
+tests covering basic shape (empty module, single fn, params,
+unparseable source, module-entry edges, line range, AST
+accessor), edges (caller→callee, module-level, recursion,
+cross-module drop, builtin drop, undefined-local drop, lambda
+invocation drop, conditional call), methods (qualified naming,
+`self.m`, `cls.m`, `Class.m`, constructor→__init__, missing
+__init__, `self` outside a class), nested (inner fn naming,
+outer→inner, nested-method-helper, lambda-as-node,
+anonymous-lambda skip), graph protocol (entry / nodes /
+successors surface; unreachable fn still a node; successors of
+unknown node).
 
 **Gates:** Phase 13.
 
