@@ -53,7 +53,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | **done** (9 new tests + binary-oracle back-compat preserved; ruff clean) |
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + E2E corpus + ablation | **done** (13 corpus/wire-up tests; 7-fixture corpus + CORPUS.md ablation table; smt_barrier extended with optional file_path/cwe/language kwargs; ruff clean) |
 | 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/phase-8-substrate-spike/DECISION.md`) |
-| 9 | B | C/C++ intra-procedural CFG + symbol layer | not started |
+| 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
 | 10 | B | Pointer / alias conservatism | not started |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | not started |
 | 12 | C (Python inter-proc) | Module-local Python call graph | not started |
@@ -338,24 +338,49 @@ prototype_tree_sitter.py, prototype_tree_sitter.out, DECISION.md}`.
 
 **Gates:** Phase 9.
 
-### Phase 9 — C/C++ intra-procedural CFG + symbol layer
+### Phase 9 — C/C++ intra-procedural CFG + symbol layer  *(done)*
 
 **Goal:** the C/C++ analogue of Phase 1.
 
-- `build_cpp_intraproc_cfg(source_or_binary, function_name) ->
-  Graph[CPPCFGNode]` matching the existing `Graph[N]` Protocol.
-- `CPPCFGNode` carries `defs`, `uses`, `call_sites` like
-  `PyCFGNode`.
-- Control-flow coverage: straight-line, `if`/`else`,
-  `while`/`for`/`do-while`, `switch` (each `case` is a branch
-  target; fallthrough modeled), `goto` (conservative — all
-  labeled targets are edges from every `goto`), ternary `?:`,
-  short-circuit `&&`/`||` (each operand is its own node so a
-  sanitizer in the RHS is correctly attributed).
-- Tests on hand-built C and C++ fixtures (same shape as Phase 5
-  Python tests in the shipped arc).
+**Shipped:** `core/inventory/cfg_builder_cpp.py` exposes
+`build_cpp_intraproc_cfg(source, function_name, *, language="c") ->
+Optional[CPPCFG]`. `CPPCFG` is a frozen dataclass implementing
+`core.inventory.dominators.Graph` (same protocol the Python CFG
+satisfies). `CPPCFGNode` carries `kind`, `lineno`, `label`, `calls`,
+`defs`, `uses`, `call_sites` — same field set and same
+:class:`CallSite` type as `PyCFGNode` so downstream consumers
+(`reaching_defs`, `match_sanitizers_in_cfg`, evaluate_finding) need
+no language branch.
 
-**Ships:** CFG builder + tests.
+Control-flow handled: straight-line statements, `if`/`else` (with
+bare-statement consequences and `else if` chains), `while`, `for`
+(init / cond / step / body — continue targets step), `do…while`,
+`switch` with case fallthrough modelled by linking consecutive
+case bodies, `break` (targets the nearest switch join then nearest
+loop header), `continue` (targets the nearest loop header / for-step),
+`return` (links to exit, blocks fall-through), `goto` + `labeled_statement`
+(conservative: a goto with no matching label flows to exit so
+analysis doesn't trap), C++ methods inside `class_specifier`, C++
+functions inside `namespace_definition`.
+
+Deferred to Phase 10/11 (documented in the module docstring):
+splitting ternary `?:` and short-circuit `&&` / `||` operands into
+their own CFG nodes. Phase 9 keeps them as a single statement-level
+node — operand calls still appear in `call_sites`, and the
+conservative collapse over-suppresses rather than under-suppresses
+(no soundness loss for the value-bound gate).
+
+**Tests:** `core/inventory/tests/test_cfg_builder_cpp.py` — 32 tests
+covering basic shape (entry/exit, params, function-not-found),
+symbol layer (init_declarator, assignment, compound assignment,
+nested call assigned_names, field-expr callable name, calls
+back-compat), if/else (with and without alternative), loops
+(back-edge, for init/cond/step, do-while, break, continue), switch
+(branches, fallthrough, no-default-join), goto (resolved + unknown),
+return (links to exit, blocks fall-through), C++ method-in-class
+and namespace-wrapped, degrade-cleanly (partial parse, declaration-
+only). Suite skips automatically when the tree-sitter-c/-cpp
+grammars aren't installed.
 
 **Gates:** Phase 10, Phase 11.
 
