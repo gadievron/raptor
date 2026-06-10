@@ -59,7 +59,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/python_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
 | 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/python_taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
 | 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/python_interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
-| 15 | D (lexical removal) | Parity telemetry + A/B horizon | not started |
+| 15 | D (lexical removal) | Parity telemetry + A/B horizon | **done** (33 tests; `core/dataflow/sanitizer_cut_parity.py` — ParityRecord, shadow-log via `RAPTOR_SANITIZER_CUT_PARITY_LOG`, Wilson-CI aggregation, removal-safe gate = rate-criterion AND zero per-finding regression; HORIZON.md + committed first-report.md show value-bound and lexical are complementary so the gate is correctly NOT-yet-cleared; ruff clean) |
 | 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | not started |
 
 Sub-arcs A → B → D and A → C → D are sequential. B and C are
@@ -674,23 +674,65 @@ fixture unchanged.
 
 ## Sub-arc D — Lexical fallback removal
 
-### Phase 15 — Parity telemetry + A/B horizon
+### Phase 15 — Parity telemetry + A/B horizon  *(done)*
 
 **Goal:** don't remove the fallback on vibes.
 
-- `suppressions.jsonl` records gain `lexical_would_have_suppressed:
-  bool` and `value_bound_suppressed: bool` (both computed for
-  every finding, only the second is acted on when the flag is
-  on).
-- Horizon: collect over the smaller of 200 findings or 4 weeks of
-  `/agentic` runs.
-- Parity criterion: value-bound TP-rate ≥ lexical TP-rate AND
-  value-bound FP-rate ≤ lexical FP-rate, with 95% confidence
-  intervals reported.
-- Failure mode: if value-bound regresses on either axis, file the
-  specific findings as bug fixtures, fix the gap, restart the
-  window. Phase 16 does not ship until parity holds twice in a
-  row.
+**Shipped:**
+
+* `core/dataflow/sanitizer_cut_parity.py` — `ParityRecord` (per
+  finding: the lexical decision + the value-bound verdict + an
+  optional `should_suppress`/`should_not_suppress` ground-truth
+  label), `aggregate_parity` (agreement matrix + per-method
+  noise-suppression / bug-hiding rates with Wilson 95% CIs),
+  `parity_criterion_met`, and `render_parity_report`. Dedicated
+  JSONL log rather than `suppressions.jsonl` (which only records
+  *acted* suppressions — parity needs an observation per finding,
+  suppressed or not).
+* Shadow hook in `smt_barrier.validator_dominates_sink` /
+  `substitution_dominates_sink`: when
+  `RAPTOR_SANITIZER_CUT_PARITY_LOG` is set, both decisions are
+  recorded for every finding, independent of `RAPTOR_SANITIZER_CUT`
+  and with zero overhead when the env var is absent. The lexical
+  bodies were extracted to `_lexical_validator_dominates` /
+  `_lexical_substitution_dominates` (the functions Phase 16 removes)
+  so the hook records the pure lexical decision without re-entering
+  the gate.
+* `docs/sanitizer-cut-parity/HORIZON.md` — collection method, the
+  200-finding / 4-week window, the gate, the failure mode, and the
+  two-in-a-row requirement.
+* `docs/sanitizer-cut-parity/first-report.md` — the committed
+  baseline, regenerable via
+  `libexec/raptor-sanitizer-cut-parity-report`.
+
+**Criterion — strengthened past the design's literal form.** The
+design's two-rate criterion (value-bound noise-suppression ≥
+lexical AND bug-hiding ≤ lexical) is *necessary but not sufficient*:
+the lexical check and the value-bound gate target **different
+finding shapes** (validator-guard / substitution vs sanitizer-cut),
+so equal aggregate rates can hide the value-bound gate abandoning a
+whole population. `parity_criterion_met` therefore also requires
+**zero per-finding regression** (`lexical_only == 0` — no finding
+the lexical check suppressed that the value-bound gate didn't).
+Removing the fallback is safe only when the value-bound gate already
+covers everything lexical did.
+
+**First-report finding.** On the synthetic baseline the gate is
+correctly **NOT cleared**: lexical fires on the validator-guard and
+substitution fixtures, value-bound fires on the sanitizer-cut
+fixtures, neither covers the other's shapes (`lexical_only = 2`).
+Rates are equal but removal would lose the validator/substitution
+suppressions. This is the Phase 16 opening question: extend the
+value-bound gate/catalog to those shapes, or migrate only the
+shapes it fully covers.
+
+**Tests** (33): `test_sanitizer_cut_parity.py` (record
+serialisation, Wilson interval, agreement matrix, rate criterion,
+the complementary-coverage-fails-the-gate case, report rendering),
+`test_parity_shadow_logging.py` (record written when env set, no-op
+otherwise, return value unchanged by logging, substitution path),
+`test_sanitizer_cut_parity_report.py` (per-fixture decisions, the
+complementary-coverage headline, committed-report-in-sync guard).
 
 **Ships:** telemetry + horizon doc + first parity report.
 
@@ -753,5 +795,15 @@ fixture unchanged.
   function arity); over-arity functions stay `summary_unknown`.
 - **Phase 15 corpus skew.** A horizon collected on the same
   finding population that's used to design the value-bound
-  catches is circular. Mitigation: hold out 20% of findings as
-  a verification set never seen by Phase 1–14 test design.
+  catches is circular. Mitigation: the real gating window is
+  collected from `/agentic` runs via the shadow log — NOT the
+  synthetic baseline, which is explicitly labelled a machinery
+  smoke test. Hold out 20% of findings as a verification set never
+  seen by Phase 1–14 test design.
+- **Phase 15 complementary-coverage trap (found in the first
+  report).** The lexical check and the value-bound gate fire on
+  different finding shapes, so the design's aggregate-rate
+  criterion can read "met" while removal would still drop a whole
+  population. Resolved by adding the `lexical_only == 0` per-finding
+  no-regression guard to `parity_criterion_met`. The baseline
+  report correctly reads NOT-cleared because of it.

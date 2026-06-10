@@ -759,6 +759,65 @@ _SINK_CLASS_TO_CWE = {
 }
 
 
+# Env var pointing at the parity-telemetry JSONL log. When unset,
+# the Phase 15 shadow hook is a no-op (zero overhead). Separate from
+# RAPTOR_SANITIZER_CUT — telemetry collects even when the suppression
+# flag is off ("both computed for every finding, only the value-bound
+# side acted on when the flag is on").
+_PARITY_LOG_ENV = "RAPTOR_SANITIZER_CUT_PARITY_LOG"
+
+
+def _maybe_record_parity(
+    *,
+    kind: str,
+    file_path: Optional[str],
+    validator_line: int,
+    sink_line: int,
+    cwe: Optional[str],
+    language: Optional[str],
+    lexical_suppressed: bool,
+) -> None:
+    """Phase 15 shadow telemetry. When ``RAPTOR_SANITIZER_CUT_PARITY_LOG``
+    is set, compute the value-bound verdict alongside the lexical
+    decision and append a :class:`ParityRecord` to the log. No-op and
+    near-zero cost when the env var is absent. Never raises — telemetry
+    must not break a real run."""
+    log_path = _os.environ.get(_PARITY_LOG_ENV, "").strip()
+    if not log_path:
+        return
+    if not (file_path and cwe and language):
+        return
+    try:
+        from core.dataflow.sanitizer_cut_parity import (
+            append_parity_record,
+            build_parity_record,
+            value_bound_verdict_for,
+        )
+        finding = {
+            "cwe": cwe,
+            "file_path": file_path,
+            "source_line": validator_line,
+            "sink_line": sink_line,
+            "language": language,
+        }
+        verdict = value_bound_verdict_for(finding)
+        record = build_parity_record(
+            finding_id=f"{file_path}:{validator_line}:{sink_line}:{cwe}",
+            file=file_path,
+            cwe=cwe,
+            language=language,
+            source_line=validator_line,
+            sink_line=sink_line,
+            kind=kind,
+            lexical_suppressed=lexical_suppressed,
+            value_bound_verdict=verdict,
+        )
+        append_parity_record(log_path, record)
+    except Exception:                                       # noqa: BLE001
+        # Telemetry is best-effort; swallow everything.
+        pass
+
+
 def _value_bound_dominates(
     *,
     file_path: Optional[str],
@@ -876,8 +935,32 @@ def validator_dominates_sink(
         cwe=cwe,
         language=language,
     )
+    lexical = _lexical_validator_dominates(
+        source_text, validator_line, sink_line,
+    )
+    # Phase 15 — shadow telemetry. Records BOTH decisions for every
+    # finding when RAPTOR_SANITIZER_CUT_PARITY_LOG is set, regardless
+    # of the suppression flag. Zero overhead when the env var is
+    # absent (the check returns immediately).
+    _maybe_record_parity(
+        kind="charset",
+        file_path=file_path, validator_line=validator_line,
+        sink_line=sink_line, cwe=cwe, language=language,
+        lexical_suppressed=lexical,
+    )
     if vb is not None:
         return vb
+    return lexical
+
+
+def _lexical_validator_dominates(
+    source_text: str, validator_line: int, sink_line: int,
+) -> bool:
+    """Pure lexical (charset-validator) dominance check — the body
+    that Phase 16 will remove. Extracted so the Phase 15 parity hook
+    can record what the lexical heuristic *would* have decided
+    without re-entering :func:`validator_dominates_sink` (which now
+    also consults the value-bound gate)."""
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
@@ -1089,8 +1172,25 @@ def substitution_dominates_sink(
         cwe=cwe,
         language=language,
     )
+    lexical = _lexical_substitution_dominates(
+        source_text, validator_line, sink_line, var_name,
+    )
+    _maybe_record_parity(
+        kind="charset_sub",
+        file_path=file_path, validator_line=validator_line,
+        sink_line=sink_line, cwe=cwe, language=language,
+        lexical_suppressed=lexical,
+    )
     if vb is not None:
         return vb
+    return lexical
+
+
+def _lexical_substitution_dominates(
+    source_text: str, validator_line: int, sink_line: int, var_name: str,
+) -> bool:
+    """Pure lexical (substitution-form) dominance check — the body
+    Phase 16 will remove. Extracted for the Phase 15 parity hook."""
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
