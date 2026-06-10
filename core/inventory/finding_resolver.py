@@ -58,6 +58,11 @@ from core.inventory.cfg_builder import (
     PythonCFG,
     build_python_cfg,
 )
+from core.inventory.cfg_builder_cpp import (
+    CPPCFG,
+    CPPCFGNode,
+    build_cpp_intraproc_cfg,
+)
 
 
 # CWE extraction patterns.
@@ -75,9 +80,14 @@ class ResolvedFinding:
     smt_barrier wire-up can call ``evaluate_finding(rf.cfg,
     [rf.source_node], rf.sink_node, cwe=rf.cwe, ...)`` directly
     without rebuilding the CFG. Rebuilding would invalidate the
-    node-identity invariant Phase 4 relies on
-    (:class:`PyCFGNode` instances aren't deduplicated across
-    builds).
+    node-identity invariant Phase 4 relies on (CFG node instances
+    aren't deduplicated across builds).
+
+    ``cfg`` is :class:`PythonCFG` for Python findings and
+    :class:`CPPCFG` for C / C++ findings (Phase 11 wired the C/C++
+    branch). Both satisfy :class:`core.inventory.dominators.Graph`
+    so evaluate_finding consumes either with no language branch.
+    Source / sink node types vary in parallel.
     """
     file: str
     enclosing_function: str
@@ -87,9 +97,9 @@ class ResolvedFinding:
     sink_arg: str
     cwe: str
     language: str
-    cfg: PythonCFG
-    source_node: PyCFGNode
-    sink_node: PyCFGNode
+    cfg: Union[PythonCFG, CPPCFG]
+    source_node: Union[PyCFGNode, CPPCFGNode]
+    sink_node: Union[PyCFGNode, CPPCFGNode]
 
 
 @dataclass(frozen=True)
@@ -331,14 +341,20 @@ def _detect_language(file_path: str) -> str:
 
 
 def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
-    if parsed.language != "python":
-        return ResolutionFailure(
-            reason=(
-                f"language={parsed.language!r} not yet supported — phase 9 "
-                "adds c/c++ intra-procedural CFG, phase 11 wires through here"
-            ),
-        )
+    if parsed.language == "python":
+        return _resolve_from_parsed_python(parsed)
+    if parsed.language in ("c", "cpp"):
+        return _resolve_from_parsed_cpp(parsed)
+    return ResolutionFailure(
+        reason=(
+            f"language={parsed.language!r} not yet supported — "
+            "python is shipped (phases 1-7), c/c++ wired in phase 11; "
+            "other languages await future arcs"
+        ),
+    )
 
+
+def _resolve_from_parsed_python(parsed: _ParsedFinding) -> Resolution:
     file_path = Path(parsed.file)
     try:
         source_text = file_path.read_text(encoding="utf-8")
@@ -400,6 +416,97 @@ def _resolve_from_parsed(parsed: _ParsedFinding) -> Resolution:
     return ResolvedFinding(
         file=parsed.file,
         enclosing_function=fn.name,
+        source_lineno=parsed.source_lineno,
+        source_symbols=source_symbols,
+        sink_lineno=parsed.sink_lineno,
+        sink_arg=sink_arg,
+        cwe=parsed.cwe,
+        language=parsed.language,
+        cfg=cfg,
+        source_node=source_node,
+        sink_node=sink_node,
+    )
+
+
+def _resolve_from_parsed_cpp(parsed: _ParsedFinding) -> Resolution:
+    """C / C++ branch of the resolver — Phase 11.
+
+    Uses tree-sitter (via ``build_cpp_intraproc_cfg``) to find the
+    enclosing function spanning [source_line, sink_line]. The same
+    source / sink resolution algorithm as Python is then applied,
+    using ``cfg.params`` / ``defs`` / ``call_sites`` — all of which
+    :class:`CPPCFG` exposes with the same contract as
+    :class:`PythonCFG`.
+
+    Degrades to :class:`ResolutionFailure` when the tree-sitter
+    grammar isn't installed, when the source can't be parsed, when
+    no function spans the line range, or when the CFG produces no
+    node at the requested source / sink line. The legacy lexical
+    fallback at ``smt_barrier.py:746`` / ``:940`` is the safety net.
+    """
+    file_path = Path(parsed.file)
+    try:
+        source_text = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return ResolutionFailure(reason=f"cannot read {parsed.file}: {e}")
+
+    fn_name, fn_start = _find_enclosing_function_cpp(
+        source_text, parsed.language, parsed.source_lineno,
+        parsed.sink_lineno,
+    )
+    if fn_name is None:
+        return ResolutionFailure(
+            reason=(
+                f"no enclosing C/C++ function for source line "
+                f"{parsed.source_lineno} / sink line {parsed.sink_lineno} "
+                f"in {parsed.file} (tree-sitter grammar missing or no "
+                "function definition spans the range)"
+            ),
+        )
+
+    cfg = build_cpp_intraproc_cfg(
+        source_text, fn_name, language=parsed.language,
+    )
+    if cfg is None:
+        return ResolutionFailure(
+            reason=(
+                f"CFG construction failed for {fn_name} in {parsed.file} "
+                "(tree-sitter grammar missing or function not found by "
+                "the builder)"
+            ),
+        )
+
+    source_node, source_symbols = _resolve_source_cpp(
+        cfg, fn_start, parsed.source_lineno,
+    )
+    if source_node is None:
+        return ResolutionFailure(
+            reason=(
+                f"no source statement at line {parsed.source_lineno} in "
+                f"{fn_name}"
+            ),
+        )
+
+    sink_node, sink_arg = _resolve_sink_cpp(
+        cfg, parsed.sink_lineno, parsed.sink_arg_hint,
+    )
+    if sink_node is None:
+        return ResolutionFailure(
+            reason=(
+                f"no sink call at line {parsed.sink_lineno} in {fn_name}"
+            ),
+        )
+    if not sink_arg:
+        return ResolutionFailure(
+            reason=(
+                f"sink call at line {parsed.sink_lineno} has no bare-name "
+                "argument; cannot resolve sink_arg"
+            ),
+        )
+
+    return ResolvedFinding(
+        file=parsed.file,
+        enclosing_function=fn_name,
         source_lineno=parsed.source_lineno,
         source_symbols=source_symbols,
         sink_lineno=parsed.sink_lineno,
@@ -512,6 +619,111 @@ def _resolve_sink(
 def _node_at_lineno(cfg: PythonCFG, lineno: int) -> Optional[PyCFGNode]:
     for n in cfg.nodes():
         if not isinstance(n, PyCFGNode):
+            continue
+        if n.lineno == lineno:
+            return n
+    return None
+
+
+# ---------------------------------------------------------------------------
+# C / C++ resolution (Phase 11)
+# ---------------------------------------------------------------------------
+
+
+def _find_enclosing_function_cpp(
+    source_text: str, language: str, source_line: int, sink_line: int,
+) -> Tuple[Optional[str], int]:
+    """Smallest C / C++ function_definition spanning [source, sink].
+
+    Returns ``(function_name, header_line)`` on success, ``(None, 0)``
+    on any failure (missing grammar, no spanning definition, function
+    has no resolvable name). ``header_line`` is the function's
+    start_point line (1-indexed) — the value Phase 11's
+    :func:`_resolve_source_cpp` compares against to spot the
+    "source == function entry" case.
+
+    Smallest by end-line span so nested helpers / lambdas win over
+    their enclosing function when both contain the range.
+    """
+    # Lazy-import the parser via the cfg_builder_cpp module's helper
+    # — keeps the import surface minimal and reuses the same
+    # cached parser. Identical to the Phase 9 walker's grammar
+    # plumbing.
+    from core.inventory.cfg_builder_cpp import (
+        _function_name as _cpp_function_name,
+        _get_parser as _cpp_get_parser,
+    )
+
+    parser = _cpp_get_parser(language)
+    if parser is None:
+        return None, 0
+    tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    lo = min(source_line, sink_line)
+    hi = max(source_line, sink_line)
+    best: Optional[Tuple[int, str, int]] = None   # (span, name, header_line)
+    stack = [tree.root_node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "function_definition":
+            start = cur.start_point[0] + 1
+            end = cur.end_point[0] + 1
+            if start <= lo and hi <= end:
+                name = _cpp_function_name(cur)
+                if name is not None:
+                    span = end - start
+                    if best is None or span < best[0]:
+                        best = (span, name, start)
+        for child in cur.children:
+            if child.is_named:
+                stack.append(child)
+    if best is None:
+        return None, 0
+    return best[1], best[2]
+
+
+def _resolve_source_cpp(
+    cfg: CPPCFG, fn_start_line: int, source_line: int,
+) -> Tuple[Optional[CPPCFGNode], FrozenSet[str]]:
+    """C / C++ analog of :func:`_resolve_source`.
+
+    * ``source_line == fn_start_line`` → the source is the function
+      entry; tainted symbols are the parameters.
+    * Otherwise, locate the statement-level CFG node at ``source_line``
+      and return its ``defs`` (or fall back to ``uses`` when the line
+      is an expression-statement with no LHS).
+    """
+    if source_line == fn_start_line:
+        return cfg.entry_node, frozenset(cfg.params)
+    node = _cpp_node_at_lineno(cfg, source_line)
+    if node is None:
+        return None, frozenset()
+    symbols = node.defs if node.defs else node.uses
+    return node, symbols
+
+
+def _resolve_sink_cpp(
+    cfg: CPPCFG, sink_line: int, sink_arg_hint: Optional[str],
+) -> Tuple[Optional[CPPCFGNode], str]:
+    """C / C++ analog of :func:`_resolve_sink`. Same algorithm:
+    locate the CFG node at ``sink_line``, consult its ``call_sites``,
+    pick the hint match or fall back to the outermost call's first
+    bare-name argument (lexicographic for determinism)."""
+    node = _cpp_node_at_lineno(cfg, sink_line)
+    if node is None or not node.call_sites:
+        return None, ""
+    if sink_arg_hint:
+        for cs in node.call_sites:
+            if sink_arg_hint in cs.arg_names:
+                return node, sink_arg_hint
+    outermost = node.call_sites[-1]
+    if not outermost.arg_names:
+        return None, ""
+    return node, sorted(outermost.arg_names)[0]
+
+
+def _cpp_node_at_lineno(cfg: CPPCFG, lineno: int) -> Optional[CPPCFGNode]:
+    for n in cfg.nodes():
+        if not isinstance(n, CPPCFGNode):
             continue
         if n.lineno == lineno:
             return n

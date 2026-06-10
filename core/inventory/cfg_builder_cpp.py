@@ -448,12 +448,13 @@ def _walk_subtree_for_call_sites(
     ``wrap``, not into the statement's LHS. This matches the
     Python builder's semantics.
     """
+    # Sort key is ``end_byte`` so inner calls (smaller end_byte —
+    # their closing paren comes before the outer's) appear before
+    # outer calls. Matches the PyCFG convention: ``call_sites[-1]``
+    # is the syntactic OUTERMOST call. The Phase 11 resolver's
+    # outermost-pick uses ``call_sites[-1]``; both languages now
+    # agree.
     out: List[Tuple[int, int, CallSite]] = []
-    # Track which call_expressions are the outermost — a call_expression
-    # is "root" iff its parent (or path-of-direct-parents-skipping-
-    # value-wrappers) ends at the statement boundary the caller
-    # passed in. We approximate by: only the syntactic root of n is
-    # outermost; nested calls inherit empty assigned_names.
     root_id = id(_unwrap_value_expr(n)) if n is not None else None
 
     def visit(node) -> None:
@@ -472,9 +473,7 @@ def _walk_subtree_for_call_sites(
                     assigned_names=assigned,
                     lineno=node.start_point[0] + 1,
                 )
-                out.append((node.start_byte, id(node), cs))
-            # Descend into arguments — nested calls register as their
-            # own call_sites with empty assigned_names.
+                out.append((node.end_byte, id(node), cs))
             arg_list = node.child_by_field_name("arguments")
             if arg_list is not None:
                 for c in arg_list.children:

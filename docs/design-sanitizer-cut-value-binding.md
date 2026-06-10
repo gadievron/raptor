@@ -55,7 +55,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/phase-8-substrate-spike/DECISION.md`) |
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
 | 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
-| 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | not started |
+| 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
 | 12 | C (Python inter-proc) | Module-local Python call graph | not started |
 | 13 | C | Per-function taint summaries | not started |
 | 14 | C | Inter-procedural `evaluate_finding` | not started |
@@ -433,24 +433,61 @@ regression that unstamped CFG still suppresses).
 
 **Gates:** Phase 11.
 
-### Phase 11 — Value-bound suppression for C/C++
+### Phase 11 — Value-bound suppression for C/C++  *(done)*
 
 **Goal:** retire the Phase 4 auto-downgrade for C/C++ when an
 intra-proc CFG is available.
 
-- Phase 4's C/C++ branch was "always return `candidate_only`."
-  Phase 11 replaces that with: if `build_cpp_intraproc_cfg`
-  succeeds, run the 4-condition gate exactly as Python does. If
-  it fails (stripped binary, no source, syntax-error C), fall
-  back to `candidate_only`.
-- Call-graph path (function granularity) still returns
-  `candidate_only` — function-level edges genuinely cannot prove
-  argument binding.
-- Corpus of TP/FP C/C++ fixtures + A/B against the
-  `candidate_only`-only baseline. Same ablation harness as
-  Phase 7.
+**Shipped:**
 
-**Ships:** wire-up + corpus + report.
+* `core/inventory/finding_resolver.py` extended with
+  `_resolve_from_parsed_cpp` — uses tree-sitter (via the Phase 9
+  helpers) to find the smallest `function_definition` spanning
+  [source_line, sink_line], builds a `CPPCFG` via
+  `build_cpp_intraproc_cfg`, then runs the same source / sink
+  resolution algorithm as the Python branch (`cfg.params` for
+  function-entry source, `node.defs` for body-source assignment,
+  `node.call_sites` for sink-arg disambiguation). `ResolvedFinding`
+  widened to `Union[PythonCFG, CPPCFG]` / `Union[PyCFGNode,
+  CPPCFGNode]`.
+
+* `core/dataflow/known_safe_calls.py` extended with four C/C++
+  catalog entries chosen for documented library contracts:
+  `g_markup_escape_text` (xss), `g_uri_escape_string` (pathtrav),
+  `g_shell_quote` (cmdi), `sqlite3_mprintf` (sqli). Selection rule
+  documented inline — only "transform" sanitizers that return a
+  newly-allocated value qualify; destination-buffer writers
+  (`mysql_real_escape_string`, `realpath`) would be downgraded by
+  Phase 10's `may_escape` policy anyway and are excluded to avoid
+  audit noise.
+
+* The Phase 4 callgraph-only carve-out is preserved (callgraph
+  bindings still carry empty input/output symbol sets so condition
+  2 always fails — function-level edges genuinely can't prove
+  argument binding). Phase 11 only retires the auto-downgrade for
+  the intra-proc CFG path, when the CFG actually has `call_sites`.
+
+* CPPCFG `call_sites` ordering fix: sort key changed from
+  `start_byte` to `end_byte` so the convention matches PyCFG —
+  inner calls precede their outers, `call_sites[-1]` is the
+  syntactic outermost. The resolver's outermost pick now agrees
+  across languages.
+
+**Tests:** `core/inventory/tests/test_sanitizer_cut_corpus_cpp.py`
+— 10 tests parametrised over 5 C fixtures
+(`straight_line_safe.c`, `symmetric_sanitize.c`,
+`wrong_variable.c`, `bypass.c`, `may_escape.c`) under
+`fixtures/sanitizer_cut_corpus_cpp/`. Each fixture's expected
+verdict is documented in its file docstring and pinned in
+`CORPUS.md`'s ablation table. The wrong-variable case is the
+soundness witness for C/C++ — the lexical check would have
+falsely suppressed, the auto-downgrade would have emitted
+candidate_only, only Phase 11's value-bound resolution catches
+the wrong-binding without losing the TP cases. Also tests:
+resolver returns CPPCFG (not PythonCFG); `language="cpp"` routes
+the same branch; missing enclosing function → descriptive
+ResolutionFailure; callgraph-only auto-downgrade still produces
+empty input/output symbols.
 
 **Gates:** Phase 15 (telemetry consumes the C/C++ value-bound
 output too).
