@@ -61,6 +61,7 @@ pin) and 4.16.0; all PoC cases finish in 7-9 ms.
 from __future__ import annotations
 
 import ast
+import os as _os
 import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -743,8 +744,107 @@ def _same_function_in_order(
     return v_fn is not None and v_fn is s_fn
 
 
+# ``sink_class`` (xss / sqli / cmdi / pathtrav) is the per-sink-family
+# tag the SMT-barrier proof flow uses; the value-bound finding
+# resolver wants a CWE id. Pick the canonical CWE in each family —
+# any CWE in the family round-trips through
+# :func:`core.dataflow.sanitizer_catalog.sink_classes_for_cwe` back
+# to the same sink_class set, so the choice doesn't affect catalog
+# lookup. Used only by the Phase 7 wire-up below.
+_SINK_CLASS_TO_CWE = {
+    "xss": "CWE-79",
+    "sqli": "CWE-89",
+    "cmdi": "CWE-78",
+    "pathtrav": "CWE-22",
+}
+
+
+def _value_bound_dominates(
+    *,
+    file_path: Optional[str],
+    validator_line: int,
+    sink_line: int,
+    cwe: Optional[str],
+    language: Optional[str],
+):
+    """Phase 7 of the value-binding arc — wire ``validator_dominates_sink``
+    and ``substitution_dominates_sink`` through the value-bound gate.
+
+    Returns:
+
+    * ``True``  → value-bound vertex-cut suppresses; the caller treats
+      this as dominance proved by value flow (stronger than the
+      lexical check could prove).
+    * ``False`` → ``VERDICT_NO_SUPPRESS``; the gate found a path
+      bypassing every catalog sanitizer. The caller treats this as
+      "value-bound disagrees — no dominance" even if the lexical
+      heuristic would have said yes.
+    * ``None``  → "consult lexical fallback." Returned when the
+      ``RAPTOR_SANITIZER_CUT`` env flag is off, the resolver
+      can't normalise the finding (missing kwargs, file unreadable,
+      function not found, non-python language, …), or the gate's
+      verdict was ``candidate_only`` (control-flow holds but value
+      binding unproven).
+
+    Lazy import of the inventory + dataflow packages so this module
+    stays cheap to import; the heavier dependencies are paid only
+    when the flag is set on a real run.
+    """
+    if _os.environ.get("RAPTOR_SANITIZER_CUT", "").strip().lower() not in (
+        "1", "true", "on", "yes",
+    ):
+        return None
+    if not (file_path and cwe and language):
+        return None
+
+    from core.inventory.finding_resolver import (
+        ResolvedFinding,
+        resolve_finding,
+    )
+    from core.inventory.sanitizer_cut import (
+        VERDICT_CANDIDATE_ONLY,
+        VERDICT_NO_SUPPRESS,
+        VERDICT_SUPPRESS,
+        evaluate_finding,
+    )
+
+    finding = {
+        "cwe": cwe,
+        "file_path": file_path,
+        "source_line": validator_line,
+        "sink_line": sink_line,
+        "language": language,
+    }
+    resolved = resolve_finding(finding)
+    if not isinstance(resolved, ResolvedFinding):
+        return None
+    result = evaluate_finding(
+        resolved.cfg,
+        [resolved.source_node],
+        resolved.sink_node,
+        cwe=resolved.cwe,
+        language=resolved.language,
+        source_symbols=resolved.source_symbols,
+        sink_arg=resolved.sink_arg,
+    )
+    if result.verdict == VERDICT_SUPPRESS:
+        return True
+    if result.verdict == VERDICT_NO_SUPPRESS:
+        return False
+    # VERDICT_CANDIDATE_ONLY — control-flow holds but value-binding
+    # is unproven; let the lexical heuristic decide.
+    assert result.verdict == VERDICT_CANDIDATE_ONLY
+    return None
+
+
 def validator_dominates_sink(
-    source_text: str, validator_line: int, sink_line: int,
+    source_text: str,
+    validator_line: int,
+    sink_line: int,
+    *,
+    file_path: Optional[str] = None,
+    cwe: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> bool:
     """Sound dominance for the ``kind="charset"`` form — whole-string
     allowlist guarded by an ``if``-statement.
@@ -761,7 +861,23 @@ def validator_dominates_sink(
     Substitution-form (``kind="charset_sub"``) uses a different check
     (no ``if`` block, instead a no-reassignment guard) — see
     :func:`substitution_dominates_sink`.
+
+    Phase 7 of the value-binding arc adds the optional ``file_path``
+    / ``cwe`` / ``language`` kwargs. When the ``RAPTOR_SANITIZER_CUT``
+    env flag is set AND all three are supplied, the function first
+    consults :func:`_value_bound_dominates`. The lexical AST check
+    below is the fallback for ``candidate_only`` results, resolver
+    failures, missing kwargs, and the flag-off path.
     """
+    vb = _value_bound_dominates(
+        file_path=file_path,
+        validator_line=validator_line,
+        sink_line=sink_line,
+        cwe=cwe,
+        language=language,
+    )
+    if vb is not None:
+        return vb
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
@@ -938,7 +1054,14 @@ def _python_chain_reaches_sink(
 
 
 def substitution_dominates_sink(
-    source_text: str, validator_line: int, sink_line: int, var_name: str,
+    source_text: str,
+    validator_line: int,
+    sink_line: int,
+    var_name: str,
+    *,
+    file_path: Optional[str] = None,
+    cwe: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> bool:
     """Sound dominance for ``kind="charset_sub"`` — assignment-form
     sanitizer (``x = re.sub('[forbidden]+', '', x)``).
@@ -951,7 +1074,23 @@ def substitution_dominates_sink(
          sanitization and invalidate the post-sub language claim.
          Mutating-subscript assignments (``x[0] = ...``) don't rebind
          ``x`` itself and aren't flagged.
+
+    Phase 7 of the value-binding arc adds the optional ``file_path``
+    / ``cwe`` / ``language`` kwargs (same shape as
+    :func:`validator_dominates_sink`). When the
+    ``RAPTOR_SANITIZER_CUT`` env flag is set AND all three are
+    supplied, the value-bound gate is consulted first; the lexical
+    no-reassignment check is the fallback.
     """
+    vb = _value_bound_dominates(
+        file_path=file_path,
+        validator_line=validator_line,
+        sink_line=sink_line,
+        cwe=cwe,
+        language=language,
+    )
+    if vb is not None:
+        return vb
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
@@ -1195,14 +1334,28 @@ def try_tier0(
                f"would then return from a different function than the "
                f"sink's)")
     elif spec.kind == "charset_sub":
+        # Phase 7 plumbing: pass the resolved absolute path + CWE +
+        # language through so the dominance function can consult the
+        # value-bound gate when RAPTOR_SANITIZER_CUT is on. Defaults
+        # (None) keep the lexical-only behaviour for the flag-off
+        # path and for callers from outside this module who don't
+        # yet populate these kwargs.
         dominates = substitution_dominates_sink(
             source_text, line, sink_line, spec.var_name,
+            file_path=str(src_path),
+            cwe=_SINK_CLASS_TO_CWE.get(sink_class),
+            language=language,
         )
         why = (f"either out of source order, in a different function, "
                f"or {spec.var_name} was reassigned between the "
                f"substitution and the sink (undoing sanitization)")
     else:
-        dominates = validator_dominates_sink(source_text, line, sink_line)
+        dominates = validator_dominates_sink(
+            source_text, line, sink_line,
+            file_path=str(src_path),
+            cwe=_SINK_CLASS_TO_CWE.get(sink_class),
+            language=language,
+        )
         why = ("either out of source order, in a different function, "
                "or the `if not X:` block doesn't exit on failure")
     if not dominates:
