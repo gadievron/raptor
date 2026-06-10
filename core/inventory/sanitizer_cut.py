@@ -75,10 +75,19 @@ from core.inventory.dataflow import (
 logger = logging.getLogger(__name__)
 
 
-# Verdict tag emitted by Phase 7b into ``suppressions.jsonl``. Sister
-# tag of the binary-oracle's ``binary_oracle_absent`` — same shape, same
-# file. Operators query both via the same grep.
+# Verdict tags emitted into ``suppressions.jsonl``. Sister tags of the
+# binary-oracle's ``binary_oracle_absent`` — same shape, same file,
+# greppable by operators with one ``jq`` invocation.
+#
+# ``sanitizer_dominated`` records a Phase 4 ``suppress`` — the
+# finding was dropped; ``dropped: true``.
+# ``sanitizer_candidate`` records a Phase 4 ``candidate_only`` — the
+# control-flow cut held but the value-bound gate didn't fire; the
+# finding SURVIVED to the LLM; ``dropped: false``. Phase 6 added this
+# tag so operators can see what the value-bound suppressor saw but
+# didn't act on.
 VERDICT_SANITIZER_DOMINATED = "sanitizer_dominated"
+VERDICT_SANITIZER_CANDIDATE = "sanitizer_candidate"
 
 
 # Phase 4 suppression-verdict tri-state. The legacy ``suppress: bool``
@@ -117,12 +126,35 @@ class SanitizerCutResult:
     record. ``candidate_callables`` is the catalog-derived set the
     cut was attempted against; useful for explaining "we tried these
     but none were present on the path" in the negative case.
+
+    Phase 6 added the binding-witness fields so the audit JSONL
+    record can carry the exact sanitizer calls + symbols the
+    decision was based on:
+
+    * ``value_bound_bindings`` — the bindings that satisfied gate
+      conditions 2 AND 3 (taint flows in AND output reaches sink).
+      Non-empty for ``VERDICT_SUPPRESS``; empty for the other two
+      verdicts.
+    * ``all_matched_bindings`` — every catalog match in the CFG,
+      regardless of value binding. Non-empty for both
+      ``VERDICT_SUPPRESS`` and ``VERDICT_CANDIDATE_ONLY`` (the
+      ``candidate_only`` audit record needs them so operators can
+      see what was tried).
+    * ``sink_arg`` — the symbol consumed at the sink, supplied by
+      the Phase 5 resolver. Empty when value context wasn't given.
+
+    Phase 7's legacy callers don't supply value context, so all
+    three fields stay at their defaults — the JSONL record omits
+    the corresponding keys (or writes empty lists / strings).
     """
     suppress: bool
     reason: str
     cut_set: FrozenSet
     candidate_callables: FrozenSet[str]
     verdict: str = ""
+    value_bound_bindings: FrozenSet[SanitizerBinding] = frozenset()
+    all_matched_bindings: FrozenSet[SanitizerBinding] = frozenset()
+    sink_arg: str = ""
 
     def __post_init__(self) -> None:
         # Default verdict derives from the legacy ``suppress`` flag
@@ -467,6 +499,9 @@ def evaluate_finding(
             cut_set=frozenset(value_bound_nodes),
             candidate_callables=frozenset(candidate_callables),
             verdict=VERDICT_SUPPRESS,
+            value_bound_bindings=value_bound_bindings,
+            all_matched_bindings=matched_bindings,
+            sink_arg=sink_arg,
         )
 
     if full_cf_cut:
@@ -483,6 +518,9 @@ def evaluate_finding(
             cut_set=frozenset(),
             candidate_callables=frozenset(candidate_callables),
             verdict=VERDICT_CANDIDATE_ONLY,
+            value_bound_bindings=value_bound_bindings,
+            all_matched_bindings=matched_bindings,
+            sink_arg=sink_arg,
         )
 
     return SanitizerCutResult(
@@ -495,6 +533,8 @@ def evaluate_finding(
         cut_set=frozenset(),
         candidate_callables=frozenset(candidate_callables),
         verdict=VERDICT_NO_SUPPRESS,
+        all_matched_bindings=matched_bindings,
+        sink_arg=sink_arg,
     )
 
 
@@ -503,36 +543,100 @@ def evaluate_finding(
 # ---------------------------------------------------------------------------
 
 
+def _binding_to_json(b: SanitizerBinding) -> Dict[str, Any]:
+    """Serialise one :class:`SanitizerBinding` for the JSONL audit
+    record. Frozensets become sorted lists so the JSON is stable
+    across runs (sets have no inherent ordering)."""
+    return {
+        "callable": b.callable,
+        "input_symbols": sorted(b.input_symbols),
+        "output_symbols": sorted(b.output_symbols),
+        "lineno": b.lineno,
+    }
+
+
 def record_sanitizer_cut_suppression(
     out_dir: Path,
     finding: Dict[str, Any],
     result: SanitizerCutResult,
 ) -> None:
-    """Write a sanitizer-cut suppression to ``suppressions.jsonl``.
+    """Write a sanitizer-cut record to ``suppressions.jsonl``.
 
-    Delegates to :func:`core.inventory.reach_chokepoint.record_suppression`
-    so the audit JSONL shape matches the binary-oracle suppressor's
-    (same file, same record schema). The ``verdict`` is set to
-    :data:`VERDICT_SANITIZER_DOMINATED` so operators can grep / filter
-    by verdict kind.
+    Phase 6 extended this helper to emit records for BOTH the
+    ``suppress`` verdict (the finding is dropped — ``dropped:
+    true``) and the ``candidate_only`` verdict (the finding
+    survives to the LLM, but the value-bound suppressor saw enough
+    catalog matches to be worth recording — ``dropped: false``).
+    ``no_suppress`` is still a no-op; nothing to log.
 
-    No-op when ``result.suppress`` is False — the chokepoint records
-    DROPPED findings, not surviving ones.
+    Verdict tags:
+
+    * :data:`VERDICT_SANITIZER_DOMINATED` for suppressions.
+    * :data:`VERDICT_SANITIZER_CANDIDATE` for candidate-only
+      records.
+
+    Witness fields written into ``extra``:
+
+    * ``sink_arg`` — the symbol consumed at the sink.
+    * ``bindings`` — list of value-bound binding records
+      (callable, input_symbols, output_symbols, lineno). For
+      ``suppress`` these are the bindings whose nodes formed the
+      cut; for ``candidate_only`` this is empty (no binding
+      satisfied the value gate).
+    * ``catalog_matches`` — list of ALL catalog-matched binding
+      records in the CFG (a superset of ``bindings`` for
+      ``suppress``; the full set for ``candidate_only`` so
+      operators can see what was tried).
+    * ``witness_lines`` — the source lines of every catalog
+      match, sorted for stable jq filtering.
+
+    Delegates to
+    :func:`core.inventory.reach_chokepoint.record_suppression` so
+    the JSONL shape stays compatible with the binary-oracle
+    records that share the file. The ``dropped`` field
+    distinguishes drops from surviving-but-recorded findings —
+    operators can ``jq 'select(.dropped == false)'`` to see what
+    the value-bound gate flagged but didn't drop.
     """
-    if not result.suppress:
+    if result.verdict == VERDICT_SUPPRESS:
+        verdict_tag = VERDICT_SANITIZER_DOMINATED
+        dropped = True
+    elif result.verdict == VERDICT_CANDIDATE_ONLY:
+        verdict_tag = VERDICT_SANITIZER_CANDIDATE
+        dropped = False
+    else:
+        # VERDICT_NO_SUPPRESS — nothing to record.
         return
+
     from core.inventory.reach_chokepoint import record_suppression
+
+    catalog_matches = sorted(
+        result.all_matched_bindings, key=lambda b: (b.lineno, b.callable),
+    )
+    value_bindings = sorted(
+        result.value_bound_bindings, key=lambda b: (b.lineno, b.callable),
+    )
+
+    extra: Dict[str, Any] = {
+        "sink_arg": result.sink_arg,
+        "bindings": [_binding_to_json(b) for b in value_bindings],
+        "catalog_matches": [_binding_to_json(b) for b in catalog_matches],
+        "witness_lines": sorted({b.lineno for b in catalog_matches}),
+    }
 
     record_suppression(
         out_dir,
         finding=finding,
-        verdict=VERDICT_SANITIZER_DOMINATED,
+        verdict=verdict_tag,
         reason=result.reason,
+        dropped=dropped,
+        extra=extra,
     )
 
 
 __all__ = [
     "VERDICT_SANITIZER_DOMINATED",
+    "VERDICT_SANITIZER_CANDIDATE",
     "VERDICT_SUPPRESS",
     "VERDICT_CANDIDATE_ONLY",
     "VERDICT_NO_SUPPRESS",

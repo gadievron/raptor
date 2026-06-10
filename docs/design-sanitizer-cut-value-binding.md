@@ -50,7 +50,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 3 | A | Symbol-bound sanitizer recognition (`SanitizerBinding`) | **done** (16 new tests + 24 existing updated; ruff clean) |
 | 4 | A | Value-bound `evaluate_finding` + tri-state verdict | **done** (17 new tests + wrong-variable case pinned as candidate_only; ruff clean) |
 | 5 | A | Finding-normalisation adapter (SARIF / Semgrep / RAPTOR-native) | **done** (21 tests; SARIF + Semgrep + RAPTOR-native fixtures; end-to-end wrong-variable + safe straight-line; ruff clean) |
-| 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | not started |
+| 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | **done** (9 new tests + binary-oracle back-compat preserved; ruff clean) |
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + report surfacing + E2E corpus | not started |
 | 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | not started |
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | not started |

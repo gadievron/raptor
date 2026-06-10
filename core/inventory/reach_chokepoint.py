@@ -162,6 +162,8 @@ def record_suppression(
     finding: Dict[str, Any],
     verdict: str,
     reason: str,
+    dropped: bool = True,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Append one record to ``out_dir/suppressions.jsonl`` describing
     the finding the chokepoint just dropped. Best-effort — IO errors
@@ -182,11 +184,33 @@ def record_suppression(
         "function":   "...",
         "verdict":    "binary_oracle_absent",
         "reason":     "Reachability chokepoint: ...",
+        "dropped":    true,          # phase 6 addition: false when the
+                                     # record describes a finding that
+                                     # SURVIVED to the LLM (e.g. the
+                                     # sanitizer-cut ``candidate_only``
+                                     # verdict)
+        ...                          # phase 6 ``extra`` fields
+                                     # merged in here; consumers
+                                     # tolerant of unknown keys
       }
+
+    Phase 6 added the optional ``dropped`` and ``extra`` kwargs:
+
+    * ``dropped`` — back-compat default ``True`` so existing
+      binary-oracle suppression records preserve their meaning.
+      Set ``False`` for records that describe a NON-suppressed
+      finding (the sanitizer-cut ``candidate_only`` case writes
+      these so operators can see what the value-bound suppressor
+      saw but didn't act on).
+    * ``extra`` — additional fields merged into the record. Phase
+      6's sanitizer-cut uses this to carry ``sink_arg``,
+      ``bindings`` (the per-binding witness), and similar audit
+      data. Unknown keys are tolerated by every existing reader.
+
     """
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        record = {
+        record: Dict[str, Any] = {
             "finding_id": (finding.get("finding_id")
                            or finding.get("id") or ""),
             "rule_id":    finding.get("rule_id") or "",
@@ -198,7 +222,10 @@ def record_suppression(
                                "function_name", "")),
             "verdict":    verdict,
             "reason":     reason,
+            "dropped":    bool(dropped),
         }
+        if extra:
+            record.update(extra)
         with (out_dir / "suppressions.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
     except OSError as e:
