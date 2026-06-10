@@ -1,11 +1,11 @@
 # Sanitizer-Cut Value-Binding Arc
 
-Follow-on to the just-merged `feat(inventory,dataflow): sanitizer-cut
-suppressor` (PR #794, commit `bcdee360`). That PR shipped a pure-graph
+Follow-on to the shipped `feat(inventory,dataflow): sanitizer-cut
+suppressor` work. The shipped phases (5–7) added a pure-graph
 vertex-cut suppressor: "every dynamic path from source to sink crosses
 a node that contains a sanitizer call." This arc closes the latent
-soundness gap that critique surfaced — the cut proves control-flow,
-not value-flow.
+soundness gap in that formulation — the cut proves control-flow, not
+value-flow.
 
 ## The hole
 
@@ -34,11 +34,10 @@ stays until A/B parity is demonstrated; only Phase 16 removes it.
 
 ## Why one arc, not three branches
 
-Reviewer comments on PR #794 pushed for landing the substrate first,
-then wiring behind a flag, then expanding language coverage. The
-phases below are sequenced to allow exactly that — each phase ships
-as its own PR, no behaviour change until Phase 7, no C/C++ value
-layer until Phase 11, no lexical removal until Phase 16. But a
+The phases below are sequenced to land the substrate first, then
+wire it behind a flag, then expand language coverage. Each phase
+ships as its own PR; no behaviour change until Phase 7, no C/C++
+value layer until Phase 11, no lexical removal until Phase 16. A
 single design doc binds the contract so the substrate decisions in
 Phase 1 don't drift before Phase 16 lands.
 
@@ -49,8 +48,8 @@ Phase 1 don't drift before Phase 16 lands.
 | 1 | A (Python intra-proc) | Symbol-aware CFG nodes (`CallSite`, `defs`, `uses`, `call_sites`) | **done** (29 tests pass, ruff clean) |
 | 2 | A | Intra-procedural reaching-definitions | **done** (21 tests pass, ruff clean) |
 | 3 | A | Symbol-bound sanitizer recognition (`SanitizerBinding`) | **done** (16 new tests + 24 existing updated; ruff clean) |
-| 4 | A | Value-bound `evaluate_finding` + tri-state verdict | **done** (17 new tests + Cuthbert case pinned as candidate_only; ruff clean) |
-| 5 | A | Finding-normalisation adapter (SARIF / Semgrep / CodeQL) | not started |
+| 4 | A | Value-bound `evaluate_finding` + tri-state verdict | **done** (17 new tests + wrong-variable case pinned as candidate_only; ruff clean) |
+| 5 | A | Finding-normalisation adapter (SARIF / Semgrep / RAPTOR-native) | **done** (21 tests; SARIF + Semgrep + RAPTOR-native fixtures; end-to-end wrong-variable + safe straight-line; ruff clean) |
 | 6 | A | Audit JSONL schema upgrade (witness fields, `candidate_only` records) | not started |
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + report surfacing + E2E corpus | not started |
 | 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | not started |
@@ -159,7 +158,7 @@ identically.
 
 ### Phase 4 — Value-bound `evaluate_finding` + tri-state verdict
 
-**Goal:** the actual closure of Daniel's hole.
+**Goal:** the actual closure of the value-binding hole.
 
 - `SuppressionVerdict = Literal["suppress", "candidate_only",
   "no_suppress"]`. New `SanitizerCutResult.verdict` field; the
@@ -190,7 +189,7 @@ identically.
   `candidate_only` (no value layer at function granularity until
   Phase 11). The auto-downgrade is encoded here so phases 5–7 can
   rely on it.
-- Tests covering: Daniel's `handle(user, other)` counter-example
+- Tests covering: the `handle(user, other)` wrong-variable case
   (must NOT suppress); symmetric-sanitize TP (must suppress);
   bypass branch with sanitizer only on one path (must NOT
   suppress); C/C++ callgraph (must downgrade to `candidate_only`);
@@ -265,7 +264,7 @@ lexical check as fallback.
   `candidate_only` shows as a hint annotation on the surviving
   finding ("sanitizer present but value binding unproven").
 - E2E corpus: 5–8 hand-built fixtures.
-    - Daniel's wrong-variable case (must NOT suppress)
+    - the wrong-variable case (must NOT suppress)
     - Symmetric-sanitize TP (must suppress)
     - Bypass branch TP (must NOT suppress)
     - C/C++ callgraph downgrade

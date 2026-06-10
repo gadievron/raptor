@@ -10,9 +10,9 @@ of callable names. Phase 1 adds:
   in) and ``assigned_names`` (what the return flows to).
 
 The four-condition gate of Phase 4 will read these to close the
-soundness hole the reviewer surfaced (sanitizer node present on every
-path, but the cleaned value never reaches the sink). These tests pin
-the substrate; downstream phases reason from it.
+value-binding soundness hole (sanitizer node present on every path,
+but the cleaned value never reaches the sink). These tests pin the
+substrate; downstream phases reason from it.
 
 Coverage focus areas:
 
@@ -465,9 +465,10 @@ def test_call_sites_in_compound_test_attributed_to_header():
 
 
 def test_call_sites_in_compound_body_are_separate():
-    """Sanity check: the canonical Cuthbert case from the design doc
-    has the right separation. The two calls live on two different
-    lines, so they're attributed to two separate CFG nodes."""
+    """Sanity check: the canonical wrong-variable case from the
+    design doc has the right separation. The two calls live on two
+    different lines, so they're attributed to two separate CFG
+    nodes."""
     src = (
         "def handle(user, other):\n"
         "    safe_other = html.escape(other)\n"

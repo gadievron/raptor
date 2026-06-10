@@ -1,15 +1,15 @@
 """Phase 4 tests — value-bound suppression gate.
 
-These pin the closure of the soundness hole the PR #794 reviewer
-surfaced: the original vertex-cut proved control-flow but not
-value-flow, so it would suppress
+These pin the closure of the value-binding soundness hole: the
+original vertex-cut proved control-flow but not value-flow, so it
+would suppress
 
     def handle(user, other):
         safe_other = html.escape(other)
         render(user.name)
 
 as a "sanitized XSS" because removing the html.escape node makes
-the sink unreachable. The cleaner, however, never touched
+the sink unreachable. The sanitizer, however, never touched
 ``user.name``.
 
 Phase 4's gate evaluates four conditions per binding:
@@ -136,16 +136,16 @@ class TestVerdictDefaulting:
 
 
 # ---------------------------------------------------------------------------
-# The Cuthbert case — the whole point of the arc
+# The wrong-variable case — the whole point of the arc
 # ---------------------------------------------------------------------------
 
 
-class TestCuthbertCase:
+class TestWrongVariableCase:
     """``safe_other = html.escape(other); render(user.name)`` — the
-    PR #794 reviewer's example. The shipped Phase 7 incorrectly
+    canonical wrong-variable case. The shipped Phase 7 incorrectly
     suppresses this; Phase 4 must NOT."""
 
-    def test_phase_4_refuses_to_suppress_cuthbert_case(self):
+    def test_phase_4_refuses_to_suppress_wrong_variable_case(self):
         src = (
             "def handle(user, other):\n"
             "    safe_other = html.escape(other)\n"
@@ -168,7 +168,7 @@ class TestCuthbertCase:
 
     def test_phase_7_legacy_path_still_falsely_suppresses(self):
         """Documents the unsoundness when value context is omitted.
-        The original PR #794 behaviour — preserved for back-compat
+        The shipped Phase 7 behaviour — preserved for back-compat
         so existing tests pass — would suppress this. Phase 7 of
         the value-binding arc (smt_barrier wire-up behind flag)
         will switch the default to the value-bound path."""

@@ -216,12 +216,12 @@ def test_bindings_for_distinct_cwes_are_independent():
 
 
 # ---------------------------------------------------------------------------
-# Cuthbert case — the pinned soundness witness
+# Wrong-variable case — the pinned soundness witness
 # ---------------------------------------------------------------------------
 
 
-def test_cuthbert_case_binding_shape_makes_gate_refuse():
-    """The reviewer's canonical false-suppression case. After
+def test_wrong_variable_case_binding_shape_makes_gate_refuse():
+    """The canonical wrong-variable false-suppression case. After
     Phase 3:
 
     * one binding for html.escape on line 2

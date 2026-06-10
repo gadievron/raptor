@@ -401,11 +401,11 @@ def test_all_at_returns_full_per_symbol_map():
 
 
 # ---------------------------------------------------------------------------
-# The Cuthbert case — the whole point of Phase 2
+# The wrong-variable case — the whole point of Phase 2
 # ---------------------------------------------------------------------------
 
 
-def test_cuthbert_case_reaching_defs_show_value_binding_gap():
+def test_wrong_variable_case_reaching_defs_show_value_binding_gap():
     """``safe_other = html.escape(other); render(user.name)`` — at
     the sink node, ``user`` still reaches from the entry (never
     sanitised), and ``safe_other`` reaches from the sanitize node
