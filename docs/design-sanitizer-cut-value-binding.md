@@ -57,7 +57,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
 | 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/python_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
-| 13 | C | Per-function taint summaries | not started |
+| 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/python_taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
 | 14 | C | Inter-procedural `evaluate_finding` | not started |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | not started |
 | 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | not started |
@@ -545,31 +545,69 @@ unknown node).
 
 **Gates:** Phase 13.
 
-### Phase 13 — Per-function taint summaries
+### Phase 13 — Per-function taint summaries  *(done)*
 
 **Goal:** "if I taint param `p`, does it reach return / does it
-reach a callee's tainted-sink arg?"
+reach a callee's tainted-sink arg — and which sanitizers did the
+taint pass through on the way?"
 
-- For each function `f(p1, ..., pn)`: summary mapping
-  `taint_in_params → (taint_out_return, taint_out_call_args)`.
-  Computed via Phase 2 reaching-defs lifted to the inter-proc
-  level.
-- Fixed-point over the call graph; cycle handling via summary
-  widening (taint can only grow). Convergence test: at most
-  3 × |callgraph nodes| iterations, then bail with
-  `summary_unconverged: true` (treat unconverged callers as
-  `summary_unknown`).
-- Dynamic dispatch (`getattr`, `**kwargs` forwarding, `eval`,
-  `exec`, `importlib.import_module` with computed name) marks
-  the callee as `summary_unknown`. Callers of `summary_unknown`
-  functions downgrade to `candidate_only` along the affected
-  path.
-- Tests on identity (`def f(x): return x`), transform
-  (`def f(x): return html.escape(x)`), branching (`def f(x,
-  cond): return html.escape(x) if cond else x`), recursion,
-  mutual recursion.
+**Shipped:** `core/inventory/python_taint_summaries.py` exposes
+`TaintSummary` (frozen, hashable) carrying:
 
-**Ships:** summaries + tests.
+* `return_effects: FrozenSet[Tuple[int, str, int]]` — each triple
+  `(param_idx, callable_name, arg_idx)` says "the taint from this
+  caller-param passed through this callable's arg on its way to
+  the return value." The sentinel `("", -1)` means "direct return,
+  no callable in between." Phase 14's sanitizer-in-helper rescue
+  keys on this set.
+* `call_arg_taint: FrozenSet[Tuple[str, int, int]]` — each triple
+  `(callee_name, arg_idx, param_idx)` says "this function's param
+  N, when tainted at the call, taints the arg at index `arg_idx`
+  of the call to `callee_name`."
+* `summary_unknown` + `summary_unknown_reason` — set when the
+  function contains `getattr` / `setattr` / `delattr` / `eval` /
+  `exec` / `compile` / `globals` / `locals` / `__import__` /
+  `importlib.*` calls, or forwards `**kwargs`. Phase 14 treats
+  unknown summaries as opaque and downgrades.
+* `summary_unconverged` — set when the outer call-graph
+  fixed-point bails at `3 × N` iterations. Phase 14 treats this
+  the same as `summary_unknown`.
+
+Plus query helpers `param_taints_return(i)`,
+`return_sanitizers_for_param(i)`, `params_tainting_call_arg(callee,
+arg_idx)`.
+
+**Algorithm:**
+
+* Per-function fixed-point inside the intra-proc CFG. Each
+  `(node, symbol)` carries a `TaintState` — a frozenset of
+  `(param_idx, frozenset_of_(callable, arg_idx))` atoms. The
+  per-symbol IN state is `union over reaching defs`; the OUT
+  state is computed by walking the AST of the defining expression
+  (positional arg accuracy beats the `sorted(arg_names)` fallback).
+* Return values walked via the same AST recursion, so
+  `return html.escape(x)` records `(0, "html.escape", 0)` in
+  `return_effects` even though no symbol-level def captures it.
+* Call sites walked at each line so positional-arg taint feeds
+  `call_arg_taint` correctly.
+* Outer fixed-point iterates summaries over the call graph,
+  bailing at `3 × N` iterations. Functions whose summary depends
+  on a `summary_unknown` callee get external-stamp fallback at
+  that call site (taint flows through with the callee's name as
+  the effect entry).
+* Nested-function dynamic dispatch doesn't poison the outer's
+  summary — the unknown-detector scopes to the immediate
+  function's own body.
+
+**Tests:** `core/inventory/tests/test_python_taint_summaries.py`
+— 23 tests covering primitives (identity, constant return,
+transform, branching, ordered params), call_arg_taint
+(external call, intermediate var, untainted arg), inter-procedural
+(sanitizer-in-helper rescue, passthrough helper, two-param helper
+positional resolution), cycles (recursion converges, mutual
+recursion terminates), summary_unknown (getattr / eval / exec /
+**kwargs / nested-doesn't-poison / normal-is-not-unknown),
+coverage (all in-module fns, no `<module>` entry, lambda → unknown).
 
 **Gates:** Phase 14.
 
