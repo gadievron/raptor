@@ -90,8 +90,8 @@ class CPPCFGNode:
     ``assignment_expression`` (including compound forms ``+=``,
     ``-=``, etc.), and the induction variable of a C-style ``for``'s
     initialiser. Compound-statement targets (struct field writes,
-    array element writes) yield the BASE name only — Phase 10
-    refines this with ``may_escape`` for the indirection case.
+    array element writes) yield the BASE name only — Phase 10's
+    ``may_escape`` flag below covers the indirection case.
 
     ``uses`` covers identifiers read in ``Load`` position. Compound
     field-access reads (``obj.attr``, ``obj->attr``) contribute the
@@ -108,6 +108,18 @@ class CPPCFGNode:
     with the legacy chokepoint paths (matches the structure of
     ``PyCFGNode.calls``). ``{cs.name for cs in call_sites}`` agrees
     with it.
+
+    ``may_escape`` is Phase 10's conservative-aliasing bit. True iff
+    the statement involves any syntactic indirection — pointer
+    dereference (``*p``), address-of (``&x``), subscript (``a[i]``),
+    arrow field access (``obj->field``), or a call to a bulk-copy
+    function in :data:`_BULK_COPY_FUNCS` (``memcpy``, ``strcpy``,
+    etc. — they write through a destination pointer the gate can't
+    track). evaluate_finding downgrades ``SUPPRESS → CANDIDATE_ONLY``
+    when any node on a source→sink path is ``may_escape``. The flag
+    is non-load-bearing for Python (PyCFGNode lacks the attribute and
+    ``getattr(..., "may_escape", False)`` keeps the Python path
+    bit-identical).
     """
     kind: str          # "entry" | "exit" | "stmt"
     lineno: int
@@ -116,6 +128,7 @@ class CPPCFGNode:
     defs: FrozenSet[str] = frozenset()
     uses: FrozenSet[str] = frozenset()
     call_sites: Tuple[CallSite, ...] = ()
+    may_escape: bool = False
 
     def __repr__(self) -> str:                              # pragma: no cover
         return (
@@ -186,6 +199,30 @@ def _get_parser(language: str):
         return None
 
 
+# Phase 10 — bulk-copy / string-build functions whose presence
+# stamps may_escape on the enclosing statement. They write through a
+# destination pointer the value-bound gate can't follow. Conservative
+# inclusion: anything that copies bytes into a caller-supplied buffer
+# qualifies. Names are matched against the resolved callable name
+# (``_resolve_callable_name`` returns the bare basename for non-dotted
+# calls — ``memcpy``, not ``std::memcpy``; ``std::memcpy`` will appear
+# as ``std.memcpy`` after the dotted-collapse, which the catalogue
+# also includes).
+_BULK_COPY_FUNCS = frozenset({
+    # memory
+    "memcpy", "memmove", "memset", "bzero",
+    "std.memcpy", "std.memmove", "std.memset",
+    # string copy / cat
+    "strcpy", "strncpy", "strlcpy",
+    "strcat", "strncat", "strlcat",
+    "stpcpy", "stpncpy",
+    # formatted writes into a buffer
+    "sprintf", "snprintf", "vsprintf", "vsnprintf",
+    "wcscpy", "wcsncpy", "wcscat", "wcsncat",
+    "swprintf", "vswprintf",
+})
+
+
 # Node-type constants — keep in one place so the dispatcher in
 # :class:`_CPPCFGBuilder` doesn't bury magic strings. Tree-sitter-c
 # and tree-sitter-cpp agree on these names; C++-only nodes (templates,
@@ -220,6 +257,26 @@ _POINTER_DECLARATOR = "pointer_declarator"
 _PARENTHESIZED_DECLARATOR = "parenthesized_declarator"
 _PARAM_LIST = "parameter_list"
 _PARAM_DECL = "parameter_declaration"
+
+# Phase 10 — node types whose presence in a statement stamps
+# ``may_escape`` on the enclosing CFG node. Each represents a
+# syntactic indirection the value-bound gate can't follow:
+#
+# * ``pointer_expression`` — both ``*p`` (deref) and ``&x``
+#   (address-of). The operator child distinguishes them but both
+#   qualify: deref reads through an unknown alias, address-of hands
+#   the callee a handle to mutate the named symbol.
+# * ``subscript_expression`` — ``a[i]`` in load OR store position.
+#   The same array element can be read by any other index expression
+#   we can't symbolically equate.
+# * ``field_expression`` is only flagged when the operator is ``->``
+#   (arrow access through a pointer). Plain ``obj.field`` is a value
+#   access through the named base; no indirection. The walker reads
+#   the operator child to distinguish.
+_INDIRECTION_NODE_TYPES = frozenset({
+    "pointer_expression",
+    "subscript_expression",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +511,44 @@ def _walk_subtree_for_calls(n) -> FrozenSet[str]:
     return frozenset(out)
 
 
+def _subtree_has_indirection(n) -> bool:
+    """Phase 10 — True iff any descendant of ``n`` is one of:
+
+    * ``pointer_expression`` (``*p`` or ``&x``)
+    * ``subscript_expression`` (``a[i]``)
+    * ``field_expression`` with operator ``->``
+    * ``call_expression`` whose resolved callee is in
+      :data:`_BULK_COPY_FUNCS` (``memcpy`` etc.)
+
+    Used by the statement-payload extractors to set
+    :attr:`CPPCFGNode.may_escape`. Recursion is depth-first; we
+    don't short-circuit because the cost is bounded by statement
+    size (tens of nodes) and the call-site walk has to happen
+    anyway for bulk-copy detection.
+    """
+    if n is None:
+        return False
+    stack = [n]
+    while stack:
+        cur = stack.pop()
+        t = cur.type
+        if t in _INDIRECTION_NODE_TYPES:
+            return True
+        if t == _FIELD_EXPR:
+            op = cur.child_by_field_name("operator")
+            if op is not None and _node_text(op) == "->":
+                return True
+        if t == _CALL_EXPR:
+            callee = cur.child_by_field_name("function")
+            name = _resolve_callable_name(callee)
+            if name is not None and name in _BULK_COPY_FUNCS:
+                return True
+        for c in cur.children:
+            if c.is_named:
+                stack.append(c)
+    return False
+
+
 def _payload_from_declaration(decl) -> Tuple[FrozenSet[str], FrozenSet[str],
                                               FrozenSet[str], Tuple[CallSite, ...]]:
     """``int x = f(y);`` and ``int x;`` etc.
@@ -683,13 +778,15 @@ class _CPPCFGBuilder:
         defs: FrozenSet[str] = frozenset(),
         uses: FrozenSet[str] = frozenset(),
         call_sites: Tuple[CallSite, ...] = (),
+        may_escape: bool = False,
     ) -> CPPCFGNode:
-        # Append a zero-width-space "tie-breaker" to the label only
-        # if a node with identical structural identity already exists.
-        # Cheap and keeps repr readable for the common case.
+        # Append a tie-breaker tag only when a node with identical
+        # structural identity already exists — cheap, keeps repr
+        # readable for the common case.
         node = CPPCFGNode(
             kind=kind, lineno=lineno, label=label,
             calls=calls, defs=defs, uses=uses, call_sites=call_sites,
+            may_escape=may_escape,
         )
         if node in self._adjacency or node in self._all_nodes:
             self._dedupe_counter += 1
@@ -697,6 +794,7 @@ class _CPPCFGBuilder:
             node = CPPCFGNode(
                 kind=kind, lineno=lineno, label=label + tag,
                 calls=calls, defs=defs, uses=uses, call_sites=call_sites,
+                may_escape=may_escape,
             )
         self._all_nodes.append(node)
         return node
@@ -793,6 +891,7 @@ class _CPPCFGBuilder:
             kind="stmt", lineno=stmt.start_point[0] + 1,
             label=self._short_label(stmt),
             calls=calls, defs=defs, uses=uses, call_sites=css,
+            may_escape=_subtree_has_indirection(stmt),
         )
 
     # ----- compound constructs -----
@@ -804,6 +903,7 @@ class _CPPCFGBuilder:
             kind="stmt", lineno=stmt.start_point[0] + 1,
             label="if " + self._short_label(cond) if cond is not None else "if",
             calls=calls, defs=defs, uses=uses, call_sites=css,
+            may_escape=_subtree_has_indirection(cond),
         )
         self._link_many(incoming, cond_node)
         then_body = stmt.child_by_field_name("consequence")
@@ -835,6 +935,7 @@ class _CPPCFGBuilder:
             kind="stmt", lineno=stmt.start_point[0] + 1,
             label="while " + self._short_label(cond) if cond is not None else "while",
             calls=calls, defs=defs, uses=uses, call_sites=css,
+            may_escape=_subtree_has_indirection(cond),
         )
         self._link_many(incoming, header)
         after_loop: List[CPPCFGNode] = [header]
@@ -865,6 +966,7 @@ class _CPPCFGBuilder:
                 kind="stmt", lineno=stmt.start_point[0] + 1,
                 label="for " + self._short_label(cond),
                 calls=calls, defs=defs, uses=uses, call_sites=css,
+                may_escape=_subtree_has_indirection(cond),
             )
         else:
             # ``for(;;)`` infinite loop header
@@ -880,6 +982,7 @@ class _CPPCFGBuilder:
                 kind="stmt", lineno=step.start_point[0] + 1,
                 label="step " + self._short_label(step),
                 calls=calls_s, defs=defs_s, uses=uses_s, call_sites=css_s,
+                may_escape=_subtree_has_indirection(step),
             )
             self._link(step_node, header)
         else:
@@ -904,6 +1007,7 @@ class _CPPCFGBuilder:
                 kind="stmt", lineno=cond.start_point[0] + 1,
                 label="while " + self._short_label(cond),
                 calls=calls, defs=defs, uses=uses, call_sites=css,
+                may_escape=_subtree_has_indirection(cond),
             )
         else:
             tail = self._make_node(
@@ -946,6 +1050,7 @@ class _CPPCFGBuilder:
             kind="stmt", lineno=stmt.start_point[0] + 1,
             label="switch " + (self._short_label(subj) if subj is not None else ""),
             calls=calls, defs=defs, uses=uses, call_sites=css,
+            may_escape=_subtree_has_indirection(subj),
         )
         self._link_many(incoming, header)
         # Join node — every break in the switch body links here; the

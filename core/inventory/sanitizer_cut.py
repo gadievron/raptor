@@ -54,6 +54,7 @@ from typing import (
     Dict,
     FrozenSet,
     Iterable,
+    List,
     Mapping,
     Optional,
     Set,
@@ -234,6 +235,73 @@ def sanitizer_cuts_source_to_sink(
         return True
     reachable = _bfs_reachable_excluding(graph, sources, cut)
     return sink not in reachable
+
+
+def _may_escape_on_path(
+    graph,
+    sources: Iterable,
+    sink,
+    excluded: Set,
+) -> bool:
+    """Phase 10 — True iff any node with ``may_escape=True`` lies on
+    a source→sink path in ``graph``, after removing ``excluded`` (the
+    value-bound sanitizer cut). Forward-reachable-from-sources
+    intersected with backward-reachable-to-sink gives the on-path set;
+    we early-return on the first ``may_escape`` hit.
+
+    Cheap: O(V + E) per call (one forward BFS + one reverse BFS).
+    Pure function. Uses ``getattr(node, "may_escape", False)`` so
+    PyCFGNode (which lacks the attribute) always returns False — the
+    Python evaluate_finding paths stay bit-identical.
+    """
+    excl: Set = set(excluded) if excluded else set()
+
+    # Forward BFS from sources.
+    forward: Set = set()
+    queue: deque = deque()
+    for s in sources:
+        if s not in excl and s not in forward:
+            forward.add(s)
+            queue.append(s)
+    while queue:
+        node = queue.popleft()
+        for nxt in graph.successors(node):
+            if nxt in excl or nxt in forward:
+                continue
+            forward.add(nxt)
+            queue.append(nxt)
+
+    # Build reverse adjacency for the backward walk. graph only
+    # exposes successors(), so we build a one-shot reverse index over
+    # the forward-reachable set (everything else is irrelevant — a
+    # node not in ``forward`` can't be on a source→sink path).
+    predecessors: Dict[Any, List[Any]] = {}
+    for n in forward:
+        for succ in graph.successors(n):
+            if succ in forward:
+                predecessors.setdefault(succ, []).append(n)
+
+    # Backward BFS from sink. ``sink`` itself isn't necessarily in
+    # ``forward`` (the cut might disconnect it — but then the
+    # surrounding evaluate_finding wouldn't be checking us). Seed
+    # only if it is.
+    if sink not in forward:
+        return False
+    backward: Set = {sink}
+    rqueue: deque = deque([sink])
+    while rqueue:
+        node = rqueue.popleft()
+        for prev in predecessors.get(node, ()):
+            if prev in backward:
+                continue
+            backward.add(prev)
+            rqueue.append(prev)
+
+    # On-path = forward ∩ backward. Check may_escape on each.
+    for n in backward:
+        if getattr(n, "may_escape", False):
+            return True
+    return False
 
 
 def _propagate_taint(
@@ -487,6 +555,33 @@ def evaluate_finding(
     )
 
     if value_bound_cut:
+        # Phase 10 — pointer/alias conservatism. If any node on a
+        # source→sink path in the *un-cut* graph is ``may_escape``,
+        # the gate can't prove the cleaned value actually reaches
+        # the sink: an alias could have been written through
+        # indirection the gate doesn't track. Run the check over
+        # the un-cut graph (excluded=empty) — the cut itself proves
+        # control flow goes through the sanitizer, but says nothing
+        # about whether the cleaned VALUE survives indirection on
+        # that path. Downgrade SUPPRESS → CANDIDATE_ONLY rather
+        # than risk a false suppression.
+        if _may_escape_on_path(graph, sources_set, sink, excluded=set()):
+            return SanitizerCutResult(
+                suppress=False,
+                reason=(
+                    "candidate_only: value-bound vertex-cut held but "
+                    "a node on a source→sink path is may_escape "
+                    "(indirection or bulk-copy detected); cleaned "
+                    "value's identity at the sink is unprovable "
+                    "without alias analysis"
+                ),
+                cut_set=frozenset(),
+                candidate_callables=frozenset(candidate_callables),
+                verdict=VERDICT_CANDIDATE_ONLY,
+                value_bound_bindings=value_bound_bindings,
+                all_matched_bindings=matched_bindings,
+                sink_arg=sink_arg,
+            )
         return SanitizerCutResult(
             suppress=True,
             reason=(

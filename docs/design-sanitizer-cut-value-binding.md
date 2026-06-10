@@ -54,7 +54,7 @@ Phase 1 don't drift before Phase 16 lands.
 | 7 | A | `smt_barrier` wire-up behind `RAPTOR_SANITIZER_CUT` flag + E2E corpus + ablation | **done** (13 corpus/wire-up tests; 7-fixture corpus + CORPUS.md ablation table; smt_barrier extended with optional file_path/cwe/language kwargs; ruff clean) |
 | 8 | B (C/C++ intra-proc) | Substrate spike + choice (libclang vs tree-sitter vs r2-decomp) | **done — chose tree-sitter** (60-LOC C fixture parses in 1.73 ms, 6/6 canonical shapes recover defs/uses/call_sites; writeup at `docs/phase-8-substrate-spike/DECISION.md`) |
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
-| 10 | B | Pointer / alias conservatism | not started |
+| 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | not started |
 | 12 | C (Python inter-proc) | Module-local Python call graph | not started |
 | 13 | C | Per-function taint summaries | not started |
@@ -384,26 +384,52 @@ grammars aren't installed.
 
 **Gates:** Phase 10, Phase 11.
 
-### Phase 10 — Pointer / alias conservatism
+### Phase 10 — Pointer / alias conservatism  *(done)*
 
 **Goal:** decide what to do about indirection without solving
 field-sensitive aliasing.
 
-- Policy: track direct flows only. Any indirection — `*p`, `&x`,
-  `a[i]`, struct field write through a pointer, `memcpy`-style
-  bulk copy — marks the touched symbol set as `may_escape`.
-- `evaluate_finding` on a path through a `may_escape` node
-  downgrades to `candidate_only` even when the cut otherwise
-  holds. (Sound: we can't prove the cleaned value is what reaches
-  the sink if the sink reads through an alias the sanitizer
-  doesn't know about.)
-- Field-sensitivity, points-to analysis, and inter-procedural
-  alias tracking are explicitly out of scope. The conservative
-  bit lets us be honest without paying for a points-to engine.
-- Tests on aliased writes, struct field assignments via pointer,
-  `memcpy` indirect taint.
+**Shipped:**
 
-**Ships:** policy + tests.
+* `CPPCFGNode.may_escape: bool` (default False) — stamped True by
+  the Phase 9 walker when the statement contains any of:
+  * `pointer_expression` — both deref (`*p`) and address-of (`&x`)
+  * `subscript_expression` — `a[i]` in load or store position
+  * `field_expression` with `->` operator (arrow access through a
+    pointer). Plain `obj.field` is NOT flagged — it's a value
+    access through a named base.
+  * a call to a bulk-copy / string-build callable from
+    `_BULK_COPY_FUNCS` (`memcpy`, `memmove`, `memset`, `bzero`,
+    `strcpy`/`strncpy`/`strlcpy`, `strcat`/`strncat`/`strlcat`,
+    `stpcpy`/`stpncpy`, `sprintf`/`snprintf`/`vsprintf`/`vsnprintf`,
+    `wcscpy` and friends, `swprintf`). These write through a
+    destination pointer the value-bound gate can't follow.
+
+* `evaluate_finding` calls `_may_escape_on_path(graph, sources,
+  sink)` after a value-bound cut holds. The helper does forward
+  BFS from sources ∩ backward BFS to sink over the *un-cut* graph
+  (the cut nodes themselves are on path and their indirection
+  still counts). Any on-path node with `may_escape=True`
+  downgrades `SUPPRESS → CANDIDATE_ONLY` with a reason that names
+  the witness. PyCFGNode lacks the attribute so
+  `getattr(..., "may_escape", False)` keeps every Python verdict
+  bit-identical.
+
+* Out of scope by design: field sensitivity, points-to analysis,
+  inter-procedural alias tracking. The conservative bit lets us
+  be honest about value flow without paying for a points-to
+  engine.
+
+**Tests:** `core/inventory/tests/test_phase10_may_escape.py` — 27
+tests: stamping (plain assignment is not flagged; deref load /
+deref store / address-of / subscript load / subscript store /
+arrow field / dot field NOT flagged / 9 bulk-copy callees / if
+condition / for step / entry+exit sentinels), helper behaviour
+(Python returns False; un-cut C path finds it; off-path dead
+branch IS flagged — conservative by design; excluded node is
+treated as removed), end-to-end (Python path unchanged;
+synthetic-stamped Python sink demonstrates downgrade reason;
+regression that unstamped CFG still suppresses).
 
 **Gates:** Phase 11.
 
