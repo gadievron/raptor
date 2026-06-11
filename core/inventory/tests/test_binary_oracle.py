@@ -336,9 +336,20 @@ def test_classifier_handles_cpp_mangled_symbols(tmp_path: Path) -> None:
     assert v["main"].classification == "symbol_present"
 
 
+@pytest.mark.slow
 def test_classifier_does_not_crash_on_stripped_real_binary() -> None:
     """A real-world stripped system binary (``/usr/bin/ls``) — must not
-    raise; classifier returns empty (caller logs the skip)."""
+    raise; classifier returns empty (caller logs the skip).
+
+    Marked ``slow`` because invoking nm/objdump/readelf against a real
+    system binary takes ~10-15s on CI cold-start runners and brushes
+    the default-tier 10s call-phase guard. Coverage for the
+    stripped-binary fallback path is preserved in fast-tier via
+    ``test_classifier_falls_back_to_symbol_only_on_stripped_binary``
+    which uses a built fixture; this test's unique value is the
+    "real-world stripped binary doesn't crash" smoke, which is
+    legitimately a nightly-tier concern.
+    """
     ls = Path("/usr/bin/ls")
     if not ls.exists():
         pytest.skip("/usr/bin/ls not present")
