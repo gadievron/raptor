@@ -132,3 +132,40 @@ class TestSelinuxEnforcingProbe:
 
         monkeypatch.setattr(Path, "read_text", _raise)
         assert probes._selinux_enforcing() is False
+
+
+class TestLandlockOnlyWarningRouting:
+    """Pre-PR-#777-followup the Landlock-only warning at
+    ``context.py:755`` hardcoded
+    ``kernel.apparmor_restrict_unprivileged_userns=1`` as the likely
+    cause. On a SELinux + rootless-podman host (no AppArmor sysctl)
+    operators were told to flip a non-existent sysctl — actively
+    misleading. The warning now sources its attribution from
+    ``mount_unavailable_reason()`` so each LSM gets its own message.
+
+    Construct the warning string the same way the runtime path does
+    and pin that the routing actually surfaces."""
+
+    def test_selinux_landlock_warning_does_not_mention_apparmor(
+        self, monkeypatch,
+    ):
+        from pathlib import Path
+
+        def _read_text(self, *a, **kw):
+            s = str(self)
+            if s.endswith("apparmor_restrict_unprivileged_userns"):
+                raise FileNotFoundError
+            if s == "/sys/fs/selinux/enforce":
+                return "1\n"
+            raise FileNotFoundError
+
+        monkeypatch.setattr(Path, "read_text", _read_text)
+        monkeypatch.setattr(probes.shutil, "which",
+                            lambda b: f"/usr/bin/{b}")
+        condition, _ = probes.mount_unavailable_reason()
+        warning = (
+            f"RAPTOR: sandbox running in Landlock-only mode — "
+            f"{condition}. Credential exfil ..."
+        )
+        assert "apparmor" not in warning.lower()
+        assert "selinux" in warning.lower()

@@ -636,12 +636,21 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         sandbox_kwargs["fake_home"] = True
     if readable_paths:
         sandbox_kwargs["readable_paths"] = list(readable_paths)
+    # ``strict_env=True`` acknowledges that this caller deliberately
+    # supplies env= (a ``get_safe_env()``-derived dict with HOME / XDG
+    # overrides from the semgrep-specific path). Without it, the sandbox
+    # logs a one-line WARNING per invocation telling us to do exactly
+    # this. Operator on PR #777 surfaced the warning firing ~12× per
+    # scan run. The strip is a no-op for us (``get_safe_env`` already
+    # excludes DANGEROUS_ENV_VARS) but the flag is also the documented
+    # "I'm aware of the bypass" marker.
     p = sandbox_run(
         cmd,
         target=target,
         output=output,
         cwd=cwd,
         env=env or RaptorConfig.get_safe_env(),
+        strict_env=True,
         text=True,
         capture_output=True,
         timeout=timeout,
