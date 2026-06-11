@@ -789,8 +789,39 @@ def test_binary_oracle_paths_does_not_leak_across_runs(
         "BINARY_ORACLE_EDGES leaked from prior run — must always reset")
 
 
+@pytest.fixture(scope="module")
+def _planted_unrelated_binary(tmp_path_factory):
+    """Module-scoped: gcc-compile a "planted" ELF whose DWARF / symbol
+    table contains symbols completely unrelated to any source-side
+    inventory we test against. Used by the source-coverage-floor
+    defense test (and any future tests that need the hostile-ELF
+    attack shape — currently only one consumer).
+
+    Hoisting the compile into a module fixture moves the ~8s gcc
+    cost out of the test's CALL phase and into SETUP. The default-
+    tier slow-test guard (``conftest.py`` pytest_runtest_logreport)
+    only checks CALL duration, so this keeps the test fast-tier
+    eligible without slow-marking it. Bonus: if a second hostile-
+    ELF test is added later, it inherits the cached compile.
+
+    Compiled with ``-O0 -g`` so DWARF passes the auto-detect sanity
+    check — this binary IS valid; the test's point is that it has
+    nothing to do with the analysed source tree.
+    """
+    import subprocess as _sp
+    work = tmp_path_factory.mktemp("planted_binary")
+    src = work / "hostile.c"
+    src.write_text(
+        "int hostile_helper(int x){return x*2;}\n"
+        "int main(void){return hostile_helper(1);}\n"
+    )
+    binary = work / "planted"
+    _sp.run(["gcc", "-O0", "-g", "-o", str(binary), str(src)], check=True)
+    return binary
+
+
 def test_enrich_drops_unrelated_binary_below_source_coverage_floor(
-    tmp_path: Path,
+    _planted_unrelated_binary,
 ) -> None:
     """Adversarial review P0-D-1 defense: a binary whose DWARF mentions
     almost none of the source-side function names — the hostile-ELF
@@ -804,8 +835,6 @@ def test_enrich_drops_unrelated_binary_below_source_coverage_floor(
     function classifies absent and downstream chokepoints would
     suppress all native findings on this target.
     """
-    import subprocess as _sp
-
     # Source inventory lists ten functions — none of which exist
     # in the planted binary's DWARF/symbol table. Wide enough that
     # the min_matched=3 floor isn't the only mechanism in play (so
@@ -815,20 +844,7 @@ def test_enrich_drops_unrelated_binary_below_source_coverage_floor(
     inv = {"files": [{"path": "real.c", "language": "c",
                       "items": items}]}
 
-    # The "planted" binary: completely different source, completely
-    # different symbols. Compiled with -O0 -g to ensure DWARF passes
-    # the auto-detect sanity check (this binary IS valid; the issue
-    # is that it has nothing to do with the analysed source tree).
-    planted_src = tmp_path / "hostile.c"
-    planted_src.write_text(
-        "int hostile_helper(int x){return x*2;}\n"
-        "int main(void){return hostile_helper(1);}\n"
-    )
-    planted_bin = tmp_path / "planted"
-    _sp.run(["gcc", "-O0", "-g", "-o", str(planted_bin), str(planted_src)],
-            check=True)
-
-    counts = enrich_inventory_with_binary_oracle(inv, (planted_bin,))
+    counts = enrich_inventory_with_binary_oracle(inv, (_planted_unrelated_binary,))
 
     # Defense fired: the planted binary was dropped, so NOTHING got a
     # binary_oracle annotation. Without the floor, all 3 would classify
