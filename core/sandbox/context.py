@@ -95,13 +95,17 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
                 "Command Line Tools if missing.",
             )
     elif not check_mount_available():
-        return (
-            "mount-ns blocked by host "
-            "(apparmor_restrict_unprivileged_userns=1)",
-            "set kernel.apparmor_restrict_unprivileged_userns=0 "
-            "(Ubuntu 24.04+) and install the uidmap package; or "
-            "rerun on a host where mount-ns is available.",
-        )
+        # Pre-fix this branch hardcoded the AppArmor diagnostic — but
+        # ``check_mount_available()`` can fail for at least four
+        # distinct reasons (AppArmor sysctl, missing uidmap binaries,
+        # SELinux enforcing, outer seccomp / nested userns), each with
+        # its own remediation. Misattributing to AppArmor on a
+        # SELinux-using host sent operators chasing the wrong sysctl
+        # entirely. Route to ``mount_unavailable_reason()`` which
+        # re-probes the specific conditions in priority order and
+        # returns a routed ``(condition, fix)``.
+        from .probes import mount_unavailable_reason
+        return mount_unavailable_reason()
     if kwargs.get("pass_fds"):
         return (
             "call uses pass_fds= which spawn doesn't plumb through",

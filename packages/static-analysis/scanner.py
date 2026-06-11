@@ -2013,6 +2013,31 @@ def main():
                 file=sys.stderr,
             )
 
+        # CI-gate signal — "every dispatched semgrep pack failed" means
+        # the scan produced no useful output. Pre-fix this exited 0
+        # regardless: an operator running ``raptor scan`` as a pre-merge
+        # gate on a broken sandbox would silently false-pass with "0
+        # findings". Detect at the dispatch boundary (sarif_paths has
+        # one entry per dispatched pack — success or fail; failed_scans
+        # is the failure subset). When the two lengths match and packs
+        # were attempted, surface as a distinct exit code at the final
+        # sys.exit below. The reserved SANDBOX_ENGAGE_EXIT_CODE stays
+        # for the actual sandbox-engagement-failure path (raised as
+        # SandboxSetupError); ``4`` is the all-packs-failed signal.
+        all_semgrep_failed = (
+            len(semgrep_sarifs) > 0
+            and len(semgrep_failed) == len(semgrep_sarifs)
+        )
+        if all_semgrep_failed:
+            print(
+                f"\nRAPTOR: scan produced no useful semgrep output — "
+                f"all {len(semgrep_sarifs)} dispatched pack(s) failed. "
+                f"Exiting 4 (CI-gate signal — distinct from "
+                f"sandbox-engagement-failure exit "
+                f"{SANDBOX_ENGAGE_EXIT_CODE}).",
+                file=sys.stderr,
+            )
+
         # CodeQL stage (optional). --no-codeql takes precedence —
         # script-friendly so a default-flip from "off" to "on" can
         # be opted out of without code changes.
@@ -2212,7 +2237,11 @@ def main():
         except Exception as _e:
             logger.debug("summarize_and_write at end of scanner.py: "
                          "%s", _e, exc_info=True)
-        sys.exit(0)
+        # ``all_semgrep_failed`` set above when every dispatched
+        # semgrep pack failed (CI-gate signal — exit 4 distinct from
+        # the sandbox-engagement-failure exit code which is reserved
+        # for the SandboxSetupError path at __main__).
+        sys.exit(4 if all_semgrep_failed else 0)
     finally:
         if not args.keep:
             try:

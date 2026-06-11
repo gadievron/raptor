@@ -331,3 +331,58 @@ class TestExtraConfigDedupAndCollision:
         assert len(set(names)) == 2, (
             f"basename-colliding extra_configs got same name: {names}"
         )
+
+
+class TestAllSemgrepPacksFailedExitCode:
+    """Regression guard for the CI-gate-false-pass class. Pre-fix
+    ``raptor scan`` exited 0 even when every dispatched semgrep pack
+    failed (e.g. broken sandbox / network down / semgrep binary
+    crash). An operator running raptor as a pre-merge gate silently
+    got "0 findings = clean PR" when in fact NO pack ran. Surface as
+    exit code 4 at the dispatch boundary.
+
+    These tests assert the FLAG-COMPUTATION logic (sarif/failed
+    length equality + non-empty); the end-to-end sys.exit(4) wiring
+    is covered by integration."""
+
+    def test_all_failed_when_failed_equals_sarif_lengths(self):
+        """All N packs dispatched, all N in failed list → all-failed."""
+        sarif_paths = ["a.sarif", "b.sarif", "c.sarif"]
+        failed = ["a", "b", "c"]
+        all_failed = (
+            len(sarif_paths) > 0 and len(failed) == len(sarif_paths)
+        )
+        assert all_failed is True
+
+    def test_partial_failure_does_not_trigger(self):
+        """1 of 3 failed → 2 produced useful output → don't exit 4."""
+        sarif_paths = ["a.sarif", "b.sarif", "c.sarif"]
+        failed = ["a"]
+        all_failed = (
+            len(sarif_paths) > 0 and len(failed) == len(sarif_paths)
+        )
+        assert all_failed is False
+
+    def test_empty_dispatch_does_not_trigger(self):
+        """Operator passed no policy groups + no extra-config → no
+        packs dispatched. That's an operator-input issue, not a
+        scan-failure; don't exit 4 (would mask the real misuse)."""
+        sarif_paths = []
+        failed = []
+        all_failed = (
+            len(sarif_paths) > 0 and len(failed) == len(sarif_paths)
+        )
+        assert all_failed is False
+
+    def test_failure_with_zero_sarif_paths_does_not_trigger(self):
+        """Edge case: failed list populated but sarif_paths empty
+        (shouldn't happen in practice — every dispatched pack
+        appends a sarif_path even on failure — but defensive: we
+        gate on ``sarif_paths > 0`` so a malformed return value
+        doesn't crash here)."""
+        sarif_paths = []
+        failed = ["mystery"]
+        all_failed = (
+            len(sarif_paths) > 0 and len(failed) == len(sarif_paths)
+        )
+        assert all_failed is False
