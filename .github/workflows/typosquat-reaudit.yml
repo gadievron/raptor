@@ -32,7 +32,7 @@ jobs:
       - name: Checkout
         # Hash-pinned per design/sca.md §1045 (re-run raptor-sca fix
         # --cve-only --hash-pin after a minor bump).
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6

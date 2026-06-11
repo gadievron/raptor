@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           # Need full history so we can check out main as the
           # baseline below.
