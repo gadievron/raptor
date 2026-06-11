@@ -101,7 +101,7 @@ jobs:
       codeql_actions: ${{ steps.filter.outputs.codeql_actions }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
       - id: force
@@ -220,14 +220,14 @@ jobs:
 
       - name: Checkout repository
         if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
       # Initializes the CodeQL tools for scanning.
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        uses: github/codeql-action/init@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -253,7 +253,7 @@ jobs:
       # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        uses: github/codeql-action/analyze@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
         with:
           category: "/language:${{matrix.language}}"
           upload: never
@@ -339,7 +339,7 @@ jobs:
 
     steps:
       - name: Checkout (needed by upload-sarif for repo metadata)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -406,7 +406,7 @@ jobs:
       # the multi-run file as one batch and the meta-check fires with
       # all three configs visible.
       - name: Upload combined SARIF
-        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        uses: github/codeql-action/upload-sarif@1a818fd5f97ed0ee9a823421bd5b171add01227f  # was v4.36.2
         with:
           sarif_file: combined.sarif
           # No `category:` here — each run carries its own
