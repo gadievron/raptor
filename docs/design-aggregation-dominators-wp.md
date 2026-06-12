@@ -92,14 +92,20 @@ The report is what gates 1b.
       `jeffreys_prior()` (Beta(½,½)), `weak_informative_prior(mean,
       strength)` (operator supplies prior mean and the equivalent
       sample count).
-- **Explicitly NOT included.** `class_base_rate_from_scorecard()`
-  was in an earlier draft. The scorecard's `correct / incorrect`
-  counts measure agreement-with-majority, **not** true-positive
-  incidence — using them as a base-rate prior would re-import the
-  same circularity Phase 4 is meant to remove. A real per-class base
-  rate requires the panel log from Phase 2 (raw verdicts +
-  validated outcomes); the corresponding factory will be added in
-  Phase 3 once that data is available.
+- **Informed priors come from `/validate`, not the scorecard.**
+  `class_base_rate_from_scorecard()` was in an earlier draft and is
+  deliberately excluded: the scorecard's `correct / incorrect` counts
+  measure agreement-with-majority, **not** true-positive incidence, so
+  using them as a base-rate prior would re-import the same circularity
+  the arc removes. The sound substrate is `/validate`'s labelled
+  ground truth — its `exploitable` / `disproven` rulings are real
+  positive / negative labels. `priors.priors_from_validation(
+  {decision_class: (n_exploitable, n_disproven)})` builds per-class
+  `Beta(1 + exploitable, 1 + disproven)` priors (the class-prevalence
+  prior the EM holds fixed at its mean); a class with no labels is
+  absent from the map, so the consumer's uniform `Beta(1, 1)`
+  cold-start applies. This is the factory the deferred Phase 4 feeds
+  into `calibrate_results`'s `priors_by_class`.
 - Decision policy for downstream: cells with sample count below a
   configurable threshold fall back to vote with a logged downgrade
   reason. No silent priors — the chosen factory + parameters are

@@ -22,6 +22,8 @@ from core.llm.scorecard.priors import (
     _inverse_betai,
     jeffreys_prior,
     posterior_update,
+    prior_from_validation_labels,
+    priors_from_validation,
     uniform_prior,
     weak_informative_prior,
 )
@@ -246,3 +248,48 @@ def test_betaprior_is_frozen():
     p = uniform_prior()
     with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
         p.alpha = 99.0  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# /validate-sourced informed priors (review of PR #793, item 4)
+# ---------------------------------------------------------------------------
+
+
+def test_validation_labels_no_data_is_uniform_cold_start():
+    # No labels → exactly the uniform Beta(1,1) cold-start.
+    p = prior_from_validation_labels(0, 0)
+    assert (p.alpha, p.beta) == (uniform_prior().alpha, uniform_prior().beta)
+    assert p.mean == pytest.approx(0.5)
+
+
+def test_validation_labels_sharpen_toward_base_rate():
+    # 8 exploitable, 2 disproven → Beta(9, 3), mean 0.75.
+    p = prior_from_validation_labels(8, 2)
+    assert (p.alpha, p.beta) == (9.0, 3.0)
+    assert p.mean == pytest.approx(0.75)
+    # More data tightens the prior (greater strength).
+    assert p.strength > prior_from_validation_labels(1, 0).strength
+
+
+def test_validation_labels_reject_negative():
+    with pytest.raises(ValueError):
+        prior_from_validation_labels(-1, 0)
+
+
+def test_priors_from_validation_maps_per_class():
+    priors = priors_from_validation({
+        "py:sql-injection": (5, 1),
+        "cpp:format-string": (0, 4),
+        "py:xss": (0, 0),
+    })
+    assert priors["py:sql-injection"].mean == pytest.approx(6 / 8)
+    assert priors["cpp:format-string"].mean == pytest.approx(1 / 6)
+    # (0,0) degenerates to uniform.
+    assert priors["py:xss"].mean == pytest.approx(0.5)
+
+
+def test_priors_from_validation_absent_class_omitted_for_cold_start():
+    # A class with no /validate labels is simply absent — the consumer's
+    # default_prior (uniform) then applies. No silent informed prior.
+    priors = priors_from_validation({"py:sql-injection": (3, 0)})
+    assert "cpp:format-string" not in priors

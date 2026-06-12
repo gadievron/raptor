@@ -16,8 +16,15 @@ Why this module deliberately omits ``class_base_rate_from_scorecard``:
 the scorecard's ``correct / incorrect`` counts measure
 agreement-with-majority, not true-positive incidence. Using them as a
 class base-rate prior would re-introduce the circularity that the
-whole arc exists to remove. Real base rates require the panel log
-(Phase 2) — that consumer arrives in Phase 3.
+whole arc exists to remove.
+
+The sound substrate for an informed per-class prior is ``/validate``'s
+labelled ground truth — its ``exploitable`` / ``disproven`` rulings
+are real true-positive / true-negative labels, not vote agreement, so
+they carry no such circularity. :func:`priors_from_validation` builds
+per-decision-class Beta priors from those counts; classes with no
+labels fall back to the uniform ``Beta(1, 1)`` cold-start. See the
+design doc (Phase 1b / Phase 4) for the full path.
 
 Incomplete-beta function: continued-fraction expansion, Numerical
 Recipes section 6.4 (Lentz–Thompson). Accuracy ~1e-12 for arguments
@@ -27,7 +34,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Dict, Mapping, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +271,54 @@ def weak_informative_prior(mean: float, strength: float) -> BetaPrior:
     return BetaPrior(alpha, beta)
 
 
+def prior_from_validation_labels(
+    n_exploitable: int, n_disproven: int,
+) -> BetaPrior:
+    """Informed class-prevalence prior from ``/validate`` ground truth
+    for one decision class.
+
+    ``/validate``'s rulings are real labels: ``exploitable`` is a
+    true-positive (``success``), ``disproven`` a true-negative
+    (``failure``). The prior is the uniform ``Beta(1, 1)`` updated by
+    those observed labels — ``Beta(1 + exploitable, 1 + disproven)`` —
+    so with no labels it is *exactly* the uniform cold-start, and it
+    sharpens toward the observed base rate as labels accumulate.
+
+    Unlike a scorecard-derived base rate, this carries no circularity:
+    the labels are ground truth, not agreement-with-majority.
+    """
+    return posterior_update(uniform_prior(), n_exploitable, n_disproven)
+
+
+def priors_from_validation(
+    counts_by_class: Mapping[str, Tuple[int, int]],
+) -> Dict[str, BetaPrior]:
+    """Per-decision-class informed priors from ``/validate`` ground
+    truth.
+
+    ``counts_by_class`` maps a decision class (e.g. ``py:sql-injection``)
+    to ``(n_exploitable, n_disproven)`` counts harvested from
+    ``/validate`` rulings. Returns a ``{decision_class: BetaPrior}`` map
+    suitable for :func:`calibrate_results`'s ``priors_by_class``.
+
+    Cold-start fallback is implicit: a decision class with no
+    ``/validate`` labels is simply absent from ``counts_by_class`` and
+    therefore from the result, so the consumer's ``default_prior``
+    (uniform ``Beta(1, 1)``) applies. A class present with ``(0, 0)``
+    likewise yields the uniform prior.
+    """
+    return {
+        dc: prior_from_validation_labels(expl, disp)
+        for dc, (expl, disp) in counts_by_class.items()
+    }
+
+
 __all__ = [
     "BetaPrior",
     "posterior_update",
     "uniform_prior",
     "jeffreys_prior",
     "weak_informative_prior",
+    "prior_from_validation_labels",
+    "priors_from_validation",
 ]
