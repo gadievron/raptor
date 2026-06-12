@@ -54,13 +54,14 @@ future step rather than a premature deletion.
 
 ## The end-state, made reachable as a flag-flip
 
-`RAPTOR_SANITIZER_CUT_NO_LEXICAL=1` disables the lexical fallback:
-`validator_dominates_sink` / `substitution_dominates_sink` then
-treat any verdict the value-bound gate can't make (candidate_only,
-resolver failure, an uncovered shape) as "we don't know — don't
-suppress," the finding surviving to the LLM. This is the precise
-behaviour Phase 16's spec described ("candidate_only becomes the
-'we don't know' verdict instead of falling back to lexical"), now
+`--sanitizer-cut=strict` (legacy: `RAPTOR_SANITIZER_CUT_NO_LEXICAL=1`)
+disables the lexical fallback: `validator_dominates_sink` /
+`substitution_dominates_sink` then treat any verdict the value-bound
+gate can't make (candidate_only, resolver failure, an uncovered
+shape) as "we don't know — don't suppress," the finding surviving to
+the LLM. This is the precise behaviour Phase 16's spec described
+("candidate_only becomes the 'we don't know' verdict instead of
+falling back to lexical"), now
 available as a switch instead of a code deletion.
 
 The switch lets the team A/B the removal end-state on real data

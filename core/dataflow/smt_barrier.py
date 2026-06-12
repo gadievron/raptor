@@ -61,7 +61,6 @@ pin) and 4.16.0; all PoC cases finish in 7-9 ms.
 from __future__ import annotations
 
 import ast
-import os as _os
 import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -759,39 +758,21 @@ _SINK_CLASS_TO_CWE = {
 }
 
 
-# Env var pointing at the parity-telemetry JSONL log. When unset,
-# the Phase 15 shadow hook is a no-op (zero overhead). Separate from
-# RAPTOR_SANITIZER_CUT — telemetry collects even when the suppression
-# flag is off ("both computed for every finding, only the value-bound
-# side acted on when the flag is on").
-_PARITY_LOG_ENV = "RAPTOR_SANITIZER_CUT_PARITY_LOG"
-
-# Phase 16 — lexical-fallback removal switch. When this env var is
-# set, validator_dominates_sink / substitution_dominates_sink do NOT
-# consult the lexical AST heuristic: the value-bound gate's decision
-# is final, and a verdict the gate can't make (candidate_only,
-# resolver failure, a shape the gate doesn't cover) becomes the
-# "we don't know — don't suppress" answer (the finding survives to
-# the LLM) instead of falling back to lexical.
-#
-# This is the END-STATE behaviour of the arc, made reachable as a
-# flag-flip rather than a code deletion. The lexical bodies are
-# RETAINED (the default, flag-off path) because Phase 15's parity
-# gate is not yet cleared: the value-bound gate does not cover the
-# validator-guard / substitution shapes the lexical check handles,
-# so deleting it would silently drop those suppressions. See
-# docs/sanitizer-cut-parity/HORIZON.md. Once the parity gate clears
-# twice on real /agentic data, this flag becomes the default and
-# the lexical bodies can be deleted outright.
-_NO_LEXICAL_ENV = "RAPTOR_SANITIZER_CUT_NO_LEXICAL"
+# The gate's behaviour (value-bound on/off, lexical fallback on/off,
+# parity-log path) is resolved centrally in
+# :mod:`core.dataflow.sanitizer_cut_config` from the consuming
+# command's ``--sanitizer-cut`` flag, falling back to the legacy env
+# vars. The "no lexical fallback" end-state corresponds to the
+# ``strict`` mode there; parity telemetry to ``shadow`` mode (or an
+# explicit ``--sanitizer-cut-parity-log``). See review #4 on PR #794.
+from core.dataflow import sanitizer_cut_config as _sc_config
 
 
 def _no_lexical_fallback() -> bool:
-    """True when the lexical fallback is disabled (Phase 16 end-state
-    behaviour). See :data:`_NO_LEXICAL_ENV`."""
-    return _os.environ.get(_NO_LEXICAL_ENV, "").strip().lower() in (
-        "1", "true", "on", "yes",
-    )
+    """True when the lexical fallback is disabled (the ``strict``
+    end-state). Footgun-guarded: the config layer never returns a state
+    with both the value-bound gate and the lexical fallback off."""
+    return not _sc_config.lexical_fallback_enabled()
 
 
 def lexical_fallback_status() -> dict:
@@ -805,12 +786,12 @@ def lexical_fallback_status() -> dict:
         "retention_reason": (
             "Phase 15 parity gate not cleared — the value-bound gate "
             "does not cover validator-guard / substitution shapes the "
-            "lexical check handles. Set "
-            f"{_NO_LEXICAL_ENV}=1 to disable the fallback (value-bound "
-            "only); delete the lexical bodies once the parity gate "
-            "clears twice on real data."
+            "lexical check handles. Use --sanitizer-cut=strict to "
+            "disable the fallback (value-bound only); delete the "
+            "lexical bodies once the parity gate clears twice on real "
+            "data."
         ),
-        "no_lexical_env": _NO_LEXICAL_ENV,
+        "mode": _sc_config.current().mode,
         "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
     }
 
@@ -825,12 +806,13 @@ def _maybe_record_parity(
     language: Optional[str],
     lexical_suppressed: bool,
 ) -> None:
-    """Phase 15 shadow telemetry. When ``RAPTOR_SANITIZER_CUT_PARITY_LOG``
-    is set, compute the value-bound verdict alongside the lexical
-    decision and append a :class:`ParityRecord` to the log. No-op and
-    near-zero cost when the env var is absent. Never raises — telemetry
-    must not break a real run."""
-    log_path = _os.environ.get(_PARITY_LOG_ENV, "").strip()
+    """Phase 15 shadow telemetry. When a parity-log path is configured
+    (``shadow`` mode or an explicit ``--sanitizer-cut-parity-log``),
+    compute the value-bound verdict alongside the lexical decision and
+    append a :class:`ParityRecord` to the log. No-op and near-zero cost
+    when no path is configured. Never raises — telemetry must not break
+    a real run."""
+    log_path = _sc_config.parity_log_path()
     if not log_path:
         return
     if not (file_path and cwe and language):
@@ -887,19 +869,17 @@ def _value_bound_dominates(
       "value-bound disagrees — no dominance" even if the lexical
       heuristic would have said yes.
     * ``None``  → "consult lexical fallback." Returned when the
-      ``RAPTOR_SANITIZER_CUT`` env flag is off, the resolver
-      can't normalise the finding (missing kwargs, file unreadable,
-      function not found, non-python language, …), or the gate's
-      verdict was ``candidate_only`` (control-flow holds but value
-      binding unproven).
+      value-bound gate is disabled (``off`` / ``shadow`` mode), the
+      resolver can't normalise the finding (missing kwargs, file
+      unreadable, function not found, non-python language, …), or the
+      gate's verdict was ``candidate_only`` (control-flow holds but
+      value binding unproven).
 
     Lazy import of the inventory + dataflow packages so this module
     stays cheap to import; the heavier dependencies are paid only
-    when the flag is set on a real run.
+    when the gate is enabled on a real run.
     """
-    if _os.environ.get("RAPTOR_SANITIZER_CUT", "").strip().lower() not in (
-        "1", "true", "on", "yes",
-    ):
+    if not _sc_config.value_bound_enabled():
         return None
     if not (file_path and cwe and language):
         return None
@@ -980,11 +960,12 @@ def validator_dominates_sink(
     :func:`substitution_dominates_sink`.
 
     Phase 7 of the value-binding arc adds the optional ``file_path``
-    / ``cwe`` / ``language`` kwargs. When the ``RAPTOR_SANITIZER_CUT``
-    env flag is set AND all three are supplied, the function first
-    consults :func:`_value_bound_dominates`. The lexical AST check
-    below is the fallback for ``candidate_only`` results, resolver
-    failures, missing kwargs, and the flag-off path.
+    / ``cwe`` / ``language`` kwargs. When the value-bound gate is
+    enabled (``--sanitizer-cut=on``/``strict``) AND all three are
+    supplied, the function first consults
+    :func:`_value_bound_dominates`. The lexical AST check below is the
+    fallback for ``candidate_only`` results, resolver failures, missing
+    kwargs, and the gate-off path.
     """
     vb = _value_bound_dominates(
         file_path=file_path,
@@ -997,9 +978,10 @@ def validator_dominates_sink(
         source_text, validator_line, sink_line,
     )
     # Phase 15 — shadow telemetry. Records BOTH decisions for every
-    # finding when RAPTOR_SANITIZER_CUT_PARITY_LOG is set, regardless
-    # of the suppression flag. Zero overhead when the env var is
-    # absent (the check returns immediately).
+    # finding when a parity-log path is configured (shadow mode or an
+    # explicit --sanitizer-cut-parity-log), regardless of the
+    # suppression mode. Zero overhead when no path is configured (the
+    # check returns immediately).
     _maybe_record_parity(
         kind="charset",
         file_path=file_path, validator_line=validator_line,
@@ -1223,8 +1205,8 @@ def substitution_dominates_sink(
 
     Phase 7 of the value-binding arc adds the optional ``file_path``
     / ``cwe`` / ``language`` kwargs (same shape as
-    :func:`validator_dominates_sink`). When the
-    ``RAPTOR_SANITIZER_CUT`` env flag is set AND all three are
+    :func:`validator_dominates_sink`). When the value-bound gate is
+    enabled (``--sanitizer-cut=on``/``strict``) AND all three are
     supplied, the value-bound gate is consulted first; the lexical
     no-reassignment check is the fallback.
     """
@@ -1501,9 +1483,9 @@ def try_tier0(
     elif spec.kind == "charset_sub":
         # Phase 7 plumbing: pass the resolved absolute path + CWE +
         # language through so the dominance function can consult the
-        # value-bound gate when RAPTOR_SANITIZER_CUT is on. Defaults
-        # (None) keep the lexical-only behaviour for the flag-off
-        # path and for callers from outside this module who don't
+        # value-bound gate when it is enabled. Defaults (None) keep the
+        # lexical-only behaviour for the gate-off path and for callers
+        # from outside this module who don't
         # yet populate these kwargs.
         dominates = substitution_dominates_sink(
             source_text, line, sink_line, spec.var_name,

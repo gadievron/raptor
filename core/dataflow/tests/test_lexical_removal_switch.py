@@ -67,28 +67,43 @@ class TestNoLexicalSwitch:
         )
         assert result is True
 
-    def test_no_lexical_flag_disables_fallback(
+    def test_strict_mode_disables_fallback(
         self, _clean_env, tmp_path, monkeypatch,
     ):
         src = _write(tmp_path, _VALIDATOR_SRC)
+        # strict = value-bound gate ON + lexical fallback OFF (the
+        # footgun-safe way to express "no lexical"). The gate doesn't
+        # cover this guard-and-exit shape, so the verdict becomes "we
+        # don't know → don't suppress".
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
         monkeypatch.setenv("RAPTOR_SANITIZER_CUT_NO_LEXICAL", "1")
-        # With the fallback off and the value-bound gate not covering
-        # this shape, the verdict becomes "we don't know → don't
-        # suppress".
         result = validator_dominates_sink(
             _VALIDATOR_SRC, 2, 4,
             file_path=str(src), cwe="CWE-79", language="python",
         )
         assert result is False
 
-    def test_no_lexical_flag_inert_without_kwargs(
+    def test_strict_mode_inert_without_kwargs(
         self, _clean_env, tmp_path, monkeypatch,
     ):
-        # No file/cwe/language → value-bound can't run; with the
-        # fallback off, "we don't know → False".
+        # No file/cwe/language → value-bound can't run; in strict the
+        # fallback is off, so "we don't know → False".
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
         monkeypatch.setenv("RAPTOR_SANITIZER_CUT_NO_LEXICAL", "1")
         result = validator_dominates_sink(_VALIDATOR_SRC, 2, 4)
         assert result is False
+
+    def test_no_lexical_without_cut_is_ignored(
+        self, _clean_env, tmp_path, monkeypatch, capsys,
+    ):
+        # Review #4 footgun 1: NO_LEXICAL without the value-bound gate
+        # would disable ALL suppression (gate off + lexical off). The
+        # config layer ignores NO_LEXICAL unless the gate is also on,
+        # and warns. Lexical stays on → guard-and-exit suppresses.
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT_NO_LEXICAL", "1")
+        result = validator_dominates_sink(_VALIDATOR_SRC, 2, 4)
+        assert result is True
+        assert "ignoring it" in capsys.readouterr().err
 
     def test_value_bound_covered_shape_unaffected_by_switch(
         self, _clean_env, tmp_path, monkeypatch,
@@ -154,13 +169,15 @@ class TestClosureStatus:
         assert status["lexical_fallback_disabled"] is False
         assert "parity gate" in status["retention_reason"].lower()
 
-    def test_status_reports_disabled_when_flag_set(
+    def test_status_reports_disabled_in_strict_mode(
         self, _clean_env, monkeypatch,
     ):
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
         monkeypatch.setenv("RAPTOR_SANITIZER_CUT_NO_LEXICAL", "1")
         status = lexical_fallback_status()
         assert status["retained"] is False
         assert status["lexical_fallback_disabled"] is True
+        assert status["mode"] == "strict"
 
 
 class TestClosureTripwire:

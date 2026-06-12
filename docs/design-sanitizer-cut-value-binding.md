@@ -250,14 +250,20 @@ visible without it being a silent suppression.
 **Goal:** light it up — but only behind a flag, and with the
 lexical check as fallback.
 
-- `RAPTOR_SANITIZER_CUT` env flag (default off). When on:
-  `smt_barrier.py:746` (`validator_dominates_sink`) and
-  `smt_barrier.py:940` (`substitution_dominates_sink`) delegate to
-  `evaluate_finding` via the Phase 5 resolver.
-- Fallback to the existing lexical check when (a) flag is off,
+- `--sanitizer-cut=off|on|strict|shadow` on `/agentic`, `/codeql`,
+  `/validate` (default `off`). When `on`/`strict`:
+  `validator_dominates_sink` and `substitution_dominates_sink`
+  delegate to `evaluate_finding` via the Phase 5 resolver. The mode is
+  resolved centrally in `core/dataflow/sanitizer_cut_config.py`; the
+  legacy `RAPTOR_SANITIZER_CUT*` env vars remain a back-compat
+  fallback and the internal transport to subprocess workers (review
+  #4, PR #794). See "Operator interface" below.
+- Fallback to the existing lexical check when (a) the gate is off,
   (b) resolver returned `None`, (c) verdict is `candidate_only`.
   The lexical check is what decides in those three cases — no
-  regression for findings the new path can't reason about.
+  regression for findings the new path can't reason about. (In
+  `strict` mode the fallback is off and those cases become "don't
+  suppress".)
 - `/validate` and `/agentic` final-report renderer surfaces
   `Suppressed: Sanitizer Dominated` with sanitizer callable,
   input symbol, output symbol, sink arg, source/sink lines.
@@ -755,14 +761,14 @@ fallback on vibes" the parity phase exists to prevent.
 
 **Shipped:**
 
-* `RAPTOR_SANITIZER_CUT_NO_LEXICAL` — disables the lexical fallback;
-  `validator_dominates_sink` / `substitution_dominates_sink` then
-  treat any verdict the value-bound gate can't make (candidate_only,
-  resolver failure, uncovered shape) as "we don't know → don't
-  suppress." This is the Phase 16 end-state behaviour the spec
-  described, made reachable as a flag-flip instead of a code
-  deletion. Lexical removal becomes a one-line default change once
-  justified, not a refactor.
+* `--sanitizer-cut=strict` (legacy: `RAPTOR_SANITIZER_CUT_NO_LEXICAL`)
+  — disables the lexical fallback; `validator_dominates_sink` /
+  `substitution_dominates_sink` then treat any verdict the value-bound
+  gate can't make (candidate_only, resolver failure, uncovered shape)
+  as "we don't know → don't suppress." This is the Phase 16 end-state
+  behaviour the spec described, made reachable as a mode-flip instead
+  of a code deletion. Lexical removal becomes a one-line default
+  change once justified, not a refactor.
 * `smt_barrier.lexical_fallback_status()` — introspection surface
   reporting whether the fallback is active and why it is retained.
 * Closure tripwire test
@@ -781,8 +787,39 @@ fallback on vibes" the parity phase exists to prevent.
 `HORIZON.md` / `CLOSURE.md`): extend the value-bound gate to cover
 validator-guard / substitution shapes (or decide those kinds stay
 lexical permanently); collect two consecutive clearing windows from
-real `/agentic` runs; flip `RAPTOR_SANITIZER_CUT_NO_LEXICAL` to the
-default and delete the `_lexical_*_dominates` bodies.
+real `/agentic` runs; make `--sanitizer-cut=strict` the default and
+delete the `_lexical_*_dominates` bodies.
+
+### Operator interface (review #4)
+
+The three legacy env vars are replaced by a single mode flag on the
+consuming commands, surfaced via
+`core/dataflow/sanitizer_cut_config.py`:
+
+```
+--sanitizer-cut=off|on|strict|shadow   (default: off)
+--sanitizer-cut-parity-log=<path>      (default: <run_dir>/sanitizer_cut_parity.jsonl in shadow)
+```
+
+* `off` — gate disabled, lexical fallback on (default).
+* `on` — gate enabled, lexical fallback on.
+* `strict` — gate enabled, lexical fallback off (Phase 16 end-state).
+* `shadow` — suppression behaves like `off`, but the value-bound
+  verdict is logged alongside the lexical decision (parity telemetry).
+
+The mode collapses the old three-boolean space so the two footguns
+are unrepresentable: there is no state with the gate **and** the
+lexical fallback both off (footgun 1 — `NO_LEXICAL` without `CUT`
+silently disabling all suppression), and a boolean-style parity-log
+value resolves to the default path rather than a file literally named
+`1` (footgun 2). The legacy `RAPTOR_SANITIZER_CUT*` env vars remain a
+back-compat fallback (with both footguns fixed at the resolution
+point) and serve as the internal transport: a consuming command
+`configure(..., export_env=True)` writes the resolved state to the env
+so spawned scan/analysis/codeql subprocesses inherit it. `/validate`
+runs each stage as its own process, so stage 0 also persists the
+resolved config to `<run_dir>/sanitizer-cut-config.json` and later
+stages reload it.
 
 **Arc status:** **closed for its soundness goal** (the wrong-variable
 hole is closed across Python intra+inter and C/C++, behind the flag,

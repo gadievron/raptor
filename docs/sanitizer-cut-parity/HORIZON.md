@@ -19,18 +19,28 @@ or silently dropping suppressions the lexical check was carrying.
 
 The shadow hook in `validator_dominates_sink` /
 `substitution_dominates_sink` records both decisions for every
-finding when `RAPTOR_SANITIZER_CUT_PARITY_LOG` points at a JSONL
-file:
+finding when a parity-log path is configured. The operator interface
+is the `--sanitizer-cut` mode flag (review #4); `shadow` mode collects
+telemetry with no suppression behaviour change:
+
+```bash
+# /agentic, /codeql, /validate all accept:
+--sanitizer-cut=shadow                                  # telemetry, default log path
+--sanitizer-cut=shadow --sanitizer-cut-parity-log=/path/to/x.jsonl
+```
+
+The legacy env var still works as a back-compat fallback (resolved
+through `core/dataflow/sanitizer_cut_config.py`, which fixes the
+`PARITY_LOG=1` → file-named-`1` footgun):
 
 ```bash
 export RAPTOR_SANITIZER_CUT_PARITY_LOG=/path/to/sanitizer-cut-parity.jsonl
-# run /agentic as usual; records accumulate
 ```
 
-Collection is independent of `RAPTOR_SANITIZER_CUT` — telemetry is
-gathered even when the suppression flag is off (both decisions
-computed, only the value-bound side acted on when the flag is on).
-The hook is a no-op with zero overhead when the env var is unset.
+Collection is independent of the suppression mode — telemetry is
+gathered even when the gate is off (both decisions computed, only the
+value-bound side acted on when the gate is on). The hook is a no-op
+with zero overhead when no path is configured.
 
 Each record carries the lexical decision, the value-bound verdict,
 the proposal `kind`, and an optional ground-truth `label`. Labels
