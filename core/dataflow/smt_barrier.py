@@ -67,6 +67,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
+from core.dataflow import sanitizer_cut_config as _sc_config
 from core.smt_solver import z3, z3_available as _z3_available
 
 
@@ -760,14 +761,12 @@ _SINK_CLASS_TO_CWE = {
 
 # The gate's behaviour (value-bound on/off, lexical fallback on/off,
 # parity-log path) is resolved centrally in
-# :mod:`core.dataflow.sanitizer_cut_config` from the consuming
-# command's ``--sanitizer-cut`` flag, falling back to the legacy env
-# vars. The "no lexical fallback" end-state corresponds to the
-# ``strict`` mode there; parity telemetry to ``shadow`` mode (or an
-# explicit ``--sanitizer-cut-parity-log``). See review #4 on PR #794.
-from core.dataflow import sanitizer_cut_config as _sc_config
-
-
+# :mod:`core.dataflow.sanitizer_cut_config` (imported at the top of
+# this module as ``_sc_config``) from the consuming command's
+# ``--sanitizer-cut`` flag, falling back to the legacy env vars. The
+# "no lexical fallback" end-state corresponds to the ``strict`` mode
+# there; parity telemetry to ``shadow`` mode (or an explicit
+# ``--sanitizer-cut-parity-log``). See review #4 on PR #794.
 def _no_lexical_fallback() -> bool:
     """True when the lexical fallback is disabled (the ``strict``
     end-state). Footgun-guarded: the config layer never returns a state
