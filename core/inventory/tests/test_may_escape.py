@@ -1,4 +1,4 @@
-"""Phase 10 — pointer / alias conservatism tests.
+"""Pointer / alias conservatism tests (may_escape).
 
 Two halves:
 

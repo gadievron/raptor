@@ -420,7 +420,7 @@ field-sensitive aliasing.
   be honest about value flow without paying for a points-to
   engine.
 
-**Tests:** `core/inventory/tests/test_phase10_may_escape.py` — 27
+**Tests:** `core/inventory/tests/test_may_escape.py` — 27
 tests: stamping (plain assignment is not flagged; deref load /
 deref store / address-of / subscript load / subscript store /
 arrow field / dot field NOT flagged / 9 bulk-copy callees / if
