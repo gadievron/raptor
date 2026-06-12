@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""Rank security candidates with the external SiftRank CLI.
+
+This is a skill-driven libexec shim. It does not participate in RAPTOR's
+default Python analysis pipeline.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+PROMPTS = {
+    "security-triage": (
+        "Rank these security-relevant candidate items by expected value for "
+        "follow-up vulnerability analysis. Prefer likely true positives, "
+        "practical exploitability, attacker-controlled input, reachable "
+        "dangerous sinks, clear dataflow or control-flow evidence, production "
+        "reachability, and meaningful security impact. Rank lower duplicated, "
+        "test-only, unreachable, informational, speculative, or low-context "
+        "items."
+    ),
+}
+
+
+MISSING_GO_MESSAGE = """siftrank is not installed and Go is not available.
+
+Install Go, then run:
+  go install github.com/noperator/siftrank/cmd/siftrank@latest
+
+After installation, ensure the Go bin directory is on PATH."""
+
+INSTALL_FAILED_MESSAGE = """Failed to install siftrank with:
+  go install github.com/noperator/siftrank/cmd/siftrank@latest
+
+Install it manually and retry."""
+
+INSTALL_NOT_FOUND_MESSAGE = """Installed siftrank with Go, but could not locate the binary.
+
+Ensure the Go bin directory is on PATH and retry."""
+
+
+@dataclass(frozen=True)
+class SiftRankModel:
+    model: str
+    api_key: str
+    base_url: str | None
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected integer, got {value!r}")
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return parsed
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="raptor-siftrank",
+        description="Rank JSON candidate items with SiftRank.",
+    )
+    parser.add_argument("--input", required=True, help="path to JSON array input")
+    parser.add_argument("--output", required=True, help="path for ranked JSON output")
+    parser.add_argument("--prompt", default="security-triage",
+                        help="named prompt or literal prompt text")
+    parser.add_argument("--top", type=_positive_int,
+                        help="maximum number of ranked items to write")
+    parser.add_argument("--model", help="OpenAI-compatible model override")
+    parser.add_argument("--base-url", help="OpenAI-compatible base URL override")
+    parser.add_argument("--batch-size", type=_positive_int,
+                        help="pass-through SiftRank batch size")
+    parser.add_argument("--max-trials", type=_positive_int,
+                        help="pass-through SiftRank max trials")
+    return parser
+
+
+def _load_candidates(path: str) -> list[Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {path}: {e}") from None
+    except OSError as e:
+        raise ValueError(f"Could not read {path}: {e}") from None
+
+    if not isinstance(data, list):
+        raise ValueError("Input JSON must be an array of candidate items.")
+    return data
+
+
+def _write_json(path: str, data: Any) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+    except OSError as e:
+        raise ValueError(f"Could not write {path}: {e}") from None
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return json.dumps(value, sort_keys=True)
+
+
+def _candidate_id(item: Any, index: int) -> str:
+    if isinstance(item, dict):
+        raw = _as_text(item.get("id")).strip()
+        if raw:
+            return raw
+    return f"item-{index + 1}"
+
+
+def _render_candidate(item: Any, candidate_id: str) -> str:
+    if isinstance(item, dict):
+        kind = _as_text(item.get("kind"))
+        source = _as_text(item.get("source"))
+        title = _as_text(item.get("title"))
+        severity = _as_text(item.get("severity"))
+        path = _as_text(item.get("path"))
+        line = _as_text(item.get("line"))
+        summary = _as_text(item.get("summary"))
+        context = _as_text(item.get("context"))
+    else:
+        kind = ""
+        source = ""
+        title = ""
+        severity = ""
+        path = ""
+        line = ""
+        summary = _as_text(item)
+        context = ""
+
+    return "\n".join([
+        f"ID: {candidate_id}",
+        f"Kind: {kind}",
+        f"Source: {source}",
+        f"Title: {title}",
+        f"Severity: {severity}",
+        f"Location: {path}:{line}",
+        f"Summary: {summary}",
+        "",
+        "Context:",
+        context,
+    ])
+
+
+def _prepared_records(items: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    ids: list[str] = []
+    records: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        candidate_id = _candidate_id(item, index)
+        ids.append(candidate_id)
+        records.append({
+            "_raptor_index": index,
+            "_raptor_id": candidate_id,
+            "text": _render_candidate(item, candidate_id),
+        })
+    return records, ids
+
+
+def _executable(path: Path) -> str | None:
+    if path.exists() and os.access(path, os.X_OK):
+        return str(path)
+    return None
+
+
+def ensure_siftrank() -> str:
+    existing = shutil.which("siftrank")
+    if existing:
+        return existing
+
+    go = shutil.which("go")
+    if not go:
+        raise FileNotFoundError(MISSING_GO_MESSAGE)
+
+    install_cmd = [go, "install", "github.com/noperator/siftrank/cmd/siftrank@latest"]
+    proc = subprocess.run(install_cmd, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(INSTALL_FAILED_MESSAGE)
+
+    found = shutil.which("siftrank")
+    if found:
+        return found
+
+    gobin = os.environ.get("GOBIN")
+    if gobin:
+        candidate = _executable(Path(gobin) / "siftrank")
+        if candidate:
+            return candidate
+
+    gopath = subprocess.run(
+        [go, "env", "GOPATH"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if gopath.returncode == 0 and gopath.stdout.strip():
+        candidate = _executable(Path(gopath.stdout.strip()) / "bin" / "siftrank")
+        if candidate:
+            return candidate
+
+    candidate = _executable(Path.home() / "go" / "bin" / "siftrank")
+    if candidate:
+        return candidate
+
+    raise FileNotFoundError(INSTALL_NOT_FOUND_MESSAGE)
+
+
+def _resolve_model(model_override: str | None, base_url_override: str | None) -> SiftRankModel:
+    from core.llm.config import _get_configured_models, _model_config_from_entry
+
+    compatible: list[tuple[int, SiftRankModel]] = []
+    for position, entry in enumerate(_get_configured_models()):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            model_config = _model_config_from_entry(entry)
+        except Exception:
+            continue
+
+        explicit_base = (
+            entry.get("base_url")
+            or entry.get("api_base")
+            or entry.get("api_url")
+        )
+        base_url = base_url_override or explicit_base or model_config.api_base
+        model_name = model_override or model_config.model_name
+        api_key = model_config.api_key
+
+        if not model_name or not api_key:
+            continue
+
+        provider = (model_config.provider or "").lower()
+        if provider != "openai" and not explicit_base and not base_url_override:
+            continue
+
+        role = (model_config.role or "").lower()
+        priority = 0 if role == "analysis" else 1
+        compatible.append((
+            priority * 10_000 + position,
+            SiftRankModel(model=model_name, api_key=api_key, base_url=base_url),
+        ))
+
+    if not compatible:
+        raise ValueError(
+            "No SiftRank-compatible RAPTOR model found. Configure an "
+            "OpenAI-compatible analysis model in RAPTOR model config."
+        )
+
+    compatible.sort(key=lambda pair: pair[0])
+    return compatible[0][1]
+
+
+def _siftrank_env(api_key: str) -> dict[str, str]:
+    keep = (
+        "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY",
+        "ALL_PROXY", "NO_PROXY", "REQUESTS_CA_BUNDLE",
+    )
+    env = {key: value for key, value in os.environ.items() if key in keep}
+    env["OPENAI_API_KEY"] = api_key
+    return env
+
+
+def _sanitize(text: str, secret: str) -> str:
+    if not text:
+        return ""
+    return text.replace(secret, "[redacted]")
+
+
+def _extract_index(result: Any, fallback: int) -> int | None:
+    if not isinstance(result, dict):
+        return fallback
+
+    doc = result.get("document")
+    if isinstance(doc, dict):
+        raw = doc.get("_raptor_index")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+
+    raw = result.get("input_index")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        pass
+
+    return fallback
+
+
+def _score(result: Any) -> Any:
+    if not isinstance(result, dict) or "score" not in result:
+        return None
+    value = result.get("score")
+    if isinstance(value, (int, float)) or value is None:
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _rank_key(position_and_result: tuple[int, Any]) -> tuple[int, int]:
+    position, result = position_and_result
+    if isinstance(result, dict):
+        try:
+            return int(result.get("rank")), position
+        except (TypeError, ValueError):
+            pass
+    return position + 1, position
+
+
+def _transform_results(
+    siftrank_results: Any,
+    original_items: list[Any],
+    candidate_ids: list[str],
+    top: int | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(siftrank_results, list):
+        raise ValueError("SiftRank output must be a JSON array.")
+
+    ranked: list[dict[str, Any]] = []
+    ordered = sorted(enumerate(siftrank_results), key=_rank_key)
+    for output_rank, (fallback_index, result) in enumerate(ordered[:top], start=1):
+        index = _extract_index(result, fallback_index)
+        if index is None or index < 0 or index >= len(original_items):
+            continue
+
+        rank = output_rank
+        if isinstance(result, dict):
+            try:
+                rank = int(result.get("rank"))
+            except (TypeError, ValueError):
+                pass
+
+        output = {
+            "rank": rank,
+            "score": _score(result),
+            "id": candidate_ids[index],
+            "item": original_items[index],
+        }
+        if isinstance(result, dict):
+            if result.get("key"):
+                output["siftrank_key"] = result.get("key")
+            for name in ("exposure", "rounds", "input_index"):
+                if name in result:
+                    output[name] = result.get(name)
+        ranked.append(output)
+
+    return ranked
+
+
+def _run_siftrank(
+    siftrank_bin: str,
+    model: SiftRankModel,
+    prompt: str,
+    records: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> Any:
+    with tempfile.TemporaryDirectory(prefix="raptor-siftrank-") as tmpdir:
+        input_path = Path(tmpdir) / "siftrank-input.json"
+        output_path = Path(tmpdir) / "siftrank-output.json"
+        input_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+
+        cmd = [
+            siftrank_bin,
+            "--file", str(input_path),
+            "--output", str(output_path),
+            "--prompt", prompt,
+            "--template", "{{ .text }}",
+            "--json",
+            "--model", model.model,
+        ]
+        if model.base_url:
+            cmd.extend(["--base-url", model.base_url])
+        if args.batch_size:
+            cmd.extend(["--batch-size", str(args.batch_size)])
+        if args.max_trials:
+            cmd.extend(["--max-trials", str(args.max_trials)])
+
+        proc = subprocess.run(
+            cmd,
+            env=_siftrank_env(model.api_key),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            stderr = _sanitize(proc.stderr, model.api_key).strip()
+            if len(stderr) > 4000:
+                stderr = stderr[:4000] + "...[truncated]"
+            detail = f": {stderr}" if stderr else ""
+            raise RuntimeError(f"siftrank failed with exit code {proc.returncode}{detail}")
+
+        if output_path.exists():
+            raw = output_path.read_text(encoding="utf-8")
+        else:
+            raw = proc.stdout
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"SiftRank produced invalid JSON: {e}") from None
+
+
+def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    try:
+        candidates = _load_candidates(args.input)
+        if not candidates:
+            _write_json(args.output, [])
+            return 0
+
+        records, candidate_ids = _prepared_records(candidates)
+        if len(candidates) == 1:
+            _write_json(args.output, [{
+                "rank": 1,
+                "score": 0.0,
+                "id": candidate_ids[0],
+                "item": candidates[0],
+            }])
+            return 0
+
+        siftrank_bin = ensure_siftrank()
+
+        model = _resolve_model(args.model, args.base_url)
+        prompt = PROMPTS.get(args.prompt, args.prompt)
+        siftrank_results = _run_siftrank(siftrank_bin, model, prompt, records, args)
+        ranked = _transform_results(siftrank_results, candidates, candidate_ids, args.top)
+        _write_json(args.output, ranked)
+        return 0
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        sys.stderr.write(f"raptor-siftrank: {e}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
