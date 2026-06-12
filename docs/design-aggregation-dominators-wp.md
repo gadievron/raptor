@@ -176,9 +176,12 @@ estimator. Without this log, phase 2 has no input.
       stable; without, the test flags the degeneracy.
 
 **Ships:** panel log (if not already present) + estimator module +
-property-based tests + an offline replay harness that re-aggregates
-historical agentic runs from the panel log and compares against the
-recorded majority verdict.
+property-based tests + the offline replay harness (Phase 2d). The
+harness is the **validation mechanism for the Phase 4 gate-flip
+decision**, not a research side-project: it re-aggregates historical
+agentic runs from the panel log and compares against the recorded
+majority verdict, so the flip rate it reports on real data is what
+gates landing the deferred posterior-weighted scorecard update.
 
 ### Phase 3 — Dispatch integration + output schema
 
@@ -475,7 +478,7 @@ when tractable; A/B measurement.
 | 2a | A | Panel-log loader (`core/llm/multi_model/panel_log.py`) | **done** (data already on disk in `orchestrated_report.json`) |
 | 2b | A | Dawid–Skene estimator (`core/llm/multi_model/dawid_skene.py`) | **done** (16 property tests pass) |
 | 2c | A | D–S property tests | **done** |
-| 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
+| 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (the Phase-4 gate-flip validation mechanism; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; unconditional — no flag, since the field is purely additive) |
 | 4 | A | Posterior-weighted scorecard updates | **deferred** — gated on replay-harness validation; lands in a follow-up PR as one consensus mode (soft credits via `record_event_soft`, no second event slot) with priors from `/validate` |
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |

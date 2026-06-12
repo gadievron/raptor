@@ -1,6 +1,10 @@
 """Offline panel-log replay harness — Phase 2d of the calibrated-aggregation arc.
 
-Research instrument. Given one or more historical
+This is the **validation mechanism for the Phase 4 gate-flip
+decision**, not a research side-project: it is how we measure, on real
+historical data, whether the Dawid–Skene posterior would change verdicts
+enough to justify landing the deferred posterior-weighted scorecard
+update (Phase 4). Given one or more historical
 ``orchestrated_report.json`` files, the harness:
 
 1. Loads every per-finding panel via :mod:`core.llm.multi_model.panel_log`.
