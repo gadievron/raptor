@@ -116,6 +116,37 @@ class TestNoLexicalSwitch:
         assert without == with_switch
 
 
+class TestResolverFailureFallsBackToLexical:
+    """Review #2: the value-bound resolver/evaluator may raise
+    (optional tree-sitter wheel ImportError, malformed inventory
+    KeyError, AST parse error on scanned source). The design contract
+    is 'resolver failure → lexical fallback'; the gate must catch every
+    exception and fall through rather than crashing /agentic mid-run."""
+
+    def test_resolver_exception_falls_through_to_lexical(
+        self, _clean_env, tmp_path, monkeypatch,
+    ):
+        src = _write(tmp_path, _VALIDATOR_SRC)
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
+
+        def _boom(_finding):
+            raise RuntimeError("resolver blew up mid-run")
+
+        monkeypatch.setattr(
+            "core.inventory.finding_resolver.resolve_finding", _boom,
+        )
+        # The value-bound side raises internally; the gate swallows it
+        # (vb=None) and the lexical fallback decides — the guard-and-exit
+        # validator dominates this shape, so the result is True. The key
+        # assertion is simply that this call does not propagate the
+        # RuntimeError.
+        result = validator_dominates_sink(
+            _VALIDATOR_SRC, 2, 4,
+            file_path=str(src), cwe="CWE-79", language="python",
+        )
+        assert result is True
+
+
 class TestClosureStatus:
     def test_status_reports_retained_by_default(self, _clean_env):
         status = lexical_fallback_status()

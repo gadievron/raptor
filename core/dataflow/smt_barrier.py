@@ -909,7 +909,6 @@ def _value_bound_dominates(
         resolve_finding,
     )
     from core.inventory.sanitizer_cut import (
-        VERDICT_CANDIDATE_ONLY,
         VERDICT_NO_SUPPRESS,
         VERDICT_SUPPRESS,
         evaluate_finding,
@@ -922,25 +921,36 @@ def _value_bound_dominates(
         "sink_line": sink_line,
         "language": language,
     }
-    resolved = resolve_finding(finding)
-    if not isinstance(resolved, ResolvedFinding):
+    # Review #2: the value-bound resolver/evaluator pulls in optional
+    # dependencies (tree-sitter wheels) and parses arbitrary scanned
+    # source, so any of ImportError / KeyError / SyntaxError / a
+    # malformed inventory could raise. The design contract is
+    # "resolver failure → lexical fallback", so every failure mode must
+    # fall through to ``None`` rather than escaping and crashing the
+    # /agentic run mid-flight.
+    try:
+        resolved = resolve_finding(finding)
+        if not isinstance(resolved, ResolvedFinding):
+            return None
+        result = evaluate_finding(
+            resolved.cfg,
+            [resolved.source_node],
+            resolved.sink_node,
+            cwe=resolved.cwe,
+            language=resolved.language,
+            source_symbols=resolved.source_symbols,
+            sink_arg=resolved.sink_arg,
+        )
+    except Exception:                                       # noqa: BLE001
         return None
-    result = evaluate_finding(
-        resolved.cfg,
-        [resolved.source_node],
-        resolved.sink_node,
-        cwe=resolved.cwe,
-        language=resolved.language,
-        source_symbols=resolved.source_symbols,
-        sink_arg=resolved.sink_arg,
-    )
     if result.verdict == VERDICT_SUPPRESS:
         return True
     if result.verdict == VERDICT_NO_SUPPRESS:
         return False
-    # VERDICT_CANDIDATE_ONLY — control-flow holds but value-binding
-    # is unproven; let the lexical heuristic decide.
-    assert result.verdict == VERDICT_CANDIDATE_ONLY
+    # VERDICT_CANDIDATE_ONLY (or any verdict this gate doesn't act on)
+    # — control-flow may hold but value-binding is unproven; defer to
+    # the lexical heuristic. A defensive fallthrough rather than an
+    # ``assert`` so a future verdict value can't turn into a crash.
     return None
 
 
