@@ -25,7 +25,6 @@ Per past-bench-lessons §1 — TDD with RED test first.
 """
 from __future__ import annotations
 
-import pytest
 
 from cve_env.agent.loop import _map_status, _StreamState
 

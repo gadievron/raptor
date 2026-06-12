@@ -18,7 +18,6 @@ RED→GREEN per Phase 21.1 / 26.1 pattern.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def _try_import_injector():

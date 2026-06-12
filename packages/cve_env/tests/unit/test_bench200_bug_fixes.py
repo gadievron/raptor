@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 from cve_env.agent.llm import AgentRunOutcome
 from cve_env.agent.loop import build
@@ -289,7 +288,7 @@ def test_F13_give_up_halts_subsequent_tool_calls(tmp_path: Path) -> None:
         *extra_tool_calls,
         _result("end_turn"),
     ]
-    audit_log_path = tmp_path / "audit-F10.jsonl"
+    _audit_log_path = tmp_path / "audit-F10.jsonl"
     with patch(
         "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
     ):

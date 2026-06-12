@@ -23,10 +23,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 import cve_env
-from cve_env.models import Outcome
 
 
 def _read_cli_source() -> str:

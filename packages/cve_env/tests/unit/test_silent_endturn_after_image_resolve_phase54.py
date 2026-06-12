@@ -29,7 +29,6 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 
 from __future__ import annotations
 
-import pytest
 
 from cve_env.agent.loop import _map_status, _StreamState
 

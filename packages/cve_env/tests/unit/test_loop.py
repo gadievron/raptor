@@ -2964,7 +2964,7 @@ def test_fix8_does_not_fire_on_research_only_no_build(tmp_path: Path) -> None:
     ]
     fake, calls = _sequenced_run_agent_factory([batch])
     with patch("cve_env.agent.loop.run_agent", fake):
-        outcome = asyncio.run(
+        _outcome = asyncio.run(
             build(_cve(), _host(), run_id="fix8-research", audit_root=tmp_path)
         )
     assert len(calls) == 1  # no continuation on research-only

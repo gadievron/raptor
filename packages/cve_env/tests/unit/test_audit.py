@@ -111,7 +111,6 @@ def test_phase67_audit_write_atomic_or_partial_recovery(tmp_path: Path) -> None:
 # state dict.
 
 
-import pytest
 
 from cve_env.agent.loop import _StreamState
 

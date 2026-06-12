@@ -18,7 +18,6 @@ Reference: 33.3 reconciled-final artifact-final.md Cat 2 E1 +
 """
 from __future__ import annotations
 
-import pytest
 
 
 def _try_import_classifier():

@@ -23,12 +23,10 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 
 def test_loop_exception_handler_wires_classify_api_overload() -> None:

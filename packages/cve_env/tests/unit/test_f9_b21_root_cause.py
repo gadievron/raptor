@@ -18,7 +18,6 @@ from typing import Any
 from unittest.mock import patch
 
 from cve_env.agent.loop import build
-from cve_env.models import CveRecord, HostInfo
 
 # Reuse the existing test_loop helpers verbatim — we're in the same dir.
 from .test_loop import (  # type: ignore[import-untyped]
@@ -82,7 +81,7 @@ def test_f9_audit_truncates_at_cap_plus_1(tmp_path: Path) -> None:
     with patch(
         "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
     ):
-        outcome = asyncio.run(
+        _outcome = asyncio.run(
             build(
                 _cve(),
                 _host(),

@@ -16,10 +16,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 from cve_env.utils.safe_env import _DANGEROUS_ENV_VARS, safe_subprocess_env
 

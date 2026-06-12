@@ -20,7 +20,6 @@ in the same commit per past-bench-lessons §13 #1 TDD discipline).
 """
 from __future__ import annotations
 
-import pytest
 
 from cve_env.utils.exploit_text_sanitizer import sanitize_exploit_text
 

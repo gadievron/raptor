@@ -67,6 +67,7 @@ def _find_docker_run_cmd(mock_run: Any) -> list[str]:
     )
 
 
+@pytest.mark.slow  # real host-port inspect poll runs to _INSPECT_POLL_TIMEOUT_S (10s); nightly tier
 @patch("cve_env.utils.run.subprocess.run")
 def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> None:
     """External image (vulhub/openssl) → --pull always in argv."""
@@ -83,6 +84,7 @@ def test_docker_run_appends_pull_always_for_external_image(mock_run: Any) -> Non
     assert pull_idx < image_idx, f"--pull must come before image: {cmd}"
 
 
+@pytest.mark.slow  # real host-port inspect poll runs to _INSPECT_POLL_TIMEOUT_S (10s); nightly tier
 @patch("cve_env.utils.run.subprocess.run")
 def test_docker_run_skips_pull_always_for_local_image(mock_run: Any) -> None:
     """Locally-built image (cve-X:build) → no --pull flag (no upstream)."""

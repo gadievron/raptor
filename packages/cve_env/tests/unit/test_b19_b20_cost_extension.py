@@ -21,11 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from cve_env import config
 from cve_env.config import (
     MAX_TURN_EXTENSIONS,
-    MODEL_TOKEN_RATES_PER_M_USD,
-    PRODUCTIVE_RECENCY_TURNS,
     TURN_EXTENSION_PCT,
     estimate_cost_from_tokens,
     get_token_rates,

@@ -23,7 +23,6 @@ atomically when 29.2 lands.
 """
 from __future__ import annotations
 
-import pytest
 
 
 def _try_candidate_refs():
