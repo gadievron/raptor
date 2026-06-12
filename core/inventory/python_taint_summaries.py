@@ -26,8 +26,9 @@ Computation:
   CFG (reaching-defs lifted to track param origin + sanitizer
   effect chain).
 * Outer fixed-point over the call graph for mutual recursion.
-  Cycle bail at ``3 × N`` iterations, where ``N`` is the number of
-  in-module functions; survivors get ``summary_unconverged=True``.
+  Cycle bail at ``max(10, 3 × N)`` iterations, where ``N`` is the
+  number of in-module functions; survivors get
+  ``summary_unconverged=True``.
 * Dynamic dispatch (``getattr`` / ``setattr`` / ``eval`` / ``exec``
   / ``globals`` / ``locals`` / ``__import__`` / ``importlib.*`` /
   ``**kwargs`` forwarding) marks the function as
@@ -601,6 +602,16 @@ def _is_return_node(node: PyCFGNode, fn_ast: ast.AST) -> bool:
 # Outer fixed-point — call-graph iteration
 # ---------------------------------------------------------------------------
 
+# Outer fixed-point iteration budget = max(FLOOR, PER_FN * N), N being
+# the number of in-module functions. The 3*N term bounds worst-case
+# taint propagation depth through the call graph; the floor keeps tiny
+# modules from under-converging. Review #5: a bare 3*N starves small
+# modules — N=2 mutually recursive functions get only 6 passes, not
+# enough to settle a real sanitizer chain, so the summaries bail as
+# `summary_unconverged` and a genuine suppression is lost. Floor at 10.
+_TAINT_SUMMARY_OUTER_ITER_FLOOR = 10
+_TAINT_SUMMARY_OUTER_ITER_PER_FN = 3
+
 
 def build_taint_summaries(
     cg: PyModuleCallGraph,
@@ -614,8 +625,10 @@ def build_taint_summaries(
     derive from the same AST.
 
     Convergence: outer fixed-point bails after
-    ``3 × N`` iterations where ``N`` is the number of in-module
-    functions. Unconverged summaries get ``summary_unconverged=True``
+    ``max(10, 3 × N)`` iterations where ``N`` is the number of
+    in-module functions (see
+    :data:`_TAINT_SUMMARY_OUTER_ITER_FLOOR`). Unconverged summaries
+    get ``summary_unconverged=True``
     so Phase 14 can downgrade. In practice non-pathological codebases
     converge in 2–3 passes.
     """
@@ -635,7 +648,10 @@ def build_taint_summaries(
         node.name: TaintSummary(function=node.name, params=node.params)
         for node in target_nodes
     }
-    max_iters = max(3, 3 * len(target_nodes))
+    max_iters = max(
+        _TAINT_SUMMARY_OUTER_ITER_FLOOR,
+        _TAINT_SUMMARY_OUTER_ITER_PER_FN * len(target_nodes),
+    )
     for _ in range(max_iters):
         changed = False
         for node in target_nodes:
