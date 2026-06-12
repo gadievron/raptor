@@ -444,7 +444,7 @@ when tractable; A/B measurement.
 | 2b | A | Dawid–Skene estimator (`core/llm/multi_model/dawid_skene.py`) | **done** (16 property tests pass) |
 | 2c | A | D–S property tests | **done** |
 | 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
-| 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; `RAPTOR_CALIBRATED_AGGREGATION` opt-out) |
+| 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; unconditional — no flag, since the field is purely additive) |
 | 4 | A | Posterior-weighted scorecard updates | **done** (new `multi_model_consensus_calibrated` event slot, soft-label credits, legacy slot preserved) |
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |
 | 6 | B | Sanitizer catalog + recognition | not started |

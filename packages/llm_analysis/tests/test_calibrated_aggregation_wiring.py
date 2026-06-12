@@ -1,64 +1,21 @@
 """Integration tests for the Phase 3b orchestrator wire-up.
 
-The orchestrator-level integration is small: a feature-flag helper, an
-inline call to ``calibrate_results``, and an attach loop. These tests
-exercise the helper directly and verify the attach loop's contract
-(every result that had ``multi_model_analyses`` gains a sibling
-``calibrated_aggregation`` field) by driving the same code path the
-orchestrator runs, without booting the full orchestrate() machinery.
+The orchestrator-level integration is small: an inline call to
+``calibrate_results`` and an attach loop. These tests verify the
+attach loop's contract (every result that had ``multi_model_analyses``
+gains a sibling ``calibrated_aggregation`` field) by driving the same
+code path the orchestrator runs, without booting the full
+orchestrate() machinery.
 
 We don't run a real orchestrate() — that needs an LLM, a target
 repo, a CodeQL database and several minutes per case. The wire-up
 itself is a single block; isolating it is honest about what's
 actually being tested.
+
+The step is unconditional (additive, no feature flag — review of
+PR #793 removed RAPTOR_CALIBRATED_AGGREGATION).
 """
 from __future__ import annotations
-
-import os
-from contextlib import contextmanager
-
-import pytest
-
-from packages.llm_analysis.orchestrator import _calibrated_aggregation_enabled
-
-
-@contextmanager
-def _env(key: str, value):
-    """Context manager that sets / restores an env var."""
-    original = os.environ.get(key)
-    try:
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-        yield
-    finally:
-        if original is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = original
-
-
-# ---------------------------------------------------------------------------
-# Feature-flag helper
-# ---------------------------------------------------------------------------
-
-
-def test_feature_flag_default_enabled():
-    with _env("RAPTOR_CALIBRATED_AGGREGATION", None):
-        assert _calibrated_aggregation_enabled() is True
-
-
-@pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", "NO", "off", ""])
-def test_feature_flag_falsy_values_disable(value):
-    with _env("RAPTOR_CALIBRATED_AGGREGATION", value):
-        assert _calibrated_aggregation_enabled() is False
-
-
-@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "anything"])
-def test_feature_flag_truthy_values_enable(value):
-    with _env("RAPTOR_CALIBRATED_AGGREGATION", value):
-        assert _calibrated_aggregation_enabled() is True
 
 
 # ---------------------------------------------------------------------------

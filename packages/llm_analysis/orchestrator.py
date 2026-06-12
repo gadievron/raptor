@@ -174,22 +174,6 @@ class CostTracker:
             return summary
 
 
-def _calibrated_aggregation_enabled() -> bool:
-    """Feature flag for the Phase 3 calibrated-aggregation wire-up.
-
-    Default: enabled. Set ``RAPTOR_CALIBRATED_AGGREGATION=0``
-    (or ``""`` / ``false`` / ``no``) to disable. The flag exists so
-    operators can opt out if the additional EM cost ever becomes
-    noticeable on very large finding sets, or if an integration
-    surface needs the strict pre-Phase-3 schema for a transition
-    period.
-    """
-    raw = os.environ.get("RAPTOR_CALIBRATED_AGGREGATION")
-    if raw is None:
-        return True
-    return raw.strip().lower() not in ("", "0", "false", "no", "off")
-
-
 def _finalize_results_for_emit(results: list) -> None:
     """Strip operator-internal fields + stamp explicit status on
     each per-finding record before it lands in
@@ -849,72 +833,67 @@ def orchestrate(
     # ``calibrated_aggregation`` field carrying a posterior P(true-positive)
     # and credible interval inferred from the multi-model panel verdicts.
     # Purely additive — does not alter ``is_exploitable`` or any existing
-    # field. The vote-based consensus pipeline (consensus.py) is unchanged
-    # and still updates the scorecard; Phase 4 closes that circularity
-    # in a separate change.
+    # field, so it always runs: there is nothing to switch off (a consumer
+    # that doesn't know the field ignores it). The vote-based consensus
+    # pipeline (consensus.py) is unchanged and still updates the scorecard;
+    # the posterior-weighted scorecard update is a deferred,
+    # measurement-gated follow-up — see the design doc.
     #
-    # Opt-out: set ``RAPTOR_CALIBRATED_AGGREGATION=0`` (or any falsy value).
-    # Default is ON. The feature is structurally safe to enable by default
-    # because it can only add a field; consumers that don't know about it
-    # ignore it.
-    # Structured summary of this run's calibrated aggregation, surfaced
-    # in orchestrated_report.json so a silent fallback (the except below)
-    # is observable to operators, not just grep-able in the log.
-    calibrated_summary: Dict[str, Any] = {"enabled": False}
-    if _calibrated_aggregation_enabled():
-        calibrated_summary = {"enabled": True, "failed": False}
-        try:
-            from core.llm.multi_model.calibrated_aggregation import (
-                calibrate_results, verdict_to_json,
-            )
-            verdicts = calibrate_results(results_by_id)
-            n_ds = sum(
-                1 for v in verdicts.values()
-                if v.aggregation_method == "dawid_skene"
-            )
-            # Break the vote-fallback count down by reason rather than
-            # reporting a bare total — an operator seeing "5 fell back"
-            # can't tell single-model panels (expected) from
-            # non-convergence (worth investigating).
-            fallback_by_reason = Counter(
-                v.aggregation_fallback_reason or "unspecified"
-                for v in verdicts.values()
-                if v.aggregation_method != "dawid_skene"
-            )
-            n_vote = sum(fallback_by_reason.values())
-            for fid, verdict in verdicts.items():
-                primary = results_by_id.get(fid)
-                if primary is not None:
-                    primary["calibrated_aggregation"] = verdict_to_json(verdict)
-            breakdown = ", ".join(
-                f"{n}× {reason}"
-                for reason, n in sorted(fallback_by_reason.items())
-            ) or "none"
-            calibrated_summary.update({
-                "dawid_skene": n_ds,
-                "vote_fallback": n_vote,
-                "fallback_by_reason": dict(fallback_by_reason),
-                "total": len(verdicts),
-            })
-            logger.info(
-                "Calibrated aggregation: %d D–S, %d vote-fallback "
-                "[%s] (%d total)",
-                n_ds, n_vote, breakdown, len(verdicts),
-            )
-        except Exception as exc:
-            # The feature is additive — if it fails for any reason we
-            # drop it rather than abort the orchestrator. Record the
-            # failure in the run summary (not just the log) so it is
-            # observable to operators reading orchestrated_report.json.
-            calibrated_summary = {
-                "enabled": True,
-                "failed": True,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            logger.warning(
-                "Calibrated aggregation failed; skipping: %s: %s",
-                type(exc).__name__, exc, exc_info=True,
-            )
+    # The structured summary is surfaced in orchestrated_report.json so a
+    # silent fallback (the except below) is observable to operators, not
+    # just grep-able in the log.
+    calibrated_summary: Dict[str, Any] = {"failed": False}
+    try:
+        from core.llm.multi_model.calibrated_aggregation import (
+            calibrate_results, verdict_to_json,
+        )
+        verdicts = calibrate_results(results_by_id)
+        n_ds = sum(
+            1 for v in verdicts.values()
+            if v.aggregation_method == "dawid_skene"
+        )
+        # Break the vote-fallback count down by reason rather than
+        # reporting a bare total — an operator seeing "5 fell back"
+        # can't tell single-model panels (expected) from
+        # non-convergence (worth investigating).
+        fallback_by_reason = Counter(
+            v.aggregation_fallback_reason or "unspecified"
+            for v in verdicts.values()
+            if v.aggregation_method != "dawid_skene"
+        )
+        n_vote = sum(fallback_by_reason.values())
+        for fid, verdict in verdicts.items():
+            primary = results_by_id.get(fid)
+            if primary is not None:
+                primary["calibrated_aggregation"] = verdict_to_json(verdict)
+        breakdown = ", ".join(
+            f"{n}× {reason}"
+            for reason, n in sorted(fallback_by_reason.items())
+        ) or "none"
+        calibrated_summary.update({
+            "dawid_skene": n_ds,
+            "vote_fallback": n_vote,
+            "fallback_by_reason": dict(fallback_by_reason),
+            "total": len(verdicts),
+        })
+        logger.info(
+            "Calibrated aggregation: %d D–S, %d vote-fallback "
+            "[%s] (%d total)",
+            n_ds, n_vote, breakdown, len(verdicts),
+        )
+    except Exception as exc:
+        # The feature is additive — if it fails for any reason we
+        # drop it rather than abort the orchestrator. Record the
+        # failure in the run summary (not just the log) so it is
+        # observable to operators reading orchestrated_report.json.
+        calibrated_summary = {
+            "failed": True,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        logger.warning(
+            "Calibrated aggregation failed; skipping: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
 
     # Multi-model collapse detection. The exclude_fallback_to guard above
     # prevents most cases where a primary's failure routes silently into
