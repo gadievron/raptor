@@ -160,6 +160,16 @@ FILTERS: dict[str, list[str]] = {
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
+    "cve_env": [
+        # Phase 1 lift-and-shift: cve-env vendors its own runtime (claude-agent-sdk
+        # agent loop, Docker tooling, dockerfile gen, HTTP) and imports ZERO core/
+        # modules, so the filter is just the package + shared dep/CI files. When a
+        # later phase adopts a core/ module, add its glob here AND register
+        # ("cve_env", "packages/cve_env") in .github/tests/test_filter_coverage.py.
+        "packages/cve_env/**",
+        "requirements*.txt",
+        ".github/workflows/tests.yml",
+    ],
     "fuzzing": [
         "packages/fuzzing/**",
         "packages/autonomous/**",
@@ -316,6 +326,8 @@ FILTERS: dict[str, list[str]] = {
         "packages/cve_diff/cve_diff/agent/loop.py",
         "packages/cve_diff/cve_diff/agent/prompt.py",
         "packages/cve_diff/cve_diff/analysis/analyzer.py",
+        "packages/cve_env/cve_env/agent/prompts.py",
+        "packages/cve_env/cve_env/agent/loop.py",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],

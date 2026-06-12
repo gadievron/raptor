@@ -96,6 +96,8 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
+| `/cve-diff` | Discover and diff the fix commit for a CVE across OSV, NVD, GitHub, and GitLab | Beta |
+| `/cve-env` | Build and verify a Docker environment running a CVE's affected application at its pre-patch version | Experimental |
 | `/exploit` | Generate proof-of-concept exploit code | Beta |
 | `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
