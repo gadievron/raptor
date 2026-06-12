@@ -100,7 +100,7 @@ real horizon window, not the synthetic baseline.
 ## Regenerating the baseline report
 
 ```bash
-RAPTOR_SANITIZER_CUT=1 libexec/raptor-sanitizer-cut-parity-report \
+RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report \
     > docs/sanitizer-cut-parity/first-report.md
 ```
 

@@ -704,7 +704,7 @@ fixture unchanged.
   two-in-a-row requirement.
 * `docs/sanitizer-cut-parity/first-report.md` — the committed
   baseline, regenerable via
-  `libexec/raptor-sanitizer-cut-parity-report`.
+  `core/dataflow/scripts/sanitizer-cut-parity-report`.
 
 **Criterion — strengthened past the design's literal form.** The
 design's two-rate criterion (value-bound noise-suppression ≥

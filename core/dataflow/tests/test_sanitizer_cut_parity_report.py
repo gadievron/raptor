@@ -82,7 +82,7 @@ class TestCommittedReportInSync:
     def test_committed_report_matches_generator(self):
         """The committed first-report.md must match the generator
         output. If this fails, regenerate:
-            RAPTOR_SANITIZER_CUT=1 libexec/raptor-sanitizer-cut-parity-report \\
+            RAPTOR_SANITIZER_CUT=1 core/dataflow/scripts/sanitizer-cut-parity-report \\
                 > docs/sanitizer-cut-parity/first-report.md
         """
         repo_root = Path(__file__).resolve().parents[3]

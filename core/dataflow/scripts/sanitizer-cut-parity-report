@@ -23,7 +23,7 @@ if not (os.environ.get("CLAUDECODE")
     sys.exit(2)
 # ─── end trust-marker check ─────────────────────────────────
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.dataflow.sanitizer_cut_parity_report import (  # noqa: E402
     render_baseline_report,
