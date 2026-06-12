@@ -857,7 +857,12 @@ def orchestrate(
     # Default is ON. The feature is structurally safe to enable by default
     # because it can only add a field; consumers that don't know about it
     # ignore it.
+    # Structured summary of this run's calibrated aggregation, surfaced
+    # in orchestrated_report.json so a silent fallback (the except below)
+    # is observable to operators, not just grep-able in the log.
+    calibrated_summary: Dict[str, Any] = {"enabled": False}
     if _calibrated_aggregation_enabled():
+        calibrated_summary = {"enabled": True, "failed": False}
         try:
             from core.llm.multi_model.calibrated_aggregation import (
                 calibrate_results, verdict_to_json,
@@ -885,6 +890,12 @@ def orchestrate(
                 f"{n}× {reason}"
                 for reason, n in sorted(fallback_by_reason.items())
             ) or "none"
+            calibrated_summary.update({
+                "dawid_skene": n_ds,
+                "vote_fallback": n_vote,
+                "fallback_by_reason": dict(fallback_by_reason),
+                "total": len(verdicts),
+            })
             logger.info(
                 "Calibrated aggregation: %d D–S, %d vote-fallback "
                 "[%s] (%d total)",
@@ -892,9 +903,14 @@ def orchestrate(
             )
         except Exception as exc:
             # The feature is additive — if it fails for any reason we
-            # drop it silently rather than abort the orchestrator. The
-            # log line gives operators something to grep for if the
-            # field goes missing.
+            # drop it rather than abort the orchestrator. Record the
+            # failure in the run summary (not just the log) so it is
+            # observable to operators reading orchestrated_report.json.
+            calibrated_summary = {
+                "enabled": True,
+                "failed": True,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
             logger.warning(
                 "Calibrated aggregation failed; skipping: %s: %s",
                 type(exc).__name__, exc, exc_info=True,
@@ -1371,6 +1387,7 @@ def orchestrate(
         "judge_disputes": judge_disputes,
         "aggregate_models": [m.model_name for m in aggregate_models],
         "aggregated": aggregation is not None,
+        "calibrated_aggregation": calibrated_summary,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
