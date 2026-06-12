@@ -56,9 +56,9 @@ Phase 1 don't drift before Phase 16 lands.
 | 9 | B | C/C++ intra-procedural CFG + symbol layer | **done** (32 tests pass; `core/inventory/cfg_builder_cpp.py` mirrors `PyCFGNode`/`PythonCFG` shape; covers if/else, while/for/do-while + break/continue, switch with fallthrough, goto+labeled, return; defs/uses/call_sites match Python builder's contract; degrade-cleanly on partial parse errors; ruff clean) |
 | 10 | B | Pointer / alias conservatism | **done** (27 tests pass; CPPCFGNode.may_escape stamped on `*p` / `&x` / `a[i]` / `obj->field` / bulk-copy calls (memcpy/strcpy family); evaluate_finding downgrades SUPPRESS → CANDIDATE_ONLY when any node on a source→sink path is may_escape; Python verdicts unchanged via getattr default; ruff clean) |
 | 11 | B | Value-bound suppression for C/C++ (auto-downgrade removed) | **done** (10 tests pass; finding_resolver wires `build_cpp_intraproc_cfg` for c/cpp languages; 5-fixture C corpus + CORPUS.md ablation table; 4 GLib/SQLite sanitizer entries added to the known-safe table; Phase 4 callgraph-only carve-out preserved; ruff clean) |
-| 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/python_callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
-| 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/python_taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
-| 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/python_interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
+| 12 | C (Python inter-proc) | Module-local Python call graph | **done** (32 tests pass; `core/inventory/callgraph.py` exposes `PyCallGraphNode` + `PyModuleCallGraph` (Graph[N] Protocol) + `build_python_module_callgraph`; resolves `name`, `self.method`, `cls.method`, `Class.method`, `Class()→__init__`; lambdas assigned to a name become nodes; cross-module / dynamic / builtin calls dropped; nested fns qualified as `outer.inner`; module-entry node implicitly reaches top-level fns; ruff clean) |
+| 13 | C | Per-function taint summaries | **done** (23 tests pass; `core/inventory/taint_summaries.py` exposes `TaintSummary` + `build_taint_summaries`; per-function fixed-point inside intra-proc CFG tracking `(param_idx, effect_chain)` atoms; outer fixed-point over call graph bails at `3×N` iterations; `summary_unknown` on `getattr`/`eval`/`exec`/`**kwargs`; `return_effects`+`call_arg_taint` answer Phase 14's two questions; ruff clean) |
+| 14 | C | Inter-procedural `evaluate_finding` | **done** (16 tests + corpus A/B; `core/inventory/interproc.py` synthesises sanitizer bindings at in-module helper calls whose Phase 13 summary cleanly sanitizes; `evaluate_finding` gains `extra_bindings`; resolver stores `inter_proc_bindings` on Python `ResolvedFinding`; `sanitizer_in_helper.py` flips no_suppress→suppress with all other corpus fixtures unchanged; ruff clean) |
 | 15 | D (lexical removal) | Parity telemetry + A/B horizon | **done** (33 tests; `core/dataflow/sanitizer_cut_parity.py` — ParityRecord, shadow-log via `RAPTOR_SANITIZER_CUT_PARITY_LOG`, Wilson-CI aggregation, removal-safe gate = rate-criterion AND zero per-finding regression; HORIZON.md + committed first-report.md show value-bound and lexical are complementary so the gate is correctly NOT-yet-cleared; ruff clean) |
 | 16 | D | Lexical fallback removal at `smt_barrier.py:746` / `:940` | **done (honest closure)** — parity gate (phase 15) is NOT cleared, so the lexical bodies are RETAINED, not deleted; the end-state is reachable via `RAPTOR_SANITIZER_CUT_NO_LEXICAL`; a closure tripwire test pins the gate's not-cleared state; arc closed for its soundness goal, open for full lexical retirement (8 tests; ruff clean; `docs/sanitizer-cut-parity/CLOSURE.md`) |
 
@@ -501,7 +501,7 @@ output too).
 
 **Goal:** know which functions call which, within a module.
 
-**Shipped:** `core/inventory/python_callgraph.py` exposes
+**Shipped:** `core/inventory/callgraph.py` exposes
 `PyCallGraphNode` (frozen, hashable on `name`+`lineno`, carries
 `params` / `is_method` / `class_name`), `PyModuleCallGraph`
 (implements `Graph[N]`, plus `find(name)` for callee resolution
@@ -531,7 +531,7 @@ A synthetic `<module>` entry has edges to every top-level
 function and to every module-level call's resolvable callee — so
 dominator queries work over the whole module.
 
-**Tests:** `core/inventory/tests/test_python_callgraph.py` — 32
+**Tests:** `core/inventory/tests/test_callgraph.py` — 32
 tests covering basic shape (empty module, single fn, params,
 unparseable source, module-entry edges, line range, AST
 accessor), edges (caller→callee, module-level, recursion,
@@ -552,7 +552,7 @@ unknown node).
 reach a callee's tainted-sink arg — and which sanitizers did the
 taint pass through on the way?"
 
-**Shipped:** `core/inventory/python_taint_summaries.py` exposes
+**Shipped:** `core/inventory/taint_summaries.py` exposes
 `TaintSummary` (frozen, hashable) carrying:
 
 * `return_effects: FrozenSet[Tuple[int, str, int]]` — each triple
@@ -600,7 +600,7 @@ arg_idx)`.
   summary — the unknown-detector scopes to the immediate
   function's own body.
 
-**Tests:** `core/inventory/tests/test_python_taint_summaries.py`
+**Tests:** `core/inventory/tests/test_taint_summaries.py`
 — 23 tests covering primitives (identity, constant return,
 transform, branching, ordered params), call_arg_taint
 (external call, intermediate var, untainted arg), inter-procedural
@@ -628,7 +628,7 @@ condition 3 still enforces the wrong-variable check (a helper that
 sanitizes `other` doesn't suppress a finding whose sink reads
 `user`).
 
-* `core/inventory/python_interproc.py` —
+* `core/inventory/interproc.py` —
   `synthetic_sanitizer_bindings(cfg, fn_ast, summaries, cwe,
   language)`. A binding is emitted for helper-call parameter `i`
   only if: the callee has a known + converged summary; param `i`
@@ -656,7 +656,7 @@ intra-procedural `match_sanitizers_in_cfg` path. `self.method`
 callee resolution is best-effort (only when the dotted call name
 matches a summary key).
 
-**Tests:** `core/inventory/tests/test_python_interproc.py` — 16
+**Tests:** `core/inventory/tests/test_interproc.py` — 16
 tests: binding generation (helper sanitizer → binding; passthrough
 → none; some-branches → none; non-sanitizer-in-chain → none; wrong
 CWE → none; multi-arg positional mapping; transitive sanitization;

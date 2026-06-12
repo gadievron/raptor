@@ -1,10 +1,10 @@
 """Phase 13 — per-function taint summary tests."""
 from __future__ import annotations
 
-from core.inventory.python_callgraph import (
+from core.inventory.callgraph import (
     build_python_module_callgraph,
 )
-from core.inventory.python_taint_summaries import (
+from core.inventory.taint_summaries import (
     build_taint_summaries,
 )
 

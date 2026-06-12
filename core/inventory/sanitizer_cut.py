@@ -438,7 +438,7 @@ def evaluate_finding(
 
     ``extra_bindings`` (Phase 14) are inter-procedural synthetic
     sanitizer bindings — typically from
-    :func:`core.inventory.python_interproc.synthetic_sanitizer_bindings`.
+    :func:`core.inventory.interproc.synthetic_sanitizer_bindings`.
     They are unioned into the catalog-matched bindings before the
     gate runs, so a sanitizer inside an in-module helper counts
     toward the cut. Each synthetic binding carries real

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import ast
 
-from core.inventory.python_callgraph import (
+from core.inventory.callgraph import (
     MODULE_ENTRY_NAME,
     PyCallGraphNode,
     PyModuleCallGraph,

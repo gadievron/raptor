@@ -453,20 +453,20 @@ def _inter_proc_bindings_python(
 
     Builds the module-local call graph + taint summaries from the
     same source text, then asks
-    :func:`core.inventory.python_interproc.synthetic_sanitizer_bindings`
+    :func:`core.inventory.interproc.synthetic_sanitizer_bindings`
     for bindings at call sites where an in-module helper cleanly
     sanitizes. Returns an empty frozenset on any failure (best-effort
     — the intra-procedural verdict still stands). Imports are local
     so the Phase 12-14 modules aren't loaded for callers that never
     resolve a Python finding."""
     try:
-        from core.inventory.python_callgraph import (
+        from core.inventory.callgraph import (
             build_python_module_callgraph,
         )
-        from core.inventory.python_interproc import (
+        from core.inventory.interproc import (
             synthetic_sanitizer_bindings,
         )
-        from core.inventory.python_taint_summaries import (
+        from core.inventory.taint_summaries import (
             build_taint_summaries,
         )
     except ImportError:                                     # pragma: no cover

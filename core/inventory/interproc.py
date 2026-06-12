@@ -79,10 +79,10 @@ from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     sanitizer_callables_for_cwe,
 )
-from core.inventory.python_taint_summaries import TaintSummary
+from core.inventory.taint_summaries import TaintSummary
 
 
-# Sentinel matching python_taint_summaries._DIRECT_RETURN_CALLABLE —
+# Sentinel matching taint_summaries._DIRECT_RETURN_CALLABLE —
 # duplicated here rather than imported to avoid coupling to a private
 # name; the value ("" empty string) is part of the TaintSummary
 # contract documented on return_effects.
@@ -184,7 +184,7 @@ def synthetic_sanitizer_bindings(
     that function's AST node — used to recover positional argument
     names that the CFG's frozenset ``arg_names`` can't order.
     ``summaries`` maps qualified function name → :class:`TaintSummary`
-    (from :func:`core.inventory.python_taint_summaries.build_taint_summaries`).
+    (from :func:`core.inventory.taint_summaries.build_taint_summaries`).
 
     Returns an empty frozenset when the CWE has no catalog sanitizers,
     when no in-module helper call cleanly sanitizes, or when

@@ -63,7 +63,7 @@ from core.inventory.cfg_builder import (
     _PythonCFGBuilder,
 )
 from core.inventory.dataflow import reaching_defs
-from core.inventory.python_callgraph import (
+from core.inventory.callgraph import (
     PyModuleCallGraph,
 )
 

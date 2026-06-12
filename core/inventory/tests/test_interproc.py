@@ -16,9 +16,9 @@ from core.inventory.finding_resolver import (
     ResolvedFinding,
     resolve_finding,
 )
-from core.inventory.python_callgraph import build_python_module_callgraph
-from core.inventory.python_interproc import synthetic_sanitizer_bindings
-from core.inventory.python_taint_summaries import build_taint_summaries
+from core.inventory.callgraph import build_python_module_callgraph
+from core.inventory.interproc import synthetic_sanitizer_bindings
+from core.inventory.taint_summaries import build_taint_summaries
 from core.inventory.sanitizer_cut import (
     VERDICT_NO_SUPPRESS,
     VERDICT_SUPPRESS,
