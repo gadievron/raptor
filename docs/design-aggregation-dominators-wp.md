@@ -56,7 +56,7 @@ sidecar at `out/llm_scorecard.json` (schema v2) keys cells on
 buckets, not flatten them — freshness weighting is downstream's call,
 not the audit's.
 
-**1a — Audit (`libexec/raptor-scorecard-audit`)**
+**1a — Audit (`core/llm/scorecard/scripts/scorecard-audit`)**
 
 - Read every scorecard JSON discoverable under `out/` plus the active
   project (the run lifecycle's `.active` symlink resolves the project
@@ -438,12 +438,12 @@ when tractable; A/B measurement.
 
 | Phase | Project | Scope | Status |
 |------:|---------|-------|--------|
-| 1a | A | Audit CLI (`libexec/raptor-scorecard-audit`) + report | **done** (no-data verdict on current checkout) |
+| 1a | A | Audit CLI (`core/llm/scorecard/scripts/scorecard-audit`) + report | **done** (no-data verdict on current checkout) |
 | 1b | A | Beta priors module (`core/llm/scorecard/priors.py`) | **done** (math-only; parameterization deferred to Phase 3) |
 | 2a | A | Panel-log loader (`core/llm/multi_model/panel_log.py`) | **done** (data already on disk in `orchestrated_report.json`) |
 | 2b | A | Dawid–Skene estimator (`core/llm/multi_model/dawid_skene.py`) | **done** (16 property tests pass) |
 | 2c | A | D–S property tests | **done** |
-| 2d | A | Offline replay harness (`libexec/raptor-panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
+| 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; `RAPTOR_CALIBRATED_AGGREGATION` opt-out) |
 | 4 | A | Posterior-weighted scorecard updates | **done** (new `multi_model_consensus_calibrated` event slot, soft-label credits, legacy slot preserved) |
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |

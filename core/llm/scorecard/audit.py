@@ -109,7 +109,7 @@ def _load_raw(path: Path) -> Optional[dict]:
         with path.open("r", encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"raptor-scorecard-audit: cannot read {path}: {exc}")
+        raise SystemExit(f"scorecard-audit: cannot read {path}: {exc}")
 
 
 def audit(path: Path = DEFAULT_PATH) -> AuditReport:
@@ -334,7 +334,7 @@ def render_json(report: AuditReport) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="raptor-scorecard-audit",
+        prog="scorecard-audit",
         description=(
             "Audit a scorecard sidecar for data sufficiency. Gates "
             "Phase 1b (Beta priors) of the calibrated-aggregation arc."

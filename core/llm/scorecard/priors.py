@@ -1,7 +1,7 @@
 """Beta-distribution priors for the calibrated-aggregation arc.
 
 Phase 1b deliverable. Pure math + factory helpers; no IO, no scipy.
-The current checkout's scorecard audit (``raptor-scorecard-audit``)
+The current checkout's scorecard audit (``core/llm/scorecard/scripts/scorecard-audit``)
 returned ``no-data``, so prior parameterization is left explicit at
 the call site: Phase 3 picks a factory + parameters at integration
 time once real panel-log data exists.

@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Operator entry point for the offline panel replay harness
+(backend: core/llm/multi_model/replay.py). Re-aggregates historical
+panel data with Dawid–Skene and compares against the recorded majority
+verdict — the read-only validation instrument for the calibrated-
+aggregation gate-flip decision (design doc Phase 2d).
+
+Operator-typed diagnostic, co-located with the subsystem it exercises
+(matching core/inventory/scripts/binary-oracle-closed-loop). Run with
+--help for usage.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+
+from core.llm.multi_model.replay import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

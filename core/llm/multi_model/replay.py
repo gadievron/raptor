@@ -392,7 +392,7 @@ def render_json(report: ReplayReport) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="raptor-panel-replay",
+        prog="panel-replay",
         description=(
             "Re-aggregate panel records from historical "
             "orchestrated_report.json files with Dawid–Skene and "
@@ -441,7 +441,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         paths.extend(discover_reports(args.root))
     if not paths:
         sys.stderr.write(
-            "raptor-panel-replay: no paths supplied (pass orchestrated_report.json "
+            "panel-replay: no paths supplied (pass orchestrated_report.json "
             "paths positionally, or --root <dir> to discover)\n"
         )
         return 2

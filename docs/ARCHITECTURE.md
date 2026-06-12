@@ -463,7 +463,7 @@ The existing `is_exploitable`, `multi_model_analyses`, and `ruling` fields are u
 
 Opt out: set `RAPTOR_CALIBRATED_AGGREGATION=0` in the environment. The block at `orchestrator.py:~830` is wrapped in a `try / except` — if D–S fails for any reason, the field is dropped silently and a `WARNING` is logged.
 
-**Phase 4 follow-on**: when `calibrated_aggregation` is present on a finding with `aggregation_method = "dawid_skene"`, `core/llm/scorecard/consensus.py` routes the scorecard update through the new `multi_model_consensus_calibrated` event slot via `ModelScorecard.record_event_soft`. Per-model credits are soft-labelled (`correct_credit = p if verdict else (1-p)`; `incorrect_credit = 1 - correct_credit`), breaking the circularity in the legacy `multi_model_consensus` slot (which defined "truth" by majority vote). The legacy slot is untouched for vote-fallback findings and pre-Phase-3 runs, so cells with mixed history retain both signals. The audit CLI (`libexec/raptor-scorecard-audit`) surfaces both slots.
+**Phase 4 follow-on**: when `calibrated_aggregation` is present on a finding with `aggregation_method = "dawid_skene"`, `core/llm/scorecard/consensus.py` routes the scorecard update through the new `multi_model_consensus_calibrated` event slot via `ModelScorecard.record_event_soft`. Per-model credits are soft-labelled (`correct_credit = p if verdict else (1-p)`; `incorrect_credit = 1 - correct_credit`), breaking the circularity in the legacy `multi_model_consensus` slot (which defined "truth" by majority vote). The legacy slot is untouched for vote-fallback findings and pre-Phase-3 runs, so cells with mixed history retain both signals. The audit CLI (`core/llm/scorecard/scripts/scorecard-audit`) surfaces both slots.
 
 **LLM Abstraction**:
 ```
