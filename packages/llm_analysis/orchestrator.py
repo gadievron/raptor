@@ -19,6 +19,7 @@ import os
 import shutil
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -866,14 +867,28 @@ def orchestrate(
                 1 for v in verdicts.values()
                 if v.aggregation_method == "dawid_skene"
             )
-            n_vote = len(verdicts) - n_ds
+            # Break the vote-fallback count down by reason rather than
+            # reporting a bare total — an operator seeing "5 fell back"
+            # can't tell single-model panels (expected) from
+            # non-convergence (worth investigating).
+            fallback_by_reason = Counter(
+                v.aggregation_fallback_reason or "unspecified"
+                for v in verdicts.values()
+                if v.aggregation_method != "dawid_skene"
+            )
+            n_vote = sum(fallback_by_reason.values())
             for fid, verdict in verdicts.items():
                 primary = results_by_id.get(fid)
                 if primary is not None:
                     primary["calibrated_aggregation"] = verdict_to_json(verdict)
+            breakdown = ", ".join(
+                f"{n}× {reason}"
+                for reason, n in sorted(fallback_by_reason.items())
+            ) or "none"
             logger.info(
-                "Calibrated aggregation: %d D–S, %d vote-fallback (%d total)",
-                n_ds, n_vote, len(verdicts),
+                "Calibrated aggregation: %d D–S, %d vote-fallback "
+                "[%s] (%d total)",
+                n_ds, n_vote, breakdown, len(verdicts),
             )
         except Exception as exc:
             # The feature is additive — if it fails for any reason we
