@@ -106,6 +106,18 @@ The report is what gates 1b.
   serialized into every aggregation result for auditability.
 - Pure-Python implementation. No scipy/numpy dep (incomplete-beta
   via standard continued-fraction expansion).
+- **Sparse-cell behaviour (not a bug — document for operators).**
+  When a `(model, decision_class)` cell has few observations, the
+  conjugate update `Beta(α+s, β+f)` is dominated by the prior: with
+  the cold-start `uniform_prior()` (Beta(1,1)) and little data the
+  posterior mean sits near 0.5, the credible interval stays wide, and
+  the *deferred* Phase 4's posterior-weighted soft updates would be
+  near-zero (`correct_credit ≈ incorrect_credit ≈ 0.5`). This is the
+  prior correctly dominating in the absence of evidence, not a
+  malfunction — it is exactly why a real informed prior (from
+  `/validate` ground truth, Phase 3/4) matters before the soft update
+  carries weight. Operators landing this on a fresh install should
+  expect ~0.5 posteriors until per-class panel data accumulates.
 
 **Ships from 1b:** priors module + tests.
 
