@@ -1602,7 +1602,6 @@ def _resolve_cross_family_checker(
 
 def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
     """Auto-detect a cheap cross-family model from environment API keys."""
-    import os
     from core.llm.config import ModelConfig
     from core.llm.model_data import PROVIDER_ENV_KEYS
 
