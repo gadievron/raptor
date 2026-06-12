@@ -457,13 +457,13 @@ Each finding in `orchestrated_report.json` gains an additive `calibrated_aggrega
 
 - `aggregation_method = "dawid_skene"` when the finding had ≥2 valid panel members; the EM estimator (`core/llm/multi_model/dawid_skene.py`) infers per-model `(α, β)` confusion matrices and a per-finding latent-label posterior.
 - `aggregation_method = "vote"` when there's no panel (single-model run, all-error panel). `aggregation_fallback_reason` is populated (`"no_panel"`, `"insufficient_panel_size_1"`, etc.) and `posterior_true_positive` degenerates to `1.0` / `0.0` matching the legacy `is_exploitable` boolean.
-- `model_reliabilities` is per-decision-class — the same model can have different `(α, β)` on `py/sql-injection` vs `cpp/uncontrolled-format`. Phase 4 will read this for posterior-weighted scorecard updates.
+- `model_reliabilities` is per-decision-class — the same model can have different `(α, β)` on `py/sql-injection` vs `cpp/uncontrolled-format`. The deferred Phase 4 (below) will read this for posterior-weighted scorecard updates.
 
 The existing `is_exploitable`, `multi_model_analyses`, and `ruling` fields are untouched; downstream consumers that don't read `calibrated_aggregation` keep working.
 
 The step is unconditional: it is purely additive (only ever adds the `calibrated_aggregation` field), so there is no opt-out to maintain. The block at `orchestrator.py:~830` is wrapped in a `try / except` — if D–S fails for any reason, the field is dropped, a `WARNING` is logged, and the failure is recorded under `orchestration.calibrated_aggregation.failed` in `orchestrated_report.json`.
 
-**Phase 4 follow-on**: when `calibrated_aggregation` is present on a finding with `aggregation_method = "dawid_skene"`, `core/llm/scorecard/consensus.py` routes the scorecard update through the new `multi_model_consensus_calibrated` event slot via `ModelScorecard.record_event_soft`. Per-model credits are soft-labelled (`correct_credit = p if verdict else (1-p)`; `incorrect_credit = 1 - correct_credit`), breaking the circularity in the legacy `multi_model_consensus` slot (which defined "truth" by majority vote). The legacy slot is untouched for vote-fallback findings and pre-Phase-3 runs, so cells with mixed history retain both signals. The audit CLI (`core/llm/scorecard/scripts/scorecard-audit`) surfaces both slots.
+**Phase 4 (deferred, follow-up PR)**: the posterior-weighted scorecard update is *not* in this PR. `core/llm/scorecard/consensus.py` still grades dissenters against the majority vote via `record_event` on the single `multi_model_consensus` slot. The follow-up — gated on replay-harness validation because the Phase-1a audit returned no-data — will collapse to one consensus mode that always records *soft* credits (the legacy discrete update being the `correct=1.0, incorrect=0.0` special case), grade against the Dawid–Skene posterior (`correct_credit = p if verdict else (1-p)`), and draw its priors from `/validate` ground truth rather than the scorecard. See `docs/design-aggregation-dominators-wp.md` Phase 4.
 
 **LLM Abstraction**:
 ```

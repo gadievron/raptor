@@ -192,28 +192,48 @@ the JSON shape downstream tools depend on.
 option. `/agentic` output now carries calibrated posteriors; nothing
 existing breaks.
 
-### Phase 4 — Break the circularity in scorecard updates
+### Phase 4 — Break the circularity in scorecard updates  *(deferred — follow-up PR)*
 
 **Goal:** stop using raw majority as ground truth in
 `consensus.record_consensus_outcomes`. This is the structural fix.
 
-- Replace `with_majority = (verdict == majority_says_exploitable)` at
-  `consensus.py:146` with `with_posterior = (verdict == (posterior > 0.5))`,
-  weighted by posterior confidence so high-uncertainty findings contribute
-  fractional updates.
-- Mathematically: update the scorecard cell with
-  Δsuccesses = posterior · 1[verdict_matches_posterior_class] and
-  symmetric for failures. This is the standard fractional-EM update; it
-  prevents low-confidence findings from inflating both correct and
-  incorrect counts.
-- Migration: bump scorecard JSON schema version; old cells are read but
-  flagged `legacy_majority_basis: true` so the audit CLI can report on
-  drift as new posterior-weighted observations accumulate.
-- Add a regression test that confirms a historically-mis-graded dissenter
-  (verdict ⊥ majority but ⊺ posterior) now receives a "correct" credit.
+**Status — deferred behind measurement (review of PR #793).** Phases
+1–3 ship the additive `calibrated_aggregation` telemetry; they change
+no verdict and no scorecard update. The Phase-1a audit returned
+*no-data*, so on a fresh install Dawid–Skene is prior-dominated and a
+posterior-weighted scorecard update would be near-inert at best and
+prior-driven noise at worst. The scorecard-update change therefore
+does **not** land in this PR. It is gated on real-data validation via
+the replay harness (Phase 2d) and lands in a follow-up once the gate
+clears.
 
-**Ships:** scorecard update path uses posterior-weighted outcomes; legacy
-data preserved and tagged; circularity closed.
+**Revised design for the follow-up (review item 1 — one mode, no
+fork):** do *not* introduce a second `multi_model_consensus_calibrated`
+event slot beside the legacy `multi_model_consensus`. Collapse to a
+single consensus mode that always records *soft* credits via
+`record_event_soft` — the legacy discrete path is just the special
+case `correct=1.0, incorrect=0.0`, which the same storage already
+accepts, so existing readers see an unchanged schema. Then:
+
+- Replace `with_majority = (verdict == majority_says_exploitable)` in
+  `consensus.record_consensus_outcomes` with the posterior-weighted
+  update: `correct_credit = p if verdict else (1 − p)`,
+  `incorrect_credit = 1 − correct_credit`, where `p` is the
+  Dawid–Skene posterior (falling back to the majority indicator,
+  `p ∈ {0,1}`, for vote-fallback findings — which reproduces the
+  legacy discrete update exactly).
+- Draw the EM's Beta priors from `/validate`'s labelled ground truth
+  (`exploitable` / `disproven`), not the scorecard, with `Beta(1,1)`
+  as the cold-start fallback (see Phase 1b) — this is what keeps the
+  update from re-introducing the very circularity it removes.
+- Add a regression test that confirms a historically-mis-graded
+  dissenter (verdict ⊥ majority but ⊺ posterior) now receives a
+  "correct" credit.
+
+**Ships (follow-up):** one consensus mode; scorecard update uses
+posterior-weighted soft outcomes on the single event slot; legacy
+discrete behaviour preserved as the `{1.0, 0.0}` special case;
+circularity closed — gated on replay-harness validation.
 
 ---
 
@@ -445,7 +465,7 @@ when tractable; A/B measurement.
 | 2c | A | D–S property tests | **done** |
 | 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (research instrument; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; unconditional — no flag, since the field is purely additive) |
-| 4 | A | Posterior-weighted scorecard updates | **done** (new `multi_model_consensus_calibrated` event slot, soft-label credits, legacy slot preserved) |
+| 4 | A | Posterior-weighted scorecard updates | **deferred** — gated on replay-harness validation; lands in a follow-up PR as one consensus mode (soft credits via `record_event_soft`, no second event slot) with priors from `/validate` |
 | 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |
 | 6 | B | Sanitizer catalog + recognition | not started |
 | 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | not started |

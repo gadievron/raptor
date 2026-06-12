@@ -85,11 +85,11 @@ def decay_weight(age_days: float, half_life_days: Union[float, None]) -> float:
 
 
 def _coerce_count(value: object) -> float:
-    """Defensive coercion to float. Phase 4 introduces fractional
-    bucket values via posterior-weighted updates; the read path must
-    accept ``int`` (legacy / vote-derived events) and ``float`` (new
-    posterior-weighted events) interchangeably. A wrong-type entry
-    (``None``, ``"abc"``, a JSON list) is treated as zero rather
+    """Defensive coercion to float. Buckets are currently integer-valued,
+    but the deferred Phase 4 (posterior-weighted updates) will introduce
+    fractional values, so the read path accepts ``int`` and ``float``
+    interchangeably — no migration needed when that lands. A wrong-type
+    entry (``None``, ``"abc"``, a JSON list) is treated as zero rather
     than aborting the read."""
     try:
         return float(value) if value is not None else 0.0
@@ -105,9 +105,9 @@ def flatten_counts(
     ``{"correct", "incorrect"}`` that slips past migration is returned as-is
     (treated as a single bucket) rather than crashing.
 
-    Returns floats — Phase 4's posterior-weighted updates land fractional
-    values in buckets; legacy integer-only buckets still flatten cleanly
-    to floats with no information loss."""
+    Returns floats — integer buckets flatten cleanly to floats with no
+    information loss, and the read path is ready for the fractional
+    values the deferred Phase 4 will introduce."""
     if not is_bucketed(buckets):
         return (
             _coerce_count(buckets.get("correct", 0)),
