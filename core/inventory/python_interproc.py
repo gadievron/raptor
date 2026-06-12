@@ -217,14 +217,34 @@ def synthetic_sanitizer_bindings(
             )
             if arg_names is None:
                 continue
+            sanitized_set = set(sanitized_positions)
+            # Review #1: a symbol passed at a position that taints the
+            # return but is NOT cleanly sanitized reaches the sink
+            # unsanitized through that position — so the helper does not
+            # clean it, even if it also passes through a sanitized
+            # position. For ``helper(a, b): return html.escape(a) + b``
+            # called as ``helper(x, x)``, x flows clean through ``a``
+            # AND dirty through ``b``; the synthetic binding must not
+            # claim x is sanitized. Exclude any such symbol so the gate
+            # declines to suppress (stays conservative).
+            unsanitized_symbols: Set[str] = set()
+            for i, name in enumerate(arg_names):
+                if name is None or i in sanitized_set:
+                    continue
+                if i < len(summary.params) and summary.param_taints_return(i):
+                    unsanitized_symbols.add(name)
             input_symbols: Set[str] = set()
             for i in sanitized_positions:
                 if i < len(arg_names) and arg_names[i] is not None:
-                    input_symbols.add(arg_names[i])  # type: ignore[arg-type]
+                    name = arg_names[i]
+                    if name in unsanitized_symbols:
+                        continue
+                    input_symbols.add(name)  # type: ignore[arg-type]
             if not input_symbols:
                 # The sanitized parameter wasn't passed a bare-name
-                # argument (e.g. a literal or nested expression) —
-                # nothing for condition 2 to bind against.
+                # argument (e.g. a literal or nested expression), or the
+                # only candidate symbol also flows in unsanitized —
+                # nothing for condition 2 to bind safely against.
                 continue
             bindings.append(SanitizerBinding(
                 node=node,

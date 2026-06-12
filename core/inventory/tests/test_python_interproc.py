@@ -177,6 +177,37 @@ class TestBindingGeneration:
         _, bindings = _bindings_for(src, "handle")
         assert bindings == frozenset()
 
+    def test_same_symbol_into_sanitized_and_unsanitized_no_binding(self):
+        # Review #1: helper sanitizes param a but passes param b
+        # through unchanged. Called with the SAME symbol x in both
+        # positions, x reaches the return unsanitized via b — so no
+        # binding may be synthesised (would be a false suppression one
+        # inter-proc level deeper than the wrong-variable case).
+        src = (
+            "def helper(a, b):\n"
+            "    return html.escape(a) + b\n"
+            "def handle(x):\n"
+            "    y = helper(x, x)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_distinct_symbols_into_multiarg_helper_binds_sanitized(self):
+        # Sibling of the above: distinct symbols, only the sanitized
+        # position's symbol is bound (the unsanitized b-symbol does not
+        # poison the binding for a's symbol).
+        src = (
+            "def helper(a, b):\n"
+            "    return html.escape(a)\n"  # b never reaches return
+            "def handle(p, q):\n"
+            "    y = helper(p, q)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert len(bindings) == 1
+        assert next(iter(bindings)).input_symbols == frozenset({"p"})
+
     def test_two_same_callee_calls_one_line_bind_by_column(self):
         # Review #3: two calls to the SAME helper on one source line.
         # Each synthetic binding must attach to its own call's args —
@@ -248,6 +279,19 @@ class TestVerdicts:
         )
         result = _evaluate(src, "handle", ["x"], "y", 7)
         assert result.verdict == VERDICT_SUPPRESS, result.reason
+
+    def test_same_symbol_dual_position_not_suppressed(self):
+        # End-to-end of the review #1 repro: taint reaches the sink via
+        # the unsanitized param, so the finding must survive.
+        src = (
+            "def helper(a, b):\n"
+            "    return html.escape(a) + b\n"
+            "def handle(x):\n"
+            "    y = helper(x, x)\n"
+            "    render(y)\n"
+        )
+        result = _evaluate(src, "handle", ["x"], "y", 5)
+        assert result.verdict == VERDICT_NO_SUPPRESS, result.reason
 
     def test_wrong_variable_via_helper_not_suppressed(self):
         # Helper sanitizes other, but the sink reads user. The
