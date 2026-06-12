@@ -131,13 +131,13 @@ These are conservative-by-design and stay so under any substrate:
 
 ## Deliverables (Phase 8 ships)
 
-- `docs/phase-8-substrate-spike/fixture.c` — 60-line canonical-shape
-  fixture.
-- `docs/phase-8-substrate-spike/prototype_tree_sitter.py` — spike
-  walker; reproducible via `.venv/bin/python <path>`.
-- `docs/phase-8-substrate-spike/prototype_tree_sitter.out` — captured
-  output, source of the measurements in this doc.
-- This `DECISION.md`.
+This `DECISION.md` records the choice. The one-shot spike artifacts
+(`fixture.c`, `prototype_tree_sitter.py`, `prototype_tree_sitter.out`)
+referenced throughout this doc were research outputs that won't be
+re-run; they were removed once the decision landed (review #9 on PR
+\#794) and remain recoverable from git history. The production
+tree-sitter walker lives in `core/inventory/cfg_builder_cpp.py`.
+
 - `docs/design-sanitizer-cut-value-binding.md` Phase 8 row flipped
   to `done — chose tree-sitter`.
 

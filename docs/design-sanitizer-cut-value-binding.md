@@ -333,8 +333,9 @@ under any choice):
 - K&R-style definitions parse but only ANSI prototypes give
   parameter extraction. Vanishingly rare.
 
-**Ships:** `docs/phase-8-substrate-spike/{fixture.c,
-prototype_tree_sitter.py, prototype_tree_sitter.out, DECISION.md}`.
+**Ships:** `docs/phase-8-substrate-spike/DECISION.md` (the one-shot
+spike artifacts — `fixture.c`, `prototype_tree_sitter.py`, `.out` —
+were removed post-decision; recoverable from git history).
 
 **Gates:** Phase 9.
 
