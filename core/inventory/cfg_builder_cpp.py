@@ -472,6 +472,7 @@ def _walk_subtree_for_call_sites(
                     arg_names=args,
                     assigned_names=assigned,
                     lineno=node.start_point[0] + 1,
+                    col_offset=node.start_point[1],
                 )
                 out.append((node.end_byte, id(node), cs))
             arg_list = node.child_by_field_name("arguments")

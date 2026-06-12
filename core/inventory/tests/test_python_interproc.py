@@ -177,6 +177,23 @@ class TestBindingGeneration:
         _, bindings = _bindings_for(src, "handle")
         assert bindings == frozenset()
 
+    def test_two_same_callee_calls_one_line_bind_by_column(self):
+        # Review #3: two calls to the SAME helper on one source line.
+        # Each synthetic binding must attach to its own call's args —
+        # resolved by (lineno, col_offset), not ast.walk order, which
+        # would map both to the first call.
+        src = (
+            "def san(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(p, q):\n"
+            "    y = san(p) if san(q) else None\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert {b.input_symbols for b in bindings} == {
+            frozenset({"p"}), frozenset({"q"}),
+        }
+
 
 # ---------------------------------------------------------------------------
 # End-to-end verdicts

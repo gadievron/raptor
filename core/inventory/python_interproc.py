@@ -139,16 +139,26 @@ def _param_cleanly_sanitized(
 
 
 def _positional_arg_names(
-    fn_ast: ast.AST, lineno: int, callee_chain: str,
+    fn_ast: ast.AST, lineno: int, col_offset: int, callee_chain: str,
 ) -> Optional[List[Optional[str]]]:
     """Positional argument bare-names for the call to ``callee_chain``
-    at ``lineno``. Each entry is the arg's identifier (``ast.Name``)
-    or None for non-name args (literals, nested calls, subscripts).
-    None if no matching call is found at that line."""
+    at ``(lineno, col_offset)``. Each entry is the arg's identifier
+    (``ast.Name``) or None for non-name args (literals, nested calls,
+    subscripts). None if no matching call is found.
+
+    Matching on the exact ``(lineno, col_offset)`` pair — not lineno
+    alone — uniquely identifies the call node even when two calls
+    share a source line (``f(a) if g(b) else None``). ``ast.walk``
+    order is implementation-defined, so lineno-only matching could
+    grab the wrong call's argument list; the column pin removes that
+    ambiguity (CallSite carries ``col_offset`` straight from the AST).
+    """
     for node in ast.walk(fn_ast):
         if not isinstance(node, ast.Call):
             continue
         if getattr(node, "lineno", 0) != lineno:
+            continue
+        if getattr(node, "col_offset", 0) != col_offset:
             continue
         if _chain_str(node.func) != callee_chain:
             continue
@@ -202,7 +212,9 @@ def synthetic_sanitizer_bindings(
             ]
             if not sanitized_positions:
                 continue
-            arg_names = _positional_arg_names(fn_ast, cs.lineno, cs.name)
+            arg_names = _positional_arg_names(
+                fn_ast, cs.lineno, cs.col_offset, cs.name,
+            )
             if arg_names is None:
                 continue
             input_symbols: Set[str] = set()

@@ -86,11 +86,19 @@ class CallSite:
     ``lineno`` is the source line of the call expression itself,
     which can differ from the enclosing statement's lineno when a
     multi-line expression wraps.
+
+    ``col_offset`` is the 0-based column of the call expression.
+    Paired with ``lineno`` it uniquely identifies a call even when
+    two calls share a source line (``f(a) if g(b) else None``), so
+    inter-procedural binding can attach to the right call's argument
+    list rather than relying on ``ast.walk`` order. Defaults to ``0``
+    for producers that don't track columns.
     """
     name: str
     arg_names: FrozenSet[str]
     assigned_names: FrozenSet[str]
     lineno: int
+    col_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -442,6 +450,7 @@ def _extract_statement_payload(
                 arg_names=_arg_surface_names(child),
                 assigned_names=assigned_map.get(id(child), frozenset()),
                 lineno=child.lineno,
+                col_offset=getattr(child, "col_offset", 0),
             )
             site_records.append((
                 child.lineno, getattr(child, "col_offset", 0), site,
