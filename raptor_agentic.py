@@ -174,6 +174,11 @@ def _materialise_threat_model_phase(
         model = existing_model or from_context_map(project, context_map)
         summary["model_preserved"] = existing_model is not None
         summary["model_refreshed"] = existing_model is None
+    except Exception as e:
+        logger.warning(f"Threat model construction failed: {e}")
+        model = existing_model or from_context_map(project, context_map)
+        summary["model_preserved"] = existing_model is not None
+        summary["model_refreshed"] = existing_model is None
 
     linked_outcomes = 0
     try:
@@ -1667,13 +1672,17 @@ Examples:
             logger.warning(f"Pre-pass skipped: {prepass_result.skipped_reason}")
 
     if args.threat_model:
-        threat_model_phase = _materialise_threat_model_phase(
-            target=original_repo_path,
-            out_dir=out_dir,
-            prepass_result=prepass_result,
-            refresh=args.threat_model_refresh,
-            allow_stale=args.threat_model_use_stale,
-        )
+        try:
+            threat_model_phase = _materialise_threat_model_phase(
+                target=original_repo_path,
+                out_dir=out_dir,
+                prepass_result=prepass_result,
+                refresh=args.threat_model_refresh,
+                allow_stale=args.threat_model_use_stale,
+            )
+        except Exception as e:
+            logger.error(f"Threat model phase failed: {e}")
+            threat_model_phase = {"enabled": True, "completed": False, "skipped_reason": str(e)}
         _print_threat_model_phase(threat_model_phase)
 
         if args.threat_model_only:
@@ -1695,19 +1704,23 @@ Examples:
                     "threat_model_lint": threat_model_phase.get("threat_model_lint"),
                     "threat_model_drift": threat_model_phase.get("threat_model_drift"),
                     "threats": threat_model_phase.get("threats"),
-                    "threat_model_summary": str(out_dir / "threat-model-summary.json"),
+                    "threat_model_summary": str(out_dir / "threat-model-summary.json") if threat_model_phase.get("completed") else None,
                     "threat_model_candidates": threat_model_phase.get("candidate_sarif"),
                     "context_map": threat_model_phase.get("context_map"),
                 },
             }
             save_json(report_file, final_report)
             try:
-                from core.run import complete_run
-                complete_run(out_dir, extra={
-                    "findings_count": threat_model_phase.get("generated_candidates", 0),
-                    "threat_model": threat_model_phase,
-                    "duration_seconds": round(time.time() - workflow_start, 1),
-                })
+                if threat_model_phase.get("completed"):
+                    from core.run import complete_run
+                    complete_run(out_dir, extra={
+                        "findings_count": threat_model_phase.get("generated_candidates", 0),
+                        "threat_model": threat_model_phase,
+                        "duration_seconds": round(time.time() - workflow_start, 1),
+                    })
+                else:
+                    from core.run import fail_run
+                    fail_run(out_dir, threat_model_phase.get("skipped_reason") or "threat model phase did not complete")
             except Exception as e:
                 logger.debug(f"Run metadata: {e}")
             if _git_temp_dir and _git_temp_dir.exists():
@@ -1716,7 +1729,8 @@ Examples:
                     shutil.rmtree(str(_git_temp_dir))
                 except Exception as e:
                     logger.debug(f"Failed to clean temp git dir: {e}")
-            print("\nThreat model only complete.")
+            completed = threat_model_phase.get("completed", False)
+            print(f"\nThreat model only {'complete' if completed else 'skipped'}.")
             print(f"   Report: {report_file}")
             return
 

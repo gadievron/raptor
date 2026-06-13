@@ -581,14 +581,14 @@ def render_markdown(model: ThreatModel) -> str:
     sections = [
         "# Threat Model",
         "",
-        f"Project: {model.project_name}",
-        f"Target: {model.target}",
-        f"Source: {model.source}",
-        f"Updated: {model.updated_at}",
+        f"Project: {_safe_for_render(model.project_name)}",
+        f"Target: {_safe_for_render(model.target)}",
+        f"Source: {_safe_for_render(model.source)}",
+        f"Updated: {_safe_for_render(model.updated_at)}",
         "",
         "## Summary",
         "",
-        model.summary or "TBC.",
+        _safe_for_render(model.summary or "TBC.", byte_cap=_MAX_NOTES_BYTES),
         "",
         _render_list("Assets", model.assets),
         _render_list("Entry Points", model.entry_points),
@@ -613,7 +613,7 @@ def render_markdown(model: ThreatModel) -> str:
         _render_records("Accepted Risks", model.accepted_risks, ("id", "threat_id", "owner", "accepted_until", "reason")),
     ]
     if model.notes.strip():
-        sections.extend(["## Notes", "", model.notes.strip(), ""])
+        sections.extend(["## Notes", "", _safe_for_render(model.notes.strip(), byte_cap=_MAX_NOTES_BYTES), ""])
     return "\n".join(sections).rstrip() + "\n"
 
 
@@ -1048,7 +1048,7 @@ def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, 
     entries_by_id = _records_by_id(entries)
     sinks_by_id = _records_by_id(sinks)
     out: list[dict[str, Any]] = []
-    for i, flow in enumerate(context_map.get("unchecked_flows") or []):
+    for i, flow in enumerate((context_map.get("unchecked_flows") or [])[:_MAX_LIST_ENTRIES]):
         if not isinstance(flow, dict):
             continue
         entry_id = str(flow.get("entry_point") or "")
@@ -1096,7 +1096,7 @@ def _threats_from_context_map(
             "source": "context-map.unchecked_flows",
         })
     offset = len(threats)
-    for j, secret in enumerate(context_map.get("hardcoded_secrets") or []):
+    for j, secret in enumerate((context_map.get("hardcoded_secrets") or [])[:_MAX_LIST_ENTRIES]):
         if not isinstance(secret, dict):
             continue
         threats.append({
@@ -1156,9 +1156,9 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
     out: list[str] = []
     if not isinstance(entries, list):
         return out
-    for i, entry in enumerate(entries):
+    for i, entry in enumerate(entries[:_MAX_LIST_ENTRIES]):
         if isinstance(entry, str):
-            out.append(entry)
+            out.append(_clip_str(entry))
             continue
         if not isinstance(entry, dict):
             continue
@@ -1173,13 +1173,13 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
         location = entry.get("file") or entry.get("path") or entry.get("location")
         line = entry.get("line")
         trust = entry.get("trust") or entry.get("trust_level")
-        summary = str(name)
+        summary = _clip_str(name)
         if location:
-            summary += f" ({location})"
+            summary += f" ({_clip_str(location)})"
             if line and ":" not in str(location):
                 summary += f":{line}"
         if trust:
-            summary += f" - {trust}"
+            summary += f" - {_clip_str(trust)}"
         out.append(summary)
     return _dedup(out)
 
@@ -1201,11 +1201,11 @@ def _summaries_from_unchecked_flows(
     } if isinstance(sinks, list) else {}
 
     out: list[str] = []
-    for flow in flows:
+    for flow in flows[:_MAX_LIST_ENTRIES]:
         if not isinstance(flow, dict):
             continue
-        entry_id = str(flow.get("entry_point") or "")
-        sink_id = str(flow.get("sink") or "")
+        entry_id = _clip_str(flow.get("entry_point") or "")
+        sink_id = _clip_str(flow.get("sink") or "")
         entry = entries_by_id.get(entry_id, {})
         sink = sinks_by_id.get(sink_id, {})
         entry_label = entry_id
@@ -1213,18 +1213,18 @@ def _summaries_from_unchecked_flows(
             method = entry.get("method")
             route = entry.get("path")
             if method and route:
-                entry_label = f"{entry_id} {method} {route}"
+                entry_label = f"{entry_id} {_clip_str(method)} {_clip_str(route)}"
         sink_label = sink_id
         if sink:
-            loc = sink.get("file") or "?"
+            loc = _clip_str(sink.get("file") or "?")
             line = sink.get("line")
-            sink_type = sink.get("type") or "sink"
+            sink_type = _clip_str(sink.get("type") or "sink")
             sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line else ''}"
-        issue = flow.get("missing_boundary") or flow.get("notes") or "unchecked flow"
+        issue = _clip_str(flow.get("missing_boundary") or flow.get("notes") or "unchecked flow")
         severity = flow.get("severity")
         label = f"{entry_label} -> {sink_label}: {issue}"
         if severity:
-            label += f" ({severity})"
+            label += f" ({_clip_str(severity)})"
         out.append(label)
     return _dedup(out)
 
@@ -1265,7 +1265,12 @@ def _records(key: str, data: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in value[:_MAX_LIST_ENTRIES]:
         if isinstance(item, dict):
-            out.append({k: _clip_str(v) if isinstance(v, str) else v for k, v in item.items()})
+            out.append({
+                k: (_clip_str(v) if isinstance(v, str)
+                    else [_clip_str(x) for x in v[:_MAX_LIST_ENTRIES]] if isinstance(v, list)
+                    else v)
+                for k, v in item.items()
+            })
         elif isinstance(item, str) and item.strip():
             out.append({"id": _stable_id(key.upper(), [item]), "name": _clip_str(item)})
     return out
@@ -1410,16 +1415,16 @@ def _stable_id(prefix: str, parts: Iterable[Any]) -> str:
 
 
 def _outcome_summary(data: dict[str, Any]) -> str:
-    oracle = data.get("oracle") or "oracle"
-    status = data.get("status") or "unknown"
-    finding = data.get("finding_id") or "unkeyed finding"
+    oracle = _clip_str(data.get("oracle") or "oracle")
+    status = _clip_str(data.get("status") or "unknown")
+    finding = _clip_str(data.get("finding_id") or "unkeyed finding")
     cwe = data.get("cwe_id")
     file = data.get("file")
     bits = [f"{oracle} {status} {finding}"]
     if cwe:
-        bits.append(str(cwe))
+        bits.append(_clip_str(cwe))
     if file:
-        bits.append(str(file))
+        bits.append(_clip_str(file))
     return " - ".join(bits)
 
 
