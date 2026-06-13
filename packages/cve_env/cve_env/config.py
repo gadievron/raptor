@@ -806,6 +806,31 @@ def estimate_cost_from_tokens(
     return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000.0
 
 
+# Conservative per-turn token volume for the turns-based cost floor. Sized from
+# observed agentic rounds (cf. tests/unit/test_b19_b20_cost_extension.py:
+# "~5K in, ~500 out per LLM round").
+_TURN_COST_INPUT_TOKENS = 5000
+_TURN_COST_OUTPUT_TOKENS = 500
+
+
+def estimate_cost_from_turns(num_turns: int, model: str = MODEL) -> float:
+    """Lower-bound cost estimate from the engine turn count.
+
+    For interrupted runs (turn_cap / budget) where the SDK reports neither a
+    usable ``total_cost_usd`` nor token ``usage`` — the Claude Code session-auth
+    case — both ``estimate_cost_from_tokens`` (tokens are 0) and the SDK cost
+    collapse, leaving a multi-turn run logged as ~$0. This recovers a defensible
+    floor from ``num_turns``. Returns 0.0 for non-positive ``num_turns``.
+    """
+    if num_turns <= 0:
+        return 0.0
+    return estimate_cost_from_tokens(
+        num_turns * _TURN_COST_INPUT_TOKENS,
+        num_turns * _TURN_COST_OUTPUT_TOKENS,
+        model,
+    )
+
+
 # Opt-in lifecycle hooks. After ``cve-env build`` exits (success OR failure),
 # run cleanup helpers if enabled. All default false to preserve existing
 # behavior. Both env var and CLI flag are supported; CLI OR-merges with env

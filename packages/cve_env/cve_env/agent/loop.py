@@ -86,6 +86,7 @@ from cve_env.config import (
     TURN_EXTENSION_PCT,
     VERSION_ASSERTION_CMD_PATTERN,
     estimate_cost_from_tokens,
+    estimate_cost_from_turns,
     get_benign_verify_continuation_max,
     get_enable_benign_verify_continuation,
     get_enable_halt_on_verified_success,
@@ -594,6 +595,56 @@ def _latch_assistant_token_cost(state: _StreamState, msg: Any, model: str) -> No
                 state.am_credited_per_segment.get(state.current_segment_id, 0.0)
                 + cost
             )
+
+
+# Terminal statuses where the SDK was INTERRUPTED mid-run (no clean end_turn
+# ResultMessage emitted) so its reported cost is unreliable — the turns-based
+# floor applies only to these. Covers every abnormal termination in the
+# OutcomeStatus taxonomy (models.py): the turn/budget caps, a mid-run exception
+# (``error`` and the generic ``interrupted``/``incomplete`` alias — the default
+# terminal status on the exception path), and a 529 throttle giving up
+# (``rate_limited``). Clean exits — success, verified_partial, verify_failed,
+# launched_no_verify, and the give-up family (unresolvable), which all end via a
+# natural end_turn with the SDK's full cost reported — are excluded so the floor
+# never inflates a correctly-reported cost.
+_INTERRUPTED_EXIT_STATUSES = frozenset(
+    {"turn_cap", "budget_exhausted", "error", "interrupted", "incomplete", "rate_limited"}
+)
+
+
+def _floor_cost(
+    status: str,
+    num_turns: int,
+    last_cost_usd: float,
+    cont_cost_usd: float,
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+    effective_max_cost_usd: float,
+) -> float:
+    """Resolve the final ``total_cost_usd`` with all floors applied.
+
+    Base = max(SDK-reported cost, continuation-summed cost, token estimate).
+    Adds a turns-based floor ONLY for an interrupted exit with no token usage —
+    the Claude Code session-auth + max_turns_reached case, where the SDK
+    under-reports cost AND ``usage`` is absent so the token estimate is 0 and a
+    multi-turn run would otherwise log ~$0. Gating leaves correctly-reported
+    clean runs and API-key (token-bearing) runs untouched (the turns floor only
+    ever raises). The turns floor is bounded by ``effective_max_cost_usd`` — a
+    run cannot have cost more than its budget cap (else it would have ended as
+    budget_exhausted), so the estimate never exceeds the cap.
+    """
+    cost = max(
+        last_cost_usd,
+        cont_cost_usd,
+        estimate_cost_from_tokens(input_tokens, output_tokens, model),
+    )
+    if status in _INTERRUPTED_EXIT_STATUSES and input_tokens == 0 and output_tokens == 0:
+        turns_floor = estimate_cost_from_turns(num_turns, model)
+        if effective_max_cost_usd > 0:
+            turns_floor = min(turns_floor, effective_max_cost_usd)
+        cost = max(cost, turns_floor)
+    return cost
 
 
 def _latch_text_and_scan(
@@ -2177,14 +2228,19 @@ async def build(
             # (→ state.last_num_turns) UNDERREPORTS it, confounding
             # turn-cap-vs-cost-bound diagnosis. max() keeps the existing floors.
             num_turns=max(state.turn, state.last_num_turns, len(state.tool_uses_seen)),
-            # Fall back to a token-based estimate when the SDK never emitted a
-            # cost-bearing ResultMessage. max() ensures the estimate only kicks in
-            # if the reported cost is zero/missing.
-            total_cost_usd=max(
+            # Floors: SDK-reported cost, then a token-based estimate, then a
+            # turns-based estimate for interrupted exits with no token usage
+            # (session auth). max() ensures a floor only kicks in when the
+            # reported cost is zero/missing. See _floor_cost.
+            total_cost_usd=_floor_cost(
+                terminal_status_on_err,
+                max(state.turn, state.last_num_turns, len(state.tool_uses_seen)),
                 state.last_cost_usd,
-                estimate_cost_from_tokens(
-                    state.total_input_tokens, state.total_output_tokens, model
-                ),
+                0.0,
+                state.total_input_tokens,
+                state.total_output_tokens,
+                model,
+                state.effective_max_cost_usd,
             ),
             verify_passed=state.verify_passed,
             verify_result=state.last_verify_result,
@@ -2449,15 +2505,19 @@ async def build(
         # continuation runs) is the real turn count; the SDK msg.num_turns
         # underreports it. max() keeps the existing floors.
         num_turns=max(state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)),
-        # Include a token-based estimate as a third floor. The SDK has been
-        # observed reporting total_cost_usd=0 on max_turns_reached even after
-        # multiple LLM rounds; the estimate recovers that data.
-        total_cost_usd=max(
+        # Include a token-based estimate as a third floor, then a turns-based
+        # floor for interrupted exits with no token usage (session auth). The SDK
+        # has been observed reporting total_cost_usd=0 on max_turns_reached even
+        # after multiple LLM rounds; the floors recover that data. See _floor_cost.
+        total_cost_usd=_floor_cost(
+            status,
+            max(state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)),
             state.last_cost_usd,
             cont_cost_acc,
-            estimate_cost_from_tokens(
-                state.total_input_tokens, state.total_output_tokens, model
-            ),
+            state.total_input_tokens,
+            state.total_output_tokens,
+            model,
+            state.effective_max_cost_usd,
         ),
         session_id=run.session_id,
         stop_reason=run.stop_reason,
