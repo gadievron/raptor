@@ -893,8 +893,17 @@ def mode_agentic(args: list) -> int:
 
     # Enable CodeQL by default for comprehensive agentic mode
     # unless user explicitly specifies --codeql-only or --no-codeql
+    # or CodeQL is disabled via config (tuning.json: codeql_enabled: false)
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:
-        args = ['--codeql'] + args
+        from core.config import RaptorConfig
+        if RaptorConfig.CODEQL_ENABLED:
+            args = ['--codeql'] + args
+        else:
+            print(
+                "  CodeQL disabled via config (tuning.json). "
+                "Pass --codeql to override for this run.",
+                file=sys.stderr,
+            )
 
     # Re-inject --trust-repo stripped by main(): the agentic child parses it
     # to set the cc_trust + codeql_trust overrides in its own process.

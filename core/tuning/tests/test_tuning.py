@@ -204,6 +204,41 @@ class TestLoadTuning(unittest.TestCase):
             self.assertEqual(t.max_codeql_workers, 2)
 
 
+    def test_codeql_enabled_true(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"codeql_enabled": True}))
+            t = load_tuning(p)
+            self.assertIs(t.codeql_enabled, True)
+
+    def test_codeql_enabled_false(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"codeql_enabled": False}))
+            t = load_tuning(p)
+            self.assertIs(t.codeql_enabled, False)
+
+    def test_codeql_enabled_rejects_auto(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"codeql_enabled": "auto"}))
+            t = load_tuning(p)
+            self.assertIs(t.codeql_enabled, True)
+
+    def test_codeql_enabled_rejects_int(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"codeql_enabled": 0}))
+            t = load_tuning(p)
+            self.assertIs(t.codeql_enabled, True)
+
+    def test_codeql_enabled_rejects_string(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"codeql_enabled": "false"}))
+            t = load_tuning(p)
+            self.assertIs(t.codeql_enabled, True)
+
     def test_auto_creates_default_file(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
@@ -319,6 +354,7 @@ class TestTuningFrozen(unittest.TestCase):
 
     def test_immutable(self):
         t = Tuning(
+            codeql_enabled=True,
             codeql_ram_mb=8192, codeql_threads=8,
             codeql_max_disk_cache_mb=0,
             max_semgrep_workers=4, max_codeql_workers=2,
