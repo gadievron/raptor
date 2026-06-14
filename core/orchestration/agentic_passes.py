@@ -1148,11 +1148,13 @@ def _build_understand_prompt(target: Path, understand_dir: Path) -> str:
     safe_target = escape_nonprintable(str(target))
     safe_dir = escape_nonprintable(str(understand_dir))
     safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
+    threat_model = _threat_model_prompt_block(target)
     return f"""You are running the /understand --map workflow on a target repository
 as a pre-pass for the /agentic security workflow.
 
 Target repository: {safe_target}
 Output directory:  {safe_dir}
+{threat_model}
 
 The launcher has already created the run directory and built checklist.json.
 Your job is to produce context-map.json so downstream analysis (the agentic
@@ -1180,6 +1182,13 @@ def _build_validate_prompt(target: Path, agentic_out_dir: Path, validate_dir: Pa
                             selected_count: int,
                             *,
                             allow_unreachable: bool = False) -> str:
+    safe_target = escape_nonprintable(str(target))
+    safe_agentic = escape_nonprintable(str(agentic_out_dir))
+    safe_validate = escape_nonprintable(str(validate_dir))
+    safe_report = escape_nonprintable(str(analysis_report))
+    safe_selection = escape_nonprintable(str(selection_file))
+    safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
+    threat_model = _threat_model_prompt_block(target)
     allow_unreachable_note = ""
     if allow_unreachable:
         allow_unreachable_note = """
@@ -1200,25 +1209,26 @@ workflow. The base agentic pipeline has finished and produced an analysis
 report; your job is to run the full validation pipeline against the
 {selected_count} findings the launcher pre-selected.
 
-Target repository:    {target}
-Agentic out_dir:      {agentic_out_dir}
-Analysis report:      {analysis_report}
-Selection file:       {selection_file}
-Validate output dir:  {validate_dir}
+Target repository:    {safe_target}
+Agentic out_dir:      {safe_agentic}
+Analysis report:      {safe_report}
+Selection file:       {safe_selection}
+Validate output dir:  {safe_validate}
+{threat_model}
 {allow_unreachable_note}
-Read the findings from {selection_file}. **The launcher has already
+Read the findings from {safe_selection}. **The launcher has already
 translated them into /validate's FindingsContainer shape** (id, file, line,
 description, ruling.status, etc.) — no field-mapping needed on your end.
 Use it as-if it were a findings.json: feed straight into Stage 0 / A.
 
 Steps:
 
-1. Load .claude/skills/exploitability-validation/SKILL.md from {_RAPTOR_DIR}
+1. Load .claude/skills/exploitability-validation/SKILL.md from {safe_raptor}
    and follow the full pipeline (Stage 0 mechanical inventory, then Stages
    A through F LLM analysis, then Stage 1 mechanical report) for the
    selected findings only.
 
-2. Use {validate_dir} as the validate output directory. The launcher has
+2. Use {safe_validate} as the validate output directory. The launcher has
    already created it via the run lifecycle — do not call
    libexec/raptor-run-lifecycle.
 
@@ -1227,7 +1237,15 @@ Steps:
    search and tier-3 global lookup) finds it automatically — no manual
    wiring needed.
 
-4. Write the final validation-report.md into {validate_dir}.
+4. Write the final validation-report.md into {safe_validate}.
 
 Keep narration brief. Report the per-finding outcomes and exit.
 """
+
+
+def _threat_model_prompt_block(target: Path) -> str:
+    try:
+        from core.threat_model import threat_model_prompt_block
+        return threat_model_prompt_block(target)
+    except Exception:
+        return ""

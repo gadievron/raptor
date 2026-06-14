@@ -226,12 +226,15 @@ class TestRunTrustedRejectsAuditKwargs:
             run_trusted(["true"], audit_verbose=True)
 
 
-class TestProfileSetIsTrimmedToFour:
-    """Confirms `audit` and `audit-verbose` are GONE from PROFILES."""
+class TestProfileSet:
+    """Pins the canonical profile names + confirms ``audit`` /
+    ``audit-verbose`` are GONE from PROFILES (post-#269 contract)."""
 
-    def test_only_four_profiles(self):
+    def test_canonical_profiles(self):
         from core.sandbox.profiles import PROFILES
-        assert set(PROFILES) == {"full", "debug", "network-only", "none"}
+        assert set(PROFILES) == {
+            "full", "strict", "debug", "network-only", "none",
+        }
 
     def test_no_audit_mode_field_in_profile_dicts(self):
         from core.sandbox.profiles import PROFILES

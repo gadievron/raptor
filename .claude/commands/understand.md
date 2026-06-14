@@ -67,6 +67,25 @@ The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent s
 libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
 ```
 
+**Step 1.5: Load threat model context** (if a project threat model exists):
+
+```bash
+python3 -c "
+import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
+from pathlib import Path
+from core.threat_model import threat_model_prompt_block
+block = threat_model_prompt_block(Path('<resolved_target>'))
+if block: print(block)
+else: print('No project threat model found.')
+"
+```
+
+When present, use it as operator-owned context during analysis:
+- For `--hunt`: use `known_bug_shapes` to seed variant patterns and `focus_areas` to prioritise search locations
+- For `--map`: use `in_scope_vuln_classes` and `out_of_scope_vuln_classes` to weight sink classification
+- For `--trace`: use `verification_expectations` to guide evidence collection
+- Still prove all claims from code — the threat model steers priority, not conclusions
+
 **Step 2: Do the analysis** (map, trace, hunt, teach — see skill files).
 
 **Step 3: Record coverage** (for `--map` — list every item you examined):

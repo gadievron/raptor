@@ -54,8 +54,19 @@ class TestValidateProject(unittest.TestCase):
         d = self._valid()
         d["description"] = "desc"
         d["notes"] = "notes"
+        d["threat_model_path"] = "out/test/threat-model.json"
+        d["threat_model_updated"] = "2026-06-05T08:00:00+00:00"
         valid, errors = validate_project(d)
         self.assertTrue(valid)
+
+    def test_threat_model_fields_must_be_strings(self):
+        d = self._valid()
+        d["threat_model_path"] = 123
+        d["threat_model_updated"] = []
+        valid, errors = validate_project(d)
+        self.assertFalse(valid)
+        self.assertIn("threat_model_path must be a string", errors)
+        self.assertIn("threat_model_updated must be a string", errors)
 
     def test_description_must_be_string(self):
         d = self._valid()
