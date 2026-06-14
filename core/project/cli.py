@@ -1248,11 +1248,12 @@ def _handle_threat_model(mgr, args) -> None:
             current.append(sanitised)
             print(_green(f"Added to {field}: {sanitised}"))
         else:
-            if value not in current:
-                print(_yellow(f"'{value}' not found in {field}."))
+            sanitised = _clip_str(value)
+            if sanitised not in current:
+                print(_yellow(f"'{sanitised}' not found in {field}."))
                 return
-            current.remove(value)
-            print(_green(f"Removed from {field}: {value}"))
+            current.remove(sanitised)
+            print(_green(f"Removed from {field}: {sanitised}"))
         model.updated_at = datetime.now(timezone.utc).isoformat()
         try:
             save_model(model, json_path, markdown_path, expected_mtime=load_mtime)
