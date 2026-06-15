@@ -1306,6 +1306,16 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
     # Resolve + persist the sanitizer-cut mode so the per-stage
     # subprocesses reload it (review #4, PR #794). Persist only when the
     # operator passed a flag; otherwise the env fallback stays active.
+    #
+    # Edge case (review #7, PR #794): configure(export_env=True) mutates
+    # this process's env BEFORE persist() writes the file. If a later
+    # stage-0 step crashes between the two, the env is left set but no
+    # config file exists. The pipeline path is safe — the run is marked
+    # failed and stages A-F/1 won't run — so this only bites an operator
+    # who then drives a stage BY HAND in the same shell: load_persisted()
+    # finds no file, returns None, and the gate falls back to the leftover
+    # env. Re-running stage 0 (or a fresh shell) clears it. Not worth a
+    # guard for the hand-driven case; documented so it isn't a surprise.
     if sanitizer_cut_mode is not None or sanitizer_cut_parity_log is not None:
         from core.dataflow import sanitizer_cut_config
         sanitizer_cut_config.configure(

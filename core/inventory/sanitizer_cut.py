@@ -709,6 +709,14 @@ def record_sanitizer_cut_suppression(
     distinguishes drops from surviving-but-recorded findings —
     operators can ``jq 'select(.dropped == false)'`` to see what
     the value-bound gate flagged but didn't drop.
+
+    NOT YET WIRED into the live pipeline (review #6 on PR #794): only
+    tests call this helper today, so it never races the binary-oracle
+    chokepoint on a real run. When it IS wired, the binary-oracle
+    reachability suppression runs first (pre-LLM), so a function it
+    dropped never reaches this gate — see
+    :func:`core.inventory.reach_chokepoint.record_suppression` for the
+    full order-of-operations contract.
     """
     if result.verdict == VERDICT_SUPPRESS:
         verdict_tag = VERDICT_SANITIZER_DOMINATED

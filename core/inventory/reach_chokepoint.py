@@ -207,6 +207,29 @@ def record_suppression(
       ``bindings`` (the per-binding witness), and similar audit
       data. Unknown keys are tolerated by every existing reader.
 
+    Order of operations between verdict producers (review #6 on
+    PR #794). ``suppressions.jsonl`` has a SINGLE writer — this
+    function. Two producers feed it:
+
+    * binary-oracle reachability (``verdict="binary_oracle_absent"``)
+      — the LIVE producer, invoked from the /agentic and /codeql
+      reachability chokepoint as a PRE-LLM hard-suppress.
+    * sanitizer-cut (``verdict="sanitizer_dominated"`` /
+      ``candidate_only``) — bridged in via
+      :func:`core.inventory.sanitizer_cut.record_sanitizer_cut_suppression`.
+      It writes the same schema but is NOT yet wired into the
+      pipeline (only tests call it — see that function's note), so
+      today there is no live ordering interaction.
+
+    When sanitizer-cut is wired, the intended order is binary-oracle
+    FIRST: a function absent from the binary is dropped before any
+    dataflow/sanitizer reasoning runs, so the sanitizer-cut gate never
+    sees it and can't double-record it. The producers do not observe
+    each other's verdicts; records are additive (one line per event,
+    distinguished by ``verdict``), so a reader attributes a drop to its
+    source by filtering on ``verdict``. (Note: ``binary_oracle_edges.py``
+    builds call edges and does NOT write here — this is the only writer.)
+
     """
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
