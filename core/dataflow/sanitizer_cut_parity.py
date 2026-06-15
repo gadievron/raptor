@@ -331,14 +331,40 @@ def _rate(successes: int, total: int) -> RateWithCI:
     )
 
 
+def _dedup_by_finding_id(records: List[ParityRecord]) -> List[ParityRecord]:
+    """Collapse repeated ``finding_id``s to their LAST record.
+
+    Review #3 on PR #794: the parity log is append-only, and agentic
+    retries (LLM-timeout retry, sanitizer-cut → lexical fallback shadow
+    log) emit the same ``finding_id`` more than once. Counting every
+    occurrence biases the agreement matrix and the labelled rates — and
+    therefore the Phase-15 criterion that gates Phase-16 lexical
+    removal. Keep the latest verdict per finding (the most recent run
+    wins), preserving first-seen order for determinism. Records with no
+    ``finding_id`` can't be keyed and are kept as-is."""
+    deduped: Dict[str, ParityRecord] = {}
+    unkeyed: List[ParityRecord] = []
+    for r in records:
+        if r.finding_id:
+            # Reassigning an existing key keeps its insertion position
+            # (dict order) while taking the later value.
+            deduped[r.finding_id] = r
+        else:
+            unkeyed.append(r)
+    return list(deduped.values()) + unkeyed
+
+
 def aggregate_parity(records: List[ParityRecord]) -> ParitySummary:
     """Aggregate a window of records into a :class:`ParitySummary`.
 
-    The agreement matrix counts all records; the rates count only
-    labelled records. ``criterion_met`` compares point estimates
-    (the design reports CIs but gates on point estimates, requiring
-    the criterion to hold across two consecutive windows before
-    Phase 16 ships)."""
+    Records are de-duplicated by ``finding_id`` first (keeping the last
+    occurrence — see :func:`_dedup_by_finding_id`) so retried findings
+    are not double-counted. The agreement matrix counts all deduped
+    records; the rates count only labelled records. ``criterion_met``
+    compares point estimates (the design reports CIs but gates on point
+    estimates, requiring the criterion to hold across two consecutive
+    windows before Phase 16 ships)."""
+    records = _dedup_by_finding_id(records)
     both = lex_only = vb_only = neither = 0
     by_kind: Dict[str, Dict[str, int]] = {}
     # Labelled tallies.

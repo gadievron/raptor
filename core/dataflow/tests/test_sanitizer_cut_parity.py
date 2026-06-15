@@ -121,6 +121,24 @@ class TestAggregation:
         assert s.neither == 1
         assert s.total == 4
 
+    def test_duplicate_finding_id_counts_once_keeping_last(self):
+        # Review #3: a retried finding appends the same finding_id twice.
+        # aggregate_parity must count it ONCE, keeping the latest verdict
+        # (here the retry flipped from suppress→no-suppress), so the
+        # window isn't biased.
+        records = [
+            _rec(fid="dup", lexical=True, verdict=VERDICT_SUPPRESS),   # 1st
+            _rec(fid="dup", lexical=False, verdict=VERDICT_NO_SUPPRESS),  # retry
+            _rec(fid="u", lexical=True, verdict=VERDICT_SUPPRESS),
+        ]
+        s = aggregate_parity(records)
+        assert s.total == 2  # dup collapsed, not 3
+        # The kept "dup" record is the retry (neither suppresses).
+        assert s.neither == 1
+        assert s.both_suppress == 1  # only the unique "u"
+        assert s.lexical_only == 0
+        assert s.value_bound_only == 0
+
     def test_value_bound_strictly_better_meets_criterion(self):
         # 2 safe findings: value-bound suppresses both, lexical neither.
         # 2 real findings: neither suppresses.

@@ -161,6 +161,37 @@ class TestResolverFailureFallsBackToLexical:
         )
         assert result is True
 
+    def test_evaluator_exception_falls_through_to_lexical(
+        self, _clean_env, tmp_path, monkeypatch,
+    ):
+        """Review #5 on PR #794: resolve_finding can SUCCEED and then
+        evaluate_finding raise. Both call sites share one try/except, so
+        this must fall through too — covered separately so a future
+        refactor that splits the wrap can't silently regress one path."""
+        # A shape resolve_finding normalises cleanly, so evaluate_finding
+        # is actually reached (then mocked to raise).
+        src_text = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        src = _write(tmp_path, src_text)
+        monkeypatch.setenv("RAPTOR_SANITIZER_CUT", "1")
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("evaluator blew up mid-run")
+
+        monkeypatch.setattr(
+            "core.inventory.sanitizer_cut.evaluate_finding", _boom,
+        )
+        # Must not propagate the RuntimeError; vb=None → lexical decides
+        # (this non-guard shape isn't lexically dominated → False).
+        result = validator_dominates_sink(
+            src_text, 1, 3,
+            file_path=str(src), cwe="CWE-79", language="python",
+        )
+        assert result is False
+
 
 class TestClosureStatus:
     def test_status_reports_retained_by_default(self, _clean_env):
