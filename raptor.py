@@ -247,6 +247,32 @@ def _wants_help(args: list) -> bool:
     return "--help" in args or "-h" in args
 
 
+def _preflight_script_args(script_path: Path, args: list) -> int | None:
+    """Ask subprocess modes to parse args before lifecycle side effects.
+
+    Some wrapped modes resolve projects, create run directories, print
+    OUTPUT_DIR, and start LLM dispatcher plumbing in the parent before the
+    child script's argparse sees malformed flags. For modes that support the
+    ``RAPTOR_ARGPARSE_ONLY`` contract, run that cheap parse-only path first.
+
+    Returns an exit code when preflight failed or timed out. Returns ``None``
+    when the caller should continue into the normal lifecycle.
+    """
+    if script_path.name != "raptor_agentic.py":
+        return None
+    from core.config import RaptorConfig
+    env = RaptorConfig.get_safe_env()
+    env["RAPTOR_ARGPARSE_ONLY"] = "1"
+    cmd = [sys.executable, str(script_path)] + args
+    try:
+        proc = subprocess.run(cmd, env=env, timeout=15)
+    except subprocess.TimeoutExpired:
+        print(f"✗ Argument validation for {script_path.name} timed out",
+              file=sys.stderr)
+        return 1
+    return proc.returncode if proc.returncode != 0 else None
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -270,6 +296,10 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # to recognise the flag. Pre-flight gate fires below, after
     # the catalog estimate is computed.
     max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
+
+    preflight_rc = _preflight_script_args(script_path, args)
+    if preflight_rc is not None:
+        return preflight_rc
 
     # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
     # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
@@ -893,8 +923,17 @@ def mode_agentic(args: list) -> int:
 
     # Enable CodeQL by default for comprehensive agentic mode
     # unless user explicitly specifies --codeql-only or --no-codeql
+    # or CodeQL is disabled via config (tuning.json: codeql_enabled: false)
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:
-        args = ['--codeql'] + args
+        from core.config import RaptorConfig
+        if RaptorConfig.CODEQL_ENABLED:
+            args = ['--codeql'] + args
+        else:
+            print(
+                "  CodeQL disabled via config (tuning.json). "
+                "Pass --codeql to override for this run.",
+                file=sys.stderr,
+            )
 
     # Re-inject --trust-repo stripped by main(): the agentic child parses it
     # to set the cc_trust + codeql_trust overrides in its own process.

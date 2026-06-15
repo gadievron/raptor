@@ -214,6 +214,47 @@ class TestEvidenceBlocks:
         # noreturn observation.
         assert "panic" in blocks[0].content
 
+    def test_cwe_fallback_gate_fires_for_external_scanner(self, tmp_path):
+        """External scanners use rule_id prefixes that don't match
+        _DEFAULT_RULE_PREFIXES (CodeQL-centric).  The CWE-based
+        fallback gate should still allow source-intel evidence when
+        the finding's cwe_id is in the memory-corruption set."""
+        result = _result_with_evidence()
+        with patch(
+            "packages.llm_analysis.source_intel_inject._analyze",
+            return_value=result,
+        ):
+            prepare_source_intel(tmp_path)
+        f = _finding(
+            rule_id="coverity-CID-12345",
+            cwe_id="CWE-476",
+            repo_path=str(tmp_path),
+            function="panic",
+        )
+        with patch(
+            "packages.llm_analysis.source_intel_inject._extract_flags",
+            return_value=None,
+        ):
+            blocks = evidence_blocks_for_finding(f)
+        assert len(blocks) == 1
+        assert blocks[0].kind == "source-intel-evidence"
+
+    def test_cwe_fallback_gate_rejects_non_memory_corruption(self, tmp_path):
+        """CWE fallback gate should reject findings whose CWE is
+        outside the memory-corruption set."""
+        result = _result_with_evidence()
+        with patch(
+            "packages.llm_analysis.source_intel_inject._analyze",
+            return_value=result,
+        ):
+            prepare_source_intel(tmp_path)
+        f = _finding(
+            rule_id="coverity-CID-99999",
+            cwe_id="CWE-89",
+            repo_path=str(tmp_path),
+        )
+        assert evidence_blocks_for_finding(f) == ()
+
     def test_render_failure_returns_empty_not_raise(self, tmp_path):
         """When the renderer raises, return ``()`` rather than
         propagating — Stage D must never fail over an evidence

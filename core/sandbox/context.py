@@ -714,6 +714,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             target = None
             output = None
             allowed_tcp_ports = None
+    strict_required = profile == "strict"
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
@@ -736,6 +737,18 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         use_sandbox = not effectively_disabled and check_net_available()
         use_mount = use_sandbox and bool(target or output) and check_mount_available()
         use_seatbelt = False
+
+    if strict_required:
+        if not use_sandbox:
+            raise RuntimeError(
+                "Sandbox profile 'strict' requested, but no platform "
+                "isolation backend is available."
+            )
+        if sys.platform != "darwin" and (target or output) and not use_mount:
+            raise RuntimeError(
+                "Sandbox profile 'strict' requested with target/output "
+                "isolation, but mount namespaces are unavailable."
+            )
 
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")

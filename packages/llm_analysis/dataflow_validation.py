@@ -430,6 +430,12 @@ def validate_dataflow_claims(
         codeql_dbs = dict(codeql_dbs)  # don't mutate caller's dict
         codeql_dbs.setdefault("_default", Path(codeql_db))
     if not codeql_dbs:
+        structural = _try_structural_fallback(
+            findings, results_by_id, repo_path=repo_path, metrics=metrics,
+            progress_callback=progress_callback,
+        )
+        if structural is not None:
+            return structural
         logger.info("dataflow validation skipped: no CodeQL database available")
         metrics["skipped_reason"] = "no_database"
         return metrics
@@ -443,6 +449,12 @@ def validate_dataflow_claims(
         else:
             logger.info("CodeQL database not found, skipping: %s", p)
     if not valid_dbs:
+        structural = _try_structural_fallback(
+            findings, results_by_id, repo_path=repo_path, metrics=metrics,
+            progress_callback=progress_callback,
+        )
+        if structural is not None:
+            return structural
         metrics["skipped_reason"] = "database_missing"
         return metrics
 
@@ -2180,7 +2192,85 @@ def _sanitize_for_prompt(text: str) -> str:
     return neutralize_tag_forgery(text)
 
 
-def _attach_result(analysis: Dict, result) -> None:
+def _try_structural_fallback(
+    findings: List[Dict],
+    results_by_id: Dict[str, Dict],
+    *,
+    repo_path: Path,
+    metrics: Dict[str, Any],
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Structural validation fallback when no CodeQL database is available.
+
+    Only processes findings that already have a ``dataflow_path``
+    (e.g. from Semgrep Pro SARIF codeFlows). No LLM calls — pure
+    AST analysis via tree-sitter.
+
+    Returns the metrics dict on success, None if the structural
+    validator is unavailable or no findings are eligible.
+    """
+    try:
+        from core.dataflow.structural_validator import validate_structurally
+    except ImportError:
+        return None
+
+    eligible = [
+        f for f in findings
+        if f.get("has_dataflow") and f.get("dataflow_path")
+    ]
+    if not eligible:
+        return None
+
+    if progress_callback:
+        progress_callback(
+            f"Structural validation: {len(eligible)} finding(s) with dataflow paths"
+        )
+
+    n_validated = 0
+    n_downgrades = 0
+    for finding in eligible:
+        finding_id = finding.get("finding_id", "")
+        analysis = results_by_id.get(finding_id, {})
+        if not analysis:
+            continue
+
+        try:
+            result = validate_structurally(
+                finding["dataflow_path"],
+                repo_path,
+                language=finding.get("language"),
+            )
+            _attach_result(analysis, result, method="structural-treesitter")
+            n_validated += 1
+            if result.refuted and analysis.get("is_exploitable"):
+                n_downgrades += 1
+        except Exception as exc:
+            logger.debug(
+                "structural validation error for %s: %s", finding_id, exc,
+            )
+            metrics["n_errors"] = metrics.get("n_errors", 0) + 1
+
+    metrics["n_eligible"] = len(eligible)
+    metrics["n_validated"] = n_validated
+    metrics["n_recommended_downgrades"] = n_downgrades
+    metrics["skipped_reason"] = ""
+    metrics["validation_method"] = "structural-treesitter"
+
+    if progress_callback:
+        progress_callback(
+            f"Structural validation complete: {n_validated} validated, "
+            f"{n_downgrades} downgrade(s) recommended"
+        )
+
+    return metrics
+
+
+def _attach_result(
+    analysis: Dict,
+    result,
+    *,
+    method: str = "codeql-iris",
+) -> None:
     """Record the validation outcome on the analysis dict — NON-DESTRUCTIVE.
 
     Sets the `dataflow_validation` block with the verdict, reasoning,
@@ -2194,16 +2284,28 @@ def _attach_result(analysis: Dict, result) -> None:
     AFTER validation. If we mutated is_exploitable here, those tasks
     would see a pre-judged finding instead of the original analysis,
     undermining their independence.
+
+    ``method`` labels the validator that produced the result:
+    ``"codeql-iris"`` (default) or ``"structural-treesitter"``.
     """
+    evidence = []
+    for e in result.evidence:
+        if isinstance(e, dict):
+            evidence.append(e)
+        elif hasattr(e, "to_dict"):
+            evidence.append(e.to_dict())
+        else:
+            evidence.append(str(e))
     recommends_downgrade = (
         result.refuted and bool(analysis.get("is_exploitable"))
     )
     analysis["dataflow_validation"] = {
         "verdict": result.verdict,
         "reasoning": result.reasoning,
-        "evidence": [e.to_dict() for e in result.evidence],
+        "evidence": evidence,
         "iterations": result.iterations,
         "recommends_downgrade": recommends_downgrade,
+        "method": method,
     }
 
 
@@ -2257,6 +2359,18 @@ def run_validation_pass(
 
     codeql_dbs = discover_codeql_databases(out_dir)
     if not codeql_dbs:
+        metrics: Dict[str, Any] = {
+            "n_eligible": 0, "n_validated": 0, "n_cache_hits": 0,
+            "n_recommended_downgrades": 0, "n_errors": 0,
+            "n_skipped_no_db_for_language": 0, "n_stale_db_warnings": 0,
+            "skipped_reason": "", "n_deep_validate_auto_enabled": 0,
+        }
+        structural = _try_structural_fallback(
+            findings, results_by_id, repo_path=repo_path, metrics=metrics,
+            progress_callback=progress_callback,
+        )
+        if structural is not None:
+            return structural
         logger.info("dataflow validation skipped: no CodeQL database in run dir")
         return None
 
@@ -2363,8 +2477,14 @@ def reconcile_dataflow_validation(results_by_id: Dict[str, Dict]) -> Dict[str, i
         # Hard: flip is_exploitable, re-score CVSS
         analysis["is_exploitable_pre_validation"] = analysis["is_exploitable"]
         analysis["is_exploitable"] = False
+        method = v.get("method", "codeql-iris")
+        method_label = (
+            "Tree-sitter structural validation"
+            if method == "structural-treesitter"
+            else "CodeQL dataflow validation"
+        )
         analysis["validation_downgrade_reason"] = (
-            f"CodeQL dataflow validation refuted the claim: {v.get('reasoning', '')}"
+            f"{method_label} refuted the claim: {v.get('reasoning', '')}"
         )
         try:
             from packages.cvss import score_finding

@@ -162,6 +162,12 @@ def test_agentic_accepts_max_findings():
     )
 
 
+def test_agentic_accepts_threat_model_use_stale():
+    assert _argparse_accepted(
+        "agentic", "--repo", "./repo", "--threat-model-use-stale"
+    )
+
+
 def test_fuzz_accepts_duration():
     assert _argparse_accepted(
         "fuzz", "--binary", "./bin", "--duration", "60"
