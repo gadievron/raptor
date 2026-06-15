@@ -458,15 +458,18 @@ intra-proc CFG is available.
   widened to `Union[PythonCFG, CPPCFG]` / `Union[PyCFGNode,
   CPPCFGNode]`.
 
-* `core/dataflow/known_safe_calls.py` extended with four C/C++
+* `core/dataflow/known_safe_calls.py` extended with three C/C++
   catalog entries chosen for documented library contracts:
   `g_markup_escape_text` (xss), `g_uri_escape_string` (pathtrav),
-  `g_shell_quote` (cmdi), `sqlite3_mprintf` (sqli). Selection rule
-  documented inline — only "transform" sanitizers that return a
-  newly-allocated value qualify; destination-buffer writers
+  `g_shell_quote` (cmdi). Selection rule documented inline — only
+  "transform" sanitizers that return a newly-allocated value
+  *unconditionally* qualify; destination-buffer writers
   (`mysql_real_escape_string`, `realpath`) would be downgraded by
   Phase 10's `may_escape` policy anyway and are excluded to avoid
-  audit noise.
+  audit noise. `sqlite3_mprintf` is excluded because its safety is
+  format-specifier-dependent (`%q`/`%Q` escape, `%s` does not), so
+  call-name-keyed suppression would be unsound (review #1 on PR #794);
+  re-add only behind per-format-specifier discrimination.
 
 * The Phase 4 callgraph-only carve-out is preserved (callgraph
   bindings still carry empty input/output symbol sets so condition

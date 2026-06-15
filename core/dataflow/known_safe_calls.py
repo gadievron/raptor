@@ -270,20 +270,12 @@ _TABLE: Tuple[KnownSafeCall, ...] = (
             "in a shell command line per POSIX sh(1) quoting rules."
         ),
     ),
-    KnownSafeCall(
-        library_call="sqlite3_mprintf",
-        sink_class="sqli",
-        languages=("c", "cpp"),
-        input_arg_kind="transform",
-        soundness_note=(
-            "SQLite sqlite3_mprintf with the %q or %Q format specifier "
-            "returns a newly-allocated SQL-safe string with embedded "
-            "single quotes doubled. Note: only the %q/%Q specifiers are "
-            "SQL-safe — generic %s in sqlite3_mprintf does NOT escape. "
-            "The catalog keys on the call name; per-format discrimination "
-            "is a future refinement."
-        ),
-    ),
+    # NOTE: sqlite3_mprintf is deliberately NOT in this catalog. Only its
+    # %q/%Q format specifiers escape; a generic %s does not, so keying
+    # suppression on the call name alone would falsely clear
+    # sqlite3_mprintf("... = %s", tainted) — the exact wrong-format-
+    # specifier FN this arc exists to prevent (review #1 on PR #794).
+    # Re-add only behind per-format-specifier discrimination.
 )
 
 
