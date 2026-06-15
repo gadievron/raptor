@@ -30,6 +30,28 @@ libexec/raptor-validation-helper 0 --target "$TARGET_PATH"
 
 This starts the run lifecycle, builds the checklist, and imports any /understand output. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
 
+### Threat Model Context (before any LLM stage)
+
+If the target has a project threat model, load it before starting Stage A:
+
+```bash
+python3 -c "
+import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
+from pathlib import Path
+from core.threat_model import threat_model_prompt_block
+block = threat_model_prompt_block(Path('$TARGET_PATH'))
+if block: print(block)
+else: print('No project threat model found.')
+"
+```
+
+When present, use it as operator-owned context throughout all LLM stages (A-D, F):
+- Prioritise focus areas and verification expectations
+- Respect explicit out-of-scope classes (lower priority, not ignore)
+- Use known bug shapes to guide hypothesis formation in Stage B
+- Apply patch validation expectations in Stage F self-review
+- Still prove all claims from code evidence or oracle-backed validation
+
 ### Stage A (Claude): One-Shot Assessment
 
 **Load:** `.claude/skills/exploitability-validation/stage-a-oneshot.md`

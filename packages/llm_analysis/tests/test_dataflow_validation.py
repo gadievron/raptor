@@ -22,6 +22,7 @@ from packages.llm_analysis.dataflow_validation import (
     _is_compile_error,
     _normalise_language,
     _pick_adapter_for_finding,
+    _try_structural_fallback,
     _validate_one_hypothesis,
     _verdict_from_prebuilt,
     discover_codeql_database,
@@ -3160,3 +3161,278 @@ class TestUsageDrivenDeepValidate:
         assert self._decide(
             analysis={"path_conditions": []},
         ) is False
+
+
+# ── Structural fallback E2E ──────────────────────────────────────
+
+
+class TestStructuralFallbackE2E:
+    """Integration tests for the tree-sitter structural validation fallback.
+
+    These exercise the full path: _try_structural_fallback → validate_structurally
+    → _attach_result → reconcile_dataflow_validation, with real Python files on
+    disk (no mocks on the validator itself).
+    """
+
+    @staticmethod
+    def _make_finding(finding_id, has_dataflow, dataflow_path, language="python"):
+        return {
+            "finding_id": finding_id,
+            "has_dataflow": has_dataflow,
+            "dataflow_path": dataflow_path,
+            "language": language,
+        }
+
+    def test_structural_fallback_fires_on_eligible_finding(self, tmp_path):
+        """When no CodeQL DB exists and a finding has dataflow_path,
+        _try_structural_fallback returns metrics with the structural method."""
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def source():\n"
+            "    return input()\n"
+            "\n"
+            "def sink(data):\n"
+            "    eval(data)\n"
+            "\n"
+            "def main():\n"
+            "    data = source()\n"
+            "    sink(data)\n",
+            encoding="utf-8",
+        )
+
+        path = {
+            "source": {"file": "app.py", "line": 8, "label": "", "snippet": ""},
+            "sink": {"file": "app.py", "line": 9, "label": "", "snippet": ""},
+            "steps": [],
+            "total_steps": 2,
+        }
+        findings = [self._make_finding("f1", True, path)]
+        results = {"f1": {"is_exploitable": True, "confidence": "high"}}
+        metrics = {
+            "n_eligible": 0, "n_validated": 0, "n_cache_hits": 0,
+            "n_recommended_downgrades": 0, "n_errors": 0,
+            "n_skipped_no_db_for_language": 0, "n_stale_db_warnings": 0,
+            "skipped_reason": "", "n_deep_validate_auto_enabled": 0,
+        }
+
+        result = _try_structural_fallback(
+            findings, results, repo_path=tmp_path, metrics=metrics,
+        )
+        assert result is not None
+        assert result["validation_method"] == "structural-treesitter"
+        assert result["n_validated"] >= 1
+
+        v = results["f1"]["dataflow_validation"]
+        assert v["method"] == "structural-treesitter"
+        assert v["verdict"] in ("confirmed", "inconclusive", "refuted")
+
+    def test_structural_fallback_returns_none_when_no_eligible(self, tmp_path):
+        """No findings with dataflow_path → fallback returns None."""
+        findings = [self._make_finding("f1", False, None)]
+        results = {"f1": {"is_exploitable": True}}
+        metrics = {
+            "n_eligible": 0, "n_validated": 0, "n_cache_hits": 0,
+            "n_recommended_downgrades": 0, "n_errors": 0,
+            "n_skipped_no_db_for_language": 0, "n_stale_db_warnings": 0,
+            "skipped_reason": "", "n_deep_validate_auto_enabled": 0,
+        }
+
+        result = _try_structural_fallback(
+            findings, results, repo_path=tmp_path, metrics=metrics,
+        )
+        assert result is None
+
+    def test_structural_refuted_triggers_downgrade_recommendation(self, tmp_path):
+        """When the structural validator refutes a path on an exploitable
+        finding, recommends_downgrade=True is set."""
+        src = tmp_path / "a.py"
+        src.write_text(
+            "def handler():\n"
+            "    x = 1\n"
+            "    return x\n"
+            "\n"
+            "def unrelated():\n"
+            "    pass\n",
+            encoding="utf-8",
+        )
+
+        path = {
+            "source": {"file": "a.py", "line": 2, "label": "", "snippet": ""},
+            "sink": {"file": "a.py", "line": 6, "label": "", "snippet": ""},
+            "steps": [],
+            "total_steps": 2,
+        }
+        findings = [self._make_finding("f2", True, path)]
+        results = {"f2": {"is_exploitable": True, "confidence": "high"}}
+        metrics = {
+            "n_eligible": 0, "n_validated": 0, "n_cache_hits": 0,
+            "n_recommended_downgrades": 0, "n_errors": 0,
+            "n_skipped_no_db_for_language": 0, "n_stale_db_warnings": 0,
+            "skipped_reason": "", "n_deep_validate_auto_enabled": 0,
+        }
+
+        _try_structural_fallback(
+            findings, results, repo_path=tmp_path, metrics=metrics,
+        )
+
+        v = results["f2"].get("dataflow_validation", {})
+        if v.get("verdict") == "refuted":
+            assert v["recommends_downgrade"] is True
+            assert metrics["n_recommended_downgrades"] >= 1
+
+    def test_reconcile_labels_structural_method(self):
+        """reconcile_dataflow_validation uses 'Tree-sitter structural validation'
+        in the downgrade reason when method is structural-treesitter."""
+        results = {
+            "f1": {
+                "is_exploitable": True,
+                "confidence": "high",
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "Call chain broken",
+                    "evidence": [],
+                    "iterations": 1,
+                    "recommends_downgrade": True,
+                    "method": "structural-treesitter",
+                },
+            },
+        }
+
+        out = reconcile_dataflow_validation(results)
+        assert out["n_hard_downgrades"] == 1
+        assert results["f1"]["is_exploitable"] is False
+        reason = results["f1"]["validation_downgrade_reason"]
+        assert "Tree-sitter structural validation" in reason
+
+    def test_reconcile_labels_codeql_method(self):
+        """reconcile_dataflow_validation uses 'CodeQL dataflow validation'
+        as the default label."""
+        results = {
+            "f1": {
+                "is_exploitable": True,
+                "confidence": "high",
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "No taint flow",
+                    "evidence": [],
+                    "iterations": 2,
+                    "recommends_downgrade": True,
+                    "method": "codeql-iris",
+                },
+            },
+        }
+
+        out = reconcile_dataflow_validation(results)
+        assert out["n_hard_downgrades"] == 1
+        reason = results["f1"]["validation_downgrade_reason"]
+        assert "CodeQL dataflow validation" in reason
+
+    def test_attach_result_with_structural_method(self):
+        """_attach_result records the method field from the caller."""
+        from core.dataflow.structural_validator import StructuralResult
+
+        analysis: Dict[str, Any] = {"is_exploitable": True}
+        result = StructuralResult(
+            verdict="confirmed",
+            reasoning="All links verified",
+            evidence=[{"step_index": 0, "file": "a.py", "exists": True}],
+            confidence="high",
+        )
+        _attach_result(analysis, result, method="structural-treesitter")
+
+        v = analysis["dataflow_validation"]
+        assert v["method"] == "structural-treesitter"
+        assert v["verdict"] == "confirmed"
+        assert v["recommends_downgrade"] is False
+
+    def test_validate_dataflow_claims_structural_fallback(self, tmp_path):
+        """Full pipeline: validate_dataflow_claims with no CodeQL DB
+        falls back to structural validation for eligible findings."""
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def source():\n"
+            "    return input()\n"
+            "\n"
+            "def sink(data):\n"
+            "    eval(data)\n"
+            "\n"
+            "def main():\n"
+            "    data = source()\n"
+            "    sink(data)\n",
+            encoding="utf-8",
+        )
+
+        path = {
+            "source": {"file": "app.py", "line": 8, "label": "", "snippet": ""},
+            "sink": {"file": "app.py", "line": 9, "label": "", "snippet": ""},
+            "steps": [],
+            "total_steps": 2,
+        }
+        findings = [{
+            "finding_id": "f1",
+            "has_dataflow": True,
+            "dataflow_path": path,
+            "language": "python",
+            "rule_id": "test-rule",
+        }]
+        results = {"f1": {"is_exploitable": True, "confidence": "high"}}
+
+        metrics = validate_dataflow_claims(
+            findings=findings,
+            results_by_id=results,
+            codeql_db=None,
+            repo_path=tmp_path,
+            llm_client=None,
+        )
+
+        assert metrics["validation_method"] == "structural-treesitter"
+        v = results["f1"]["dataflow_validation"]
+        assert v["method"] == "structural-treesitter"
+
+    def test_run_validation_pass_structural_fallback(self, tmp_path):
+        """run_validation_pass with no CodeQL DB in out_dir falls back
+        to structural validation."""
+        src = tmp_path / "repo" / "app.py"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "def source():\n"
+            "    return input()\n"
+            "\n"
+            "def sink(data):\n"
+            "    eval(data)\n"
+            "\n"
+            "def main():\n"
+            "    data = source()\n"
+            "    sink(data)\n",
+            encoding="utf-8",
+        )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        path = {
+            "source": {"file": "app.py", "line": 8, "label": "", "snippet": ""},
+            "sink": {"file": "app.py", "line": 9, "label": "", "snippet": ""},
+            "steps": [],
+            "total_steps": 2,
+        }
+        findings = [{
+            "finding_id": "f1",
+            "has_dataflow": True,
+            "dataflow_path": path,
+            "language": "python",
+        }]
+        results = {"f1": {"is_exploitable": True}}
+
+        metrics = run_validation_pass(
+            findings=findings,
+            results_by_id=results,
+            out_dir=out_dir,
+            repo_path=tmp_path / "repo",
+            dispatch_fn=lambda *a, **kw: None,
+            analysis_model=None,
+            role_resolution={},
+            dispatch_mode="external_llm",
+        )
+
+        assert metrics is not None
+        assert metrics["validation_method"] == "structural-treesitter"

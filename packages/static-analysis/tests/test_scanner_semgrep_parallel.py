@@ -46,7 +46,8 @@ def _make_sarif_response(findings=None):
     return (0 if not findings else 1, json.dumps({"runs": runs}), "")
 
 
-def _stub_run_single(name, config, repo_path, out_dir, timeout, progress_callback=None):
+def _stub_run_single(name, config, repo_path, out_dir, timeout,
+                     progress_callback=None, **_ignored):
     """Side-effect for run_single_semgrep: creates the expected files and returns."""
     safe = name.replace("/", "_").replace(":", "_")
     sarif = out_dir / f"semgrep_{safe}.sarif"
@@ -165,7 +166,8 @@ class TestSemgrepScanParallel:
 
         call_count = 0
 
-        def side_effect(name, config, repo_path, out_dir, timeout, progress_callback=None):
+        def side_effect(name, config, repo_path, out_dir, timeout,
+                        progress_callback=None, **_ignored):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -197,7 +199,7 @@ class TestSemgrepScanParallelSilentDropDetection:
         # worker's success return and the file actually landing
         # (filesystem write failure, sandbox teardown, race) lands
         # here.
-        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None, **_ignored):
             suffix = name.replace("/", "_").replace(":", "_")
             sarif = out_dir / f"semgrep_{suffix}.sarif"
             # Return success + sarif path — but never write the file.
@@ -219,7 +221,7 @@ class TestSemgrepScanParallelSilentDropDetection:
         # claim success but produce no file (silent drop).
         call_count = 0
 
-        def mixed_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+        def mixed_stub(name, config, repo_path, out_dir, timeout, progress_callback=None, **_ignored):
             nonlocal call_count
             call_count += 1
             suffix = name.replace("/", "_").replace(":", "_")
@@ -260,7 +262,7 @@ class TestSemgrepScanSequential:
         # Same shape as the parallel-path test: worker claims success
         # but no SARIF on disk. Sequential should detect via the same
         # submitted-vs-landed cross-check.
-        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None):
+        def lying_stub(name, config, repo_path, out_dir, timeout, progress_callback=None, **_ignored):
             suffix = name.replace("/", "_").replace(":", "_")
             sarif = out_dir / f"semgrep_{suffix}.sarif"
             return str(sarif), True  # claim success, never write

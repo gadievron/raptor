@@ -454,6 +454,89 @@ def check_mount_available() -> bool:
         return True
 
 
+def _selinux_enforcing() -> bool:
+    """Return True iff SELinux is loaded AND enforcing on this host.
+
+    Quickly distinguishes SELinux from AppArmor as the actual cause of
+    ``unshare(CLONE_NEWNS)`` refusal. The functional probe in
+    ``check_mount_available`` catches the refusal but can't see which
+    LSM rejected it; this helper inspects ``/sys/fs/selinux/enforce``
+    which is the kernel's authoritative answer.
+
+    Returns False for: SELinux absent (file missing), SELinux disabled
+    or permissive (``enforce`` is 0), unreadable file. Never raises —
+    the caller wants a string-routing decision, not exception flow.
+    """
+    try:
+        return Path("/sys/fs/selinux/enforce").read_text().strip() == "1"
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def mount_unavailable_reason() -> tuple[str, str]:
+    """Diagnose WHY mount-ns isolation is unavailable on this host.
+
+    Returns ``(condition, fix)`` strings suitable for surfacing to an
+    operator. Four distinct branches: AppArmor restriction, missing
+    uidmap binaries, SELinux enforcing, or (catch-all) outer seccomp /
+    nested userns. Pre-fix the diagnostic at ``context.py``'s spawn-
+    blockers branch hardcoded "AppArmor", misattributing the cause on
+    SELinux hosts and on hosts where the uidmap package was simply not
+    installed.
+
+    Caller is responsible for only invoking this when
+    ``check_mount_available()`` already returned False — this helper
+    re-probes the specific conditions in priority order, but doesn't
+    itself decide whether mount-ns is unavailable.
+    """
+    # 1. AppArmor sysctl (Ubuntu 24.04+ default).
+    try:
+        v = Path(
+            "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+        ).read_text().strip()
+        if v == "1":
+            return (
+                "mount-ns blocked by host "
+                "(apparmor_restrict_unprivileged_userns=1)",
+                "set kernel.apparmor_restrict_unprivileged_userns=0 "
+                "(Ubuntu 24.04+) and install the uidmap package; or "
+                "rerun on a host where mount-ns is available.",
+            )
+    except (FileNotFoundError, OSError):
+        pass
+    # 2. uidmap binaries missing — distinct from the AppArmor case
+    #    because the fix is package install, not sysctl flip.
+    if not (shutil.which("newuidmap") and shutil.which("newgidmap")):
+        return (
+            "mount-ns blocked by host "
+            "(uidmap binaries newuidmap/newgidmap not installed)",
+            "install the uidmap package (apt install uidmap on "
+            "Debian/Ubuntu, dnf install shadow-utils on Fedora/RHEL); "
+            "or rerun on a host where mount-ns is available.",
+        )
+    # 3. SELinux enforcing — distinct from AppArmor; the fix is an
+    #    SELinux booleans / policy change, not an AppArmor sysctl.
+    if _selinux_enforcing():
+        return (
+            "mount-ns blocked by host (SELinux enforcing)",
+            "set SELinux to permissive temporarily "
+            "(`sudo setenforce 0`) to confirm, then grant the calling "
+            "process the policy to unshare(CLONE_NEWNS) — typically "
+            "the `container_use_userns` boolean: "
+            "`sudo setsebool -P container_use_userns 1`; or rerun on a "
+            "host where mount-ns is available.",
+        )
+    # 4. Catch-all: outer seccomp filter / nested userns / unknown LSM.
+    return (
+        "mount-ns blocked by host "
+        "(unshare(CLONE_NEWNS) refused at runtime — likely outer "
+        "seccomp filter, nested user-namespace restriction, or "
+        "unknown LSM policy)",
+        "rerun outside the restricting container / VM, or rerun on a "
+        "host where mount-ns is available.",
+    )
+
+
 def check_seatbelt_available() -> bool:
     """macOS-only: check if `sandbox-exec` works for our use case.
 

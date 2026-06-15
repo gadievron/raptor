@@ -214,6 +214,16 @@ class RaptorConfig:
         """
         return cls._tuning().codeql_max_disk_cache_mb
 
+    @classproperty
+    def CODEQL_ENABLED(cls):
+        """Persistent CodeQL toggle from ``tuning.json``.
+
+        When False, ``/agentic`` no longer injects ``--codeql`` by
+        default. CLI flags still override: ``--codeql`` forces ON,
+        ``--no-codeql`` forces OFF, regardless of this config.
+        """
+        return cls._tuning().codeql_enabled
+
     # CodeQL DB cache: grace period before _evict_stale_canonical evicts
     # a canonical that has no metadata yet. The promote sequence has a
     # gap between os.rename(staging, canonical) and save_metadata

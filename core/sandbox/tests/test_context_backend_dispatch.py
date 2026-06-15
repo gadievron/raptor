@@ -230,3 +230,22 @@ def test_audit_degrade_reason_macos_branch(reset_caches):
         assert "sandbox-exec" in reason or "seatbelt" in reason.lower()
         # Must NOT mention apparmor (Linux-specific).
         assert "apparmor" not in reason.lower()
+
+
+def test_strict_profile_fails_closed_without_backend(reset_caches):
+    with mock.patch.object(sys, "platform", "linux"), \
+         mock.patch.object(context, "check_net_available", return_value=False):
+        from core.sandbox.context import sandbox
+        with pytest.raises(RuntimeError, match="strict"):
+            with sandbox(profile="strict"):
+                pass
+
+
+def test_strict_profile_requires_mount_namespace_for_target_output(reset_caches):
+    with mock.patch.object(sys, "platform", "linux"), \
+         mock.patch.object(context, "check_net_available", return_value=True), \
+         mock.patch.object(context, "check_mount_available", return_value=False):
+        from core.sandbox.context import sandbox
+        with pytest.raises(RuntimeError, match="mount namespaces"):
+            with sandbox(profile="strict", target="/tmp", output="/tmp"):
+                pass

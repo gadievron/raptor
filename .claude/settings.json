@@ -17,6 +17,8 @@
       "Bash(libexec/raptor-run-sandboxed *)",
       "Bash(libexec/raptor-sandbox-summary *)",
       "Bash(libexec/raptor-startup-check *)",
+      "Bash(libexec/raptor-threat-model)",
+      "Bash(libexec/raptor-threat-model *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Bash(libexec/raptor-validation-helper *)",
       "Write(/out/**)",
