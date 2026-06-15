@@ -383,6 +383,92 @@ def build_llm_config_from_flags(
     return llm_config
 
 
+def _attach_calibrated_aggregation(
+    results_by_id: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Run Dawid–Skene calibrated aggregation over the multi-model panel
+    and attach the additive ``calibrated_aggregation`` field to each
+    finding in ``results_by_id`` (Phase 3 of the calibrated-aggregation
+    arc; see docs/design-aggregation-dominators-wp.md).
+
+    Returns the run summary dict surfaced in
+    ``orchestrated_report.json`` under
+    ``orchestration.calibrated_aggregation``. Purely additive — it never
+    alters ``is_exploitable`` or any existing field, and never raises:
+    on any failure it returns ``{"failed": True, "error": ...}`` and
+    logs a warning, so a broken D–S can't abort the orchestrator. The
+    vote-based consensus pipeline (consensus.py) is unchanged; the
+    posterior-weighted scorecard update is a deferred, measurement-gated
+    follow-up.
+
+    The conversion is atomic (review #4 on PR #793): all verdicts are
+    serialised up front, so if ``verdict_to_json`` raises on one finding
+    no finding is left half-written — the whole step fails cleanly.
+    """
+    calibrated_summary: Dict[str, Any] = {"failed": False}
+    try:
+        from core.llm.multi_model.calibrated_aggregation import (
+            calibrate_results, verdict_to_json,
+        )
+        verdicts = calibrate_results(results_by_id)
+        n_ds = sum(
+            1 for v in verdicts.values()
+            if v.aggregation_method == "dawid_skene"
+        )
+        # Break the vote-fallback count down by reason rather than
+        # reporting a bare total — an operator seeing "5 fell back"
+        # can't tell single-model panels (expected) from
+        # non-convergence (worth investigating).
+        fallback_by_reason = Counter(
+            v.aggregation_fallback_reason or "unspecified"
+            for v in verdicts.values()
+            if v.aggregation_method != "dawid_skene"
+        )
+        n_vote = sum(fallback_by_reason.values())
+        # Convert ALL verdicts up front before mutating any finding. If
+        # verdict_to_json raises on finding N, the comprehension aborts
+        # before a single assignment, so no finding is left carrying the
+        # field while its siblings don't. The second loop only does dict
+        # assignment, which cannot raise.
+        serialized = {
+            fid: verdict_to_json(verdict)
+            for fid, verdict in verdicts.items()
+        }
+        for fid, payload in serialized.items():
+            primary = results_by_id.get(fid)
+            if primary is not None:
+                primary["calibrated_aggregation"] = payload
+        breakdown = ", ".join(
+            f"{n}× {reason}"
+            for reason, n in sorted(fallback_by_reason.items())
+        ) or "none"
+        calibrated_summary.update({
+            "dawid_skene": n_ds,
+            "vote_fallback": n_vote,
+            "fallback_by_reason": dict(fallback_by_reason),
+            "total": len(verdicts),
+        })
+        logger.info(
+            "Calibrated aggregation: %d D–S, %d vote-fallback "
+            "[%s] (%d total)",
+            n_ds, n_vote, breakdown, len(verdicts),
+        )
+    except Exception as exc:
+        # The feature is additive — if it fails for any reason we drop it
+        # rather than abort the orchestrator. Record the failure in the
+        # run summary (not just the log) so it is observable to operators
+        # reading orchestrated_report.json.
+        calibrated_summary = {
+            "failed": True,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        logger.warning(
+            "Calibrated aggregation failed; skipping: %s: %s",
+            type(exc).__name__, exc, exc_info=True,
+        )
+    return calibrated_summary
+
+
 def orchestrate(
     prep_report_path: Path,
     repo_path: Path,
@@ -827,73 +913,12 @@ def orchestrate(
                 primary[key] = source.get(key)
         results_by_id[fid] = primary
 
-    # --- Calibrated aggregation (Dawid–Skene) ---------------------------
-    # Phase 3 of the calibrated-aggregation arc
-    # (docs/design-aggregation-dominators-wp.md). Attaches a per-finding
-    # ``calibrated_aggregation`` field carrying a posterior P(true-positive)
-    # and credible interval inferred from the multi-model panel verdicts.
-    # Purely additive — does not alter ``is_exploitable`` or any existing
-    # field, so it always runs: there is nothing to switch off (a consumer
-    # that doesn't know the field ignores it). The vote-based consensus
-    # pipeline (consensus.py) is unchanged and still updates the scorecard;
-    # the posterior-weighted scorecard update is a deferred,
-    # measurement-gated follow-up — see the design doc.
-    #
-    # The structured summary is surfaced in orchestrated_report.json so a
-    # silent fallback (the except below) is observable to operators, not
-    # just grep-able in the log.
-    calibrated_summary: Dict[str, Any] = {"failed": False}
-    try:
-        from core.llm.multi_model.calibrated_aggregation import (
-            calibrate_results, verdict_to_json,
-        )
-        verdicts = calibrate_results(results_by_id)
-        n_ds = sum(
-            1 for v in verdicts.values()
-            if v.aggregation_method == "dawid_skene"
-        )
-        # Break the vote-fallback count down by reason rather than
-        # reporting a bare total — an operator seeing "5 fell back"
-        # can't tell single-model panels (expected) from
-        # non-convergence (worth investigating).
-        fallback_by_reason = Counter(
-            v.aggregation_fallback_reason or "unspecified"
-            for v in verdicts.values()
-            if v.aggregation_method != "dawid_skene"
-        )
-        n_vote = sum(fallback_by_reason.values())
-        for fid, verdict in verdicts.items():
-            primary = results_by_id.get(fid)
-            if primary is not None:
-                primary["calibrated_aggregation"] = verdict_to_json(verdict)
-        breakdown = ", ".join(
-            f"{n}× {reason}"
-            for reason, n in sorted(fallback_by_reason.items())
-        ) or "none"
-        calibrated_summary.update({
-            "dawid_skene": n_ds,
-            "vote_fallback": n_vote,
-            "fallback_by_reason": dict(fallback_by_reason),
-            "total": len(verdicts),
-        })
-        logger.info(
-            "Calibrated aggregation: %d D–S, %d vote-fallback "
-            "[%s] (%d total)",
-            n_ds, n_vote, breakdown, len(verdicts),
-        )
-    except Exception as exc:
-        # The feature is additive — if it fails for any reason we
-        # drop it rather than abort the orchestrator. Record the
-        # failure in the run summary (not just the log) so it is
-        # observable to operators reading orchestrated_report.json.
-        calibrated_summary = {
-            "failed": True,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        logger.warning(
-            "Calibrated aggregation failed; skipping: %s: %s",
-            type(exc).__name__, exc, exc_info=True,
-        )
+    # Calibrated aggregation (Dawid–Skene) — Phase 3. Attaches the
+    # additive per-finding ``calibrated_aggregation`` field and returns
+    # the run summary surfaced in orchestrated_report.json. Extracted to
+    # a helper so the success and failure paths are unit-testable without
+    # booting the full orchestrate() machinery (review #5 on PR #793).
+    calibrated_summary = _attach_calibrated_aggregation(results_by_id)
 
     # Multi-model collapse detection. The exclude_fallback_to guard above
     # prevents most cases where a primary's failure routes silently into
