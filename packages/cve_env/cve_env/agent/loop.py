@@ -547,6 +547,39 @@ def _accum_tokens(state: _StreamState, usage: Any) -> None:
         state.total_output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
 
 
+def _merge_cumulative_tokens(state: _StreamState, usage: Any) -> None:
+    """Merge a CUMULATIVE-per-session usage block (``ResultMessage.usage``) into
+    the running token totals via ``max()``, NOT ``+=``.
+
+    ``ResultMessage.usage`` is the session aggregate (SDK ``types.py``:
+    "Cumulative API usage for the session"), whereas ``AssistantMessage.usage``
+    (counted via :func:`_accum_tokens`) is per-message. Summing both
+    double-counts the session's tokens (~2x, worse across multi-ResultMessage
+    retry storms). ``max()`` lifts the totals to the cumulative floor without
+    re-adding the per-message tokens already counted, and never lowers them — so
+    a give_up run that never reaches a terminal ResultMessage keeps its
+    per-message accumulation. No-op when ``usage`` is falsy.
+
+    ASSUMPTION (benign — these totals only feed the token-estimate floor in
+    _floor_cost, which never wins the max() under session auth, so cost is
+    unaffected): the session-cumulative continues across continuation runs, which
+    all resume the same session (``run_agent(..., resume=...)``). If a future SDK
+    were to RESET the cumulative on resume, this max() would freeze at the largest
+    single-run value and under-count tokens across continuations; the per-message
+    AssistantMessage += would then be the more accurate signal.
+    """
+    if not usage:
+        return
+    if isinstance(usage, dict):
+        in_tok = int(usage.get("input_tokens", 0) or 0)
+        out_tok = int(usage.get("output_tokens", 0) or 0)
+    else:
+        in_tok = int(getattr(usage, "input_tokens", 0) or 0)
+        out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+    state.total_input_tokens = max(state.total_input_tokens, in_tok)
+    state.total_output_tokens = max(state.total_output_tokens, out_tok)
+
+
 def _accumulate_result_cost_and_turns(state: _StreamState, msg: Any) -> None:
     """ResultMessage cost/turn aggregation, extracted from ``on_message``
     (behavior-preserving). Handles the multi-ResultMessage cost storm: credit the
@@ -1968,9 +2001,11 @@ async def build(
                         f"cost ${state.stage_costs[breached_stage]:.3f} > budget; "
                         f"terminating run (Phase 12.3)."
                     )
-            # Accumulate input/output tokens so we can estimate cost when the SDK
+            # Merge the ResultMessage's CUMULATIVE session usage via max() (not
+            # +=) so it doesn't double-count the per-message AssistantMessage
+            # usage already accumulated; lets us estimate cost when the SDK
             # reports total_cost_usd=0 despite real LLM rounds.
-            _accum_tokens(state, msg.usage)
+            _merge_cumulative_tokens(state, msg.usage)
             # If accumulated cost (across multi-ResultMessage retry storms)
             # exceeded max_cost_usd, halt SDK iteration. Without this, SDK retries
             # consume budget independently and total can exceed cap by 2-3×.
