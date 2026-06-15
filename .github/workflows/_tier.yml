@@ -69,7 +69,7 @@ jobs:
         password: ${{ github.token }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
       - name: Reconcile deps
@@ -87,7 +87,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout_minutes }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
       - name: Set up Python
@@ -95,7 +95,7 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"

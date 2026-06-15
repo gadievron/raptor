@@ -27,13 +27,39 @@ class TestProject(unittest.TestCase):
 
     def test_to_dict_roundtrip(self):
         p = Project(name="test", target=self.target_code, output_dir="out/test",
-                    created="2026-04-06", description="desc", notes="notes")
+                    created="2026-04-06", description="desc", notes="notes",
+                    threat_model_path="out/test/threat-model.json",
+                    threat_model_updated="2026-06-05T08:00:00+00:00")
         d = p.to_dict()
         p2 = Project.from_dict(d)
         self.assertEqual(p.name, p2.name)
         self.assertEqual(p.target, p2.target)
         self.assertEqual(p.description, p2.description)
         self.assertEqual(p.notes, p2.notes)
+        self.assertEqual(p.threat_model_path, p2.threat_model_path)
+        self.assertEqual(p.threat_model_updated, p2.threat_model_updated)
+
+    def test_legacy_project_defaults_threat_model_fields(self):
+        p = Project.from_dict({
+            "version": 2,
+            "name": "legacy",
+            "target": self.target_code,
+            "output_dir": "out/legacy",
+        })
+        self.assertEqual(p.version, 3)
+        self.assertEqual(p.threat_model_path, "")
+        self.assertEqual(p.threat_model_updated, "")
+
+    def test_future_version_warns_and_clamps(self):
+        with self.assertLogs("core.project.project", level="WARNING") as cm:
+            p = Project.from_dict({
+                "version": 99,
+                "name": "future",
+                "target": self.target_code,
+                "output_dir": "out/future",
+            })
+        self.assertEqual(p.version, 99)
+        self.assertTrue(any("schema version 99" in msg for msg in cm.output))
 
     def test_output_path(self):
         p = Project(name="test", target=self.target_code, output_dir="out/projects/test")

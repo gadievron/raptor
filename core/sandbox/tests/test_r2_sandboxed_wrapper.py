@@ -27,10 +27,21 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-r2-sandboxed"
 
 # A real, small ELF to use as the r2 target / symlink destination.
-# Resolve `ls` wherever it lives (/bin vs /usr/bin differ across distros
-# and the /usr-merge); fall back to the interpreter (always present) so
-# these tests never assume a hardcoded /bin/ls path exists.
-_REAL_BINARY = shutil.which("ls") or sys.executable
+# On systems with Rust coreutils, `ls` can be 11MB+, making r2 `aaa`
+# exceed any reasonable timeout. Pick the smallest available ELF.
+def _find_small_elf() -> str:
+    _MAX_SIZE = 500_000
+    for name in ("true", "false", "env", "ls"):
+        path = shutil.which(name)
+        if path:
+            try:
+                if os.path.getsize(path) <= _MAX_SIZE:
+                    return path
+            except OSError:
+                continue
+    return sys.executable
+
+_REAL_BINARY = _find_small_elf()
 
 
 pytestmark = pytest.mark.skipif(

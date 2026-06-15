@@ -43,7 +43,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}

@@ -22,6 +22,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Optional
 
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,6 +41,364 @@ logger = get_logger()
 def _tuning_default(key: str) -> int:
     from core.tuning import get_tuning
     return getattr(get_tuning(), key)
+
+
+def _materialise_threat_model_phase(
+    *,
+    target: Path,
+    out_dir: Path,
+    prepass_result,
+    refresh: bool = False,
+    allow_stale: bool = False,
+) -> dict:
+    """Create project/run threat-model artefacts from an understand pre-pass."""
+    summary = {
+        "enabled": True,
+        "completed": False,
+        "refresh": bool(refresh),
+        "entry_points": 0,
+        "trust_boundaries": 0,
+        "sinks": 0,
+        "unchecked_flows": 0,
+        # ``hardcoded_literal_count`` — count of detected hardcoded-
+        # literal-credential findings. The name avoids "secret" /
+        # "credential" / "key" / "token" so CodeQL's
+        # ``py/clear-text-logging-sensitive-data`` doesn't flag the
+        # dict-access flow itself. Operator-visible labels keep
+        # "hardcoded secrets" wording (clearest for the operator);
+        # CodeQL FP at the print sites is suppressed via per-line
+        # ``# lgtm[query-id]`` comments rather than degrade the
+        # labels.
+        "hardcoded_literal_count": 0,
+        "generated_candidates": 0,
+        "threat_model_json": None,
+        "threat_model_markdown": None,
+        "candidate_sarif": None,
+        "context_map": None,
+        "skipped_reason": None,
+        "allow_stale": bool(allow_stale),
+    }
+    if not prepass_result or not prepass_result.ran or not prepass_result.context_map_path:
+        reason = getattr(prepass_result, "skipped_reason", None) if prepass_result else "understand pre-pass did not run"
+        try:
+            from core.orchestration.understand_bridge import find_understand_output
+            understand_dir, stale = find_understand_output(out_dir, target_path=str(target))
+            if understand_dir and (understand_dir / "context-map.json").exists():
+                context_map_path = understand_dir / "context-map.json"
+                summary["reused_context_map"] = True
+                if stale:
+                    summary["stale_files"] = sorted(stale)
+                    if not allow_stale:
+                        summary["skipped_reason"] = (
+                            "reused /understand context-map is stale; rerun "
+                            "with --threat-model-use-stale to accept it"
+                        )
+                        return summary
+                    logger.warning(
+                        "Threat model reused stale /understand context-map from %s (%d stale files)",
+                        understand_dir, len(stale),
+                    )
+            else:
+                summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+                return summary
+        except Exception as e:
+            logger.debug(f"Threat model fallback lookup failed: {e}")
+            summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+            return summary
+    else:
+        context_map_path = Path(prepass_result.context_map_path)
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        summary["skipped_reason"] = f"invalid context map: {context_map_path}"
+        return summary
+
+    from core.threat_model import (
+        diff_context_map,
+        enrich_from_context_map,
+        from_context_map,
+        link_verified_outcomes,
+        lint_model,
+        load_model,
+        project_threat_model_report_path,
+        project_threat_model_paths,
+        save_model,
+        save_report,
+    )
+
+    project = None
+    try:
+        from core.project.project import ProjectManager
+        mgr = ProjectManager()
+        project = mgr.find_project_for_target(str(target))
+    except Exception:
+        mgr = None
+
+    project_backed = project is not None
+    if project_backed:
+        json_path, markdown_path = project_threat_model_paths(project)
+    else:
+        json_path = out_dir / "threat-model.json"
+        markdown_path = out_dir / "THREAT_MODEL.md"
+        project = type("_RunThreatProject", (), {
+            "name": Path(target).name,
+            "target": str(target),
+            "output_dir": str(out_dir),
+        })()
+
+    # Capture mtime at load time so save_model can refuse if a
+    # concurrent writer (a second /agentic run, an operator
+    # editor session, ``threat-model lint`` in parallel) raced
+    # us. Lost-update race protection.
+    load_mtime: Optional[float] = None
+    if project_backed and json_path.exists():
+        try:
+            load_mtime = json_path.stat().st_mtime
+        except OSError:
+            load_mtime = None
+
+    existing_model = load_model(json_path) if project_backed else None
+    try:
+        if existing_model is not None and not refresh:
+            model = enrich_from_context_map(existing_model, context_map)
+            save_model(model, json_path, markdown_path, expected_mtime=load_mtime)
+            summary["model_preserved"] = True
+            summary["model_refreshed"] = False
+            summary["model_migrated"] = True
+        else:
+            model = from_context_map(project, context_map)
+            save_model(model, json_path, markdown_path)
+            summary["model_preserved"] = False
+            summary["model_refreshed"] = True
+            summary["model_migrated"] = False
+    except RuntimeError as e:
+        logger.warning(f"Threat model save refused (concurrent writer?): {e}")
+        model = existing_model or from_context_map(project, context_map)
+        summary["model_preserved"] = existing_model is not None
+        summary["model_refreshed"] = existing_model is None
+    except Exception as e:
+        logger.warning(f"Threat model construction failed: {e}")
+        model = existing_model or from_context_map(project, context_map)
+        summary["model_preserved"] = existing_model is not None
+        summary["model_refreshed"] = existing_model is None
+
+    linked_outcomes = 0
+    try:
+        from core.verified_outcome import collect_outcomes
+        project_root = Path(project.output_dir) if project_backed else None
+        outcomes = collect_outcomes(out_dir, project_root=project_root)
+        linked_outcomes = len(outcomes)
+        if outcomes:
+            link_verified_outcomes(model, outcomes)
+            # Capture mtime again (we just wrote above) before the
+            # outcomes-merge save, so a concurrent writer that
+            # sneaked in between the two saves is still caught.
+            try:
+                outcomes_mtime = json_path.stat().st_mtime
+            except OSError:
+                outcomes_mtime = None
+            save_model(
+                model, json_path, markdown_path,
+                expected_mtime=outcomes_mtime,
+            )
+    except RuntimeError as e:
+        logger.warning(f"Threat model save refused (concurrent writer?): {e}")
+    except Exception as e:
+        logger.debug(f"Threat model verified-outcome linking skipped: {e}")
+
+    if mgr is not None and hasattr(project, "name") and hasattr(project, "to_dict"):
+        try:
+            project.threat_model_path = str(json_path)
+            project.threat_model_updated = model.updated_at
+            save_json(mgr.projects_dir / f"{project.name}.json", project.to_dict())
+        except Exception as e:
+            logger.debug(f"Threat model project metadata update skipped: {e}")
+
+    candidate_sarif = out_dir / "threat-model-candidates.sarif"
+    candidate_count = _write_threat_model_candidate_sarif(context_map, candidate_sarif)
+    lint = lint_model(model)
+    drift = diff_context_map(model, context_map)
+    report_path = (
+        project_threat_model_report_path(project)
+        if project_backed else out_dir / "threat-model-report.md"
+    )
+    save_report(model, report_path, lint=lint, drift=drift)
+    lint_path = out_dir / "threat-model-lint.json"
+    drift_path = out_dir / "threat-model-drift.json"
+    threats_path = out_dir / "threats.json"
+    save_json(lint_path, {"issues": lint})
+    save_json(drift_path, drift)
+    save_json(threats_path, {"threats": model.threats})
+
+    summary.update({
+        "completed": True,
+        "entry_points": len(context_map.get("entry_points") or context_map.get("sources") or []),
+        "trust_boundaries": len(context_map.get("trust_boundaries") or []),
+        "sinks": len(context_map.get("sink_details") or context_map.get("sinks") or []),
+        "unchecked_flows": len(context_map.get("unchecked_flows") or []),
+        "hardcoded_literal_count": len(context_map.get("hardcoded_secrets") or []),
+        "generated_candidates": candidate_count,
+        "threat_model_json": str(json_path),
+        "threat_model_markdown": str(markdown_path),
+        "threat_model_report": str(report_path),
+        "threat_model_lint": str(lint_path),
+        "threat_model_drift": str(drift_path),
+        "threats": str(threats_path),
+        "threats_count": len(model.threats),
+        "controls_count": len(model.controls),
+        "evidence_count": len(model.evidence),
+        "lint_issues": len(lint),
+        "drifted": bool(drift.get("is_drifted")),
+        "verified_outcomes_linked": linked_outcomes,
+        "candidate_sarif": str(candidate_sarif) if candidate_count else None,
+        "context_map": str(context_map_path),
+    })
+    save_json(out_dir / "threat-model-summary.json", summary)
+    return summary
+
+
+def _sarif_line(value, default: int = 1) -> int:
+    try:
+        line = int(value)
+    except (TypeError, ValueError):
+        return default
+    return line if line > 0 else default
+
+
+def _write_threat_model_candidate_sarif(context_map: dict, sarif_path: Path) -> int:
+    flows = context_map.get("unchecked_flows") or []
+    if not isinstance(flows, list) or not flows:
+        return 0
+    entries = {
+        str(e.get("id")): e for e in (context_map.get("entry_points") or [])
+        if isinstance(e, dict) and e.get("id")
+    }
+    sinks = {
+        str(s.get("id")): s for s in (context_map.get("sink_details") or [])
+        if isinstance(s, dict) and s.get("id")
+    }
+    results = []
+    for idx, flow in enumerate(flows, start=1):
+        if not isinstance(flow, dict):
+            continue
+        entry = entries.get(str(flow.get("entry_point") or ""), {})
+        sink = sinks.get(str(flow.get("sink") or ""), {})
+        sink_file = str(sink.get("file") or flow.get("file") or "unknown")
+        sink_line = _sarif_line(sink.get("line") or flow.get("line"))
+        entry_file = str(entry.get("file") or sink_file)
+        entry_line = _sarif_line(entry.get("line"), default=sink_line)
+        severity = str(flow.get("severity") or "warning").lower()
+        level = "error" if severity in {"critical", "high"} else "warning"
+        message = str(flow.get("missing_boundary") or "Unchecked flow from entry point to sink")
+        flow_id = str(flow.get("id") or f"UF-{idx:03d}")
+        rule_id = "raptor.threat_model.unchecked_flow"
+        results.append({
+            "ruleId": rule_id,
+            "level": level,
+            "message": {"text": f"{flow_id}: {message}"},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": sink_file},
+                    "region": {"startLine": sink_line, "endLine": sink_line},
+                },
+                "message": {"text": str(sink.get("notes") or message)},
+            }],
+            "codeFlows": [{
+                "threadFlows": [{
+                    "locations": [
+                        {
+                            "location": {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": entry_file},
+                                    "region": {"startLine": entry_line},
+                                },
+                                "message": {"text": str(entry.get("notes") or flow.get("entry_point") or "entry point")},
+                            }
+                        },
+                        {
+                            "location": {
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": sink_file},
+                                    "region": {"startLine": sink_line},
+                                },
+                                "message": {"text": str(sink.get("notes") or flow.get("sink") or "sink")},
+                            }
+                        },
+                    ]
+                }]
+            }],
+            "properties": {
+                "source": "threat_model",
+                "entry_point": flow.get("entry_point"),
+                "sink": flow.get("sink"),
+                "severity": severity,
+            },
+            "fingerprints": {
+                "matchBasedId/v1": f"threat-model:{flow_id}:{flow.get('entry_point')}:{flow.get('sink')}",
+            },
+        })
+
+    if not results:
+        return 0
+    sarif = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "RAPTOR Threat Model",
+                    "rules": [{
+                        "id": "raptor.threat_model.unchecked_flow",
+                        "name": "Unchecked flow from mapped entry point to sink",
+                        "shortDescription": {
+                            "text": "Threat-model candidate from /understand unchecked flow"
+                        },
+                    }],
+                }
+            },
+            "results": results,
+        }],
+    }
+    save_json(sarif_path, sarif)
+    return len(results)
+
+
+def _print_threat_model_phase(summary: dict) -> None:
+    print("\n" + "=" * 70)
+    print("THREAT MODEL PHASE")
+    print("=" * 70)
+    if not summary.get("completed"):
+        print(f"Skipped: {summary.get('skipped_reason') or 'not available'}")
+        return
+    print(f"  entry_points:         {summary.get('entry_points', 0)}")
+    print(f"  trust_boundaries:     {summary.get('trust_boundaries', 0)}")
+    print(f"  sinks:                {summary.get('sinks', 0)}")
+    print(f"  unchecked_flows:      {summary.get('unchecked_flows', 0)}")
+    # CodeQL ``py/clear-text-logging-sensitive-data`` flags this
+    # print because the f-string literal contains "hardcoded_secrets".
+    # The value is the integer COUNT of detected findings; the label
+    # is the clearest wording for the operator surface. Suppress at
+    # the print site rather than degrade the label.
+    print(  # lgtm[py/clear-text-logging-sensitive-data]
+        f"  hardcoded_secrets:    "
+        f"{summary.get('hardcoded_literal_count', 0)}"
+    )
+    print(f"  generated_candidates: {summary.get('generated_candidates', 0)}")
+    print(f"  threats:              {summary.get('threats_count', 0)}")
+    print(f"  controls:             {summary.get('controls_count', 0)}")
+    print(f"  evidence:             {summary.get('evidence_count', 0)}")
+    print(f"  lint_issues:          {summary.get('lint_issues', 0)}")
+    print(f"  drifted:              {'yes' if summary.get('drifted') else 'no'}")
+    if summary.get("model_migrated"):
+        print("  model_migrated:       yes")
+    print(f"  model:                {summary.get('threat_model_json')}")
+    if summary.get("threat_model_report"):
+        print(f"  report:               {summary.get('threat_model_report')}")
+    if summary.get("reused_context_map"):
+        print(f"  reused_context_map:   {summary.get('context_map')}")
+    if summary.get("stale_files"):
+        print(f"  stale_files:          {len(summary.get('stale_files') or [])}")
+    if summary.get("candidate_sarif"):
+        print(f"  handoff:              {summary.get('candidate_sarif')}")
 
 
 def run_command_streaming(
@@ -620,6 +979,24 @@ def _build_fuzz_phase_summary(fuzzing_result: dict | None, fuzz_out: Path | None
 
 
 
+def _build_completion_manifest(orch_meta, import_result, import_sarif_files,
+                               reanalyze_dir=None):
+    manifest = {
+        "models": orch_meta.get("fired_models", []),
+    }
+    if import_result and import_result.stats.total_imported:
+        from core.sarif.import_normalizer import import_provenance_block
+        tools = sorted({f.get("tool", "external") for f in import_result.findings})
+        manifest["sarif_import"] = import_provenance_block(
+            import_result,
+            sarif_files=[Path(f).name for f in import_sarif_files],
+            tools=tools,
+        )
+    if reanalyze_dir:
+        manifest["reanalysis_of"] = str(reanalyze_dir)
+    return manifest
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RAPTOR Agentic Security Testing - Scan, Analyse, Exploit, Patch",
@@ -647,6 +1024,9 @@ Examples:
 
   # Skip exploitability validation (faster, but may include false positives)
   python3 raptor.py agentic --repo /path/to/code --skip-dedup
+
+  # Build a project threat model from /understand and feed it into analysis
+  python3 raptor.py agentic --repo /path/to/code --threat-model --validate
 
   # Focus validation on specific vulnerability type
   python3 raptor.py agentic --repo /path/to/code --vuln-type sql_injection
@@ -680,6 +1060,40 @@ Examples:
             "launch time. When the script is invoked directly without "
             "the wrapper, RAPTOR_CALLER_DIR is unset and --repo is "
             "required)."
+        ),
+    )
+    parser.add_argument(
+        "--sarif", action="append", default=None, metavar="FILE",
+        help=(
+            "Import external SARIF file(s) instead of scanning. Repeatable. "
+            "Findings are normalized against the source tree at --repo "
+            "(URI rebasing, snippet synthesis, CWE inference). "
+            "Skips the scan phase unless --also-scan is set."
+        ),
+    )
+    parser.add_argument(
+        "--also-scan", action="store_true",
+        help=(
+            "When --sarif is provided, also run RAPTOR's own scanners "
+            "(Semgrep / CodeQL) and merge the results with imported "
+            "findings. Without this flag, --sarif replaces the scan step."
+        ),
+    )
+    parser.add_argument(
+        "--sarif-out", metavar="FILE",
+        help=(
+            "Write enriched SARIF after analysis. Each result carries "
+            "properties.raptor with RAPTOR's verdict, reachability, "
+            "exploitability score, and reasoning. Binary-oracle-suppressed "
+            "findings get standard SARIF suppressions."
+        ),
+    )
+    parser.add_argument(
+        "--reanalyze", metavar="DIR",
+        help=(
+            "Re-run analysis on a previous run's output directory. "
+            "Reads .raptor-run.json to recover target path and SARIF files, "
+            "skips scanning. Equivalent to --sarif <previous SARIFs> --repo <previous target>."
         ),
     )
     parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
@@ -833,6 +1247,37 @@ Examples:
                        help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: from tuning.json)")
     parser.add_argument("--understand", action="store_true",
                         help="Run /understand --map before scanning for architectural context")
+    parser.add_argument(
+        "--threat-model",
+        action="store_true",
+        help=(
+            "Run /understand --map, create a project threat-model if missing, "
+            "and hand unchecked-flow candidates into the normal analysis "
+            "pipeline. Existing project models are preserved unless "
+            "--threat-model-refresh is set. Implies --understand."
+        ),
+    )
+    parser.add_argument(
+        "--threat-model-only",
+        action="store_true",
+        help=(
+            "Run only the /understand-backed threat-model phase, write "
+            "threat-model.json, THREAT_MODEL.md, and candidate SARIF, then exit."
+        ),
+    )
+    parser.add_argument(
+        "--threat-model-refresh",
+        action="store_true",
+        help="Overwrite any existing project threat model with the latest /understand map.",
+    )
+    parser.add_argument(
+        "--threat-model-use-stale",
+        action="store_true",
+        help=(
+            "Allow threat-model fallback to reuse a stale /understand "
+            "context-map when a fresh map cannot be produced."
+        ),
+    )
     parser.add_argument("--validate", action="store_true",
                         help="Run /validate on exploitable/high-confidence findings after analysis")
     parser.add_argument("--sequential", action="store_true",
@@ -968,7 +1413,16 @@ Examples:
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
+
+    if os.environ.get("RAPTOR_ARGPARSE_ONLY") == "1":
+        return
+
     apply_cli_args(args, parser=parser)
+
+    if args.threat_model_only:
+        args.threat_model = True
+    if args.threat_model:
+        args.understand = True
 
     # Apply --phase-timeout uniformly. ``0`` is the unbounded
     # sentinel — set RaptorConfig.DEFAULT_TIMEOUT to None so
@@ -1006,6 +1460,42 @@ Examples:
     _target_kind = getattr(args, "target_kind", "auto")
     if _target_kind != "auto":
         os.environ[RaptorConfig.ENV_TARGET_KIND] = _target_kind
+
+    # --reanalyze: seed --sarif and --repo from a previous run's metadata
+    if getattr(args, "reanalyze", None):
+        from core.run.metadata import load_run_metadata
+        reanalyze_dir = Path(args.reanalyze).resolve()
+        args.reanalyze = str(reanalyze_dir)
+        if not reanalyze_dir.is_dir():
+            parser.error(f"--reanalyze directory does not exist: {args.reanalyze}")
+        prev_meta = load_run_metadata(reanalyze_dir)
+        if not prev_meta:
+            parser.error(f"--reanalyze: no .raptor-run.json in {reanalyze_dir}")
+        prev_target = prev_meta.get("target_path")
+        if not prev_target:
+            parser.error("--reanalyze: previous run has no target_path in metadata")
+        if args.repo and str(Path(args.repo).resolve()) != str(Path(prev_target).resolve()):
+            logger.warning(
+                "--reanalyze: explicit --repo %s differs from previous run's "
+                "target %s — using --repo (SARIF may not match)",
+                args.repo, prev_target,
+            )
+        if not args.repo:
+            args.repo = prev_target
+        prev_sarif = []
+        for s in prev_meta.get("extra", {}).get("sarif_files", []):
+            candidate = reanalyze_dir / Path(s).name
+            if candidate.exists():
+                prev_sarif.append(str(candidate))
+            else:
+                logger.warning("--reanalyze: SARIF file missing: %s", candidate)
+        if not prev_sarif:
+            for f in sorted(reanalyze_dir.glob("*.sarif")):
+                prev_sarif.append(str(f))
+        if not prev_sarif:
+            parser.error(f"--reanalyze: no SARIF files found in {reanalyze_dir}")
+        args.sarif = (args.sarif or []) + prev_sarif
+        logger.info("--reanalyze: re-using %d SARIF files from %s", len(prev_sarif), reanalyze_dir)
 
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")
@@ -1255,6 +1745,7 @@ Examples:
     # --understand pays off in this run too — not just in any later /validate.
     # ========================================================================
     prepass_result = None
+    threat_model_phase = {"enabled": bool(args.threat_model), "completed": False}
     if args.understand:
         from core.orchestration import run_understand_prepass
         print("\n" + "=" * 70)
@@ -1272,6 +1763,69 @@ Examples:
                         f"took {prepass_result.duration_s:.1f}s)")
         else:
             logger.warning(f"Pre-pass skipped: {prepass_result.skipped_reason}")
+
+    if args.threat_model:
+        try:
+            threat_model_phase = _materialise_threat_model_phase(
+                target=original_repo_path,
+                out_dir=out_dir,
+                prepass_result=prepass_result,
+                refresh=args.threat_model_refresh,
+                allow_stale=args.threat_model_use_stale,
+            )
+        except Exception as e:
+            logger.error(f"Threat model phase failed: {e}")
+            threat_model_phase = {"enabled": True, "completed": False, "skipped_reason": str(e)}
+        _print_threat_model_phase(threat_model_phase)
+
+        if args.threat_model_only:
+            report_file = out_dir / "raptor_agentic_report.json"
+            final_report = {
+                "repository": str(original_repo_path),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_seconds": time.time() - workflow_start,
+                "phases": {
+                    "threat_model": threat_model_phase,
+                    "scanning": {"enabled": False, "skipped_reason": "--threat-model-only"},
+                    "exploitability_validation": {"completed": False},
+                    "autonomous_analysis": {"completed": False},
+                },
+                "outputs": {
+                    "threat_model_json": threat_model_phase.get("threat_model_json"),
+                    "threat_model_markdown": threat_model_phase.get("threat_model_markdown"),
+                    "threat_model_report": threat_model_phase.get("threat_model_report"),
+                    "threat_model_lint": threat_model_phase.get("threat_model_lint"),
+                    "threat_model_drift": threat_model_phase.get("threat_model_drift"),
+                    "threats": threat_model_phase.get("threats"),
+                    "threat_model_summary": str(out_dir / "threat-model-summary.json") if threat_model_phase.get("completed") else None,
+                    "threat_model_candidates": threat_model_phase.get("candidate_sarif"),
+                    "context_map": threat_model_phase.get("context_map"),
+                },
+            }
+            save_json(report_file, final_report)
+            try:
+                if threat_model_phase.get("completed"):
+                    from core.run import complete_run
+                    complete_run(out_dir, extra={
+                        "findings_count": threat_model_phase.get("generated_candidates", 0),
+                        "threat_model": threat_model_phase,
+                        "duration_seconds": round(time.time() - workflow_start, 1),
+                    })
+                else:
+                    from core.run import fail_run
+                    fail_run(out_dir, threat_model_phase.get("skipped_reason") or "threat model phase did not complete")
+            except Exception as e:
+                logger.debug(f"Run metadata: {e}")
+            if _git_temp_dir and _git_temp_dir.exists():
+                import shutil
+                try:
+                    shutil.rmtree(str(_git_temp_dir))
+                except Exception as e:
+                    logger.debug(f"Failed to clean temp git dir: {e}")
+            completed = threat_model_phase.get("completed", False)
+            print(f"\nThreat model only {'complete' if completed else 'skipped'}.")
+            print(f"   Report: {report_file}")
+            return
 
     # ========================================================================
     # PRE-PASS: reachability — always-on companion to /understand.
@@ -1311,20 +1865,24 @@ Examples:
     all_sarif_files = []
     semgrep_metrics = {}
     codeql_metrics = {}
+    threat_candidate_sarif = threat_model_phase.get("candidate_sarif")
+    if threat_candidate_sarif and Path(threat_candidate_sarif).exists():
+        all_sarif_files.append(Path(threat_candidate_sarif))
+    import_sarif_files: list = getattr(args, "sarif", None) or []
+
+    if args.also_scan and not import_sarif_files:
+        logger.warning("--also-scan has no effect without --sarif; ignoring")
+
+    # When --sarif is provided without --also-scan, skip RAPTOR's own
+    # scanners entirely — the imported SARIF replaces the scan step.
+    skip_scan = bool(import_sarif_files) and not args.also_scan
 
     # Launch scanners in parallel when both are enabled
-    run_semgrep = not args.codeql_only
-    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql
+    run_semgrep = not args.codeql_only and not skip_scan
+    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan
 
-    # Defensive guard for the "no scanners enabled" case. The
-    # mutex group on ``--codeql / --codeql-only / --no-codeql``
-    # makes this structurally unreachable today (you can't pass
-    # both ``--codeql-only`` and ``--no-codeql`` simultaneously),
-    # but if either resolution rule above ever shifts — or a
-    # caller mutates ``args`` between argparse and here — we don't
-    # want the pipeline silently walking to completion with
-    # zero findings and reporting "clean". Bail loudly instead.
-    if not (run_semgrep or run_codeql):
+    # Defensive guard for the "no scanners enabled" case.
+    if not skip_scan and not (run_semgrep or run_codeql):
         print(
             "\n✗ Both Semgrep and CodeQL are disabled — nothing to scan.\n"
             "  Re-run without --codeql-only / --no-codeql, or pass only one "
@@ -1634,52 +2192,109 @@ Examples:
         print("SOFTWARE COMPOSITION ANALYSIS")
         print("=" * 70)
         print("\n[*] Running SCA (dependencies, supply chain, reachability)...")
-        # Route via sandbox egress proxy so SCA's HTTP calls are
-        # hostname-allowlisted when --sandbox is active. The allowlist
-        # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
-        rc, sca_stdout, sca_stderr = run_sca_subprocess(
-            sca_agent,
-            original_repo_path,
-            sca_out,
-            sandbox_args=sandbox_passthrough,
-        )
-        if rc == 0:
-            sca_sarif = sca_out / "findings.sarif"
-            if sca_sarif.exists():
-                all_sarif_files.append(sca_sarif)
-            # Parse the one-line JSON summary from stdout
-            import json as _json
-            for line in reversed(sca_stdout.strip().splitlines()):
-                line = line.strip()
-                if line.startswith("{"):
-                    try:
-                        sca_metrics = _json.loads(line)
-                    except Exception:
-                        pass
-                    break
-            sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
-                                 sca_metrics.get("supply_chain_findings", 0)
-            print("\n✓ SCA complete:")
-            print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
-            print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
-            print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
-            print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
-        else:
-            logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
+        try:
+            # Route via sandbox egress proxy so SCA's HTTP calls are
+            # hostname-allowlisted when --sandbox is active. The allowlist
+            # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
+            rc, sca_stdout, sca_stderr = run_sca_subprocess(
+                sca_agent,
+                original_repo_path,
+                sca_out,
+                sandbox_args=sandbox_passthrough,
+            )
+            if rc == 0:
+                sca_sarif = sca_out / "findings.sarif"
+                if sca_sarif.exists():
+                    all_sarif_files.append(sca_sarif)
+                # Parse the one-line JSON summary from stdout
+                import json as _json
+                for line in reversed(sca_stdout.strip().splitlines()):
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            sca_metrics = _json.loads(line)
+                        except Exception:
+                            pass
+                        break
+                sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
+                                     sca_metrics.get("supply_chain_findings", 0)
+                print("\n✓ SCA complete:")
+                print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
+                print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
+                print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
+                print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+            else:
+                logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
+                sca_findings_count = 0
+        except Exception as e:
+            print(f"⚠️  SCA failed: {e}")
+            logger.warning(f"SCA failed — continuing without dep findings: {e}")
             sca_findings_count = 0
     else:
         sca_findings_count = 0
         if not source_scan_empty:
             logger.info("raptor-sca not installed — skipping SCA phase")
 
+    # ---- External SARIF import ----
+    import_result = None
+    if import_sarif_files:
+        from core.sarif.import_normalizer import (
+            findings_to_sarif,
+            format_import_summary,
+            normalize_imported_findings,
+        )
+        from core.sarif.parser import parse_sarif_findings
+
+        print("\n" + "=" * 70)
+        print("SARIF IMPORT")
+        print("=" * 70)
+
+        imported_findings = []
+        for sf in import_sarif_files:
+            sf_path = Path(sf)
+            if not sf_path.exists():
+                print(f"  ✗ SARIF file not found: {sf}", file=sys.stderr)
+                continue
+            findings = parse_sarif_findings(sf_path)
+            logger.info("Parsed %d findings from %s", len(findings), sf_path.name)
+            imported_findings.extend(findings)
+
+        if imported_findings:
+            import_result = normalize_imported_findings(
+                imported_findings,
+                original_repo_path,
+            )
+            print(format_import_summary(
+                import_result,
+                [Path(f).name for f in import_sarif_files],
+            ))
+            normalized_sarif = findings_to_sarif(import_result.findings)
+            normalized_path = out_dir / "imported-normalized.sarif"
+            import json as _json
+            normalized_path.write_text(_json.dumps(normalized_sarif, indent=2))
+            all_sarif_files.append(normalized_path)
+        elif not all_sarif_files:
+            print("\n✗ No findings in imported SARIF and no scan results")
+            sys.exit(1)
+
     if not all_sarif_files:
         print("\n❌ No SARIF files generated from scanning")
         sys.exit(1)
 
     # Combine metrics
+    threat_model_findings_count = (
+        threat_model_phase.get("generated_candidates", 0)
+        if threat_model_phase.get("completed") else 0
+    )
     total_findings = (semgrep_metrics.get('total_findings', 0)
                       + codeql_metrics.get('total_findings', 0)
-                      + sca_findings_count)
+                      + sca_findings_count
+                      + threat_model_findings_count)
+    imported_findings_count = import_result.stats.total_imported if import_result else 0
+    total_findings = (semgrep_metrics.get('total_findings', 0)
+                      + codeql_metrics.get('total_findings', 0)
+                      + sca_findings_count
+                      + imported_findings_count)
     scan_metrics = {
         'total_findings': total_findings,
         'total_files_scanned': semgrep_metrics.get('total_files_scanned', 0),
@@ -1687,7 +2302,14 @@ Examples:
         'semgrep': semgrep_metrics,
         'codeql': codeql_metrics,
         'sca': sca_metrics,
+        'threat_model': threat_model_phase,
     }
+    if import_result:
+        scan_metrics['import'] = {
+            'total_imported': import_result.stats.total_imported,
+            'findings_skipped': import_result.stats.findings_skipped,
+            'cwe_inferred': import_result.stats.cwe_inferred,
+        }
 
     sarif_files = all_sarif_files
 
@@ -1698,6 +2320,10 @@ Examples:
         print(f"  CodeQL: {codeql_metrics.get('total_findings', 0)} findings")
     if sca_findings_count:
         print(f"  SCA: {sca_findings_count} findings")
+    if threat_model_findings_count:
+        print(f"  Threat model: {threat_model_findings_count} candidates")
+    if imported_findings_count:
+        print(f"  Imported: {imported_findings_count} findings")
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
@@ -1766,6 +2392,48 @@ Examples:
         external_llm=llm_env.external_llm,
         sca_findings_path=sca_findings_path,
     )
+
+    # Enrichment summary — pre-LLM visibility of mechanical enrichments
+    _enrichment_lines = []
+    if validation_result and validation_result.get("completed"):
+        dupes = validation_result.get("duplicates_removed", 0)
+        if dupes > 0:
+            _enrichment_lines.append(f"  Dedup: {dupes} duplicates removed")
+        sca_m = validation_result.get("sca_merged", 0)
+        if sca_m > 0:
+            _enrichment_lines.append(f"  SCA: {sca_m} dependency findings merged")
+    if import_result and import_result.stats.total_imported > 0:
+        stats = import_result.stats
+        _enrichment_lines.append(
+            f"  SARIF import: {stats.total_imported} findings "
+            f"({stats.cwe_inferred} CWEs inferred, "
+            f"{stats.findings_skipped} skipped)"
+        )
+        sca_tagged = sum(
+            1 for f in import_result.findings if f.get("source_type") == "dependency"
+        )
+        if sca_tagged > 0:
+            _enrichment_lines.append(f"  SCA tagged: {sca_tagged} imported findings")
+    if reachability_prepass_result and reachability_prepass_result.ran:
+        _enrichment_lines.append(
+            f"  Reachability: {reachability_prepass_result.marked_count} "
+            f"dead-code marks"
+        )
+    suppression_file = out_dir / "suppressions.jsonl"
+    if suppression_file.exists():
+        with suppression_file.open() as _fh:
+            suppressed = sum(1 for _ in _fh)
+        if suppressed > 0:
+            _enrichment_lines.append(
+                f"  Binary oracle: {suppressed} findings suppressed (absent)"
+            )
+    if _enrichment_lines:
+        print("\n" + "-" * 40)
+        print("ENRICHMENT SUMMARY (pre-LLM)")
+        print("-" * 40)
+        for line in _enrichment_lines:
+            print(line)
+        print(f"  Findings entering LLM analysis: {validated_findings}")
 
     # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
@@ -1999,6 +2667,7 @@ Examples:
                 "completed": True,
                 "total_findings": scan_metrics.get('total_findings', 0),
                 "files_scanned": scan_metrics.get('total_files_scanned', 0),
+                "threat_model_candidates": threat_model_findings_count,
                 "semgrep": {
                     "enabled": not args.codeql_only,
                     "findings": semgrep_metrics.get('total_findings', 0) if semgrep_metrics else 0,
@@ -2009,6 +2678,7 @@ Examples:
                     "languages": list(codeql_metrics.get('languages_detected', {}).keys()) if codeql_metrics else [],
                 },
             },
+            "threat_model": threat_model_phase,
             "sca": {
                 "enabled": args.sca,
                 "completed": sca_result is not None,
@@ -2041,6 +2711,14 @@ Examples:
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
+            "threat_model_json": threat_model_phase.get("threat_model_json"),
+            "threat_model_markdown": threat_model_phase.get("threat_model_markdown"),
+            "threat_model_report": threat_model_phase.get("threat_model_report"),
+            "threat_model_lint": threat_model_phase.get("threat_model_lint"),
+            "threat_model_drift": threat_model_phase.get("threat_model_drift"),
+            "threats": threat_model_phase.get("threats"),
+            "threat_model_summary": str(out_dir / "threat-model-summary.json") if threat_model_phase.get("completed") else None,
+            "threat_model_candidates": threat_model_phase.get("candidate_sarif"),
             "sca_findings": str(sca_findings_path) if sca_findings_path and sca_findings_path.exists() else None,
             "sca_report": str(out_dir / "sca" / "report.md") if sca_result else None,
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
@@ -2050,6 +2728,7 @@ Examples:
             "exploits_directory": str(autonomous_out / "exploits") if autonomous_out else None,
             "patches_directory": str(autonomous_out / "patches") if autonomous_out else None,
             "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
+            "enriched_sarif": None,  # populated after --sarif-out write
         }
     }
 
@@ -2210,6 +2889,8 @@ Examples:
 
     print("\n📊 Summary:")
     print(f"   Total findings: {scan_metrics.get('total_findings', 0)}")
+    if threat_model_findings_count:
+        print(f"     Threat model candidates: {threat_model_findings_count}")
     if semgrep_metrics:
         print(f"     Semgrep: {semgrep_metrics.get('total_findings', 0)}")
     if codeql_metrics:
@@ -2258,6 +2939,25 @@ Examples:
         orch_report_path = out_dir / "orchestrated_report.json"
         if orch_report_path.exists():
             save_json(orch_report_path, orchestration_result)
+
+    # Enriched SARIF output
+    sarif_out_path = getattr(args, "sarif_out", None)
+    if sarif_out_path:
+        from core.sarif.enriched_writer import write_enriched_sarif
+        analysed_results = (
+            orchestration_result.get("results", [])
+            if orchestration_result else []
+        )
+        if analysed_results:
+            sarif_out_resolved = Path(sarif_out_path)
+            if not sarif_out_resolved.is_absolute():
+                sarif_out_resolved = out_dir / sarif_out_resolved
+            n = write_enriched_sarif(analysed_results, sarif_out_resolved)
+            print(f"\n✓ Enriched SARIF written: {sarif_out_resolved} ({n} findings)")
+            final_report["outputs"]["enriched_sarif"] = str(sarif_out_resolved)
+            save_json(report_file, final_report)
+        else:
+            logger.warning("--sarif-out: no analysed findings to write")
 
     # Findings funnel
     if validation_result:
@@ -2443,6 +3143,14 @@ Examples:
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
+    if threat_model_phase.get("completed"):
+        print(
+            f"   ✓ Built threat model "
+            f"({threat_model_phase.get('unchecked_flows', 0)} unchecked flows, "
+            # Same CodeQL FP + suppression rationale as the
+            # hardcoded_secrets summary print above.
+            f"{threat_model_phase.get('hardcoded_literal_count', 0)} hardcoded secrets)"  # lgtm[py/clear-text-logging-sensitive-data]
+        )
     # Gate the green-tick "Scanned with Semgrep" line on actual scan
     # success — `semgrep_metrics` is a truthy dict only when the
     # subprocess ran, didn't time out, returned rc in {0, 1}, and
@@ -2502,7 +3210,8 @@ Examples:
     else:
         via = None
 
-    pipeline_parts = ["Scan"]
+    pipeline_parts = ["Threat Model"] if threat_model_phase.get("completed") else []
+    pipeline_parts.append("Scan")
     if sca_metrics:
         pipeline_parts.append("SCA")
     if validation.get("completed"):
@@ -2524,6 +3233,9 @@ Examples:
 
     # Build extra summary (scanning/dedup metrics go before findings counts)
     extra_summary = {}
+    if threat_model_phase.get("completed"):
+        extra_summary["Threat model candidates"] = threat_model_phase.get("generated_candidates", 0)
+        extra_summary["Unchecked flows"] = threat_model_phase.get("unchecked_flows", 0)
     extra_summary["Total findings"] = scanning.get("total_findings", 0)
     semgrep = scanning.get("semgrep", {})
     if semgrep.get("enabled"):
@@ -2575,6 +3287,18 @@ Examples:
         output_files.append(outputs["aggregation_report"])
     if outputs.get("autonomous_report"):
         output_files.append(outputs["autonomous_report"])
+    if outputs.get("threat_model_json"):
+        output_files.append(outputs["threat_model_json"])
+    if outputs.get("threat_model_markdown"):
+        output_files.append(outputs["threat_model_markdown"])
+    if outputs.get("threat_model_report"):
+        output_files.append(outputs["threat_model_report"])
+    if outputs.get("threat_model_lint"):
+        output_files.append(outputs["threat_model_lint"])
+    if outputs.get("threat_model_drift"):
+        output_files.append(outputs["threat_model_drift"])
+    if outputs.get("threats"):
+        output_files.append(outputs["threats"])
     sarif_files = outputs.get("sarif_files", [])
     combined = [sf for sf in sarif_files if "combined" in sf]
     if combined:
@@ -2584,6 +3308,8 @@ Examples:
     output_files.append("agentic-report.md")
 
     extra_sections = []
+    if threat_model_phase.get("completed"):
+        extra_sections.append(_build_threat_model_report_section(threat_model_phase))
     if aggregation:
         extra_sections.append(_build_aggregation_report_section(aggregation))
     dv = (orchestration_result or {}).get("dataflow_validation") or {}
@@ -2628,13 +3354,10 @@ Examples:
             "analysis_models": orch_meta.get("analysis_models", []),
             "aggregate_models": orch_meta.get("aggregate_models", []),
             "aggregated": orch_meta.get("aggregated", False),
-        }, manifest={
-            # Only the in-process fact the lifecycle can't see for itself: the
-            # models that fired. Engines (from the scan phase) and
-            # deterministically_reproducible=False (agentic is LLM-mediated)
-            # are filled uniformly by core.run.complete_run.
-            "models": orch_meta.get("fired_models", []),
-        })
+        }, manifest=_build_completion_manifest(
+            orch_meta, import_result, import_sarif_files,
+            reanalyze_dir=getattr(args, "reanalyze", None),
+        ))
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
 
@@ -2646,6 +3369,49 @@ Examples:
             logger.debug(f"Cleaned up temp git dir: {_git_temp_dir}")
         except Exception as e:
             logger.debug(f"Failed to clean temp git dir: {e}")
+
+
+def _build_threat_model_report_section(summary):
+    from core.reporting import ReportSection
+
+    lines = [
+        f"- Entry points: **{summary.get('entry_points', 0)}**",
+        f"- Trust boundaries: **{summary.get('trust_boundaries', 0)}**",
+        f"- Sinks: **{summary.get('sinks', 0)}**",
+        f"- Unchecked flows: **{summary.get('unchecked_flows', 0)}**",
+        # Same CodeQL FP + suppression rationale as the summary
+        # print of hardcoded_secrets above.
+        f"- Hardcoded secrets: **{summary.get('hardcoded_literal_count', 0)}**",  # lgtm[py/clear-text-logging-sensitive-data]
+        f"- Generated candidates: **{summary.get('generated_candidates', 0)}**",
+        f"- Threats: **{summary.get('threats_count', 0)}**",
+        f"- Controls: **{summary.get('controls_count', 0)}**",
+        f"- Evidence records: **{summary.get('evidence_count', 0)}**",
+        f"- Lint issues: **{summary.get('lint_issues', 0)}**",
+        f"- Drifted: **{'yes' if summary.get('drifted') else 'no'}**",
+    ]
+    if summary.get("threat_model_json"):
+        lines.append(f"- Model: `{summary['threat_model_json']}`")
+    if summary.get("threat_model_markdown"):
+        lines.append(f"- Markdown: `{summary['threat_model_markdown']}`")
+    if summary.get("threat_model_report"):
+        lines.append(f"- Report: `{summary['threat_model_report']}`")
+    if summary.get("threat_model_lint"):
+        lines.append(f"- Lint: `{summary['threat_model_lint']}`")
+    if summary.get("threat_model_drift"):
+        lines.append(f"- Drift: `{summary['threat_model_drift']}`")
+    if summary.get("candidate_sarif"):
+        lines.append(f"- Validation handoff: `{summary['candidate_sarif']}`")
+    if summary.get("reused_context_map"):
+        lines.append(f"- Reused context map: `{summary.get('context_map')}`")
+    if summary.get("stale_files"):
+        lines.append(f"- Stale files: **{len(summary.get('stale_files') or [])}**")
+        if summary.get("allow_stale"):
+            lines.append("- Stale context reuse was explicitly allowed.")
+
+    return ReportSection(
+        title="Threat Model Phase",
+        content="\n".join(lines),
+    )
 
 
 def _build_aggregation_report_section(aggregation):

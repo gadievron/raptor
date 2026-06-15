@@ -102,6 +102,7 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
 | `/project` | Named workspaces to organise runs and track findings over time | Stable |
+| `project threat-model` | Project-owned threat model for focus areas, trust boundaries, and proof expectations | Beta |
 | `/web` | Web application scanning | Alpha/stub |
 
 ---
@@ -114,11 +115,13 @@ Start by creating a project so all your runs land in one place:
 /project create myapp --target /path/to/code   # create a project first
 /project use myapp                             # set it as active
 /understand --map                              # map the attack surface
-/agentic                                       # scan, validate, exploit, patch
+/agentic --threat-model --validate             # map, model, scan, validate
 /project findings                              # review everything in one place
 ```
 
 `/understand` builds a context map of entry points, trust boundaries, and sinks before a line of scanning happens. `/agentic` then runs Semgrep and CodeQL, deduplicates findings, and dispatches each one for validation using the exploitation-validator methodology:
+
+With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` and `THREAT_MODEL.md` if the project does not already have them, then feeds a compact version into `/understand`, autonomous analysis, and `/validate`. Existing project threat models are preserved unless you pass `--threat-model-refresh`; stale fallback maps are refused unless you explicitly pass `--threat-model-use-stale`. It also turns mapped unchecked flows into candidate SARIF so scanner misses do not kill the run. It is operator-owned context, not magic proof: findings still need code evidence or oracle-backed confirmation. See `docs/threat-model.md`.
 
 - Stage A: is the pattern actually a vulnerability, or is the tool pattern-matching noise?
 - Stage B: what does an attacker need to reach it, and what gets in the way?

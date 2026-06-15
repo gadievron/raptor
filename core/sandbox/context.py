@@ -95,13 +95,17 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
                 "Command Line Tools if missing.",
             )
     elif not check_mount_available():
-        return (
-            "mount-ns blocked by host "
-            "(apparmor_restrict_unprivileged_userns=1)",
-            "set kernel.apparmor_restrict_unprivileged_userns=0 "
-            "(Ubuntu 24.04+) and install the uidmap package; or "
-            "rerun on a host where mount-ns is available.",
-        )
+        # Pre-fix this branch hardcoded the AppArmor diagnostic — but
+        # ``check_mount_available()`` can fail for at least four
+        # distinct reasons (AppArmor sysctl, missing uidmap binaries,
+        # SELinux enforcing, outer seccomp / nested userns), each with
+        # its own remediation. Misattributing to AppArmor on a
+        # SELinux-using host sent operators chasing the wrong sysctl
+        # entirely. Route to ``mount_unavailable_reason()`` which
+        # re-probes the specific conditions in priority order and
+        # returns a routed ``(condition, fix)``.
+        from .probes import mount_unavailable_reason
+        return mount_unavailable_reason()
     if kwargs.get("pass_fds"):
         return (
             "call uses pass_fds= which spawn doesn't plumb through",
@@ -710,6 +714,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             target = None
             output = None
             allowed_tcp_ports = None
+    strict_required = profile == "strict"
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
@@ -733,6 +738,18 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         use_mount = use_sandbox and bool(target or output) and check_mount_available()
         use_seatbelt = False
 
+    if strict_required:
+        if not use_sandbox:
+            raise RuntimeError(
+                "Sandbox profile 'strict' requested, but no platform "
+                "isolation backend is available."
+            )
+        if sys.platform != "darwin" and (target or output) and not use_mount:
+            raise RuntimeError(
+                "Sandbox profile 'strict' requested with target/output "
+                "isolation, but mount namespaces are unavailable."
+            )
+
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")
     elif not use_sandbox:
@@ -751,14 +768,25 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # is the load-bearing defence in this mode.  See
         # ``core/security/THREAT_MODEL.md`` (invariant I2-(a)).
         if state.warn_once("_sandbox_landlock_only_warned"):
+            # Pre-fix this warning hardcoded
+            # "kernel.apparmor_restrict_unprivileged_userns=1" as the
+            # likely cause. Operator on PR #777 hit this on a SELinux
+            # + rootless-podman host where the AppArmor sysctl doesn't
+            # exist — being told to flip a non-existent sysctl is
+            # active misdirection. Route through ``mount_unavailable_
+            # reason()`` (same helper the spawn-blockers branch uses)
+            # so AppArmor / uidmap / SELinux / nested-userns all get
+            # their own diagnostic instead of all collapsing to
+            # "AppArmor".
+            from .probes import mount_unavailable_reason
+            _condition, _ = mount_unavailable_reason()
             logger.warning(
                 "RAPTOR: sandbox running in Landlock-only mode — "
-                "mount namespace unavailable, likely "
-                "kernel.apparmor_restrict_unprivileged_userns=1. "
-                "Credential exfil is bounded only by Landlock; "
+                "%s. Credential exfil is bounded only by Landlock; "
                 "callers that dispatch LLM-driven sub-agents on "
                 "hostile source should set restrict_reads=True. "
                 "See core/security/THREAT_MODEL.md (I2-(a)).",
+                _condition,
             )
 
     effective_limits = dict(_DEFAULT_LIMITS)
@@ -1107,15 +1135,27 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # in normal-verbosity logs so a stray ``env=`` argument
             # doesn't quietly wave through ``EDITOR`` / ``PAGER`` /
             # ``BROWSER`` from an attacker-influenced parent.
-            # ``strict_env=True`` is the safe-rebound form below.
-            logger.warning(
-                "Sandbox: caller supplied custom env= for "
-                "%s — get_safe_env() not applied; caller env "
-                "passed through. Pass strict_env=True to strip "
-                "DANGEROUS_ENV_VARS from the caller env if you "
-                "only intended to override a few keys.",
-                " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
-            )
+            #
+            # Gate on ``not strict_env``: ``strict_env=True`` is the
+            # safe-rebound form (applied below) where the caller has
+            # explicitly asked us to strip DANGEROUS_ENV_VARS from
+            # their env. Once they've opted into that, the warning is
+            # contradictory noise — the warning literally tells them
+            # to pass ``strict_env=True`` as the fix. Operator on PR
+            # #777 surfaced this firing ~12× per scan run from the
+            # semgrep path; the path passes a ``get_safe_env()``-
+            # derived env (already DANGEROUS-stripped) plus a few
+            # explicit overrides, exactly the "I know what I'm doing"
+            # case the gate is meant to silence.
+            if not strict_env:
+                logger.warning(
+                    "Sandbox: caller supplied custom env= for "
+                    "%s — get_safe_env() not applied; caller env "
+                    "passed through. Pass strict_env=True to strip "
+                    "DANGEROUS_ENV_VARS from the caller env if you "
+                    "only intended to override a few keys.",
+                    " ".join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or repr(cmd),
+                )
             if strict_env:
                 _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
                 _stripped = [k for k in kwargs["env"] if k in _dangerous]

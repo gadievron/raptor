@@ -132,7 +132,7 @@ jobs:
       sca: ${{ steps.filter.outputs.sca }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -218,7 +218,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -228,7 +228,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -283,7 +283,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -292,12 +292,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -379,7 +425,7 @@ jobs:
         group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -388,12 +434,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -421,7 +513,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -430,12 +522,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -462,7 +600,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -471,12 +609,58 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -507,7 +691,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -522,12 +706,58 @@ jobs:
           sudo apt-get install -y --no-install-recommends coccinelle
           spatch --version
 
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
 
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
@@ -555,7 +785,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -586,7 +816,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
 
@@ -646,19 +876,65 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
         with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Restore venv from cache
+      # actions/cache@v5.0.x does not retry 429s from the cache backend
+      # (see v5.0.2 changelog: "429s returned from the cache service
+      # will not be retried"); under matrix-parallel restore load some
+      # jobs intermittently see "Failed to restore cache entry" even
+      # when the cache exists.  Three layers of mitigation, fastest-to-
+      # slowest:
+      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
+      #      across time so the backend serialises reads instead of
+      #      rate-limiting them.  Common path: this prevents the 429
+      #      and attempt 1 succeeds.
+      #   2. Retry with restore-keys -- 30s backoff + prefix-match
+      #      fallback so a transient 429 OR an evicted exact-key
+      #      both recover by reusing a slightly older venv.
+      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+      #      backstop; runs only if all restore attempts failed.
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
         with:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
       - name: Run cve_diff tests

@@ -653,7 +653,8 @@ class AutonomousCodeQLAnalyzer:
         self,
         finding: CodeQLFinding,
         vulnerable_code: str,
-        dataflow_validation: Optional[DataflowValidation] = None
+        dataflow_validation: Optional[DataflowValidation] = None,
+        repo_path: Optional[Path] = None,
     ) -> VulnerabilityAnalysis:
         """
         Perform deep LLM analysis of vulnerability.
@@ -753,6 +754,15 @@ class AutonomousCodeQLAnalyzer:
                 kind="dataflow-analysis",
                 origin=f"{finding.rule_id}:dataflow-validation",
             ))
+
+        if repo_path is not None:
+            try:
+                from core.threat_model import threat_model_untrusted_block
+                tm_block = threat_model_untrusted_block(repo_path)
+                if tm_block:
+                    blocks.append(tm_block)
+            except Exception:
+                pass
 
         slots = {
             "rule_id": TaintedString(value=finding.rule_id, trust="untrusted"),
@@ -1214,7 +1224,8 @@ class AutonomousCodeQLAnalyzer:
         analysis = self.analyze_vulnerability(
             finding,
             vulnerable_code,
-            dataflow_validation
+            dataflow_validation,
+            repo_path=repo_path,
         )
 
         if not analysis.is_exploitable:
