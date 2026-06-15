@@ -44,6 +44,12 @@ def _validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     if "created" in data and not isinstance(data["created"], str):
         errors.append("created must be a string")
 
+    if "threat_model_path" in data and not isinstance(data["threat_model_path"], str):
+        errors.append("threat_model_path must be a string")
+
+    if "threat_model_updated" in data and not isinstance(data["threat_model_updated"], str):
+        errors.append("threat_model_updated must be a string")
+
     if "binaries" in data:
         binaries = data["binaries"]
         if not isinstance(binaries, list):

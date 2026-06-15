@@ -349,6 +349,7 @@ def test_codeql_tunables_from_tuning_resolves_central_defaults(monkeypatch):
     from core.tuning import Tuning
 
     fake_tuning = Tuning(
+        codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
         max_semgrep_workers=4, max_codeql_workers=2,
@@ -368,6 +369,7 @@ def test_codeql_tunables_from_tuning_operator_override_wins(monkeypatch):
     from core.tuning import Tuning
 
     fake_tuning = Tuning(
+        codeql_enabled=True,
         codeql_ram_mb=8192, codeql_threads=12,
         codeql_max_disk_cache_mb=0,
         max_semgrep_workers=4, max_codeql_workers=2,

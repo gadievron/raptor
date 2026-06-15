@@ -587,7 +587,8 @@ def _sanitize_pack_name(name: str) -> str:
 
 
 def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
-        target=None, output=None, proxy_hosts=None, caller_label=None):
+        target=None, output=None, proxy_hosts=None, caller_label=None,
+        fake_home=False, readable_paths=None):
     """Execute a command in a network-isolated sandbox and return results.
 
     When `target` and `output` are supplied, Landlock is engaged — the
@@ -630,16 +631,31 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
     #     falls back to Landlock-only. Workflow proceeds; debug-
     #     level diagnostic only.
     tool_paths = _compute_python_tool_paths(cmd)
+    sandbox_kwargs = {}
+    if fake_home:
+        sandbox_kwargs["fake_home"] = True
+    if readable_paths:
+        sandbox_kwargs["readable_paths"] = list(readable_paths)
+    # ``strict_env=True`` acknowledges that this caller deliberately
+    # supplies env= (a ``get_safe_env()``-derived dict with HOME / XDG
+    # overrides from the semgrep-specific path). Without it, the sandbox
+    # logs a one-line WARNING per invocation telling us to do exactly
+    # this. Operator on PR #777 surfaced the warning firing ~12× per
+    # scan run. The strip is a no-op for us (``get_safe_env`` already
+    # excludes DANGEROUS_ENV_VARS) but the flag is also the documented
+    # "I'm aware of the bypass" marker.
     p = sandbox_run(
         cmd,
         target=target,
         output=output,
         cwd=cwd,
         env=env or RaptorConfig.get_safe_env(),
+        strict_env=True,
         text=True,
         capture_output=True,
         timeout=timeout,
         tool_paths=tool_paths or None,
+        **sandbox_kwargs,
         **net_kwargs,
     )
     return p.returncode, p.stdout, p.stderr
@@ -750,7 +766,8 @@ def run_single_semgrep(
     repo_path: Path,
     out_dir: Path,
     timeout: int,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
+    extra_config_readable_paths: Optional[List[str]] = None,
 ) -> Tuple[str, bool]:
     """
     Run a single Semgrep scan.
@@ -793,20 +810,32 @@ def run_single_semgrep(
         path_parts = [p for p in path_parts if 'venv' not in p.lower() and '/bin/pysemgrep' not in p]
         clean_env['PATH'] = ':'.join(path_parts)
 
-    # Redirect HOME into the run's out_dir so semgrep's two stateful
-    # files — semgrep.log (operational log) and settings.yml (metrics
-    # opt-in, empty after first write) — land inside the sandbox
-    # output rather than polluting the user's real ~/.semgrep.
-    # semgrep 1.79.0 does NOT persistently cache registry packs on
-    # disk — every invocation fetches the pack YAML from semgrep.dev
-    # regardless of HOME / cache dir — so the redirect costs us
-    # nothing (there's no cache to lose across scans). PR #196 ships
-    # pack YAMLs under engine/semgrep/rules/registry-cache/ and
-    # rewrites `p/security-audit` → local path BEFORE semgrep's
-    # registry client runs — post-#196 the fetch path is cold.
-    semgrep_home = out_dir / ".semgrep_home"
-    semgrep_home.mkdir(parents=True, exist_ok=True)
-    clean_env['HOME'] = str(semgrep_home)
+    # HOME + XDG basedirs are redirected via the sandbox layer's
+    # ``fake_home=True`` primitive (passed below to ``run()``). The
+    # sandbox itself owns the override semantics: it pre-creates
+    # ``HOME`` + all four ``XDG_*_HOME`` subdirs (CONFIG/DATA/CACHE/STATE)
+    # with mode 0o700 inside ``output``, refuses to materialise if any
+    # target path is a symlink (TOCTOU defence against a prior sandboxed
+    # child substituting a redirect target), and merges the override
+    # into the subprocess env with ``fake_home_env`` winning over any
+    # caller-supplied ``env=`` (see ``core/sandbox/context.py``).
+    #
+    # Without the XDG override, ``SAFE_ENV_ALLOWLIST`` preserves the
+    # operator's ``XDG_CONFIG_HOME`` and newer semgrep follows it to the
+    # real ``~/.config/semgrep`` — outside the Landlock writable policy.
+    # Under full sandbox the path is invisible inside the mount-ns;
+    # under the rootless-podman / distrobox Landlock-only path Landlock
+    # denies the write and semgrep crashes. ``fake_home=True`` is the
+    # profile-agnostic fix and means the policy lives in ONE place
+    # (sandbox context) instead of hand-rolled per-tool.
+    #
+    # semgrep 1.79.0 does NOT persistently cache registry packs on disk
+    # — every invocation fetches the pack YAML from semgrep.dev
+    # regardless of HOME / cache dir — so the redirect costs us nothing
+    # (there's no cache to lose across scans). PR #196 ships pack YAMLs
+    # under engine/semgrep/rules/registry-cache/ and rewrites
+    # ``p/security-audit`` → local path BEFORE semgrep's registry client
+    # runs — post-#196 the fetch path is cold.
 
     # Registry packs ("p/xxx", "category/xxx") fetch YAML from semgrep.dev
     # on every invocation — semgrep has no persistent on-disk cache. A slow
@@ -843,11 +872,26 @@ def run_single_semgrep(
         )
         _ph = _importlib_util.module_from_spec(_ph_spec)
         _ph_spec.loader.exec_module(_ph)
+        # ``fake_home=True``: sandbox layer materialises HOME + four
+        # XDG_*_HOME dirs inside ``output``, with symlink-TOCTOU defence,
+        # and merges its override into the subprocess env (winning over
+        # ``clean_env``'s ``HOME`` if anything else set it). Profile-
+        # agnostic — fires even under ``--sandbox none``.
+        #
+        # ``readable_paths``: the caller's ``--extra-config`` rule paths
+        # are passed here as well as in the semgrep argv. Today the
+        # scanner's Landlock policy is read-wide (``restrict_reads=False``
+        # — semgrep is a RAPTOR-chosen trusted tool) so this is a no-op,
+        # but future-proofs against a flip to read-restricted: an operator
+        # ``--extra-config /home/me/rules.yml`` would otherwise be denied
+        # at sandbox-read time.
         rc, so, se = run(
             cmd, timeout=effective_timeout, env=clean_env,
             target=str(repo_path), output=str(out_dir),
             proxy_hosts=_ph.proxy_hosts_for_semgrep(),
             caller_label="scanner-semgrep",
+            fake_home=True,
+            readable_paths=extra_config_readable_paths,
         )
 
         # Validate output
@@ -918,6 +962,7 @@ def semgrep_scan_parallel(
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
     progress_callback: Optional[Callable] = None,
     baseline_packs: Optional[List[Tuple[str, str]]] = None,
+    extra_configs: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Run Semgrep scans in parallel for improved performance.
@@ -983,6 +1028,36 @@ def semgrep_scan_parallel(
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
 
+    # Operator-supplied custom rule sources via ``--extra-config``. Each
+    # value becomes a peer pack (its own SARIF, merged into combined
+    # results). Names are derived from the path so the operator can spot
+    # which extra-config produced which finding. Paths are deduped by
+    # resolved value (the validation pass at the CLI already resolves
+    # paths, but a defensive dedup here guards against future callers
+    # that don't go through main()). Basename collisions across distinct
+    # paths get a positional suffix so the per-pack SARIF filename
+    # ``semgrep_extra_<name>.sarif`` is unique — without this, two paths
+    # like ``/a/rules.yml`` + ``/b/rules.yml`` would both write to
+    # ``semgrep_extra_rules.sarif`` and the silent-drop detector would
+    # NOT fire (the file exists, just from the other pack's worker).
+    _seen_extra: set = set()
+    _used_names: set = {n for n, _ in configs}
+    for _idx, extra in enumerate(extra_configs or []):
+        if extra in _seen_extra:
+            logger.warning(
+                f"--extra-config: duplicate path dropped: {extra}"
+            )
+            continue
+        _seen_extra.add(extra)
+        base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
+        unique = base
+        _i = 0
+        while unique in _used_names:
+            _i += 1
+            unique = f"{base}_{_i}"
+        _used_names.add(unique)
+        configs.append((unique, extra))
+
     logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
     logger.info(f"  - Local rule directories: {len([c for c in configs if c[0].startswith('category_')])}")
     logger.info(f"  - Standard/baseline packs: {len([c for c in configs if not c[0].startswith('category_')])}")
@@ -1000,7 +1075,8 @@ def semgrep_scan_parallel(
                 repo_path,
                 out_dir,
                 timeout,
-                progress_callback
+                progress_callback,
+                extra_config_readable_paths=list(extra_configs or []),
             ): (name, config)
             for name, config in configs
         }
@@ -1068,6 +1144,7 @@ def semgrep_scan_sequential(
     out_dir: Path,
     timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
     baseline_packs: Optional[List[Tuple[str, str]]] = None,
+    extra_configs: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """Sequential scanning fallback for debugging.
 
@@ -1116,9 +1193,32 @@ def semgrep_scan_sequential(
             configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
 
+    # Operator --extra-config — see parallel sibling for dedup +
+    # basename-collision-rename rationale.
+    _seen_extra: set = set()
+    _used_names: set = {n for n, _ in configs}
+    for extra in (extra_configs or []):
+        if extra in _seen_extra:
+            logger.warning(
+                f"--extra-config: duplicate path dropped: {extra}"
+            )
+            continue
+        _seen_extra.add(extra)
+        base = f"extra_{_sanitize_pack_name(Path(extra).name)}"
+        unique = base
+        _i = 0
+        while unique in _used_names:
+            _i += 1
+            unique = f"{base}_{_i}"
+        _used_names.add(unique)
+        configs.append((unique, extra))
+
     for idx, (name, config) in enumerate(configs, 1):
         logger.info(f"Running scan {idx}/{len(configs)}: {name}")
-        sarif_path, success = run_single_semgrep(name, config, repo_path, out_dir, timeout)
+        sarif_path, success = run_single_semgrep(
+            name, config, repo_path, out_dir, timeout,
+            extra_config_readable_paths=list(extra_configs or []),
+        )
         sarif_paths.append(sarif_path)
         if not success:
             failed_scans.append(name)
@@ -1720,11 +1820,50 @@ def main():
             "``--exclude-dir 'vendor/*' --exclude-dir '**/tests/*'``"
         ),
     )
+    ap.add_argument(
+        "--extra-config", action="append", default=None, metavar="PATH",
+        dest="extra_config",
+        help=(
+            "Additional semgrep rule source — a YAML rule file or a directory "
+            "of rules. Each value becomes a peer scan alongside the registry "
+            "packs (its own SARIF, merged into combined results). Repeatable. "
+            "Path must exist at parse time. RAPTOR never picks up ambient "
+            "``~/.semgrep/rules`` from the operator's HOME (sandbox stays "
+            "hermetic + reproducible across machines); this flag is the "
+            "explicit opt-in channel for custom rules. Example: "
+            "``--extra-config ./my-rules.yml --extra-config /etc/sec/policy/``"
+        ),
+    )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
+
+    # Validate --extra-config paths upfront. Fail-loud on bad input so the
+    # operator finds out before a 30-minute scan has burnt its budget. The
+    # resolved absolute path replaces the operator-supplied string so the
+    # downstream semgrep invocation gets a stable, ambient-CWD-free
+    # reference. Dedup by resolved path — passing the same rule file twice
+    # (often a copy-paste mistake on the command line) silently doubled
+    # the pack count + double-counted findings in pre-dedup runs.
+    if args.extra_config:
+        _resolved_extra: list[str] = []
+        _seen: set = set()
+        for raw in args.extra_config:
+            p = Path(raw).expanduser()
+            if not p.exists():
+                ap.error(f"--extra-config: path does not exist: {raw}")
+            resolved = str(p.resolve())
+            if resolved in _seen:
+                logger.warning(
+                    "--extra-config: duplicate path on CLI dropped: %s",
+                    raw,
+                )
+                continue
+            _seen.add(resolved)
+            _resolved_extra.append(resolved)
+        args.extra_config = _resolved_extra
 
     start_time = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))
@@ -1862,11 +2001,13 @@ def main():
             semgrep_sarifs, semgrep_failed = semgrep_scan_sequential(
                 repo_path, rules_dirs, out_dir,
                 baseline_packs=resolved_baseline,
+                extra_configs=args.extra_config,
             )
         else:
             semgrep_sarifs, semgrep_failed = semgrep_scan_parallel(
                 repo_path, rules_dirs, out_dir,
                 baseline_packs=resolved_baseline,
+                extra_configs=args.extra_config,
             )
 
         # Surface failed-pack count on stderr — at scan-level so the
@@ -1878,6 +2019,31 @@ def main():
             print(
                 f"⚠️  semgrep: {len(semgrep_failed)} pack(s) failed or "
                 f"produced no SARIF: {', '.join(semgrep_failed)}",
+                file=sys.stderr,
+            )
+
+        # CI-gate signal — "every dispatched semgrep pack failed" means
+        # the scan produced no useful output. Pre-fix this exited 0
+        # regardless: an operator running ``raptor scan`` as a pre-merge
+        # gate on a broken sandbox would silently false-pass with "0
+        # findings". Detect at the dispatch boundary (sarif_paths has
+        # one entry per dispatched pack — success or fail; failed_scans
+        # is the failure subset). When the two lengths match and packs
+        # were attempted, surface as a distinct exit code at the final
+        # sys.exit below. The reserved SANDBOX_ENGAGE_EXIT_CODE stays
+        # for the actual sandbox-engagement-failure path (raised as
+        # SandboxSetupError); ``4`` is the all-packs-failed signal.
+        all_semgrep_failed = (
+            len(semgrep_sarifs) > 0
+            and len(semgrep_failed) == len(semgrep_sarifs)
+        )
+        if all_semgrep_failed:
+            print(
+                f"\nRAPTOR: scan produced no useful semgrep output — "
+                f"all {len(semgrep_sarifs)} dispatched pack(s) failed. "
+                f"Exiting 4 (CI-gate signal — distinct from "
+                f"sandbox-engagement-failure exit "
+                f"{SANDBOX_ENGAGE_EXIT_CODE}).",
                 file=sys.stderr,
             )
 
@@ -2080,7 +2246,11 @@ def main():
         except Exception as _e:
             logger.debug("summarize_and_write at end of scanner.py: "
                          "%s", _e, exc_info=True)
-        sys.exit(0)
+        # ``all_semgrep_failed`` set above when every dispatched
+        # semgrep pack failed (CI-gate signal — exit 4 distinct from
+        # the sandbox-engagement-failure exit code which is reserved
+        # for the SandboxSetupError path at __main__).
+        sys.exit(4 if all_semgrep_failed else 0)
     finally:
         if not args.keep:
             try:

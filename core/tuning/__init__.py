@@ -27,6 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]  # core/tuning/ → repo
 _TUNING_PATH = _REPO_ROOT / "tuning.json"
 
 _VALID_KEYS = frozenset({
+    "codeql_enabled",
     "codeql_ram_mb",
     "codeql_threads",
     "codeql_max_disk_cache_mb",
@@ -38,7 +39,10 @@ _VALID_KEYS = frozenset({
     "max_json_memo_mb",
 })
 
+_BOOLEAN_KEYS = frozenset({"codeql_enabled"})
+
 _DEFAULTS = {
+    "codeql_enabled": True,
     "codeql_ram_mb": "auto",
     "codeql_threads": "auto",
     # 0 sentinel = "leave codeql's own unbounded default in place".  Set
@@ -191,7 +195,8 @@ _ZERO_ALLOWED = frozenset({"codeql_threads", "codeql_max_disk_cache_mb"})
 
 @dataclass(frozen=True, slots=True)
 class Tuning:
-    """Resolved tuning values — all integers, no ``"auto"``."""
+    """Resolved tuning values — integers and booleans, no ``"auto"``."""
+    codeql_enabled: bool
     codeql_ram_mb: int
     codeql_threads: int
     codeql_max_disk_cache_mb: int
@@ -203,11 +208,20 @@ class Tuning:
     max_json_memo_mb: int
 
 
-def _validate_value(key: str, raw: Any) -> Optional[int]:
+def _validate_value(key: str, raw: Any):
     """Validate and resolve a single tuning value.
 
-    Returns the resolved int, or None if invalid (caller uses default).
+    Returns the resolved value (int or bool), or None if invalid
+    (caller uses default).
     """
+    if key in _BOOLEAN_KEYS:
+        if isinstance(raw, bool):
+            return raw
+        logger.warning(
+            'tuning.json: "%s" must be true or false, using default (%s)',
+            key, _DEFAULTS[key],
+        )
+        return None
     if raw == "auto":
         resolver = _AUTO_RESOLVERS.get(key)
         if resolver is None:
@@ -290,6 +304,7 @@ def _create_default_file(path: Path) -> None:
         # which also writes this file. Use the same format.
         import json
         comments = {
+            "codeql_enabled": "set false to disable CodeQL across all runs (licensing)",
             "codeql_ram_mb": "MB of RAM for CodeQL (-M)",
             "codeql_threads": "CPUs for CodeQL (-j; 0 = all available)",
             "codeql_max_disk_cache_mb": "MB cap on codeql DB build cache (--max-disk-cache; 0 = codeql's unbounded default)",

@@ -89,12 +89,18 @@ Profiles bundle layer settings into a single name for CLI use:
 
 | Profile | Network | Landlock | Seccomp | Notes |
 |---|---|---|---|---|
-| `full` | blocked | yes | full | default for `run_untrusted()` and `sandbox()` |
+| `full` | blocked | yes | full | default for `run_untrusted()` and `sandbox()`; warns and degrades if a host layer is missing |
+| `strict` | blocked | yes | full | fail-closed version of `full`; for autonomous work where weaker isolation is not acceptable |
 | `debug` | blocked | yes | full (permits ptrace) | for `/crash-analysis` with gdb/rr |
 | `network-only` | blocked | off | off | tools whose correctness needs unrestricted fs |
 | `none` | open | off | off | emergency escape hatch; rlimits only |
 
 CLI: `--sandbox <profile>` on any RAPTOR command that honours it.
+
+Use `--sandbox strict` when a run should stop rather than quietly carry on with
+less isolation. On Linux, strict mode also requires mount namespaces when
+target/output isolation is requested. On macOS, the Seatbelt backend is the
+strict isolation layer.
 
 **Audit mode** is engaged orthogonally via `--audit` (and optionally
 `--audit-verbose` for strace-style output). It composes with any profile

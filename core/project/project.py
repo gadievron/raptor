@@ -23,6 +23,9 @@ PROJECTS_DIR = Path.home() / ".raptor" / "projects"
 DEFAULT_OUTPUT_BASE = Path("out/projects")
 
 
+_PROJECT_SCHEMA_VERSION = 3
+
+
 @dataclass
 class Project:
     """A RAPTOR project."""
@@ -39,7 +42,10 @@ class Project:
     # version bump makes the change EXPLICIT in the persisted file —
     # older readers can still load the project (back-compat below) but
     # operators inspecting the JSON see the v2 schema.
-    version: int = 2
+    #
+    # v3 adds a project-owned threat-model artefact path. Older files
+    # still load; the next write upgrades them.
+    version: int = 3
     # Operator-supplied debug binaries for binary_oracle reachability
     # enrichment. Persisted across runs so the operator doesn't re-pass
     # ``--binary`` every invocation. List for ``--target-kind=hybrid``
@@ -47,10 +53,12 @@ class Project:
     # into ``RaptorConfig.BINARY_ORACLE_PATHS`` at /agentic / /codeql
     # start; explicit ``--binary`` on the CLI is additive.
     binaries: List[str] = field(default_factory=list)
+    threat_model_path: str = ""
+    threat_model_updated: str = ""
 
     def to_dict(self) -> Dict:
         return {
-            "version": self.version,
+            "version": _PROJECT_SCHEMA_VERSION,
             "name": self.name,
             "target": self.target,
             "output_dir": self.output_dir,
@@ -58,6 +66,8 @@ class Project:
             "description": self.description,
             "notes": self.notes,
             "binaries": list(self.binaries),
+            "threat_model_path": self.threat_model_path,
+            "threat_model_updated": self.threat_model_updated,
         }
 
     @classmethod
@@ -65,9 +75,20 @@ class Project:
         binaries = data.get("binaries") or []
         if not isinstance(binaries, list):
             binaries = []
-        # Back-compat: load v1 files (no ``binaries``) as v2 — the
-        # field defaults to empty. The next save will upgrade the
-        # file's version to 2 with the empty list explicit.
+        try:
+            version = int(data.get("version", _PROJECT_SCHEMA_VERSION))
+        except (TypeError, ValueError):
+            version = _PROJECT_SCHEMA_VERSION
+        if version > _PROJECT_SCHEMA_VERSION:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Project file has schema version %d (current is %d); "
+                "fields beyond v%d will be lost on the next save",
+                version, _PROJECT_SCHEMA_VERSION, _PROJECT_SCHEMA_VERSION,
+            )
+        version = max(version, _PROJECT_SCHEMA_VERSION)
+        # Back-compat: load v1/v2 files with new fields defaulted. The
+        # next save upgrades the file to the current schema.
         return cls(
             name=data.get("name", ""),
             target=data.get("target", ""),
@@ -75,8 +96,10 @@ class Project:
             created=data.get("created", ""),
             description=data.get("description", ""),
             notes=data.get("notes", ""),
-            version=data.get("version", 2),
+            version=version,
             binaries=[str(b) for b in binaries if isinstance(b, str)],
+            threat_model_path=str(data.get("threat_model_path") or ""),
+            threat_model_updated=str(data.get("threat_model_updated") or ""),
         )
 
     @property

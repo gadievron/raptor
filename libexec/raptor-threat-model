@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#
+# raptor-threat-model — thin operator wrapper for project threat models.
+#
+# Called by:
+#   - /threat-model in Claude Code
+#
+# This is deliberately a router, not a second implementation. Project-owned
+# show/init/export/sync operations go through raptor-project-manager; build
+# operations go through raptor-agentic's threat-model-only phase.
+
+set -euo pipefail
+
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
+SCRIPT="$0"
+_symhops=0
+while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-threat-model: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+unset _symhops
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
+    echo "raptor-threat-model: cannot find raptor.py under $RAPTOR_DIR" >&2
+    echo "raptor-threat-model: (resolved from $SCRIPT)" >&2
+    exit 1
+fi
+
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: raptor-threat-model <command> [args]
+
+Commands:
+  show [project]             Show the active/project threat model
+  init [project]             Create a blank project threat model
+  export [project]           Print THREAT_MODEL.md
+  sync [project]             Re-render THREAT_MODEL.md from JSON
+  lint [project]             Run quality gates over the model
+  diff [project] --context-map <path>
+                             Compare model against a fresh context-map
+  report [project]           Write threat-model-report.md
+  add --field <f> --value <v>  Add a value to a list field
+  remove --field <f> --value <v>  Remove a value from a list field
+  build [agentic args]       Run /understand-backed threat-model-only phase
+  refresh [agentic args]     Rebuild and overwrite the project model
+  use-stale [agentic args]   Build while allowing stale /understand fallback
+  help                       Show this help
+
+Examples:
+  libexec/raptor-threat-model show
+  libexec/raptor-threat-model init
+  libexec/raptor-threat-model add --field focus_areas --value "Auth bypass in /api/admin"
+  libexec/raptor-threat-model remove --field out_of_scope_vuln_classes --value "DoS"
+  libexec/raptor-threat-model build --repo /path/to/code
+  libexec/raptor-threat-model refresh --repo /path/to/code
+EOF
+}
+
+cmd="${1:-show}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case "$cmd" in
+    help|--help|-h)
+        usage
+        ;;
+    show|status)
+        exec "$RAPTOR_DIR/libexec/raptor-project-manager" threat-model show "$@"
+        ;;
+    init|export|sync|lint|diff|report|add|remove)
+        exec "$RAPTOR_DIR/libexec/raptor-project-manager" threat-model "$cmd" "$@"
+        ;;
+    build)
+        exec "$RAPTOR_DIR/libexec/raptor-agentic" --threat-model-only "$@"
+        ;;
+    refresh)
+        exec "$RAPTOR_DIR/libexec/raptor-agentic" --threat-model-only --threat-model-refresh "$@"
+        ;;
+    use-stale)
+        exec "$RAPTOR_DIR/libexec/raptor-agentic" --threat-model-only --threat-model-use-stale "$@"
+        ;;
+    *)
+        echo "raptor-threat-model: unknown command: $cmd" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

@@ -67,6 +67,23 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# CWE-based fallback gate for source-intel evidence injection.
+# External scanners (Coverity, Snyk, Bandit, …) use tool-specific
+# rule_id prefixes that never match _DEFAULT_RULE_PREFIXES (which is
+# CodeQL-centric).  When a finding's rule_id doesn't match, we check
+# its CWE against this set before rejecting.  The set mirrors the CWE
+# coverage of _DEFAULT_RULE_PREFIXES.
+_SOURCE_INTEL_CWES = frozenset({
+    "CWE-120", "CWE-122",  # buffer / heap overflow
+    "CWE-190",              # integer overflow
+    "CWE-415", "CWE-416",  # double-free / use-after-free
+    "CWE-476",              # null deref
+    "CWE-787",              # OOB write
+    "CWE-252",              # unchecked return
+    "CWE-125",              # OOB read
+    "CWE-134",              # format string
+    "CWE-908",              # uninitialized memory
+})
 
 # Cache: absolute resolved target dir → ``(signature, result)``
 # tuple. ``result`` is the ``SourceIntelResult`` or ``None`` when
@@ -198,7 +215,11 @@ def evidence_blocks_for_finding(
     if not _DEFAULT_RULE_PREFIXES:
         return ()
     if not any(rule_id.startswith(p) for p in _DEFAULT_RULE_PREFIXES):
-        return ()
+        # Fallback: CWE-based gate for external scanners whose rule_id
+        # prefixes won't match the CodeQL-centric _DEFAULT_RULE_PREFIXES.
+        cwe = (finding.get("cwe_id") or "").strip()
+        if cwe not in _SOURCE_INTEL_CWES:
+            return ()
 
     repo_raw = finding.get("repo_path")
     if not repo_raw:

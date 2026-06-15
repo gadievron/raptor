@@ -928,6 +928,14 @@ class AutonomousSecurityAgentV2:
             "repo_path": str(vuln.repo_path),
             "metadata": meta,
         })
+        extra_blocks = list(si_blocks)
+        try:
+            from core.threat_model import threat_model_untrusted_block
+            tm_block = threat_model_untrusted_block(Path(vuln.repo_path))
+            if tm_block:
+                extra_blocks.append(tm_block)
+        except Exception:
+            pass
 
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
@@ -948,7 +956,7 @@ class AutonomousSecurityAgentV2:
             function_name=function_name,
             file_includes=file_includes,
             function_calls_made=function_calls_made,
-            extra_blocks=si_blocks,
+            extra_blocks=extra_blocks,
             verified_outcomes=(
                 self._get_verified_outcomes()
                 if self.use_verified_exemplars else ()

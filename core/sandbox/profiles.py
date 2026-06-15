@@ -25,7 +25,11 @@ import types
 # incoherent.
 #
 # full:         network blocked + Landlock + seccomp (incl. ptrace) + rlimits.
-#               The default. Appropriate for scan/exploit/PoC work.
+#               The default. Appropriate for scan/exploit/PoC work. If the
+#               host lacks an isolation backend it warns and degrades.
+# strict:       same policy intent as full, but fail-closed if the host cannot
+#               provide the platform isolation backend. On Linux target/output
+#               isolation also requires mount namespaces.
 # debug:        full, but seccomp permits ptrace so gdb/rr can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
@@ -42,6 +46,7 @@ import types
 # moved out of the profile dict to CLI flags / per-call kwargs.
 PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
+    "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
