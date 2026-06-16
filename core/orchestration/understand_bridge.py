@@ -573,6 +573,77 @@ def load_understand_context(
     return summary
 
 
+
+def load_understand_graph_context(
+    validate_dir: Path,
+    target_path: str,
+) -> dict[str, Any]:
+    """Import the persistent graph store as /validate starting state.
+
+    This is the graph-first sibling of load_understand_context(). It
+    rebuilds a context-map-compatible object from SQLite, then reuses the
+    existing merge/import/enrich behaviour so Stage B sees the same shape it
+    already understands. Missing DBs and empty graphs return a no-op summary.
+    """
+    validate_dir = Path(validate_dir)
+    validate_dir.mkdir(parents=True, exist_ok=True)
+    summary: dict[str, Any] = {
+        "graph_loaded": False,
+        "graph_db": None,
+        "context_map_loaded": False,
+        "stale_files_excluded": [],
+        "attack_surface": {
+            "sources": 0,
+            "sinks": 0,
+            "trust_boundaries": 0,
+            "gaps": 0,
+            "unchecked_flows": 0,
+        },
+        "flow_traces": {"count": 0, "imported_as_paths": 0},
+        "context_map": {},
+    }
+    try:
+        from core.understand_graph import build_context_map, graph_path_for_run
+    except Exception as exc:
+        logger.debug("understand_bridge: graph API unavailable: %s", exc)
+        return summary
+
+    graph_path = graph_path_for_run(validate_dir, target_path)
+    if not graph_path.exists():
+        return summary
+    context_map, stale_files = build_context_map(graph_path, target_path)
+    if not context_map:
+        return summary
+
+    checklist = load_json(validate_dir / "checklist.json") or {}
+    normalize_context_map(context_map, checklist,
+                          target_path=checklist.get("target_path") or target_path)
+    filtered = _filter_context_map(context_map, stale_files)
+    if filtered:
+        logger.info("understand_bridge: graph excluded %d entries referencing stale files", filtered)
+
+    save_json(validate_dir / "context-map.graph.json", context_map, mode=0o600)
+    surface_stats = _merge_attack_surface(context_map, validate_dir, graph_path)
+    map_smt_stats = _import_unchecked_flow_conditions(context_map, validate_dir)
+    graph_path_stats = _import_graph_attack_paths(
+        graph_path,
+        target_path,
+        validate_dir,
+    )
+
+    summary.update({
+        "graph_loaded": True,
+        "graph_db": str(graph_path),
+        "context_map_loaded": True,
+        "stale_files_excluded": sorted(stale_files),
+        "attack_surface": surface_stats,
+        "map_smt_paths": map_smt_stats,
+        "graph_attack_paths": graph_path_stats,
+        "context_map": context_map,
+    })
+    return summary
+
+
 def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any],
                           target_path: str | None = None) -> dict[str, Any]:
     """Mechanically fix up an LLM-produced context-map using the checklist
@@ -1781,6 +1852,76 @@ def _sanitise_and_stamp_paths(paths: list) -> None:
     sanitise_free_text(paths, {"items": ATTACK_PATH_SCHEMA})
     stamp_provenance(paths, _BRIDGE_GENERATOR, untrusted=True,
                      overwrite_generator=False)
+
+
+
+def _import_graph_attack_paths(
+    graph_path: Path,
+    target_path: str,
+    validate_dir: Path,
+) -> dict[str, Any]:
+    """Import graph-derived source->sink paths into attack-paths.json."""
+    try:
+        from core.understand_graph import attack_paths as _graph_attack_paths
+    except Exception as exc:
+        logger.debug("understand_bridge: graph attack path API unavailable: %s", exc)
+        return {"count": 0, "imported_as_paths": 0}
+
+    graph_paths = _graph_attack_paths(
+        graph_path,
+        target_path,
+        unchecked_only=True,
+        limit=100,
+    )
+    if not graph_paths:
+        return {"count": 0, "imported_as_paths": 0}
+
+    save_json(validate_dir / "graph-priority-paths.json", graph_paths, mode=0o600)
+
+    paths_path = validate_dir / "attack-paths.json"
+    existing_paths: list[dict[str, Any]] = []
+    if paths_path.exists():
+        loaded = load_json(paths_path)
+        if isinstance(loaded, list):
+            existing_paths = loaded
+    existing_ids = {p.get("id") for p in existing_paths if isinstance(p, dict) and p.get("id")}
+
+    imported = 0
+    for item in graph_paths:
+        path_id = item.get("id")
+        if not path_id or path_id in existing_ids:
+            continue
+        entry = item.get("entry") or {}
+        sink = item.get("sink") or {}
+        attack_path = {
+            "id": path_id,
+            "name": f"Graph path: {entry.get('label') or entry.get('id')} -> {sink.get('label') or sink.get('id')}",
+            "finding": str(sink.get("id") or ""),
+            "steps": item.get("steps") or [],
+            "proximity": 7 if item.get("unchecked") else 4,
+            "proximity_description": (
+                "Graph memory shows attacker-controlled entry reaching a sink "
+                "with no effective trust boundary recorded."
+                if item.get("unchecked") else
+                "Graph memory shows a bounded entry-to-sink path."
+            ),
+            "blockers": [],
+            "status": "uncertain",
+            "source": "understand:graph",
+            "confidence": item.get("confidence") or "candidate",
+            "evidence": item.get("evidence") or {},
+            "missing_boundary": item.get("missing_boundary") or "",
+            "imported_from": str(graph_path),
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+        }
+        existing_paths.append(attack_path)
+        existing_ids.add(path_id)
+        imported += 1
+
+    if imported:
+        save_json(paths_path, existing_paths, mode=0o600)
+
+    return {"count": len(graph_paths), "imported_as_paths": imported}
 
 
 def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, Any]:

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Read-only query surface for RAPTOR's internal understand graph."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="raptor-graph-query",
+        description="Query RAPTOR's project/run SQLite graph memory.",
+    )
+    src = p.add_mutually_exclusive_group()
+    src.add_argument("--db", help="Path to raptor.graph.sqlite")
+    src.add_argument("--run-dir", help="Run directory containing graph/")
+    src.add_argument("--project", help="Project name whose graph should be queried")
+    p.add_argument("--target", help="Target path for snapshot selection/staleness checks")
+    p.add_argument("--summary", action="store_true", help="Show graph summary")
+    p.add_argument("--reachable-sinks", action="store_true", help="List entry-to-sink reachability edges")
+    p.add_argument("--context-map", action="store_true", help="Emit graph as context-map-compatible JSON")
+    p.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    return p
+
+
+def _resolve_db(args: argparse.Namespace) -> Path:
+    if args.db:
+        return Path(args.db)
+    if args.project:
+        from core.project.project import ProjectManager
+
+        project = ProjectManager().load(args.project)
+        if not project:
+            raise SystemExit(f"project not found: {args.project}")
+        return Path(project.output_dir) / "graph" / "raptor.graph.sqlite"
+    from core.understand_graph import graph_path_for_run
+
+    return graph_path_for_run(Path(args.run_dir or "."), args.target)
+
+
+def main() -> int:
+    args = _parser().parse_args()
+    if not (args.summary or args.reachable_sinks or args.context_map):
+        args.summary = True
+    db_path = _resolve_db(args)
+
+    from core.understand_graph import build_context_map, graph_summary, reachable_sinks
+
+    if args.context_map:
+        context_map, stale = build_context_map(db_path, args.target)
+        payload = {"context_map": context_map, "stale_files": sorted(stale)}
+    elif args.reachable_sinks:
+        payload = {"reachable_sinks": reachable_sinks(db_path, args.target)}
+    else:
+        payload = graph_summary(db_path)
+
+    if args.json or args.context_map:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if not payload.get("exists", True):
+        print(f"Graph: not found ({db_path})")
+        return 1
+    if "nodes" in payload:
+        print(f"Graph: {payload.get('path', db_path)}")
+        latest = payload.get("latest_snapshot") or {}
+        if latest.get("target_path"):
+            print(f"Target: {latest['target_path']}")
+        print("Nodes:")
+        for kind, count in sorted((payload.get("nodes") or {}).items()):
+            print(f"  {kind}: {count}")
+        print("Edges:")
+        for kind, count in sorted((payload.get("edges") or {}).items()):
+            print(f"  {kind}: {count}")
+        return 0
+    for item in payload.get("reachable_sinks", []):
+        src = item.get("source") or item.get("source_file") or "source"
+        sink = item.get("sink") or item.get("sink_file") or "sink"
+        print(f"{src} -> {sink} ({item.get('confidence') or 'candidate'})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

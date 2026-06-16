@@ -790,6 +790,13 @@ def _main_body(args) -> int:
         # unserialisable dict key).
         print(f"error: could not serialize result payload: {e}", file=sys.stderr)
         return 1
+    try:
+        from core.understand_graph import ingest_run
+        graph_path = ingest_run(out_dir, args.target)
+        if graph_path:
+            print(f"Graph: {graph_path}")
+    except Exception as e:
+        print(f"warning: graph ingest skipped: {e}", file=sys.stderr)
     _print_summary(payload, output_path)
 
     # SAGE store: persist results for cross-run learning.

@@ -2241,6 +2241,22 @@ def _bridge_understand_output(out_dir, checklist, target,
         load_understand_context,
     )
 
+
+    graph_bridge = load_understand_graph_context(out_dir, target)
+    if graph_bridge.get("context_map_loaded"):
+        enrich_checklist(checklist, graph_bridge["context_map"], str(out_dir))
+        n_sources = graph_bridge["attack_surface"]["sources"]
+        n_sinks = graph_bridge["attack_surface"]["sinks"]
+        n_paths = graph_bridge.get("graph_attack_paths", {}).get("imported_as_paths", 0)
+        n_targets = len(checklist.get("priority_targets", []))
+        stale = graph_bridge.get("stale_files_excluded") or []
+        stale_note = f", {len(stale)} stale file(s) excluded" if stale else ""
+        print(f"  Bridge: loaded graph memory"
+              f" — {n_sources} sources, {n_sinks} sinks,"
+              f" {n_paths} graph paths,"
+              f" {n_targets} priority targets{stale_note}")
+        return
+
     understand_dir, stale_files = find_understand_output(
         out_dir, target_path=target,
     )

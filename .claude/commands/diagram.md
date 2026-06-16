@@ -28,6 +28,7 @@ read-only preview, or `--force` if you really do want to overwrite an existing
 | `attack-paths.json` | flowchart TD per path | Step chain with proximity score (0–10) and blocker annotations |
 | `hypotheses.json` | flowchart TD | Hypothesis states |
 | `findings.json` | pie | Verdict/type summary (rendered when 2+ findings) |
+| `graph/raptor.graph.sqlite` | flowchart LR | Fallback context map from persistent `/understand` graph memory when local JSON is absent |
 
 Black-box binary `context-map.json` files (and `binary-context-map.json`) also render xref-backed candidate call
 edges as dotted grey edges labelled `candidate`. They are deliberately not
