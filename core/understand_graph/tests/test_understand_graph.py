@@ -6,6 +6,7 @@ from core.json import save_json
 from core.orchestration.understand_bridge import load_understand_graph_context
 from core.understand_graph import (
     build_context_map,
+    graph_path_for_run,
     graph_summary,
     ingest_run,
     prompt_context_for_location,
@@ -123,3 +124,32 @@ def test_validation_bridge_can_load_project_graph(tmp_path, monkeypatch):
     assert bridge["context_map_loaded"] is True
     assert (validate_dir / "attack-surface.json").exists()
     assert (validate_dir / "context-map.graph.json").exists()
+
+
+def test_graph_path_prefers_project_containing_run_dir(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    project_a = tmp_path / "projects" / "a"
+    project_b = tmp_path / "projects" / "b"
+    run_dir = project_b / "understand-1"
+    run_dir.mkdir(parents=True)
+
+    class _Project:
+        def __init__(self, name, output_dir):
+            self.name = name
+            self.output_dir = str(output_dir)
+            self.target = str(target)
+
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.list_projects",
+        lambda self: [_Project("a", project_a), _Project("b", project_b)],
+    )
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.get_active",
+        lambda self: "a",
+    )
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.load",
+        lambda self, name: _Project(name, project_a),
+    )
+
+    assert graph_path_for_run(run_dir, str(target)) == project_b / "graph" / "raptor.graph.sqlite"
