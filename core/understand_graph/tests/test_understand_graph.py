@@ -6,7 +6,9 @@ from pathlib import Path
 from core.json import save_json
 from core.orchestration.understand_bridge import load_understand_graph_context
 from core.understand_graph import (
+    attack_paths,
     build_context_map,
+    graph_diff,
     graph_path_for_run,
     graph_summary,
     ingest_run,
@@ -88,6 +90,13 @@ def test_ingest_summary_and_context_map(tmp_path):
     assert context_map["entry_points"][0]["id"] == "EP-001"
     assert context_map["unchecked_flows"][0]["sink"] == "SINK-001"
     assert reachable_sinks(graph_path, str(target))[0]["sink"] == "render"
+    paths = attack_paths(graph_path, str(target), unchecked_only=True)
+    assert paths[0]["entry"]["id"] == "EP-001"
+    assert paths[0]["sink"]["id"] == "SINK-001"
+    assert paths[0]["unchecked"] is True
+    assert paths[0]["risk_score"] >= 60
+    assert paths[0]["evidence"]["oracle"] == "understand_graph"
+    assert context_map["entry_points"][0]["graph_evidence"]["oracle"] == "understand"
 
 
 def test_context_map_backfills_name_from_graph_row(tmp_path):
@@ -150,6 +159,57 @@ def test_validation_bridge_can_load_project_graph(tmp_path, monkeypatch):
     assert bridge["context_map_loaded"] is True
     assert (validate_dir / "attack-surface.json").exists()
     assert (validate_dir / "context-map.graph.json").exists()
+    assert (validate_dir / "graph-priority-paths.json").exists()
+    paths = json.loads((validate_dir / "attack-paths.json").read_text())
+    assert any(p["source"] == "understand:graph" for p in paths)
+
+
+def test_graph_diff_reports_new_reachability_between_snapshots(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    project_dir = tmp_path / "project"
+    first = project_dir / "understand-1"
+    second = project_dir / "understand-2"
+    _write_fixture_run(first, target)
+    _write_fixture_run(second, target)
+
+    target_str = str(target)
+
+    class _Project:
+        output_dir = str(project_dir)
+        target = target_str
+
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.find_project_for_target",
+        lambda self, target_arg, content_id=None: _Project(),
+    )
+
+    second_map = json.loads((second / "context-map.json").read_text())
+    second_map["sink_details"].append({
+        "id": "SINK-002",
+        "type": "filesystem",
+        "name": "open",
+        "file": "app.py",
+        "line": 2,
+        "reaches_from": ["EP-001"],
+    })
+    second_map["unchecked_flows"].append({
+        "entry_point": "EP-001",
+        "sink": "SINK-002",
+        "missing_boundary": "No path canonicalisation",
+        "confidence": "high",
+        "cwe": "CWE-22",
+    })
+    save_json(second / "context-map.json", second_map)
+
+    graph_path = ingest_run(first, str(target))
+    ingest_run(second, str(target))
+
+    diff = graph_diff(graph_path, str(target))
+    assert diff["is_diffable"] is True
+    assert diff["is_drifted"] is True
+    assert diff["nodes"]["sink"]["added"]
+    assert diff["reachability"]["added"]
+    assert diff["new_risks"]
 
 
 def test_graph_path_prefers_project_containing_run_dir(tmp_path, monkeypatch):
