@@ -99,8 +99,30 @@ def _materialise_threat_model_phase(
                         understand_dir, len(stale),
                     )
             else:
-                summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
-                return summary
+                try:
+                    from core.understand_graph import build_context_map, graph_path_for_run
+                    graph_path = graph_path_for_run(out_dir, str(target))
+                    graph_context, graph_stale = build_context_map(graph_path, str(target))
+                    if graph_context:
+                        context_map_path = out_dir / "context-map.graph.json"
+                        save_json(context_map_path, graph_context, mode=0o600)
+                        summary["reused_context_map"] = True
+                        summary["reused_graph"] = str(graph_path)
+                        if graph_stale:
+                            summary["stale_files"] = sorted(graph_stale)
+                            if not allow_stale:
+                                summary["skipped_reason"] = (
+                                    "reused /understand graph is stale; rerun "
+                                    "with --threat-model-use-stale to accept it"
+                                )
+                                return summary
+                    else:
+                        summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+                        return summary
+                except Exception as e:
+                    logger.debug(f"Threat model graph fallback failed: {e}")
+                    summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"
+                    return summary
         except Exception as e:
             logger.debug(f"Threat model fallback lookup failed: {e}")
             summary["skipped_reason"] = reason or "understand pre-pass did not produce context-map.json"

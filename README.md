@@ -119,7 +119,9 @@ Start by creating a project so all your runs land in one place:
 /project findings                              # review everything in one place
 ```
 
-`/understand` builds a context map of entry points, trust boundaries, and sinks before a line of scanning happens. `/agentic` then runs Semgrep and CodeQL, deduplicates findings, and dispatches each one for validation using the exploitation-validator methodology:
+`/understand` builds a context map of entry points, trust boundaries, and sinks before a line of scanning happens. It also writes that map into a project/run SQLite graph (`graph/raptor.graph.sqlite`) so `/validate`, `/threat-model`, `/agentic`, and `/diagram` can reuse prior context instead of rediscovering the same attack surface every time. The JSON artefacts stay the public contract; the graph is RAPTOR's shared memory layer. See `docs/understand-graph.md`.
+
+`/agentic` then runs Semgrep and CodeQL, deduplicates findings, and dispatches each one for validation using the exploitation-validator methodology:
 
 With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` and `THREAT_MODEL.md` if the project does not already have them, then feeds a compact version into `/understand`, autonomous analysis, and `/validate`. Existing project threat models are preserved unless you pass `--threat-model-refresh`; stale fallback maps are refused unless you explicitly pass `--threat-model-use-stale`. It also turns mapped unchecked flows into candidate SARIF so scanner misses do not kill the run. It is operator-owned context, not magic proof: findings still need code evidence or oracle-backed confirmation. See `docs/threat-model.md`.
 

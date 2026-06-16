@@ -859,6 +859,7 @@ RAPTOR is open source and welcomes contributions. Areas where help is needed:
 - **[exploit-feasibility.md](exploit-feasibility.md)**: Exploit feasibility analysis guide
 - **[sandbox.md](sandbox.md)**: Subprocess sandbox — isolation layers, egress proxy, read-restriction, troubleshooting
 - **[threat-model.md](threat-model.md)**: Project-owned threat models for focus areas, trust boundaries, and proof expectations
+- **[understand-graph.md](understand-graph.md)**: SQLite graph memory behind `/understand`, `/validate`, `/threat-model`, `/agentic`, and diagrams
 - **Test Script**: `test_dataflow_analysis.py` - Demonstrates dataflow-aware analysis
 
 
@@ -882,6 +883,5 @@ RAPTOR leverages excellent open source tools:
 - **GDB** (GNU Project) - The GNU Debugger
 - **Anthropic Claude** - LLM reasoning for vulnerability analysis
 - **OpenAI GPT-4** - Alternative LLM provider
-
 
 

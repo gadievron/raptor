@@ -276,6 +276,14 @@ def _run_understand_prepass_unsafe(
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
 
+        try:
+            from core.understand_graph import ingest_run
+            graph_path = ingest_run(understand_dir, str(target))
+            if graph_path:
+                logger.info("understand pre-pass: graph memory updated at %s", graph_path)
+        except Exception as e:
+            logger.debug("understand pre-pass graph ingest skipped: %s", e)
+
         _complete_lifecycle(understand_dir)
         lifecycle_settled = True
 

@@ -120,6 +120,32 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
         except Exception as exc:
             sections.append(_section(title, f"> Could not render `{fname}`: {exc}"))
 
+    if not (out_dir / "context-map.json").exists():
+        try:
+            from core.understand_graph import build_context_map, graph_path_for_run
+            graph_path = graph_path_for_run(out_dir)
+            if graph_path.exists():
+                data, stale = build_context_map(graph_path)
+                if data:
+                    diagram = context_map.generate(data)
+                    stale_note = (
+                        f"\n\n_Stale files excluded: {len(stale)}_"
+                        if stale else ""
+                    )
+                    body = (
+                        f"_Source: `{graph_path}` (persistent /understand graph)_"
+                        f"{stale_note}\n\n```mermaid\n{diagram}\n```"
+                    )
+                    sections.append(_section(
+                        "Context Map from Graph Memory",
+                        body,
+                    ))
+        except Exception as exc:
+            sections.append(_section(
+                "Context Map from Graph Memory",
+                f"> Could not render graph memory: {exc}",
+            ))
+
     # --- Flow traces ---
     trace_files = sorted(out_dir.glob(_FLOW_TRACE_GLOB))
     if trace_files:

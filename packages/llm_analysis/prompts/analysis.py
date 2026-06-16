@@ -144,6 +144,8 @@ def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
     if metadata.get("priority") == "high":
         reason = metadata.get("priority_reason", "high-priority")
         parts.append(f"Architectural role: {reason} (from /understand --map)")
+    if metadata.get("graph_context"):
+        parts.append(str(metadata["graph_context"]))
     reach_block = _format_reachability_block(metadata)
     if reach_block:
         parts.append(reach_block)

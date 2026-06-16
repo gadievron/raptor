@@ -24,6 +24,7 @@ Omit `--type` to render everything in the directory.
 | `flow-trace-*.json` | flowchart TD | Each hop in the call chain, tainted variable at each step, branches, attacker control |
 | `attack-tree.json` | flowchart TD | Knowledge graph with nodes styled by status (confirmed/disproven/exploring/unexplored) |
 | `attack-paths.json` | flowchart TD per path | Step chain with proximity score (0–10) and blocker annotations |
+| `graph/raptor.graph.sqlite` | flowchart LR | Fallback context map from persistent `/understand` graph memory when local JSON is absent |
 
 ## Examples
 
@@ -43,7 +44,11 @@ Omit `--type` to render everything in the directory.
 
 ## Output
 
-Writes `diagrams.md` into the target directory next to the existing JSON files. One Mermaid fenced block per diagram, with section headings. Renders in GitHub, VS Code, Obsidian, or anything Mermaid-aware.
+Writes `diagrams.md` into the target directory next to the existing JSON files.
+One Mermaid fenced block per diagram, with section headings. If no local
+`context-map.json` exists, it can render the project/run graph memory as a
+context-map-compatible diagram. Renders in GitHub, VS Code, Obsidian, or
+anything Mermaid-aware.
 
 ## Execution
 

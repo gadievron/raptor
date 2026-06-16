@@ -617,6 +617,11 @@ class AutonomousSecurityAgentV2:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from core.understand_graph import graph_path_for_run
+            self.graph_db_path = graph_path_for_run(self.out_dir, str(self.repo_path))
+        except Exception:
+            self.graph_db_path = None
         # KNighter follow-up: synthesise a checker rule for every
         # confirmed exploitable finding and emit suspicious annotations
         # for variants found across the codebase. Default on; opt out
@@ -2014,6 +2019,21 @@ class AutonomousSecurityAgentV2:
                         if func.get("priority_reason"):
                             metadata["priority_reason"] = func["priority_reason"]
                         finding["metadata"] = metadata
+
+                try:
+                    if self.graph_db_path and self.graph_db_path.exists():
+                        fpath = finding.get("file_path") or finding.get("file") or ""
+                        fline = finding.get("start_line") if finding.get("start_line") is not None else finding.get("startLine", 0)
+                        from core.understand_graph import prompt_context_for_location
+                        graph_context = prompt_context_for_location(
+                            self.graph_db_path, fpath, fline,
+                        )
+                        if graph_context:
+                            metadata = finding.get("metadata") or {}
+                            metadata["graph_context"] = graph_context
+                            finding["metadata"] = metadata
+                except Exception:
+                    logger.debug("graph prompt context lookup skipped", exc_info=True)
 
                 # Per-function AST view enrichment. Sits outside the
                 # metadata-enrichment gate above so findings that

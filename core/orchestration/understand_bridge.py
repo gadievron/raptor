@@ -472,6 +472,71 @@ def load_understand_context(
     return summary
 
 
+def load_understand_graph_context(
+    validate_dir: Path,
+    target_path: str,
+) -> Dict[str, Any]:
+    """Import the persistent graph store as /validate starting state.
+
+    This is the graph-first sibling of ``load_understand_context``. It
+    rebuilds a context-map-compatible object from SQLite, then reuses the
+    existing merge/import/enrich behaviour so Stage B sees the same shape it
+    already understands. Missing DBs and empty graphs return a no-op summary.
+    """
+    validate_dir = Path(validate_dir)
+    validate_dir.mkdir(parents=True, exist_ok=True)
+    summary: Dict[str, Any] = {
+        "graph_loaded": False,
+        "graph_db": None,
+        "context_map_loaded": False,
+        "stale_files_excluded": [],
+        "attack_surface": {
+            "sources": 0,
+            "sinks": 0,
+            "trust_boundaries": 0,
+            "gaps": 0,
+            "unchecked_flows": 0,
+        },
+        "flow_traces": {"count": 0, "imported_as_paths": 0},
+        "context_map": {},
+    }
+    try:
+        from core.understand_graph import build_context_map, graph_path_for_run
+    except Exception as exc:
+        logger.debug("understand_bridge: graph API unavailable: %s", exc)
+        return summary
+
+    graph_path = graph_path_for_run(validate_dir, target_path)
+    if not graph_path.exists():
+        return summary
+    context_map, stale_files = build_context_map(graph_path, target_path)
+    if not context_map:
+        return summary
+
+    checklist = load_json(validate_dir / "checklist.json") or {}
+    normalize_context_map(context_map, checklist,
+                          target_path=checklist.get("target_path") or target_path)
+    filtered = _filter_context_map(context_map, stale_files)
+    if filtered:
+        logger.info("understand_bridge: graph excluded %d entries referencing stale files", filtered)
+
+    # Persist the rebuilt view as a run-local derived artefact for auditability.
+    save_json(validate_dir / "context-map.graph.json", context_map, mode=0o600)
+    surface_stats = _merge_attack_surface(context_map, validate_dir, graph_path.parent)
+    map_smt_stats = _import_unchecked_flow_conditions(context_map, validate_dir)
+
+    summary.update({
+        "graph_loaded": True,
+        "graph_db": str(graph_path),
+        "context_map_loaded": True,
+        "stale_files_excluded": sorted(stale_files),
+        "attack_surface": surface_stats,
+        "map_smt_paths": map_smt_stats,
+        "context_map": context_map,
+    })
+    return summary
+
+
 def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any],
                           target_path: Optional[str] = None) -> Dict[str, Any]:
     """Mechanically fix up an LLM-produced context-map using the checklist

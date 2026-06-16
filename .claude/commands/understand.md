@@ -117,6 +117,15 @@ annotations under `$OUTPUT_DIR/annotations/` for entry points, sinks,
 trust boundaries, unchecked flows, and trace steps. Best-effort — exits
 0 with "nothing to synthesise" when no inputs are present.
 
+**Step 4.6: Update graph memory** (best-effort):
+```bash
+libexec/raptor-graph-ingest "$OUTPUT_DIR" --target <resolved_target>
+```
+This writes `/understand` outputs into the project/run SQLite graph so
+`/validate`, `/threat-model`, `/agentic`, and `/diagram` can reuse the mapped
+entry points, trust boundaries, sinks, traces, variants, and evidence later.
+The JSON files remain the public artefacts; the graph is shared memory.
+
 **Step 5: Complete the run.** Replace `<your-model-id>` with your exact model ID from your system prompt (e.g. `claude-opus-4-7`) — it records which model performed the analysis, which only you (the harness) know (RAPTOR's Python can't read `/model`). If you don't know your model ID, drop the `--model` flag entirely; the run still completes, the model is just left unrecorded.
 ```bash
 libexec/raptor-run-lifecycle complete "$OUTPUT_DIR" --model <your-model-id>
@@ -170,8 +179,14 @@ Understanding output feeds into Gadi & JC's epic exploitability validation:
 - `context-map.json` → pre-populates `attack-surface.json` for Stage B
 - `flow-trace-*.json` → confirms reachability for Stage C
 - `variants.json` → expands `checklist.json` scope for Stage 0
+- `graph/raptor.graph.sqlite` → persistent project/run memory queried by
+  `/validate`, `/threat-model`, `/agentic`, and `/diagram`
 
-**Automatic bridge:** `/validate` Stage 0 automatically finds and imports `/understand` output. No `--out` alignment needed — the bridge searches co-located files, project siblings, and global `out/` (matching by target path and SHA-256 freshness). Just run both commands:
+**Automatic bridge:** `/validate` Stage 0 checks graph memory first, then falls
+back to finding and importing `/understand` JSON output. No `--out` alignment
+needed — the JSON fallback searches co-located files, project siblings, and
+global `out/` (matching by target path and SHA-256 freshness). Just run both
+commands:
 ```
 /understand ./src --map
 /validate ./src
