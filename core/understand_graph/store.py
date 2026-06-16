@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+import os
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -76,6 +77,7 @@ def open_graph(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -104,7 +106,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
     if current < 1:
         _migrate_1(conn)
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        current = 1
+    if current < 2:
+        _migrate_2(conn)
+        current = 2
+    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+        ("schema_version", str(SCHEMA_VERSION)),
+    )
 
 
 def _migrate_1(conn: sqlite3.Connection) -> None:
@@ -129,7 +139,7 @@ def _migrate_1(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS nodes (
             id TEXT PRIMARY KEY,
             kind TEXT NOT NULL,
-            stable_key TEXT NOT NULL UNIQUE,
+            stable_key TEXT NOT NULL,
             name TEXT NOT NULL DEFAULT '',
             file TEXT NOT NULL DEFAULT '',
             line_start INTEGER,
@@ -169,6 +179,8 @@ def _migrate_1(conn: sqlite3.Connection) -> None:
             ON snapshots(target_path, created_at);
         CREATE INDEX IF NOT EXISTS idx_nodes_kind_snapshot
             ON nodes(kind, snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot
+            ON nodes(stable_key, snapshot_id);
         CREATE INDEX IF NOT EXISTS idx_nodes_file
             ON nodes(file);
         CREATE INDEX IF NOT EXISTS idx_edges_kind_snapshot
@@ -181,5 +193,125 @@ def _migrate_1(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
-        ("schema_version", str(SCHEMA_VERSION)),
+        ("schema_version", "1"),
     )
+
+
+def _migrate_2(conn: sqlite3.Connection) -> None:
+    """Make node rows snapshot-scoped so graph diffs can compare history.
+
+    v1 used ``stable_key UNIQUE`` and updated the same node row on each ingest.
+    That worked as memory, but erased older snapshots' node membership. v2 keeps
+    stable_key for comparison while allowing one row per snapshot.
+    """
+    _recover_interrupted_v2_migration(conn)
+
+    cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(nodes)").fetchall()
+    }
+    if "stable_key" not in cols:
+        return
+
+    indexes = conn.execute("PRAGMA index_list(nodes)").fetchall()
+    has_unique_stable = False
+    for row in indexes:
+        if not bool(row["unique"]):
+            continue
+        index_cols = {
+            info["name"]
+            for info in conn.execute(f"PRAGMA index_info({row['name']})").fetchall()
+        }
+        if index_cols == {"stable_key"}:
+            has_unique_stable = True
+            break
+    if not has_unique_stable:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot ON nodes(stable_key, snapshot_id)"
+        )
+        return
+
+    suffix = f"{os.getpid()}_{id(conn) & 0xffff:x}"
+    nodes_old = f"nodes_v1_{suffix}"
+    edges_old = f"edges_v1_{suffix}"
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    conn.execute(f"ALTER TABLE nodes RENAME TO {nodes_old}")
+    conn.execute(
+        """
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            stable_key TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            file TEXT NOT NULL DEFAULT '',
+            line_start INTEGER,
+            line_end INTEGER,
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO nodes
+        (id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json)
+        SELECT id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json
+        FROM {nodes_old}
+        """
+    )
+    conn.execute(f"ALTER TABLE edges RENAME TO {edges_old}")
+    conn.execute(
+        """
+        CREATE TABLE edges (
+            id TEXT PRIMARY KEY,
+            src_id TEXT NOT NULL,
+            dst_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            confidence TEXT NOT NULL DEFAULT '',
+            snapshot_id TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            props_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO edges
+        (id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json)
+        SELECT id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json
+        FROM {edges_old}
+        """
+    )
+    conn.execute(f"DROP TABLE {edges_old}")
+    conn.execute(f"DROP TABLE {nodes_old}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_kind_snapshot ON nodes(kind, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_stable_snapshot ON nodes(stable_key, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_kind_snapshot ON edges(kind, snapshot_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id)")
+    conn.execute("PRAGMA legacy_alter_table=OFF")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _recover_interrupted_v2_migration(conn: sqlite3.Connection) -> None:
+    tables = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "nodes_v1" in tables and "nodes" in tables:
+        conn.execute("DROP TABLE nodes_v1")
+    elif "nodes_v1" in tables and "nodes" not in tables:
+        conn.execute("ALTER TABLE nodes_v1 RENAME TO nodes")
+    if "edges_v1" in tables and "edges" in tables:
+        conn.execute("DROP TABLE edges_v1")
+    elif "edges_v1" in tables and "edges" not in tables:
+        conn.execute("ALTER TABLE edges_v1 RENAME TO edges")

@@ -15,6 +15,7 @@ from core.threat_model import (
     prompt_context,
     render_report,
     save_model,
+    threat_model_prompt_block,
 )
 from core.verified_outcome.types import Oracle, OutcomeStatus, VerifiedOutcome
 
@@ -822,8 +823,17 @@ def test_cli_add_updates_markdown(tmp_path):
 
 def test_threat_model_prompt_block_returns_empty_for_no_model():
     from core.threat_model import threat_model_prompt_block
-    result = threat_model_prompt_block(Path("/nonexistent/target/xyz"))
+    with patch("core.threat_model.graph_risk_context_for_target", return_value=""):
+        result = threat_model_prompt_block(Path("/nonexistent/target/xyz"))
     assert result == ""
+
+
+def test_threat_model_prompt_block_can_use_graph_risks_without_model():
+    with patch("core.threat_model.load_for_target", return_value=None), \
+         patch("core.threat_model.graph_risk_context_for_target", return_value="Graph-backed risks from /understand memory:\n- EP -> SINK"):
+        block = threat_model_prompt_block(Path("/target"))
+    assert "[threat-model-context source=understand_graph]" in block
+    assert "Graph-backed risks" in block
 
 
 def test_threat_model_prompt_block_returns_context_for_existing_model(tmp_path):
@@ -835,7 +845,8 @@ def test_threat_model_prompt_block_returns_context_for_existing_model(tmp_path):
     md_path = tmp_path / "THREAT_MODEL.md"
     save_model(model, json_path, md_path)
 
-    with patch("core.threat_model.load_for_target", return_value=model):
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target", return_value=""):
         result = threat_model_prompt_block(tmp_path)
     assert "[threat-model-context" in result
     assert "focus areas" in result.lower() or "Focus areas" in result

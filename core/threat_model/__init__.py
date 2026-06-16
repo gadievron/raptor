@@ -775,11 +775,21 @@ def threat_model_prompt_block(target: Path) -> str:
     attacker-influenced symbol names in auto-derived models
     cannot forge envelope tags.
     """
+    graph_context = graph_risk_context_for_target(target)
+    if graph_context:
+        from core.security.prompt_envelope import neutralize_tag_forgery
+        graph_context = neutralize_tag_forgery(graph_context)
     model = load_for_target(target)
-    if not model:
+    if not model and not graph_context:
         return ""
-    content = prompt_context(model)
-    source = str(model.source or "operator").lower()
+    if model:
+        content = prompt_context(model)
+        source = str(model.source or "operator").lower()
+    else:
+        content = graph_context
+        source = "understand_graph"
+    if model and graph_context:
+        content = f"{content}\n{graph_context}"
     source = __import__("re").sub(r"[^a-z0-9_-]", "", source) or "operator"
     if source not in ("operator", "manual"):
         from core.security.prompt_envelope import neutralize_tag_forgery
@@ -803,20 +813,51 @@ def threat_model_untrusted_block(target: Path):
     Returns None when no model exists.
     """
     model = load_for_target(target)
-    if not model:
+    graph_context = graph_risk_context_for_target(target)
+    if graph_context:
+        from core.security.prompt_envelope import neutralize_tag_forgery
+        graph_context = neutralize_tag_forgery(graph_context)
+    if not model and not graph_context:
         return None
     from core.security.prompt_envelope import UntrustedBlock
-    source = str(model.source or "operator").lower()
+    source = str(model.source or "operator").lower() if model else "understand_graph"
     kind_label = (
         "operator-threat-model"
         if source in ("operator", "manual")
         else "untrusted-derived-threat-model"
     )
+    content = prompt_context(model) if model else ""
+    if graph_context:
+        content = f"{content}\n{graph_context}".strip()
     return UntrustedBlock(
-        content=prompt_context(model),
+        content=content,
         kind=kind_label,
         origin="project-threat-model",
     )
+
+
+def graph_risk_context_for_target(target: Path, *, limit: int = 8) -> str:
+    """Return compact graph-backed risks for a target, if project graph exists."""
+    try:
+        from core.project.project import ProjectManager
+        from core.understand_graph import graph_path_for_run, threat_model_graph_context
+
+        mgr = ProjectManager()
+        project = mgr.find_project_for_target(str(target))
+        if project is None:
+            active = mgr.get_active()
+            candidate = mgr.load(active) if active else None
+            if candidate and _same_path(candidate.target, target):
+                project = candidate
+        if project is not None:
+            graph_path = Path(project.output_dir) / "graph" / "raptor.graph.sqlite"
+        else:
+            graph_path = graph_path_for_run(Path("."), str(target))
+        if not graph_path.exists():
+            return ""
+        return threat_model_graph_context(graph_path, str(target), limit=limit)
+    except Exception:
+        return ""
 
 
 def lint_model(model: ThreatModel) -> list[dict[str, Any]]:

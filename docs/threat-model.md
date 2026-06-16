@@ -116,6 +116,19 @@ When a project has a threat model, `/agentic` passes a compact threat-model
 block into the `/understand` pre-pass, autonomous finding analysis, and the
 `/validate` post-pass.
 
+When the project also has `/understand` graph memory, RAPTOR adds a compact
+graph-risk block built from unchecked source-to-sink paths. This gives the
+model real attack-surface memory rather than just operator prose:
+
+```text
+Graph-backed risks from /understand memory:
+- EP-003 GET /search -> SINK-004 template render: no output encoding (high)
+```
+
+That graph block is treated as target-derived signal. It is brilliant for
+priority and context, but it is not proof until `/validate` or another oracle
+confirms it.
+
 The agents are told to use it as operator-owned context, not as proof. So it can
 raise or lower priority, steer variant hunting, and reduce rubbish, but a
 finding still needs code evidence or an oracle-backed validation result.

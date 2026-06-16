@@ -524,6 +524,11 @@ def load_understand_graph_context(
     save_json(validate_dir / "context-map.graph.json", context_map, mode=0o600)
     surface_stats = _merge_attack_surface(context_map, validate_dir, graph_path)
     map_smt_stats = _import_unchecked_flow_conditions(context_map, validate_dir)
+    graph_path_stats = _import_graph_attack_paths(
+        graph_path,
+        target_path,
+        validate_dir,
+    )
 
     summary.update({
         "graph_loaded": True,
@@ -532,6 +537,7 @@ def load_understand_graph_context(
         "stale_files_excluded": sorted(stale_files),
         "attack_surface": surface_stats,
         "map_smt_paths": map_smt_stats,
+        "graph_attack_paths": graph_path_stats,
         "context_map": context_map,
     })
     return summary
@@ -1675,6 +1681,75 @@ def _import_unchecked_flow_conditions(
         "imported_as_paths": imported,
         "skipped_no_conditions": skipped,
     }
+
+
+def _import_graph_attack_paths(
+    graph_path: Path,
+    target_path: str,
+    validate_dir: Path,
+) -> Dict[str, Any]:
+    """Import graph-derived source→sink paths into attack-paths.json."""
+    try:
+        from core.understand_graph import attack_paths as _graph_attack_paths
+    except Exception as exc:
+        logger.debug("understand_bridge: graph attack path API unavailable: %s", exc)
+        return {"count": 0, "imported_as_paths": 0}
+
+    graph_paths = _graph_attack_paths(
+        graph_path,
+        target_path,
+        unchecked_only=True,
+        limit=100,
+    )
+    if not graph_paths:
+        return {"count": 0, "imported_as_paths": 0}
+
+    save_json(validate_dir / "graph-priority-paths.json", graph_paths, mode=0o600)
+
+    paths_path = validate_dir / "attack-paths.json"
+    existing_paths: List[Dict[str, Any]] = []
+    if paths_path.exists():
+        loaded = load_json(paths_path)
+        if isinstance(loaded, list):
+            existing_paths = loaded
+    existing_ids = {p.get("id") for p in existing_paths if isinstance(p, dict) and p.get("id")}
+
+    imported = 0
+    for item in graph_paths:
+        path_id = item.get("id")
+        if not path_id or path_id in existing_ids:
+            continue
+        entry = item.get("entry") or {}
+        sink = item.get("sink") or {}
+        attack_path = {
+            "id": path_id,
+            "name": f"Graph path: {entry.get('label') or entry.get('id')} → {sink.get('label') or sink.get('id')}",
+            "finding": str(sink.get("id") or ""),
+            "steps": item.get("steps") or [],
+            "proximity": 7 if item.get("unchecked") else 4,
+            "proximity_description": (
+                "Graph memory shows attacker-controlled entry reaching a sink "
+                "with no effective trust boundary recorded."
+                if item.get("unchecked") else
+                "Graph memory shows a bounded entry-to-sink path."
+            ),
+            "blockers": [],
+            "status": "uncertain",
+            "source": "understand:graph",
+            "confidence": item.get("confidence") or "candidate",
+            "evidence": item.get("evidence") or {},
+            "missing_boundary": item.get("missing_boundary") or "",
+            "imported_from": str(graph_path),
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+        }
+        existing_paths.append(attack_path)
+        existing_ids.add(path_id)
+        imported += 1
+
+    if imported:
+        save_json(paths_path, existing_paths, mode=0o600)
+
+    return {"count": len(graph_paths), "imported_as_paths": imported}
 
 
 def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:

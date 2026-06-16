@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 NODE_KINDS = {
     "file",
