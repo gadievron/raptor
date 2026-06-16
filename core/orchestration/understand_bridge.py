@@ -589,6 +589,7 @@ def load_understand_context(
 
 
 
+
 def load_understand_graph_context(
     validate_dir: Path,
     target_path: str,
@@ -1901,6 +1902,7 @@ def _sanitise_and_stamp_paths(paths: list) -> None:
     sanitise_free_text(paths, {"items": ATTACK_PATH_SCHEMA})
     stamp_provenance(paths, _BRIDGE_GENERATOR, untrusted=True,
                      overwrite_generator=False)
+
 
 
 

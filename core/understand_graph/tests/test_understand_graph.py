@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 from core.json import save_json
@@ -87,6 +88,31 @@ def test_ingest_summary_and_context_map(tmp_path):
     assert context_map["entry_points"][0]["id"] == "EP-001"
     assert context_map["unchecked_flows"][0]["sink"] == "SINK-001"
     assert reachable_sinks(graph_path, str(target))[0]["sink"] == "render"
+
+
+def test_context_map_backfills_name_from_graph_row(tmp_path):
+    target = tmp_path / "target"
+    run_dir = tmp_path / "understand-run"
+    _write_fixture_run(run_dir, target)
+
+    graph_path = ingest_run(run_dir, str(target))
+    with sqlite3.connect(graph_path) as conn:
+        row = conn.execute(
+            "SELECT id, props_json FROM nodes WHERE kind='entry_point' LIMIT 1"
+        ).fetchone()
+        props = json.loads(row[1])
+        props.pop("name", None)
+        props.pop("entry", None)
+        props.pop("path", None)
+        conn.execute(
+            "UPDATE nodes SET props_json=? WHERE id=?",
+            (json.dumps(props, sort_keys=True), row[0]),
+        )
+
+    context_map, stale = build_context_map(graph_path, str(target))
+    assert stale == set()
+    assert context_map["entry_points"][0]["name"] == "GET /search"
+    assert context_map["entry_points"][0]["entry"] == "GET /search"
 
 
 def test_prompt_context_for_location(tmp_path):

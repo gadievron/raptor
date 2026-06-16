@@ -58,6 +58,7 @@ def build_context_map(db_path: Path, target_path: Optional[str] = None) -> tuple
         ).fetchall()
         for row in rows:
             props = json_loads(row["props_json"])
+            _backfill_node_props(props, row)
             file = props.get("file") or props.get("path") or row["file"]
             if file and file in stale_files:
                 continue
@@ -85,6 +86,25 @@ def build_context_map(db_path: Path, target_path: Optional[str] = None) -> tuple
             "snapshot_id": snapshot["id"],
         }
         return context_map, stale_files
+
+
+def _backfill_node_props(props: dict[str, Any], row: Any) -> None:
+    """Add stable node-row fields that older ingests did not store in props."""
+    row_name = row["name"] if "name" in row.keys() else None
+    row_file = row["file"] if "file" in row.keys() else None
+    row_line = row["line_start"] if "line_start" in row.keys() else None
+    if row_name and not props.get("name"):
+        props["name"] = row_name
+    if row_file and not props.get("file"):
+        props["file"] = row_file
+    if row_line and not props.get("line"):
+        props["line"] = row_line
+    if row["kind"] == "entry_point":
+        if row_name and not props.get("entry") and not props.get("path"):
+            props["entry"] = row_name
+    elif row["kind"] == "sink":
+        if row_name and not props.get("operation") and not props.get("location"):
+            props["operation"] = row_name
 
 
 def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[dict[str, Any]]:
