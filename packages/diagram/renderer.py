@@ -11,7 +11,7 @@ from typing import Optional
 
 from core.json import load_json as _load_json
 
-from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary
+from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses, findings_summary, graph_memory
 
 
 _FLOW_TRACE_GLOB = "flow-trace-*.json"
@@ -230,6 +230,22 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
         except Exception as exc:
             sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {exc}"))
 
+    # --- Graph-priority paths (Stage 0 graph handoff) ---
+    graph_paths_path = out_dir / "graph-priority-paths.json"
+    if graph_paths_path.exists():
+        try:
+            data = _load_json(graph_paths_path)
+            if data is None:
+                raise ValueError("failed to parse JSON")
+            if isinstance(data, dict):
+                data = data.get("paths") or data.get("graph_paths") or data.get("items") or []
+            if isinstance(data, list):
+                diagram = graph_memory.generate_priority_paths(data)
+                body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{diagram}\n```"
+                sections.append(_section("Graph Priority Paths", body))
+        except Exception as exc:
+            sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {exc}"))
+
     # --- Attack paths ---
     paths_path = out_dir / "attack-paths.json"
     if paths_path.exists():
@@ -244,6 +260,22 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 sections.append(_section("Attack Paths", body))
         except Exception as exc:
             sections.append(_section("Attack Paths", f"> Could not render `attack-paths.json`: {exc}"))
+
+    # --- Graph diff output ---
+    for diff_name in ("graph-diff.json", "understand-graph-diff.json"):
+        diff_path = out_dir / diff_name
+        if not diff_path.exists():
+            continue
+        try:
+            data = _load_json(diff_path)
+            if data is None:
+                raise ValueError("failed to parse JSON")
+            if isinstance(data, dict):
+                diagram = graph_memory.generate_diff(data)
+                body = f"_Source: `{diff_name}`_\n\n```mermaid\n{diagram}\n```"
+                sections.append(_section("Graph Snapshot Diff", body))
+        except Exception as exc:
+            sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {exc}"))
 
     if len(sections) <= 1:
         sections.append("> No renderable JSON outputs found in this directory.\n")
