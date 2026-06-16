@@ -26,7 +26,7 @@ class CCDispatchConfig:
     timeout_s: int = 300
     json_schema: dict[str, Any] | None = None
     capture_json_envelope: bool = True
-    # System prompt passed via the `--system` flag rather than
+    # System prompt passed via the `--system-prompt` flag rather than
     # prepended to the user prompt. Pre-fix `ClaudeCodeLLMProvider`
     # concatenated `f"{system_prompt}\n\n{prompt}"` and sent the
     # combined text as the user message — the model then saw it as
@@ -62,11 +62,11 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
         "--max-budget-usd", config.budget_usd,
     ]
     if config.system_prompt is not None and config.system_prompt.strip():
-        # `--system` keeps the system prompt in its own
+        # `--system-prompt` keeps the system prompt in its own
         # role-channel rather than concatenated to the user
         # prompt. See CCDispatchConfig.system_prompt comment for
         # the prompt-injection rationale.
-        cmd.extend(["--system", config.system_prompt])
+        cmd.extend(["--system-prompt", config.system_prompt])
     for d in config.add_dirs:
         cmd.extend(["--add-dir", str(d)])
     if config.capture_json_envelope:
