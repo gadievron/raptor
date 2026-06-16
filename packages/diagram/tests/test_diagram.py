@@ -10,6 +10,7 @@ from ..context_map import generate as gen_context_map
 from ..flow_trace import generate as gen_flow_trace
 from ..attack_tree import generate as gen_attack_tree
 from ..attack_paths import generate as gen_attack_paths, generate_single
+from ..graph_memory import generate_priority_paths as gen_graph_paths, generate_diff as gen_graph_diff
 from ..hypotheses import generate as gen_hypotheses
 from ..renderer import render_directory, render_and_write
 
@@ -1063,6 +1064,50 @@ class TestAttackPaths:
 
 
 # ---------------------------------------------------------------------------
+# graph memory tests
+# ---------------------------------------------------------------------------
+
+class TestGraphMemory:
+    def test_graph_priority_paths_render_risk_flow(self):
+        out = gen_graph_paths([{
+            "id": "graph-path-EP-001-SINK-001",
+            "entry": {"id": "EP-001", "label": "GET /search", "location": "routes.py:10"},
+            "sink": {"id": "SINK-001", "label": "template render", "location": "views.py:20"},
+            "risk_score": 80,
+            "confidence": "high",
+            "missing_boundary": "No output encoding",
+        }])
+        assert "flowchart LR" in out
+        assert "GET /search" in out
+        assert "template render" in out
+        assert "risk 80" in out
+        assert_no_mermaid_directive_injection(out)
+
+    def test_graph_diff_renders_new_risks(self):
+        out = gen_graph_diff({
+            "is_diffable": True,
+            "base_snapshot": {"id": "snap:old"},
+            "head_snapshot": {"id": "snap:new"},
+            "new_risks": [{
+                "source": "GET /upload",
+                "sink": "filesystem write",
+                "confidence": "high",
+            }],
+            "reachability": {"added": [], "removed": []},
+            "nodes": {"sink": {"added": [{"id": "SINK-2"}], "removed": []}},
+        })
+        assert "flowchart TD" in out
+        assert "New risk" in out
+        assert "GET /upload" in out
+        assert "filesystem write" in out
+        assert_no_mermaid_directive_injection(out)
+
+    def test_graph_diff_not_diffable_renders_reason(self):
+        out = gen_graph_diff({"is_diffable": False, "reason": "need at least two snapshots"})
+        assert "need at least two snapshots" in out
+
+
+# ---------------------------------------------------------------------------
 # renderer tests
 # ---------------------------------------------------------------------------
 
@@ -1125,6 +1170,37 @@ class TestRenderer:
         self._make_out_dir(tmp_path, {"attack-paths.json": ATTACK_PATHS_DATA})
         out = render_directory(tmp_path)
         assert "Attack Paths" in out
+
+    def test_render_directory_with_graph_priority_paths(self, tmp_path):
+        self._make_out_dir(tmp_path, {
+            "graph-priority-paths.json": [{
+                "id": "graph-path-EP-001-SINK-001",
+                "entry": {"id": "EP-001", "label": "GET /search"},
+                "sink": {"id": "SINK-001", "label": "template render"},
+                "risk_score": 80,
+                "confidence": "high",
+                "missing_boundary": "No output encoding",
+            }]
+        })
+        out = render_directory(tmp_path)
+        assert "Graph Priority Paths" in out
+        assert "GET /search" in out
+        assert "template render" in out
+
+    def test_render_directory_with_graph_diff(self, tmp_path):
+        self._make_out_dir(tmp_path, {
+            "graph-diff.json": {
+                "is_diffable": True,
+                "base_snapshot": {"id": "snap:old"},
+                "head_snapshot": {"id": "snap:new"},
+                "new_risks": [{"source": "GET /upload", "sink": "filesystem write"}],
+                "reachability": {"added": [], "removed": []},
+                "nodes": {},
+            }
+        })
+        out = render_directory(tmp_path)
+        assert "Graph Snapshot Diff" in out
+        assert "GET /upload" in out
 
     def test_render_empty_directory(self, tmp_path):
         out = render_directory(tmp_path)
