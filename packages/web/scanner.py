@@ -204,6 +204,18 @@ Examples:
         help="Optional ffuf response size filter for -fs",
     )
     parser.add_argument(
+        "--ffuf-header",
+        action="append",
+        default=[],
+        help="Header to pass to ffuf; repeatable, e.g. --ffuf-header 'Header-Name: value'",
+    )
+    parser.add_argument(
+        "--ffuf-cookie",
+        action="append",
+        default=[],
+        help="Cookie to pass to ffuf; repeatable, e.g. --ffuf-cookie 'session=...'",
+    )
+    parser.add_argument(
         "--reveal-secrets",
         action="store_true",
         help="Preserve secrets in web artifacts for local debugging; defaults to redaction",
@@ -228,6 +240,8 @@ def build_ffuf_config(args) -> Optional[FfufConfig]:
         match_status=args.ffuf_match_status or None,
         filter_status=args.ffuf_filter_status or None,
         filter_size=args.ffuf_filter_size,
+        headers=tuple(args.ffuf_header or ()),
+        cookies=tuple(args.ffuf_cookie or ()),
     )
 
 
