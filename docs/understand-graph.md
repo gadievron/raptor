@@ -54,6 +54,26 @@ Nodes and reachability edges also carry lightweight evidence metadata:
 - `/agentic` adds nearby graph facts to each finding's metadata prompt block.
 - `/diagram` can render graph memory when local diagram JSON is missing.
 
+## Diagram Output
+
+`/diagram` understands the graph-specific artefacts now:
+
+- `graph-priority-paths.json` renders as entry → sink paths with risk,
+  confidence, and missing-boundary notes. This is the visual version of what
+  Stage 0 handed to `/validate`.
+- `graph-diff.json` or `understand-graph-diff.json` renders the latest graph
+  drift: new risks, added reachability, removed reachability, and node-count
+  changes.
+- `graph/raptor.graph.sqlite` still renders as a context-map fallback when a
+  directory has no local `context-map.json`.
+
+Example:
+
+```bash
+libexec/raptor-graph-query --project myapp --diff --json > out/projects/myapp/graph-diff.json
+/diagram out/projects/myapp --target myapp
+```
+
 ## Operator Query
 
 ```bash
