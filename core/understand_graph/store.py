@@ -19,6 +19,39 @@ def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path
     standalone runs, the graph lives under the run directory.
     """
     run_dir = Path(run_dir)
+    try:
+        from core.project.project import ProjectManager
+
+        mgr = ProjectManager()
+        run_resolved = run_dir.resolve()
+        projects = mgr.list_projects()
+
+        # Strongest signal: the caller passed a run dir that is already under a
+        # project output directory. Prefer that project over any other project
+        # pointing at the same target, otherwise duplicate test projects can
+        # steal each other's graph memory.
+        for project in projects:
+            out_dir = Path(project.output_dir).resolve()
+            try:
+                run_resolved.relative_to(out_dir)
+                return out_dir / "graph" / GRAPH_FILENAME
+            except ValueError:
+                continue
+
+        active_name = mgr.get_active()
+        if active_name:
+            active = mgr.load(active_name)
+            if active is not None:
+                if not target_path:
+                    return Path(active.output_dir) / "graph" / GRAPH_FILENAME
+                try:
+                    if Path(active.target).resolve() == Path(target_path).resolve():
+                        return Path(active.output_dir) / "graph" / GRAPH_FILENAME
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
     if target_path:
         try:
             from core.project.project import ProjectManager
