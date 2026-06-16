@@ -91,6 +91,115 @@ def test_build_command_rejects_invalid_numeric_options(
         runner.build_command(FfufConfig(wordlist=wordlist, **config_kwargs), tmp_path / "out.json")
 
 
+
+def test_build_command_threads_authenticated_ffuf_options(tmp_path: Path):
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    output = tmp_path / "ffuf_results.json"
+    bearer = "Authorization: Bearer " + "a" * 32
+
+    runner = FfufRunner("https://example.test", tmp_path)
+    cmd = runner.build_command(
+        FfufConfig(
+            wordlist=wordlist,
+            headers=(bearer, "X-Tenant: test"),
+            cookies=("session=" + "b" * 32, "pref=dark"),
+        ),
+        output,
+    )
+
+    assert cmd[cmd.index("-H") + 1] == bearer
+    assert [cmd[idx + 1] for idx, value in enumerate(cmd) if value == "-H"] == [
+        bearer,
+        "X-Tenant: test",
+    ]
+    assert [cmd[idx + 1] for idx, value in enumerate(cmd) if value == "-b"] == [
+        "session=" + "b" * 32,
+        "pref=dark",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config_kwargs", "message"),
+    [
+        ({"headers": ("X-Test: ok\nInjected: yes",)}, "headers must not contain newlines"),
+        ({"headers": ("X-Test: ok\rInjected: yes",)}, "headers must not contain newlines"),
+        ({"headers": ("Bearer abc123",)}, "headers must be in 'Name: value' form"),
+        ({"headers": (": abc123",)}, "headers must be in 'Name: value' form"),
+        ({"cookies": ("session=ok\nother=yes",)}, "cookies must not contain newlines"),
+        ({"cookies": ("session=ok\rother=yes",)}, "cookies must not contain newlines"),
+    ],
+)
+def test_build_command_rejects_header_cookie_newlines(
+    tmp_path: Path,
+    config_kwargs: dict[str, tuple[str, ...]],
+    message: str,
+):
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    runner = FfufRunner("https://example.test", tmp_path)
+
+    with pytest.raises(ValueError, match=message):
+        runner.build_command(FfufConfig(wordlist=wordlist, **config_kwargs), tmp_path / "out.json")
+
+
+def test_run_redacts_authenticated_ffuf_options_from_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
+
+    def fake_run(cmd, **kwargs):
+        output_path = Path(cmd[cmd.index("-o") + 1])
+        output_path.write_text(json.dumps({"results": []}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
+    bearer = "Authorization: Bearer " + "a" * 32
+    cookie = "session=" + "b" * 32
+
+    messages: list[str] = []
+    monkeypatch.setattr("packages.web.ffuf.logger.info", messages.append)
+
+    runner = FfufRunner("https://example.test", tmp_path)
+    runner.run(FfufConfig(wordlist=wordlist, headers=(bearer,), cookies=(cookie,)))
+
+    logs = "\n".join(messages)
+    assert "Authorization: [REDACTED]" in logs
+    assert "session=[REDACTED]" in logs
+    assert "a" * 32 not in logs
+    assert "b" * 32 not in logs
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization: Token abc123",
+        "Authorization: ApiKey short",
+        'Authorization: Digest username="u", nonce="n"',
+        "Proxy-Authorization: Negotiate abc",
+    ],
+)
+def test_redacts_authorization_headers_without_relying_on_token_shape(
+    tmp_path: Path,
+    header: str,
+):
+    runner = FfufRunner("https://example.test", tmp_path)
+
+    assert runner._redact_header_value(header) == f"{header.split(':', 1)[0]}: [REDACTED]"
+
+
+def test_cookie_redaction_preserves_separator_spacing(tmp_path: Path):
+    runner = FfufRunner("https://example.test", tmp_path)
+
+    assert (
+        runner._redact_cookie_value("session=abc123; pref=dark")
+        == "session=[REDACTED]; pref=[REDACTED]"
+    )
+
+
 def test_run_requires_explicit_ffuf_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
@@ -200,6 +309,8 @@ def test_scanner_cli_wires_all_ffuf_options(tmp_path: Path):
 
     wordlist = tmp_path / "words.txt"
     wordlist.write_text("admin\n", encoding="utf-8")
+    auth_header = "Authorization: Bearer " + "a" * 32
+    session_cookie = "session=" + "b" * 32
     args = build_arg_parser().parse_args(
         [
             "--url",
@@ -227,6 +338,14 @@ def test_scanner_cli_wires_all_ffuf_options(tmp_path: Path):
             "403,404",
             "--ffuf-filter-size",
             "1234",
+            "--ffuf-header",
+            auth_header,
+            "--ffuf-header",
+            "X-Tenant: test",
+            "--ffuf-cookie",
+            session_cookie,
+            "--ffuf-cookie",
+            "pref=dark",
         ]
     )
 
@@ -245,6 +364,8 @@ def test_scanner_cli_wires_all_ffuf_options(tmp_path: Path):
     assert config.match_status == "200,401"
     assert config.filter_status == "403,404"
     assert config.filter_size == 1234
+    assert config.headers == (auth_header, "X-Tenant: test")
+    assert config.cookies == (session_cookie, "pref=dark")
 
 
 def test_scanner_cli_can_omit_optional_ffuf_match_and_filter_status(tmp_path: Path):
