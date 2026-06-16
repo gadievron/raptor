@@ -79,7 +79,7 @@ packaging==25.0
 # packages/zkpox/__init__.py; the package degrades to ImportError if
 # either is missing. /prove-exploit and /verify-exploit-proof commands
 # require these.
-# cryptography==45.0.4
+# cryptography==48.0.1   # 45.0.4 had GHSA-537c-gmf6-5ccf (vulnerable bundled OpenSSL)
 # cbor2==6.0.1
 
 # SCA hard deps (defusedxml, packaging, pyyaml) are pinned above. The

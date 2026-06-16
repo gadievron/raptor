@@ -33,7 +33,10 @@ beautifulsoup4==4.14.3
 # disclosure / anchor / envelope / prove tests actually run in CI instead
 # of importorskip-ing. Tests keep their importorskip guards as
 # defense-in-depth for devs running pytest without these installed.
-cryptography==45.0.4
+# cryptography 45.0.4 carried GHSA-537c-gmf6-5ccf (High, CVSS 7.5): the
+# PyPI wheels statically link a vulnerable OpenSSL (OOB read → DoS).
+# Fixed in 48.0.1.
+cryptography==48.0.1
 cbor2==6.0.1
 
 # test for Z3 solver
