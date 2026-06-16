@@ -919,6 +919,7 @@ def check_tcp_probe(
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
                 sock = ctx.wrap_socket(raw_sock, server_hostname=host_ip)
             else:
                 sock = raw_sock

@@ -13,6 +13,7 @@ import json
 import subprocess
 import tarfile
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -644,7 +645,7 @@ def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
         url = req.full_url if hasattr(req, "full_url") else str(req)
         if "api.github.com/repos/foo/bar/tags" in url:
             return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
-        if "codeload.github.com" in url:
+        if urllib.parse.urlparse(url).hostname == "codeload.github.com":
             return _FakeResp(tarball)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)
@@ -1003,7 +1004,7 @@ def test_phase61_tarball_filter_blocks_absolute_symlink(tmp_path: Path) -> None:
         url = req.full_url if hasattr(req, "full_url") else str(req)
         if "api.github.com/repos/foo/bar/tags" in url:
             return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
-        if "codeload.github.com" in url:
+        if urllib.parse.urlparse(url).hostname == "codeload.github.com":
             return _FakeResp(malicious)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)
@@ -1051,7 +1052,7 @@ def test_phase61_tarball_filter_blocks_relative_escape_symlink(
         url = req.full_url if hasattr(req, "full_url") else str(req)
         if "api.github.com/repos/foo/bar/tags" in url:
             return _FakeResp(json.dumps([{"name": "v1.5"}]).encode())
-        if "codeload.github.com" in url:
+        if urllib.parse.urlparse(url).hostname == "codeload.github.com":
             return _FakeResp(malicious)
         msg = f"unexpected url: {url}"
         raise AssertionError(msg)

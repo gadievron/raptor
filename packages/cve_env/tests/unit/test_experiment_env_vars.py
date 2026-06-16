@@ -15,6 +15,16 @@ from unittest.mock import patch
 from cve_env.tools.image_resolve import _candidate_refs
 
 
+def _registry_host(ref: str) -> str:
+    """First path segment of a candidate ref (the registry hostname).
+
+    Used in assertions to check the registry exactly rather than via
+    substring/prefix matching (which CodeQL's
+    ``py/incomplete-url-substring-sanitization`` rule flags).
+    """
+    return ref.split("/", 1)[0].split(":", 1)[0].lower()
+
+
 class TestDenyRegistryEnv:
     def _refs(self, env_value: str | None) -> list[str]:
         env = dict(os.environ)
@@ -27,22 +37,22 @@ class TestDenyRegistryEnv:
 
     def test_unset_env_yields_full_cascade(self) -> None:
         refs = self._refs(None)
-        assert any("vulhub" in r for r in refs)
-        assert any(r.startswith("docker.io/") for r in refs)
+        assert any(_registry_host(r) == "vulhub" for r in refs)
+        assert any(_registry_host(r) == "docker.io" for r in refs)
         assert any("library/drupal" in r for r in refs)
-        assert any("mirror.gcr.io" in r for r in refs)
+        assert any(_registry_host(r) == "mirror.gcr.io" for r in refs)
 
     def test_empty_env_yields_full_cascade(self) -> None:
         refs = self._refs("")
-        assert any("vulhub" in r for r in refs)
-        assert any(r.startswith("docker.io/") for r in refs)
+        assert any(_registry_host(r) == "vulhub" for r in refs)
+        assert any(_registry_host(r) == "docker.io" for r in refs)
 
     def test_deny_vulhub_drops_only_vulhub(self) -> None:
         refs = self._refs("vulhub")
-        assert not any(r.startswith("vulhub/") for r in refs)
+        assert not any(_registry_host(r) == "vulhub" for r in refs)
         # Other registries preserved
-        assert any(r.startswith("mirror.gcr.io") for r in refs)
-        assert any(r.startswith("docker.io/") for r in refs)
+        assert any(_registry_host(r) == "mirror.gcr.io" for r in refs)
+        assert any(_registry_host(r) == "docker.io" for r in refs)
 
     def test_deny_docker_io_drops_full_dockerhub_family(self) -> None:
         """docker.io deny drops every Docker Hub-resolved ref:
@@ -53,32 +63,33 @@ class TestDenyRegistryEnv:
         'localhost' is a Docker Hub user namespace.
         """
         refs = self._refs("docker.io")
-        assert not any(r.startswith("docker.io/") for r in refs)
-        assert not any(r.startswith("library/") for r in refs)
+        assert not any(_registry_host(r) == "docker.io" for r in refs)
+        assert not any(_registry_host(r) == "library" for r in refs)
         assert not any(r == "drupal:8.5.0" for r in refs)
-        assert not any(r.startswith("vulhub/") for r in refs)  # also Docker Hub
+        assert not any(_registry_host(r) == "vulhub" for r in refs)  # also Docker Hub
         # Non-Docker-Hub registries preserved
-        assert any(r.startswith("mirror.gcr.io") for r in refs)
-        assert any(r.startswith("ghcr.io") for r in refs)
+        assert any(_registry_host(r) == "mirror.gcr.io" for r in refs)
+        assert any(_registry_host(r) == "ghcr.io" for r in refs)
 
     def test_deny_both_vulhub_and_docker_io(self) -> None:
         """The deep-explore bench config: skip both."""
         refs = self._refs("vulhub,docker.io")
         for r in refs:
-            assert not r.startswith("vulhub/"), r
-            assert not r.startswith("library/"), r
-            assert not r.startswith("docker.io/"), r
+            host = _registry_host(r)
+            assert host != "vulhub", r
+            assert host != "library", r
+            assert host != "docker.io", r
             assert "/" in r, f"bare name not filtered: {r}"
         # Should leave only the alternate registries
-        assert any(r.startswith("mirror.gcr.io") for r in refs)
-        assert any(r.startswith("public.ecr.aws") for r in refs)
+        assert any(_registry_host(r) == "mirror.gcr.io" for r in refs)
+        assert any(_registry_host(r) == "public.ecr.aws" for r in refs)
 
     def test_unknown_registry_in_deny_is_ignored(self) -> None:
         """Robustness: typos shouldn't crash. Unknown deny terms have no effect."""
         refs = self._refs("nonexistent-registry")
         # Full cascade preserved
-        assert any("vulhub" in r for r in refs)
-        assert any(r.startswith("docker.io/") for r in refs)
+        assert any(_registry_host(r) == "vulhub" for r in refs)
+        assert any(_registry_host(r) == "docker.io" for r in refs)
 
 
 class TestExtraPromptPrefixEnv:

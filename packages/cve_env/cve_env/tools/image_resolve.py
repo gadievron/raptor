@@ -187,12 +187,51 @@ def _candidate_refs(product: str, version: str) -> list[str]:
     return _filter_denied_registries(out)
 
 
+_DOCKERHUB_ALIASES = frozenset({
+    "docker.io",
+    "dockerhub",
+    "index.docker.io",
+    "registry-1.docker.io",
+})
+
+
+def _normalize_registry_token(raw: str) -> str:
+    """Normalize an operator-supplied registry token to a comparable host.
+
+    Accepts URL-ish inputs (``https://docker.io/v2/``), host:port
+    (``mirror.gcr.io:443``), or bare hostnames. Returns the lowercase
+    hostname stripped of scheme, port, path, and trailing dots. The
+    Docker Hub aliases (``index.docker.io``, ``registry-1.docker.io``,
+    ``dockerhub``) collapse to ``docker.io``.
+    """
+    token = raw.strip().lower()
+    if not token:
+        return ""
+    # Strip scheme.
+    if "://" in token:
+        token = token.split("://", 1)[1]
+    # Strip path / query.
+    token = token.split("/", 1)[0]
+    token = token.split("?", 1)[0]
+    # Strip port (handle bracketed IPv6 separately if it ever shows up).
+    if token.startswith("[") and "]" in token:
+        token = token[1 : token.index("]")]
+    elif ":" in token:
+        token = token.rsplit(":", 1)[0]
+    token = token.rstrip(".")
+    if token in _DOCKERHUB_ALIASES:
+        return "docker.io"
+    return token
+
+
 def _filter_denied_registries(candidates: list[str]) -> list[str]:
     """Filter the cascade by ``CVE_ENV_DENY_REGISTRY`` env var (if set).
 
     Used by experimental benches that want to test what the engine does
     when its highest-success registries are unavailable. Comma-separated
     list of registry tokens; matches first-path-segment exactly.
+    Operators may pass URL-ish forms (``https://docker.io``) — values are
+    normalized to a bare hostname before comparison.
 
     Special handling for ``docker.io``: also drops bare-name refs
     (``foo:1.0``) and ``library/*`` (which both default to Docker Hub).
@@ -202,15 +241,19 @@ def _filter_denied_registries(candidates: list[str]) -> list[str]:
     denied_str = os.environ.get("CVE_ENV_DENY_REGISTRY", "").strip()
     if not denied_str:
         return candidates
-    denied = {d.strip().lower() for d in denied_str.split(",") if d.strip()}
+    denied = {
+        normalized
+        for d in denied_str.split(",")
+        if (normalized := _normalize_registry_token(d))
+    }
     if not denied:
         return candidates
 
-    drop_dockerhub = "docker.io" in denied or "dockerhub" in denied
+    drop_dockerhub = "docker.io" in denied
     out: list[str] = []
     for c in candidates:
         cl = c.lower()
-        first_seg = cl.split("/", 1)[0].split(":", 1)[0]
+        first_seg = _normalize_registry_token(cl.split("/", 1)[0])
         if first_seg in denied:
             continue
         if drop_dockerhub:

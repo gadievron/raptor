@@ -120,33 +120,43 @@ _BUILD_CONFIG_TO_TYPE: dict[str, str] = {
 # -- pure helpers ----------------------------------------------------------
 
 
+# SCP-style git URL: ``[user@]host:path``. Matched explicitly because urlparse
+# treats them as relative paths.
+_SCP_GIT_RE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(.+)$")
+_GITHUB_GIT_SCHEMES = frozenset({"http", "https", "git", "ssh", "git+http", "git+https", "git+ssh"})
+
+
 def normalize_github_url(url: str | None) -> str | None:
     """Coerce any GitHub URL form into ``https://github.com/<owner>/<repo>``.
 
     Returns ``None`` for non-GitHub URLs or malformed inputs.
 
-    Host validation is exact (``urlparse(url).netloc.lower() == "github.com"``)
-    to prevent bypass via URLs like ``https://attacker.com/github.com/evil/repo``.
+    Host validation uses ``urlparse(url).hostname`` (port/userinfo stripped)
+    to prevent bypass via URLs like ``https://attacker.com/github.com/evil/repo``
+    or ``https://github.com@attacker.com/x/y``.
     """
     if not url:
         return None
-    # Scheme rewrites — convert known git URL forms to https before parsing.
-    if url.startswith("git://github.com"):
-        url = url.replace("git://github.com", "https://github.com")
-    if url.startswith("git+https://"):
-        url = url.removeprefix("git+")
-    if url.startswith("git+ssh://"):
-        url = url.replace("git+ssh://git@github.com", "https://github.com")
-    if url.startswith("git@github.com:"):
-        url = url.replace("git@github.com:", "https://github.com/")
+    url = url.strip()
     if url.endswith(".git"):
         url = url.removesuffix(".git")
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return None
-    if parsed.netloc.lower() != "github.com":
-        return None
-    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    # SCP-style (``git@github.com:owner/repo``) first — urlparse misreads it.
+    scp_match = _SCP_GIT_RE.match(url)
+    if scp_match and "://" not in url:
+        host, path = scp_match.group(1), scp_match.group(2)
+        if host.lower() != "github.com":
+            return None
+        parts = [p for p in path.strip("/").split("/") if p]
+    else:
+        parsed = urllib.parse.urlparse(url)
+        scheme = parsed.scheme.lower()
+        if scheme.startswith("git+"):
+            scheme = scheme.removeprefix("git+")
+        if scheme not in {"http", "https", "git", "ssh"}:
+            return None
+        if (parsed.hostname or "").lower() != "github.com":
+            return None
+        parts = [p for p in parsed.path.strip("/").split("/") if p]
     if len(parts) < 2:
         return None
     owner, repo = parts[0], parts[1]

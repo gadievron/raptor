@@ -54,7 +54,7 @@ def _docker_hub_indices(cands: list[str]) -> list[int]:
         if "/" not in c:
             out.append(i)  # bare name → DH default
             continue
-        if c.startswith("docker.io/"):
+        if first == "docker.io":
             out.append(i)
             continue
         if "." not in first and ":" not in first and first != "localhost":
