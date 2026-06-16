@@ -8,31 +8,23 @@ with unchecked flows shown as dashed edges.
 from __future__ import annotations
 
 import html
-import re
+
+from core.json import load_json
 from pathlib import Path
 from typing import Any
 
-from core.json import load_json
-
-from .sanitize import sanitize as _sanitize
-from .sanitize import sanitize_id as _sid
-
-_C0_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
+from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 
-def _addr(v: Any) -> str:
-    if v is None:
-        return ""
-    if isinstance(v, int):
-        return hex(v)
-    return str(v)
+def _node_id(prefix: str, index: int) -> str:
+    return f"{prefix}{index:03d}"
 
 
 def _text(value: Any) -> str:
+    """Return label-safe text while preserving readable operators."""
     if value is None:
         return ""
-    raw = _C0_RE.sub(" ", html.unescape(str(value)))
-    return _sanitize(raw).replace("-&gt;", "->")
+    return _sanitize(html.unescape(str(value))).replace("-&gt;", "->")
 
 
 def _first_text(item: dict[str, Any], *keys: str) -> str:
@@ -49,26 +41,13 @@ def _first_text(item: dict[str, Any], *keys: str) -> str:
 def _entry_label(ep: dict[str, Any]) -> str:
     method = _first_text(ep, "method")
     route = _first_text(ep, "path", "entry", "route", "name", "function", "id")
-    if method and route and not (route.startswith(method + " ") or route == method):
+    if method and route and not route.startswith(method):
         return f"{method} {route}"
     return route or "?"
 
 
 def _sink_label(sink: dict[str, Any]) -> str:
     return _first_text(sink, "operation", "location", "name", "type", "id") or "?"
-
-
-def _location_text(item: dict[str, Any], *, compact_binary: bool = False) -> str:
-    file_ref = str(item.get("file") or "")
-    line_ref = item.get("line")
-    address = _addr(item.get("address"))
-    if compact_binary and file_ref:
-        file_ref = Path(file_ref).name
-    if file_ref and line_ref not in (None, ""):
-        return f"{file_ref}:{line_ref}"
-    if file_ref and address:
-        return f"{file_ref}@{address}"
-    return file_ref or address
 
 
 def _is_remote_surface(data: dict[str, Any]) -> bool:
@@ -80,11 +59,6 @@ def _is_remote_surface(data: dict[str, Any]) -> bool:
         or "httpd-" in target
         or target.endswith("/httpd")
     )
-
-
-def _is_blackbox_binary(data: dict[str, Any]) -> bool:
-    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    return str(meta.get("analysis_mode") or "").lower() == "blackbox_binary"
 
 
 def _is_support_tool(item: dict[str, Any]) -> bool:
@@ -105,6 +79,12 @@ def _filter_support_tool_sinks(
     sink_details: list[dict[str, Any]],
     unchecked_flows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drop local CLI/support-tool sinks from remote-server diagrams.
+
+    Apache httpd, for example, ships `support/ab.c`. Those sinks are
+    useful when reviewing bundled tools, but they are misleading inside a
+    remote HTTP server attack-surface map.
+    """
     if not _is_remote_surface(data):
         return sink_details, unchecked_flows
 
@@ -130,14 +110,11 @@ def _filter_support_tool_sinks(
 def generate(data: dict[str, Any]) -> str:
     """Return Mermaid flowchart markdown from a context-map.json dict."""
     lines = ["flowchart LR"]
-    blackbox_binary = _is_blackbox_binary(data)
 
     entry_points = [e for e in data.get("entry_points", []) if isinstance(e, dict)]
     boundary_details = [b for b in data.get("boundary_details", []) if isinstance(b, dict)]
     sink_details = [s for s in data.get("sink_details", []) if isinstance(s, dict)]
     unchecked_flows = [f for f in data.get("unchecked_flows", []) if isinstance(f, dict)]
-    candidate_flows = [f for f in data.get("candidate_flows", []) if isinstance(f, dict)]
-    interesting_functions = [f for f in data.get("interesting_functions", []) if isinstance(f, dict)]
 
     # Fallback: plain sources/sinks when detailed lists are absent
     if not entry_points and data.get("sources"):
@@ -162,26 +139,6 @@ def generate(data: dict[str, Any]) -> str:
         sink_details,
         unchecked_flows,
     )
-    candidate_function_nodes: dict[str, dict[str, Any]] = {}
-    entry_by_address = {
-        _addr(ep.get("address")): _sid(ep.get("id", "EP-?"))
-        for ep in entry_points
-        if ep.get("address")
-    }
-    functions_by_id = {
-        str(fn.get("id")): fn
-        for fn in interesting_functions
-        if fn.get("id")
-    }
-    if _is_blackbox_binary(data):
-        for flow in candidate_flows:
-            source_id = str(flow.get("source_function") or "")
-            fn = functions_by_id.get(source_id)
-            if not fn:
-                continue
-            if _addr(fn.get("address")) in entry_by_address:
-                continue
-            candidate_function_nodes[source_id] = fn
 
     # -- Entry point nodes --
     if entry_points:
@@ -189,8 +146,10 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Entry Points")
     for ep in entry_points:
         ep_id = _sid(ep.get("id", "EP-?"))
-        loc = _location_text(ep, compact_binary=blackbox_binary)
-        auth = " [PUBLIC]" if ep.get("auth_required") is False else ""
+        file_ref = ep.get("file", "")
+        line_ref = ep.get("line", "")
+        loc = f"{file_ref}:{line_ref}" if file_ref else ""
+        auth = "" if ep.get("auth_required", True) else " [PUBLIC]"
         label = _text(f"{_entry_label(ep)}{auth}\\n{loc}".strip())
         lines.append(f'    {ep_id}["{label}"]')
 
@@ -201,19 +160,11 @@ def generate(data: dict[str, Any]) -> str:
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
         boundary = _text(tb.get("boundary", tb.get("type", "?")))
-        loc = _location_text(tb, compact_binary=blackbox_binary)
+        file_ref = tb.get("file", "")
+        line_ref = tb.get("line", "")
+        loc = f"{file_ref}:{line_ref}" if file_ref else ""
         label = _text(f"{boundary}\\n{loc}".strip())
         lines.append(f'    {tb_id}{{"{label}"}}')
-
-    if candidate_function_nodes:
-        lines.append("")
-        lines.append("    %% Candidate Functions (binary xref context)")
-    for fn in candidate_function_nodes.values():
-        fn_id = _sid(fn.get("id", "BFN-?"))
-        name = _text(_first_text(fn, "name", "id") or "?")
-        address = _text(_addr(fn.get("address")))
-        label = _text(f"{name}\\n{address}".strip())
-        lines.append(f'    {fn_id}["{label}"]')
 
     # -- Sink nodes --
     if sink_details:
@@ -221,7 +172,9 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Sinks")
     for sink in sink_details:
         sink_id = _sid(sink.get("id", "SINK-?"))
-        loc = _location_text(sink, compact_binary=blackbox_binary)
+        file_ref = sink.get("file", "")
+        line_ref = sink.get("line", "")
+        loc = f"{file_ref}:{line_ref}" if file_ref else ""
         label = _text(f"{_sink_label(sink)}\\n{loc}".strip())
         lines.append(f'    {sink_id}[/"{label}"\\]')
 
@@ -256,6 +209,7 @@ def generate(data: dict[str, Any]) -> str:
                 for tb_id in tb_for_ep:
                     add_edge(f"    {tb_id} --> {sink_id}")
             else:
+                # No TB, direct edge (will also appear as unchecked)
                 add_edge(f"    {ep_id} --> {sink_id}")
 
     # -- Unchecked flows: dashed red edges --
@@ -268,26 +222,11 @@ def generate(data: dict[str, Any]) -> str:
         reason = _text(flow.get("missing_boundary", "no check"))
         add_edge(f"    {ep_id} -. \"{reason}\" .-> {sink_id}")
 
-    # -- Binary candidate flows: dotted grey edges, explicitly not taint proof --
-    if candidate_flows:
-        lines.append("")
-        lines.append("    %% Candidate Call Edges (xref-backed, not taint proof)")
-    for flow in candidate_flows:
-        source_id = str(flow.get("source_function") or "")
-        fn = functions_by_id.get(source_id)
-        if not fn:
-            continue
-        src_id = entry_by_address.get(_addr(fn.get("address")), _sid(source_id))
-        sink_id = _sid(flow.get("sink", "?"))
-        relationship = _text(flow.get("relationship") or "candidate")
-        add_edge(f'    {src_id} -. "{relationship} candidate" .-> {sink_id}')
-
     # -- Style classes --
     lines.append("")
     lines.append("    classDef ep fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f")
     lines.append("    classDef tb fill:#fef9c3,stroke:#ca8a04,color:#713f12")
     lines.append("    classDef sink fill:#fee2e2,stroke:#dc2626,color:#7f1d1d")
-    lines.append("    classDef candidate fill:#f3f4f6,stroke:#6b7280,color:#374151")
 
     if entry_points:
         ep_ids = ",".join(_sid(ep.get("id", "")) for ep in entry_points if ep.get("id"))
@@ -301,10 +240,6 @@ def generate(data: dict[str, Any]) -> str:
         sink_ids = ",".join(_sid(s.get("id", "")) for s in sink_details if s.get("id"))
         if sink_ids:
             lines.append(f"    class {sink_ids} sink")
-    if candidate_function_nodes:
-        fn_ids = ",".join(_sid(fn.get("id", "")) for fn in candidate_function_nodes.values() if fn.get("id"))
-        if fn_ids:
-            lines.append(f"    class {fn_ids} candidate")
 
     return "\n".join(lines)
 
@@ -312,8 +247,7 @@ def generate(data: dict[str, Any]) -> str:
 def generate_from_file(path: Path) -> str:
     data = load_json(path)
     if data is None:
-        msg = f"Failed to load {path}"
-        raise ValueError(msg)
+        raise ValueError(f"Failed to load {path}")
     return generate(data)
 
 
@@ -353,18 +287,14 @@ def generate_forward_reachable_blocks(
         diagram = _render_one_entry_forward(ep, fr)
         if not diagram:
             continue
-        # Both values come raw from the context-map JSON; route through
-        # _text (html-unescape + C0 strip + sanitize) so a crafted
-        # id/host can't break the section heading out of its line or
-        # smuggle control characters into diagrams.md.
-        ep_id = _text(ep.get("id", "EP-?"))
-        host = _text(fr.get("host", "?"))
+        ep_id = ep.get("id", "EP-?")
+        host = fr.get("host", "?")
         title = f"{ep_id}: {host}"
         out.append((title, diagram))
     return out
 
 
-def _render_one_entry_forward(_ep: dict[str, Any], fr: dict[str, Any]) -> str:
+def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     """Render one entry's forward closure as a top-down flowchart.
 
     Layout: host at top, internal callees branching down (green),
@@ -377,7 +307,7 @@ def _render_one_entry_forward(_ep: dict[str, Any], fr: dict[str, Any]) -> str:
     host_id = "HOST"
     lines.append("")
     lines.append("    %% Host (entry point's enclosing function)")
-    lines.append(f'    {host_id}["{_text(host)}"]')
+    lines.append(f'    {host_id}["{_sanitize(host)}"]')
 
     internal_names = list(fr.get("internal_names") or [])
     external_names = list(fr.get("external_names") or [])
@@ -392,7 +322,7 @@ def _render_one_entry_forward(_ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(internal_names):
         nid = f"INT{i:03d}"
         int_ids.append(nid)
-        lines.append(f'    {nid}["{_text(name)}"]')
+        lines.append(f'    {nid}["{_sanitize(name)}"]')
         lines.append(f"    {host_id} --> {nid}")
 
     # External nodes — parallelogram shape, distinct from
@@ -405,7 +335,7 @@ def _render_one_entry_forward(_ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(external_names):
         nid = f"EXT{i:03d}"
         ext_ids.append(nid)
-        lines.append(f'    {nid}[/"{_text(name)}"\\]')
+        lines.append(f'    {nid}[/"{_sanitize(name)}"\\]')
         lines.append(f"    {host_id} --> {nid}")
 
     # Truncation note — closure walk hit max_depth, the listed
