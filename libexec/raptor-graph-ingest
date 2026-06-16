@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Ingest a RAPTOR run directory into the internal understand graph."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-graph-ingest",
+        description="Ingest /understand JSON artefacts into graph memory.",
+    )
+    parser.add_argument("run_dir", help="Run directory to ingest")
+    parser.add_argument("--target", help="Target path for project graph resolution")
+    args = parser.parse_args()
+
+    from core.understand_graph import ingest_run
+
+    graph_path = ingest_run(Path(args.run_dir), args.target)
+    if not graph_path:
+        print("Graph: no ingestable understand artefacts found")
+        return 0
+    print(f"Graph: {graph_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
