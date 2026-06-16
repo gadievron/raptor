@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-06-09T08:59:52Z",
+    "fetched_at": "2026-06-16T10:53:24Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6644,
+    "modules_scanned": 6647,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -92,6 +92,12 @@
       "module_paths": [
         "auxiliary_scanner/snmp/snmp_enum",
         "auxiliary_scanner/snmp/snmp_login"
+      ]
+    },
+    "CVE-1999-0512": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/smtp/smtp_relay"
       ]
     },
     "CVE-1999-0516": {
@@ -19055,6 +19061,12 @@
         "exploit_multi/http/apache_activemq_jolokia_rce"
       ]
     },
+    "CVE-2026-41679": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/paperclipai_unauth_rce_cve_2026_41679"
+      ]
+    },
     "CVE-2026-41940": {
       "has_msf_module": true,
       "module_paths": [
@@ -19077,6 +19089,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/local/cve_2026_43500_dirty_frag"
+      ]
+    },
+    "CVE-2026-46333": {
+      "has_msf_module": true,
+      "module_paths": [
+        "post_linux/gather/cve_2026_46333_chage"
       ]
     }
   }
