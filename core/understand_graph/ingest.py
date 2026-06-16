@@ -100,13 +100,15 @@ def _upsert_node(conn, snapshot_id: str, kind: str, key: str, props: dict[str, A
     line = _int_or_none(props.get("line") or props.get("line_start") or props.get("start_line"))
     line_end = _int_or_none(props.get("line_end") or props.get("end_line"))
     name = str(props.get("name") or props.get("id") or props.get("entry") or props.get("type") or "")
-    node_id = stable_node_id(kind, key)
+    node_id = stable_node_id(kind, snapshot_id, key)
+    node_stable_key = stable_key(kind, key)
     conn.execute(
         """
         INSERT INTO nodes (id, kind, stable_key, name, file, line_start, line_end, snapshot_id, props_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(stable_key) DO UPDATE SET
+        ON CONFLICT(id) DO UPDATE SET
             kind=excluded.kind,
+            stable_key=excluded.stable_key,
             name=excluded.name,
             file=excluded.file,
             line_start=excluded.line_start,
@@ -115,7 +117,7 @@ def _upsert_node(conn, snapshot_id: str, kind: str, key: str, props: dict[str, A
             stale=0,
             props_json=excluded.props_json
         """,
-        (node_id, kind, stable_key(kind, key), name, file, line, line_end, snapshot_id, json_dumps(props)),
+        (node_id, kind, node_stable_key, name, file, line, line_end, snapshot_id, json_dumps(props)),
     )
     return node_id
 
@@ -136,6 +138,24 @@ def _upsert_edge(conn, snapshot_id: str, kind: str, src_id: str, dst_id: str, *,
         (edge_id, src_id, dst_id, kind, confidence, snapshot_id, json_dumps(evidence), json_dumps(props)),
     )
     return edge_id
+
+
+def _graph_evidence(source: str, section: str, item: dict[str, Any], *, confidence: str = "") -> dict[str, Any]:
+    return {
+        "oracle": "understand",
+        "source": source,
+        "section": section,
+        "confidence": confidence or str(item.get("confidence") or item.get("severity") or "candidate"),
+        "confirmed": bool(item.get("confirmed")),
+        "reproducible": False,
+        "cwe": item.get("cwe") or item.get("cwe_id") or item.get("cwes") or [],
+    }
+
+
+def _with_graph_evidence(source: str, section: str, item: dict[str, Any]) -> dict[str, Any]:
+    props = dict(item)
+    props.setdefault("graph_evidence", _graph_evidence(source, section, props))
+    return props
 
 
 def _ingest_checklist(conn, snapshot_id: str, checklist: dict[str, Any]) -> None:
@@ -171,7 +191,7 @@ def _ingest_context_map(conn, snapshot_id: str, context_map: dict[str, Any]) -> 
     ):
         for entry in _list(context_map.get(section)):
             key = entry.get("id") or entry.get("name") or entry.get("entry") or entry.get("location") or short_hash(entry)
-            props = dict(entry)
+            props = _with_graph_evidence("context-map.json", section, entry)
             props["_context_section"] = section
             node_id = _upsert_node(conn, snapshot_id, kind, key, props)
             if entry.get("id"):
@@ -179,26 +199,39 @@ def _ingest_context_map(conn, snapshot_id: str, context_map: dict[str, Any]) -> 
 
     for i, flow in enumerate(_list(context_map.get("unchecked_flows"))):
         key = flow.get("id") or f"unchecked-flow-{i + 1}:{flow.get('entry_point')}->{flow.get('sink')}"
-        flow_id = _upsert_node(conn, snapshot_id, "unchecked_flow", key, flow)
+        flow_props = _with_graph_evidence("context-map.json", "unchecked_flows", flow)
+        flow_id = _upsert_node(conn, snapshot_id, "unchecked_flow", key, flow_props)
         entry_id = ids.get(str(flow.get("entry_point") or ""))
         sink_id = ids.get(str(flow.get("sink") or ""))
+        evidence = _graph_evidence("context-map.json", "unchecked_flows", flow)
+        evidence["flow"] = flow
         if entry_id:
-            _upsert_edge(conn, snapshot_id, "HAS_SOURCE", flow_id, entry_id, evidence=flow)
+            _upsert_edge(conn, snapshot_id, "HAS_SOURCE", flow_id, entry_id, evidence=evidence)
         if sink_id:
-            _upsert_edge(conn, snapshot_id, "HAS_SINK", flow_id, sink_id, evidence=flow)
+            _upsert_edge(conn, snapshot_id, "HAS_SINK", flow_id, sink_id, evidence=evidence)
         if entry_id and sink_id:
-            _upsert_edge(conn, snapshot_id, "REACHES", entry_id, sink_id, evidence=flow, confidence=str(flow.get("confidence") or "candidate"))
+            _upsert_edge(
+                conn,
+                snapshot_id,
+                "REACHES",
+                entry_id,
+                sink_id,
+                evidence=evidence,
+                confidence=str(flow.get("confidence") or flow.get("severity") or "candidate"),
+            )
 
 
 def _ingest_flow_trace(conn, snapshot_id: str, trace: dict[str, Any]) -> None:
-    trace_id = _upsert_node(conn, snapshot_id, "flow_trace", trace.get("id") or trace.get("name") or short_hash(trace), trace)
+    trace_props = _with_graph_evidence("flow-trace", "flow_trace", trace)
+    trace_id = _upsert_node(conn, snapshot_id, "flow_trace", trace.get("id") or trace.get("name") or short_hash(trace), trace_props)
     prev = trace_id
     for step in _list(trace.get("steps")):
         key = f"{trace.get('id', 'trace')}::{step.get('step')}::{step.get('definition') or step.get('call_site') or short_hash(step)}"
-        step_id = _upsert_node(conn, snapshot_id, "trace_step", key, step)
-        _upsert_edge(conn, snapshot_id, "DERIVED_FROM", step_id, trace_id, evidence=step)
+        step_props = _with_graph_evidence("flow-trace", "steps", step)
+        step_id = _upsert_node(conn, snapshot_id, "trace_step", key, step_props)
+        _upsert_edge(conn, snapshot_id, "DERIVED_FROM", step_id, trace_id, evidence=step_props)
         if prev != trace_id:
-            _upsert_edge(conn, snapshot_id, "REACHES", prev, step_id, evidence=step, confidence=str(step.get("confidence") or ""))
+            _upsert_edge(conn, snapshot_id, "REACHES", prev, step_id, evidence=step_props, confidence=str(step.get("confidence") or ""))
         prev = step_id
 
 
@@ -212,7 +245,8 @@ def _ingest_variants(conn, snapshot_id: str, variants: Any) -> None:
         items = []
     for i, item in enumerate(items):
         if isinstance(item, dict):
-            _upsert_node(conn, snapshot_id, "variant", item.get("id") or item.get("file") or f"variant-{i + 1}", item)
+            props = _with_graph_evidence("variants.json", "variants", item)
+            _upsert_node(conn, snapshot_id, "variant", item.get("id") or item.get("file") or f"variant-{i + 1}", props)
 
 
 def _ingest_multimodel_result(conn, snapshot_id: str, result: dict[str, Any]) -> None:
@@ -220,7 +254,8 @@ def _ingest_multimodel_result(conn, snapshot_id: str, result: dict[str, Any]) ->
     for i, item in enumerate(result.get("items") or []):
         if isinstance(item, dict):
             kind = "variant" if mode == "hunt" else "flow_trace"
-            _upsert_node(conn, snapshot_id, kind, item.get("id") or f"{mode}-{i + 1}", item)
+            props = _with_graph_evidence(f"{mode}-result", "items", item)
+            _upsert_node(conn, snapshot_id, kind, item.get("id") or f"{mode}-{i + 1}", props)
 
 
 def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path) -> None:
