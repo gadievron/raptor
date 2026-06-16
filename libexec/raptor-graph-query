@@ -32,6 +32,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--target", help="Target path for snapshot selection/staleness checks")
     p.add_argument("--summary", action="store_true", help="Show graph summary")
     p.add_argument("--reachable-sinks", action="store_true", help="List entry-to-sink reachability edges")
+    p.add_argument("--paths", action="store_true", help="List graph-derived entry-to-sink attack paths")
+    p.add_argument("--source", help="Filter paths by entry/source ID, name, or location")
+    p.add_argument("--sink", help="Filter paths by sink ID, name, or location")
+    p.add_argument("--unchecked-only", action="store_true", help="Only show paths with no mapped effective boundary")
+    p.add_argument("--by-cwe", help="Filter paths by CWE/CWE-like token")
+    p.add_argument("--limit", type=int, default=50, help="Maximum paths to return")
+    p.add_argument("--diff", action="store_true", help="Diff the latest two graph snapshots")
+    p.add_argument("--base-snapshot", help="Base snapshot ID for --diff")
+    p.add_argument("--head-snapshot", help="Head snapshot ID for --diff")
+    p.add_argument("--threat-context", action="store_true", help="Emit compact graph-backed risk context for threat modelling")
     p.add_argument("--context-map", action="store_true", help="Emit graph as context-map-compatible JSON")
     p.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     return p
@@ -54,21 +64,58 @@ def _resolve_db(args: argparse.Namespace) -> Path:
 
 def main() -> int:
     args = _parser().parse_args()
-    if not (args.summary or args.reachable_sinks or args.context_map):
+    if not (
+        args.summary or args.reachable_sinks or args.paths or args.context_map
+        or args.diff or args.threat_context
+    ):
         args.summary = True
     db_path = _resolve_db(args)
 
-    from core.understand_graph import build_context_map, graph_summary, reachable_sinks
+    from core.understand_graph import (
+        attack_paths,
+        build_context_map,
+        graph_diff,
+        graph_summary,
+        reachable_sinks,
+        threat_model_graph_context,
+    )
 
     if args.context_map:
         context_map, stale = build_context_map(db_path, args.target)
         payload = {"context_map": context_map, "stale_files": sorted(stale)}
+    elif args.diff:
+        payload = graph_diff(
+            db_path,
+            args.target,
+            base_snapshot=args.base_snapshot,
+            head_snapshot=args.head_snapshot,
+        )
+    elif args.paths:
+        payload = {
+            "paths": attack_paths(
+                db_path,
+                args.target,
+                source=args.source,
+                sink=args.sink,
+                unchecked_only=args.unchecked_only,
+                by_cwe=args.by_cwe,
+                limit=args.limit,
+            )
+        }
+    elif args.threat_context:
+        payload = {
+            "graph_context": threat_model_graph_context(
+                db_path,
+                args.target,
+                limit=args.limit,
+            )
+        }
     elif args.reachable_sinks:
         payload = {"reachable_sinks": reachable_sinks(db_path, args.target)}
     else:
         payload = graph_summary(db_path)
 
-    if args.json or args.context_map:
+    if args.json or args.context_map or args.diff:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
@@ -86,6 +133,23 @@ def main() -> int:
         print("Edges:")
         for kind, count in sorted((payload.get("edges") or {}).items()):
             print(f"  {kind}: {count}")
+        return 0
+    if "paths" in payload:
+        for item in payload.get("paths", []):
+            entry = item.get("entry", {})
+            sink = item.get("sink", {})
+            status = "unchecked" if item.get("unchecked") else "bounded"
+            print(
+                f"{entry.get('id') or '?'} {entry.get('label') or '?'}"
+                f" -> {sink.get('id') or '?'} {sink.get('label') or '?'}"
+                f" ({status}, {item.get('confidence') or 'candidate'},"
+                f" risk={item.get('risk_score')})"
+            )
+            if item.get("missing_boundary"):
+                print(f"  missing: {item['missing_boundary']}")
+        return 0
+    if "graph_context" in payload:
+        print(payload.get("graph_context") or "No graph-backed risks found.")
         return 0
     for item in payload.get("reachable_sinks", []):
         src = item.get("source") or item.get("source_file") or "source"
