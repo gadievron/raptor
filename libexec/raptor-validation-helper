@@ -1283,7 +1283,8 @@ def prepare_bridge(workdir, target=None):
     _bridge_understand_output(Path(workdir), checklist, target)
 
 
-def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
+def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
+              sanitizer_cut_mode=None, sanitizer_cut_parity_log=None):
     """Stage 0: start lifecycle, build checklist, bridge understand output."""
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
@@ -1301,6 +1302,28 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
         sys.exit(1)
 
     start_run(out_dir, "validate", target=target)
+
+    # Resolve + persist the sanitizer-cut mode so the per-stage
+    # subprocesses reload it (review #4, PR #794). Persist only when the
+    # operator passed a flag; otherwise the env fallback stays active.
+    #
+    # Edge case (review #7, PR #794): configure(export_env=True) mutates
+    # this process's env BEFORE persist() writes the file. If a later
+    # stage-0 step crashes between the two, the env is left set but no
+    # config file exists. The pipeline path is safe — the run is marked
+    # failed and stages A-F/1 won't run — so this only bites an operator
+    # who then drives a stage BY HAND in the same shell: load_persisted()
+    # finds no file, returns None, and the gate falls back to the leftover
+    # env. Re-running stage 0 (or a fresh shell) clears it. Not worth a
+    # guard for the hand-driven case; documented so it isn't a surprise.
+    if sanitizer_cut_mode is not None or sanitizer_cut_parity_log is not None:
+        from core.dataflow import sanitizer_cut_config
+        sanitizer_cut_config.configure(
+            sanitizer_cut_mode or "off",
+            parity_log=sanitizer_cut_parity_log,
+            run_dir=str(out_dir), export_env=True,
+        )
+        sanitizer_cut_config.persist(str(out_dir))
 
     # Wrap the rest of stage-0 prep in try/except so a failure
     # AFTER `start_run` (which created the run dir + lifecycle
@@ -1431,7 +1454,7 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge]")
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--model <id>] [--no-bridge] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>]")
         sys.exit(1)
 
     stage = args[0]
@@ -1454,9 +1477,24 @@ def main():
             model = args[idx + 1]
     no_bridge = "--no-bridge" in args
 
+    # Sanitizer-cut mode (review #4, PR #794). Stage 0 resolves +
+    # persists it; later stages reload it. None means "not passed".
+    sanitizer_cut_mode = None
+    if "--sanitizer-cut" in args:
+        idx = args.index("--sanitizer-cut")
+        if idx + 1 < len(args):
+            sanitizer_cut_mode = args[idx + 1]
+    sanitizer_cut_parity_log = None
+    if "--sanitizer-cut-parity-log" in args:
+        idx = args.index("--sanitizer-cut-parity-log")
+        if idx + 1 < len(args):
+            sanitizer_cut_parity_log = args[idx + 1]
+
     # Stage 0 creates its own workdir
     if stage == "0":
-        prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge)
+        prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge,
+                  sanitizer_cut_mode=sanitizer_cut_mode,
+                  sanitizer_cut_parity_log=sanitizer_cut_parity_log)
         return
 
     # All other stages need a workdir
@@ -1468,6 +1506,11 @@ def main():
     if not Path(workdir).is_dir():
         print(f"ERROR: workdir not found: {workdir}", file=sys.stderr)
         sys.exit(1)
+
+    # Reload the sanitizer-cut mode persisted by stage 0 (if any) and
+    # re-export it so this stage's gate consumers see a consistent mode.
+    from core.dataflow import sanitizer_cut_config
+    sanitizer_cut_config.load_persisted(workdir)
 
     if stage == "1":
         prepare_1(workdir, target, model=model)

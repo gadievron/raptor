@@ -1148,6 +1148,13 @@ Examples:
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
 
+    # Sanitizer-cut value-bound suppression mode (review #4, PR #794).
+    # Replaces the RAPTOR_SANITIZER_CUT* env vars. configure() below
+    # exports the resolved state so spawned scan/analysis subprocesses
+    # inherit it.
+    from core.dataflow import sanitizer_cut_config
+    sanitizer_cut_config.add_cli_arguments(parser)
+
     # CodeQL integration — mutually exclusive. Pre-fix all three
     # flags were independent ``store_true`` booleans, so combinations
     # like ``--codeql-only --no-codeql`` resolved to
@@ -1623,6 +1630,15 @@ Examples:
     # timestamp+PID name and gets the symlink/UID/world-write check.
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
+
+    # Resolve the sanitizer-cut mode now the run dir is known, and
+    # export it so the scan / codeql / analysis subprocesses inherit it
+    # (review #4, PR #794). No-op when --sanitizer-cut isn't passed.
+    _sc = sanitizer_cut_config.configure_from_args(
+        args, run_dir=str(out_dir), export_env=True,
+    )
+    if _sc is not None:
+        logger.info(f"Sanitizer-cut mode: {_sc.mode}")
 
     try:
         from core.run import start_run

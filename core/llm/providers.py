@@ -2506,7 +2506,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         import time as _time
 
         # Pass the user prompt as-is and route the system prompt
-        # through CC's `--system` flag (see CCDispatchConfig.system_prompt
+        # through CC's `--system-prompt` flag (see CCDispatchConfig.system_prompt
         # comment for the prompt-injection rationale).
         full_prompt = prompt
         cc_config = CCDispatchConfig(
@@ -2612,15 +2612,15 @@ class ClaudeCodeLLMProvider(LLMProvider):
         import subprocess
         import time as _time
 
-        # Route system_prompt through CC's `--system` flag instead of
+        # Route system_prompt through CC's `--system-prompt` flag instead of
         # concatenating into the user prompt. Pre-fix this path used
         # `f"{system_prompt}\n\n{prompt}"`, mixing the trusted system
         # message into the same channel as user content. The
         # generate() path above (the freeform sibling of this method)
-        # already uses `--system` correctly. The structured path's
+        # already uses `--system-prompt` correctly. The structured path's
         # f-string concat:
         #
-        #   * Drops the trust separation that CC's `--system` flag
+        #   * Drops the trust separation that CC's `--system-prompt` flag
         #     gives us — operator system instructions and finding
         #     content arrive on the SAME channel from the model's
         #     perspective.
@@ -2632,7 +2632,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # Bring this site in line with generate(): full_prompt is
         # the user content; system_prompt routes through
         # CCDispatchConfig.system_prompt (which build_cc_command
-        # converts into a `--system` flag).
+        # converts into a `--system-prompt` flag).
         full_prompt = prompt
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,

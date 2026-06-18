@@ -135,11 +135,11 @@ RUN apt-get update \
 
 # Capture-then-execute the nodesource setup script so a curl failure isn't
 # silently swallowed by the pipeline (curl | bash ignores curl's exit status).
-# Node 22 is the current LTS; Node 20 went EOL April 2026.
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
+# Node 24 is the current stable release, and is supported by the latest Claude CLI.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh \
     && bash /tmp/nodesource_setup.sh \
     && rm /tmp/nodesource_setup.sh \
-    && apt-get install -y --no-install-recommends nodejs=24.15.0+dfsg+~cs24.12.2-1 \
+    && apt-get install -y --no-install-recommends nodejs=24.15.0-1nodesource1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code@2.1.119
 
