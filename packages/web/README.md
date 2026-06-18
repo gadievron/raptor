@@ -116,7 +116,13 @@ The same registry, filtered to checks that require a live session. Session fixat
 ### Phase 6: Injection and fuzzing
 The LLM generates payloads per parameter per vulnerability class. Five classes by default: SQL injection, XSS, SSTI, command injection, path traversal.
 
-The response analysis requires actual exploitation evidence, not keyword matching. That distinction matters in practice. A page about SQL injection will have the word "SQL" in it. The check only flags if the response contains an unambiguous server-side signal:
+The response analysis requires actual exploitation evidence, not keyword matching. That distinction matters in practice. A page about SQL injection will have the word "SQL" in it. RAPTOR now uses a three-gate web oracle before it promotes a hit:
+
+1. Send a benign baseline request for the same endpoint and parameter.
+2. Send the attack payload.
+3. Confirm only if the attack response contains a real exploitation signal that was not already present in the baseline, with a recorded baseline/attack diff.
+
+The check only flags if the response contains an unambiguous server-side signal:
 
 - SQLi: MySQL/PostgreSQL/Oracle error messages
 - XSS: payload appears verbatim and unescaped in the response body
@@ -139,6 +145,9 @@ Output directory gets:
 - `web_scan_report.json` -- full summary
 - `discovery.json` -- discovered URLs, fingerprint, API specs
 - `crawl_results.json` -- pages, forms, parameters
+- `web-session-context.json` -- sanitized session/application context for downstream agents
+- `verified-outcomes.json` -- web findings mapped into RAPTOR's shared oracle record
+- `context-guard-report.json` -- what context was allowed, blocked, redacted and treated as untrusted
 - `research_landscape.json` -- PortSwigger archive-derived coverage map and target-aware priorities
 - `defense-telemetry.json` -- LLM defense signals (injection hit rate, schema rejection rate)
 
@@ -156,11 +165,37 @@ Injection findings from Phase 6 get `status: needs_review`. Pass `--validate` to
 - `target_url`
 - `confirmation_payload`
 - `response_evidence`
+- `baseline_evidence`
+- `attack_evidence`
+- `diff_summary`
+- `attack_vector`
 - `cwe_id`
 - `oracle: web`
 - `reproducible: false`
 
 `reproducible` is false because live web responses are point-in-time observations rather than deterministic sandbox witnesses or ZKPoX-provable artefacts.
+
+`verified-outcomes.json` is the bridge into RAPTOR's shared evidence memory. A confirmed web finding becomes:
+
+```json
+{
+  "oracle": "web",
+  "status": "verified",
+  "reproducible": false,
+  "evidence": {
+    "target_url": "https://target.example.com/search",
+    "payload": "' OR 1=1--",
+    "response_evidence": "You have an error in your SQL syntax",
+    "diff_summary": "baseline HTTP 200/1200 bytes; attack HTTP 500/480 bytes"
+  }
+}
+```
+
+That means `/agentic`, `/validate`, `/understand`, project reporting and future graph consumers can treat the web scanner as a third oracle beside sandbox execution and fuzzing, while still being honest that a live HTTP response is a point-in-time observation.
+
+`web-session-context.json` is the application shape RAPTOR learned during the run: URLs, forms, parameters, API count, auth mode, cookie names, endpoint roles and recent request metadata. Secret values are not stored unless the operator explicitly opts into reveal mode for debugging.
+
+`context-guard-report.json` records the context contract for the scan. It marks target HTTP content as untrusted, records same-origin scope enforcement, blocks off-scope URLs and target-supplied instructions, and makes it explicit that web evidence should not be treated as a replayable sandbox witness.
 
 Every run also writes `research_landscape.json`. This is RAPTOR's explicit
 view of the modern web-testing landscape, distilled from the PortSwigger Top

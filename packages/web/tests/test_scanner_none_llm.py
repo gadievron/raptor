@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 try:
     from packages.web.scanner import WebScanner
+    from packages.web.models import WebFinding
     HAS_WEB_DEPS = True
 except ImportError:
     HAS_WEB_DEPS = False
@@ -165,6 +166,10 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                     "vulnerability_type": "sqli",
                     "status_code": 500,
                     "response_length": 128,
+                    "method": "GET",
+                    "baseline_evidence": "HTTP 200, 20 bytes: normal search page",
+                    "attack_evidence": "You have an error in your SQL syntax",
+                    "diff_summary": "baseline HTTP 200/20 bytes; attack HTTP 500/128 bytes; oracle=sqli_error",
                     "confirmed": True,
                     "response_evidence": "You have an error in your SQL syntax",
                     "oracle_signal": "sqli_error:you have an error in your sql syntax",
@@ -187,8 +192,82 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             )
             self.assertEqual(finding["cwe_id"], "CWE-89")
             self.assertEqual(finding["oracle"], "web")
+            self.assertEqual(finding["baseline_evidence"], "HTTP 200, 20 bytes: normal search page")
+            self.assertEqual(finding["attack_evidence"], "You have an error in your SQL syntax")
+            self.assertIn("baseline HTTP", finding["diff_summary"])
+            self.assertEqual(finding["attack_vector"], "query_param")
+            self.assertEqual(finding["method"], "GET")
             self.assertTrue(finding["confirmed"])
             self.assertFalse(finding["reproducible"])
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_report_writes_session_context_guard_and_verified_outcomes(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner("http://example.com", None, Path(tmpdir))
+            scanner.client.request_history = [{
+                "method": "GET",
+                "url": "http://example.com/search?q=test",
+                "status_code": 200,
+                "duration": 0.01,
+                "content_length": 20,
+                "timestamp": 1.0,
+            }]
+            scanner.client.reveal_secrets = False
+            discovery = MagicMock()
+            discovery.urls = ["http://example.com/search"]
+            discovery.forms = []
+            discovery.apis = []
+            discovery.parameters = ["q"]
+            discovery.fingerprint = {"server": "test"}
+            discovery.stats.return_value = {"total_urls": 1}
+
+            finding = WebFinding(
+                id="WEB-0001",
+                title="SQL Injection",
+                severity="high",
+                confidence="medium",
+                status="needs_review",
+                url="http://example.com/search",
+                evidence="payload confirmed",
+                description="SQLi",
+                recommendation="Use parameterised queries",
+                vuln_type="injection",
+                asvs_category="V5",
+                check_id="V5.2.1",
+                cwe_id="CWE-89",
+                confirmed=True,
+                target_url="http://example.com/search",
+                confirmation_payload="' OR 1=1--",
+                response_evidence="SQL syntax",
+                baseline_evidence="HTTP 200, 20 bytes",
+                attack_evidence="SQL syntax",
+                diff_summary="baseline HTTP 200/20 bytes; attack HTTP 500/128 bytes",
+                attack_vector="query_param",
+                method="GET",
+            )
+
+            result = scanner._phase_report(
+                [finding],
+                discovery,
+                {
+                    "stats": {"total_pages": 1},
+                    "discovered_urls": ["http://example.com/search"],
+                    "discovered_parameters": ["q"],
+                    "discovered_forms": [],
+                },
+            )
+
+            out = Path(tmpdir)
+            self.assertTrue((out / "web-session-context.json").exists())
+            self.assertTrue((out / "verified-outcomes.json").exists())
+            self.assertTrue((out / "context-guard-report.json").exists())
+            self.assertEqual(result["verified_outcomes"]["count"], 1)
+            self.assertEqual(result["context_guard"]["target_content_is_untrusted"], True)
 
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
@@ -243,6 +322,49 @@ class TestWebScannerNoneLlm(unittest.TestCase):
         }
         self.assertIn("orm_filter_data_exposure", high_priority)
         self.assertIn("oauth_cookie_auth_chains", high_priority)
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_fuzz_prioritises_query_urls_and_their_own_parameters(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                max_fuzz_urls=2,
+                max_fuzz_params=2,
+                max_fuzz_forms=0,
+            )
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
+
+            scanner._phase_injection({
+                "discovered_urls": [
+                    "http://example.com",
+                    "http://example.com/.git/",
+                    (
+                        "http://example.com/passive/params?"
+                        "id=1&user=admin&debug=true&token=x&key=y&"
+                        "redirect_uri=http://example.com&cmd=test&file=a&"
+                        "template=home&q=search&email=a@example.com&url=http://example.com"
+                    ),
+                    "http://example.com/rce/expect?cmd=id",
+                    "http://example.com/tools/ping?host=127.0.0.1",
+                ],
+                "discovered_parameters": ["action", "category", "debug"],
+                "discovered_forms": [],
+            })
+
+            calls = [
+                (call.args[0], call.args[1])
+                for call in scanner.fuzzer.fuzz_parameter.call_args_list
+            ]
+            self.assertIn(("http://example.com/rce/expect?cmd=id", "cmd"), calls)
+            self.assertIn(("http://example.com/tools/ping?host=127.0.0.1", "host"), calls)
 
 
 if __name__ == "__main__":

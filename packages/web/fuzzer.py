@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any
 import re
 import sys
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Add paths for cross-package imports
 # packages/web/fuzzer.py -> repo root
@@ -133,7 +134,7 @@ class WebFuzzer:
         }
 
         if not self.llm:
-            return self._get_basic_payloads(vuln_type)
+            return self._get_basic_payloads(vuln_type, param_name=param_name)
 
         try:
             result, _ = self.llm.generate_structured(
@@ -161,19 +162,35 @@ class WebFuzzer:
                 redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
             )
             # Fallback to basic payloads
-            return self._get_basic_payloads(vuln_type)
+            return self._get_basic_payloads(vuln_type, param_name=param_name)
 
-        return self._get_basic_payloads(vuln_type)
+        return self._get_basic_payloads(vuln_type, param_name=param_name)
 
-    def _get_basic_payloads(self, vuln_type: str) -> List[str]:
+    def _get_basic_payloads(self, vuln_type: str, param_name: str = "") -> List[str]:
         """Fallback basic payloads when LLM fails."""
         basic_payloads = {
             'sqli': ["' OR '1'='1", "' OR 1=1--", "'; DROP TABLE users--"],
             'xss': ["<script>alert('XSS')</script>", "<img src=x onerror=alert(1)>"],
-            'command_injection': ["; ls", "| whoami", "`cat /etc/passwd`"],
+            'command_injection': ["; id", "&& id", "| id", "`id`", "`cat /etc/passwd`"],
             'path_traversal': ["../../../etc/passwd", "..\\..\\..\\windows\\win.ini"],
         }
-        return basic_payloads.get(vuln_type, ["test"])
+        payloads = list(basic_payloads.get(vuln_type, ["test"]))
+        lower_param = param_name.lower()
+        if vuln_type == "command_injection" and any(
+            token in lower_param
+            for token in ("host", "ip", "addr", "target", "server")
+        ):
+            payloads = [
+                "127.0.0.1; id",
+                "127.0.0.1 && id",
+                "127.0.0.1 | id",
+            ] + payloads
+        elif vuln_type == "command_injection" and any(
+            token in lower_param
+            for token in ("cmd", "command", "exec", "shell")
+        ):
+            payloads = ["id", "whoami", "cat /etc/passwd"] + payloads
+        return payloads
 
     def _test_payload(self, url: str, param_name: str, payload: str,
                      vuln_type: str, method: str = "GET") -> Optional[Dict]:
@@ -184,35 +201,38 @@ class WebFuzzer:
         (login forms, mutation handlers, search backends that
         reject GET with 405) were never reachable — fuzzer
         reported zero findings on whole classes of forms even
-        when injection vulns were present in the POST body
-        handler.
+                when injection vulns were present in the POST body
+                handler.
         """
         try:
-            # Send request with payload via the appropriate verb.
-            method_upper = method.upper()
-            if method_upper == "POST":
-                # Body-encoded params for POST; matches the
-                # default form encoding (application/x-www-form-urlencoded)
-                # that requests.post applies when `data=` is a dict.
-                response = self.client.post(url, data={param_name: payload})
-            else:
-                # Default + GET path: query-string params.
-                response = self.client.get(url, params={param_name: payload})
+            baseline_value = self._baseline_value(param_name)
+            baseline = self._send_payload(url, param_name, baseline_value, method)
+            response = self._send_payload(url, param_name, payload, method)
 
             # Analyze response for oracle-grade exploitation evidence.
             confirmation = self._analyze_response(response, payload, vuln_type)
 
-            if confirmation:
+            if confirmation and self._passes_three_gate_oracle(
+                baseline,
+                response,
+                confirmation,
+            ):
                 logger.warning(f"Potential {vuln_type} found in {param_name}")
                 return {
                     'url': redact_secrets(url, reveal_secrets=self.client.reveal_secrets),
                     'parameter': param_name,
                     'payload': payload,
                     'vulnerability_type': vuln_type,
+                    'method': method.upper(),
                     'status_code': response.status_code,
                     'response_length': len(response.content),
+                    'baseline_status_code': baseline.status_code,
+                    'baseline_response_length': len(baseline.content),
                     'confirmed': True,
                     'response_evidence': confirmation["snippet"],
+                    'attack_evidence': confirmation["snippet"],
+                    'baseline_evidence': self._response_summary(baseline),
+                    'diff_summary': self._diff_summary(baseline, response, confirmation["signal"]),
                     'oracle_signal': confirmation["signal"],
                 }
 
@@ -227,6 +247,73 @@ class WebFuzzer:
             )
 
         return None
+
+    def _send_payload(self, url: str, param_name: str, value: str, method: str):
+        """Send one baseline or attack request using the selected verb."""
+        method_upper = method.upper()
+        if method_upper == "POST":
+            return self.client.post(url, data={param_name: value})
+        return self.client.get(self._url_with_param(url, param_name, value))
+
+    def _url_with_param(self, url: str, param_name: str, value: str) -> str:
+        """Return URL with ``param_name`` replaced, not duplicated."""
+        parsed = urlparse(url)
+        query = [
+            (name, existing_value)
+            for name, existing_value in parse_qsl(parsed.query, keep_blank_values=True)
+            if name != param_name
+        ]
+        query.append((param_name, value))
+        return urlunparse(parsed._replace(query=urlencode(query)))
+
+    def _baseline_value(self, param_name: str) -> str:
+        """Benign value for the baseline half of the web oracle."""
+        lower = param_name.lower()
+        if any(token in lower for token in ("id", "count", "page", "limit")):
+            return "1"
+        if any(token in lower for token in ("host", "ip", "addr", "server")):
+            return "127.0.0.1"
+        if any(token in lower for token in ("email", "mail")):
+            return "raptor@example.invalid"
+        if any(token in lower for token in ("url", "uri", "next", "redirect")):
+            return "/"
+        return "raptor-baseline"
+
+    def _passes_three_gate_oracle(self, baseline, attack, confirmation: Dict[str, str]) -> bool:
+        """Require baseline, attack and diff evidence before confirming.
+
+        This stops pages that already contain database errors, arithmetic
+        strings, or reflected scanner documentation from becoming findings.
+        """
+        signal = confirmation.get("signal", "")
+        snippet = confirmation.get("snippet", "")
+        baseline_text = baseline.text if isinstance(baseline.text, str) else ""
+        attack_text = attack.text if isinstance(attack.text, str) else ""
+
+        if snippet and snippet in baseline_text:
+            return False
+        if signal and signal in baseline_text:
+            return False
+        if baseline.status_code != attack.status_code:
+            return True
+        if len(baseline.content) != len(attack.content):
+            return True
+        return baseline_text != attack_text
+
+    def _response_summary(self, response, limit: int = 240) -> str:
+        body = response.text if isinstance(response.text, str) else ""
+        excerpt = body[:limit].replace("\n", "\\n").replace("\r", "\\r")
+        return (
+            f"HTTP {response.status_code}, {len(response.content)} bytes"
+            + (f": {excerpt}" if excerpt else "")
+        )
+
+    def _diff_summary(self, baseline, attack, oracle_signal: str) -> str:
+        return (
+            f"baseline HTTP {baseline.status_code}/{len(baseline.content)} bytes; "
+            f"attack HTTP {attack.status_code}/{len(attack.content)} bytes; "
+            f"oracle={oracle_signal}"
+        )
 
     def _evidence_snippet(self, body: str, needle: str, limit: int = 240) -> str:
         """Return a compact response excerpt around the matched oracle signal."""
@@ -314,6 +401,12 @@ class WebFuzzer:
                 "volume serial number",  # Windows dir output
                 "windows ip configuration",
             ]
+            id_match = re.search(r"\buid=\d+\([^)]+\)", body_lower)
+            if id_match:
+                return self._confirmation(
+                    f"command_output:{id_match.group(0)}",
+                    self._evidence_snippet(body, id_match.group(0)),
+                )
             for indicator in os_indicators:
                 if indicator in body_lower:
                     return self._confirmation(

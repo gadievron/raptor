@@ -17,6 +17,14 @@ def _response():
     )
 
 
+def _baseline_response():
+    return SimpleNamespace(
+        status_code=200,
+        content=b"normal",
+        text="normal search page",
+    )
+
+
 def test_web_crawler_redacts_secret_url_artifacts_by_default():
     api_key = "api-" + "j" * 24
     access_probe = "access-" + "k" * 24
@@ -189,7 +197,8 @@ def test_web_fuzzer_redacts_finding_urls_by_default():
     redaction_probe = "access-" + "e" * 24
     client = WebClient("https://example.test")
     fuzzer = WebFuzzer(client, DummyLLM())
-    client.get = lambda url, params=None: _response()
+    responses = iter([_baseline_response(), _response()])
+    client.get = lambda url, params=None: next(responses)
 
     finding = fuzzer._test_payload(
         f"https://example.test/search?access_token={redaction_probe}",
@@ -210,7 +219,8 @@ def test_web_fuzzer_can_preserve_finding_urls_for_debugging():
     redaction_probe = "access-" + "f" * 24
     client = WebClient("https://example.test", reveal_secrets=True)
     fuzzer = WebFuzzer(client, DummyLLM())
-    client.get = lambda url, params=None: _response()
+    responses = iter([_baseline_response(), _response()])
+    client.get = lambda url, params=None: next(responses)
 
     finding = fuzzer._test_payload(
         f"https://example.test/search?access_token={redaction_probe}",

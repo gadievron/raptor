@@ -17,6 +17,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from urllib.parse import parse_qsl, urlparse
 
 # Bootstrap: add repo root to sys.path so core.* and packages.* are importable
 # when this script is launched as a subprocess by raptor.py (get_safe_env()
@@ -24,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from typing import Any, Dict, List, Optional
 
+from core.context_guard import build_web_context_guard_report
 from core.json import save_json
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
@@ -38,8 +40,22 @@ from packages.web.research_landscape import (
     assess_research_landscape,
     high_priority_theme_ids,
 )
+from packages.web.session_context import build_web_session_context
+from packages.web.verified_outcomes import verified_outcomes_for_findings
 
 logger = get_logger()
+
+HIGH_RISK_WEB_PARAMS = {
+    "cmd", "command", "exec", "execute", "code", "input", "template",
+    "host", "ip", "addr", "target", "server", "url", "uri", "path", "file",
+    "next", "redirect", "redirect_uri", "return_url", "q", "query", "search",
+    "filter", "id", "uuid",
+}
+
+HIGH_RISK_PATH_TOKENS = {
+    "eval", "exec", "command", "cmd", "ping", "diagnostic", "template",
+    "search", "redirect", "proxy", "fetch", "upload", "debug", "admin",
+}
 
 
 WEB_INJECTION_CWE = {
@@ -286,7 +302,7 @@ class WebScanner:
         # consume the finding without scraping prose from the evidence string.
         grouped: Dict[tuple, dict] = {}
 
-        def _record(endpoint: str, param: str, raw: dict) -> None:
+        def _record(endpoint: str, param: str, raw: dict, attack_vector: str) -> None:
             vuln_type = raw.get("vulnerability_type", "injection")
             key = (endpoint, vuln_type)
             if key not in grouped:
@@ -296,17 +312,31 @@ class WebScanner:
                     "params": [],
                     "payloads": [],
                     "response_evidence": [],
+                    "baseline_evidence": [],
+                    "attack_evidence": [],
+                    "diff_summaries": [],
                     "oracle_signals": [],
                     "status_codes": [],
+                    "methods": [],
+                    "attack_vectors": [],
                 }
             grouped[key]["params"].append(param)
             grouped[key]["payloads"].append(raw.get("payload", "")[:200])
             if raw.get("response_evidence"):
                 grouped[key]["response_evidence"].append(raw["response_evidence"])
+            if raw.get("baseline_evidence"):
+                grouped[key]["baseline_evidence"].append(raw["baseline_evidence"])
+            if raw.get("attack_evidence"):
+                grouped[key]["attack_evidence"].append(raw["attack_evidence"])
+            if raw.get("diff_summary"):
+                grouped[key]["diff_summaries"].append(raw["diff_summary"])
             if raw.get("oracle_signal"):
                 grouped[key]["oracle_signals"].append(raw["oracle_signal"])
             if raw.get("status_code") is not None:
                 grouped[key]["status_codes"].append(raw["status_code"])
+            if raw.get("method"):
+                grouped[key]["methods"].append(raw["method"])
+            grouped[key]["attack_vectors"].append(attack_vector)
 
         target_urls = list(dict.fromkeys(
             crawl_data.get("discovered_urls")
@@ -320,6 +350,7 @@ class WebScanner:
             crawl_data.get("discovered_parameters", []),
             context_map=context_map,
         )[:self.max_fuzz_params]
+        target_urls = self._prioritise_urls(target_urls, params)
 
         # URL parameters. Test each discovered endpoint, not just the root URL.
         selected_urls = target_urls[:self.max_fuzz_urls]
@@ -329,23 +360,29 @@ class WebScanner:
             f"{min(len(crawl_data.get('discovered_forms', [])), self.max_fuzz_forms)} form(s)"
         )
         for target_url in selected_urls:
-            for param in params:
+            url_params = self._query_parameters(target_url)
+            target_params = self._prioritise_parameters(
+                url_params + params,
+                context_map=context_map,
+            )[:self.max_fuzz_params]
+            for param in target_params:
                 for raw in fuzzer.fuzz_parameter(
                     target_url, param, vulnerability_types=vuln_types
                 ):
-                    _record(raw.get("url", target_url), param, raw)
+                    _record(raw.get("url", target_url), param, raw, "query_param")
 
         # Form fields
         for form in crawl_data.get("discovered_forms", [])[:self.max_fuzz_forms]:
             endpoint = form.get("action", self.base_url)
             method = form.get("method", "GET")
+            attack_vector = "request_body" if str(method).upper() == "POST" else "query_param"
             for field_name, field_info in form.get("inputs", {}).items():
                 if field_info.get("type") in ("hidden", "submit", "button"):
                     continue
                 for raw in fuzzer.fuzz_parameter(
                     endpoint, field_name, vulnerability_types=["sqli", "xss"], method=method
                 ):
-                    _record(endpoint, field_name, raw)
+                    _record(endpoint, field_name, raw, attack_vector)
 
         # Convert grouped hits to one WebFinding per (endpoint, vuln_type)
         findings = []
@@ -353,9 +390,15 @@ class WebScanner:
             params = hit["params"]
             payloads = hit["payloads"]
             response_evidence = hit.get("response_evidence") or []
+            baseline_evidence = hit.get("baseline_evidence") or []
+            attack_evidence = hit.get("attack_evidence") or response_evidence
+            diff_summaries = hit.get("diff_summaries") or []
             oracle_signals = hit.get("oracle_signals") or []
+            attack_vectors = hit.get("attack_vectors") or []
+            methods = hit.get("methods") or []
             param_list = ", ".join(f"'{p}'" for p in params)
             evidence_snippet = response_evidence[0] if response_evidence else ""
+            diff_summary = diff_summaries[0] if diff_summaries else ""
             oracle_signal = oracle_signals[0] if oracle_signals else "web_oracle"
             self._finding_counter += 1
             findings.append(WebFinding(
@@ -367,6 +410,7 @@ class WebScanner:
                     f"Affected parameters: {param_list}\n"
                     f"Example payload: {payloads[0]}\n"
                     f"Response evidence: {evidence_snippet}\n"
+                    f"Baseline/attack diff: {diff_summary}\n"
                     f"Oracle signal: {oracle_signal}"
                 ),
                 description=(
@@ -386,6 +430,11 @@ class WebScanner:
                 target_url=endpoint,
                 confirmation_payload=payloads[0] if payloads else None,
                 response_evidence=evidence_snippet,
+                baseline_evidence=baseline_evidence[0] if baseline_evidence else None,
+                attack_evidence=attack_evidence[0] if attack_evidence else None,
+                diff_summary=diff_summary or None,
+                attack_vector=attack_vectors[0] if attack_vectors else None,
+                method=methods[0] if methods else None,
                 reproducible=False,
             ))
 
@@ -511,7 +560,7 @@ class WebScanner:
         context_map: Optional[dict] = None,
     ) -> List[str]:
         if not context_map:
-            return list(parameters)
+            return self._rank_parameters(list(parameters))
 
         sink_params = []
         for sink in context_map.get("sinks", []):
@@ -520,10 +569,85 @@ class WebScanner:
                 sink_params.append(param)
 
         ordered = []
-        for param in sink_params + list(parameters):
+        for param in sink_params + self._rank_parameters(list(parameters)):
             if param not in ordered:
                 ordered.append(param)
         return ordered
+
+    def _rank_parameters(self, parameters: List[str]) -> List[str]:
+        indexed = list(dict.fromkeys(parameters))
+        return sorted(
+            indexed,
+            key=lambda param: (
+                self._parameter_score(param),
+                -indexed.index(param),
+            ),
+            reverse=True,
+        )
+
+    def _parameter_score(self, param: str) -> int:
+        lower = str(param).lower()
+        score = 0
+        if lower in HIGH_RISK_WEB_PARAMS:
+            score += 100
+        if any(token in lower for token in ("cmd", "command", "exec", "code")):
+            score += 80
+        if any(token in lower for token in ("host", "ip", "target", "url", "uri")):
+            score += 60
+        if any(token in lower for token in ("file", "path", "template", "redirect")):
+            score += 50
+        return score
+
+    def _prioritise_urls(self, urls: List[str], parameters: List[str]) -> List[str]:
+        indexed = list(dict.fromkeys(urls))
+        known_params = set(parameters)
+        return sorted(
+            indexed,
+            key=lambda url: (
+                self._url_score(url, known_params),
+                -indexed.index(url),
+            ),
+            reverse=True,
+        )
+
+    def _url_score(self, url: str, known_params: set[str]) -> int:
+        parsed = urlparse(url)
+        query_params = [name for name, _ in parse_qsl(parsed.query, keep_blank_values=True)]
+        path_tokens = {
+            token
+            for token in parsed.path.lower().replace("-", "_").split("/")
+            for token in token.split("_")
+            if token
+        }
+        score = 0
+        if query_params:
+            score += 50
+            if len(query_params) <= 3:
+                score += 120
+            elif len(query_params) > 5:
+                score -= (len(query_params) - 5) * 100
+        param_scores = sorted(
+            (self._parameter_score(param) for param in query_params),
+            reverse=True,
+        )[:3]
+        score += sum(param_scores)
+        for param in query_params:
+            if param in known_params:
+                score += 20
+        if path_tokens & HIGH_RISK_PATH_TOKENS:
+            score += 40
+        if parsed.path.endswith((".js", ".css", ".png", ".jpg", ".gif", ".ico")):
+            score -= 100
+        if any(token in parsed.path.lower() for token in ("/.git", "/actuator/health")):
+            score -= 30
+        return score
+
+    def _query_parameters(self, url: str) -> List[str]:
+        return [
+            name
+            for name, _value in parse_qsl(urlparse(url).query, keep_blank_values=True)
+            if name
+        ]
 
     def _web_finding_to_agentic_result(self, finding: WebFinding) -> Dict[str, Any]:
         data = finding.to_dict()
@@ -553,6 +677,42 @@ class WebScanner:
             registered_check_ids=(check.check_id for check in registry.all()),
         )
         save_json(self.out_dir / "research_landscape.json", research_landscape)
+
+        session_context = build_web_session_context(
+            base_url=self.base_url,
+            discovery=discovery,
+            crawl_data=crawl_data,
+            client=self.client,
+            session=self.session,
+            findings=findings,
+        )
+        save_json(self.out_dir / "web-session-context.json", session_context)
+
+        verified_outcomes = verified_outcomes_for_findings(findings)
+        verified_outcomes_dict = {
+            "count": len(verified_outcomes),
+            "outcomes": [outcome.to_dict() for outcome in verified_outcomes],
+        }
+        save_json(self.out_dir / "verified-outcomes.json", verified_outcomes_dict)
+
+        context_guard = build_web_context_guard_report(
+            target=self.base_url,
+            llm_enabled=self.llm is not None,
+            auth_context=(
+                "authenticated"
+                if (self.session and self.session.authenticated)
+                else "unauthenticated"
+            ),
+            reveal_secrets=bool(getattr(self.client, "reveal_secrets", False)),
+            artifacts={
+                "web_findings": str(self.out_dir / "web_findings.json"),
+                "web_session_context": str(self.out_dir / "web-session-context.json"),
+                "verified_outcomes": str(self.out_dir / "verified-outcomes.json"),
+                "research_landscape": str(self.out_dir / "research_landscape.json"),
+            },
+        )
+        save_json(self.out_dir / "context-guard-report.json", context_guard)
+
         try:
             from core.security.prompt_telemetry import defense_telemetry
             defense_telemetry.write_summary(self.out_dir)
@@ -583,6 +743,21 @@ class WebScanner:
                     theme["id"]: theme["coverage"]
                     for theme in research_landscape["themes"]
                 },
+            },
+            "web_session_context": {
+                "url_count": session_context["surface"]["url_count"],
+                "form_count": session_context["surface"]["form_count"],
+                "parameter_count": session_context["surface"]["parameter_count"],
+                "auth": session_context["auth"],
+            },
+            "verified_outcomes": {
+                "count": len(verified_outcomes),
+                "oracle": "web",
+                "reproducible": False,
+            },
+            "context_guard": {
+                "artifact": str(self.out_dir / "context-guard-report.json"),
+                "target_content_is_untrusted": True,
             },
         }
         save_json(self.out_dir / "web_scan_report.json", result)
@@ -616,7 +791,7 @@ class WebScanner:
         }
 
 
-def main() -> int:
+def build_arg_parser():
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -680,6 +855,55 @@ Examples:
         help="Run /validate on needs_review findings after fuzzing to confirm exploitability",
     )
 
+    ffuf = parser.add_argument_group("ffuf content discovery")
+    ffuf.add_argument("--ffuf-wordlist")
+    ffuf.add_argument("--ffuf-path", default="FUZZ")
+    ffuf.add_argument("--ffuf-bin", default="ffuf")
+    ffuf.add_argument("--ffuf-threads", type=int, default=10)
+    ffuf.add_argument("--ffuf-rate", type=int)
+    ffuf.add_argument("--ffuf-timeout", type=int, default=30)
+    ffuf.add_argument("--ffuf-report-limit", type=int, default=50)
+    ffuf.add_argument("--ffuf-max-runtime", type=int, default=300)
+    ffuf.add_argument("--ffuf-no-auto-calibration", action="store_true")
+    ffuf.add_argument("--ffuf-match-status", default="200,204,301,302,307,401,403,405,500")
+    ffuf.add_argument("--ffuf-filter-status", default="404")
+    ffuf.add_argument("--ffuf-filter-size", type=int)
+    ffuf.add_argument("--ffuf-header", action="append", default=[])
+    ffuf.add_argument("--ffuf-cookie", action="append", default=[])
+
+    return parser
+
+
+def build_ffuf_config(args):
+    """Build an optional ffuf config from parsed CLI args."""
+    if not getattr(args, "ffuf_wordlist", None):
+        return None
+
+    from packages.web.ffuf import FfufConfig
+
+    def _blank_to_none(value):
+        return None if value == "" else value
+
+    return FfufConfig(
+        wordlist=Path(args.ffuf_wordlist),
+        path_template=args.ffuf_path,
+        threads=args.ffuf_threads,
+        rate=args.ffuf_rate,
+        timeout=args.ffuf_timeout,
+        max_runtime=args.ffuf_max_runtime,
+        report_limit=args.ffuf_report_limit,
+        binary=args.ffuf_bin,
+        auto_calibration=not args.ffuf_no_auto_calibration,
+        match_status=_blank_to_none(args.ffuf_match_status),
+        filter_status=_blank_to_none(args.ffuf_filter_status),
+        filter_size=args.ffuf_filter_size,
+        headers=tuple(args.ffuf_header or ()),
+        cookies=tuple(args.ffuf_cookie or ()),
+    )
+
+
+def main() -> int:
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     out_dir = Path(args.out) if args.out else None

@@ -39,6 +39,11 @@ class WebFinding:
     target_url: Optional[str] = None
     confirmation_payload: Optional[str] = None
     response_evidence: Optional[str] = None
+    baseline_evidence: Optional[str] = None
+    attack_evidence: Optional[str] = None
+    diff_summary: Optional[str] = None
+    attack_vector: Optional[str] = None
+    method: Optional[str] = None
     oracle: str = "web"
     reproducible: bool = False
 
