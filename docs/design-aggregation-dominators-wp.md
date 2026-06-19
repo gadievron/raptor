@@ -4,11 +4,19 @@ Three-project arc that extends RAPTOR's existing mathematical substrate.
 Sequenced as 9 phases. Each phase ships independently; later phases assume
 earlier ones but do not re-open them.
 
-- **Project A (phases 1–4):** Dawid–Skene calibrated multi-model aggregation.
+- **Project A (phases 1–4):** Dawid–Skene calibrated multi-model
+  aggregation. *Phases 1–3 shipped (PR #793); Phase 4 deferred by design
+  behind a written data gate — see the Phase summary.*
 - **Project B (phases 5–7):** CFG dominator-based sanitizer suppression.
+  *Shipped (PR #794).*
 - **Project C (phases 8–9):** Weakest-precondition extraction from the SMT
   path validator. (Carve-out from the broader SMT theory expansion; array
-  theory deferred to a separate arc.)
+  theory deferred to a separate arc.) *Shipped (Project C PR).*
+
+**Arc status: 8 of 9 phases shipped.** The only un-shipped phase (A4) is
+an intentional carve-out gated on real `/validate` ground truth, not
+outstanding work — its activation gate and checkpoint are documented in
+the Phase summary.
 
 ## Why this ordering
 
@@ -260,6 +268,12 @@ circularity closed — gated on replay-harness validation.
 
 ## Project B — CFG dominator-based sanitizer suppression
 
+> **Status: shipped (PR #794).** Phases 5–7 are implemented and tested —
+> `cfg_builder.py` / `cfg_builder_cpp.py` / `dominators.py` (Phase 5),
+> `sanitizer_catalog.py` (Phase 6), and the vertex-cut suppressor
+> `sanitizer_cut.py` with the `smt_barrier` delegation (Phase 7). The
+> sections below are the original design narrative, retained for context.
+
 ### Substrate today
 
 - `core/dataflow/smt_barrier.py:746,940,1189` already encodes the
@@ -392,6 +406,13 @@ measurement on existing corpora.
 
 ## Project C — Weakest-precondition extraction
 
+> **Status: shipped (Project C PR).** Phase 8 emits
+> `PathSMTResult.wp_predicate` (minimal sat-preserving conjunct subset,
+> via implication-based redundancy); Phase 9 carries it through
+> `validate_path` → Tier 4 `smt_witness` → the `/exploit` prompt as a
+> hard constraint. The sections below are the original design narrative,
+> retained for context.
+
 ### Substrate today
 
 - `packages/codeql/smt_path_validator.py` (1354 lines) already has
@@ -486,15 +507,43 @@ when tractable; A/B measurement.
 | 2c | A | D–S property tests | **done** |
 | 2d | A | Offline replay harness (`core/llm/multi_model/scripts/panel-replay`) | **done** (the Phase-4 gate-flip validation mechanism; reads historical `orchestrated_report.json`, reports flip rates and per-model reliability) |
 | 3 | A | Dispatch integration + output schema | **done** (additive `calibrated_aggregation` field on findings; unconditional — no flag, since the field is purely additive) |
-| 4 | A | Posterior-weighted scorecard updates | **deferred** — gated on replay-harness validation; lands in a follow-up PR as one consensus mode (soft credits via `record_event_soft`, no second event slot) with priors from `/validate` |
-| 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | not started |
-| 6 | B | Sanitizer catalog + recognition | not started |
-| 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | not started |
-| 8 | C | WP predicate extraction (minimal sat subset) | not started |
-| 9 | C | `/exploit` consumes WP predicate | not started |
+| 4 | A | Posterior-weighted scorecard updates | **deferred by design** — not missing: gated on real `/validate` ground truth (Phase 1a returned *no-data*, so a flip now is prior-dominated noise). Gate + checkpoint are written down (see "Phase 4 gate" below); lands in a follow-up PR as one consensus mode (soft credits via `record_event_soft`, no second event slot) with priors from `/validate`. |
+| 5 | B | CFG builder (Python + C/C++) + Lengauer–Tarjan | **done** (#794) — `core/inventory/cfg_builder.py`, `cfg_builder_cpp.py`, `dominators.py` |
+| 6 | B | Sanitizer catalog + recognition | **done** (#794) — `core/dataflow/sanitizer_catalog.py` |
+| 7 | B | Vertex-cut suppressor + `smt_barrier` upgrade | **done** (#794) — `core/inventory/sanitizer_cut.py`; `smt_barrier` dominance checks delegate to the vertex cut |
+| 8 | C | WP predicate extraction (minimal sat subset) | **done** (Project C PR) — `PathSMTResult.wp_predicate` via implication-based redundancy in `packages/codeql/smt_path_validator.py` |
+| 9 | C | `/exploit` consumes WP predicate | **done** (Project C PR) — surfaced through `validate_path` → Tier 4 `smt_witness` → exploit prompt as a hard constraint |
 
 **Total: 9 phases.** Phases within a project are sequential. Across
-projects, A and B are independent; C depends on neither.
+projects, A and B are independent; C depends on neither. **Status: 8 of
+9 phases shipped** (A: 1–3 in this PR #793, B: 5–7 in #794, C: 8–9 in
+the Project C PR). Phase 4 is the one intentional carve-out — deferred
+behind the data gate below, not outstanding work.
+
+### Phase 4 gate (when the flip lands)
+
+The flip activates when **all three** hold; until then the additive
+telemetry shipped in Phases 1–3 stands on its own and changes no
+verdict:
+
+1. **Labels exist.** `/validate` has produced ground-truth
+   (`exploitable` / `disproven`) for the active decision classes —
+   target ≥30 labels/class — so `priors_from_validation` is
+   data-driven, not the `Beta(1,1)` cold-start. (A per-class harvester
+   that rolls `/validate` runs into `(n_exploitable, n_disproven)`
+   counts is itself part of the follow-up — today those labels live
+   only in per-run validation outputs.)
+2. **Replay clears.** `panel-replay` over accumulated
+   `orchestrated_report.json` history shows the posterior-weighted path
+   moves credit in the right direction (the mis-graded-dissenter case)
+   with no regression on agreed findings.
+3. **One mode, no fork.** Single consensus mode recording soft credits
+   via `record_event_soft`; the legacy discrete update is the
+   `{1.0, 0.0}` special case.
+
+Checkpoint: re-run `panel-replay` and report flip-rate + per-class label
+counts at the next review; open the follow-up PR when the gate clears,
+otherwise post the counts so the distance to the gate is visible.
 
 ## Out of scope (explicit)
 
