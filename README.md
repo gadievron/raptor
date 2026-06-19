@@ -99,6 +99,7 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/exploit` | Generate proof-of-concept exploit code | Beta |
 | `/patch` | Generate secure patches for confirmed vulnerabilities | Beta |
 | `/fuzz` | Binary fuzzing with AFL++ and crash analysis | Stable |
+| `/frida` | Dynamic instrumentation: spawn-only function/argument trace and Stalker coverage | Beta |
 | `/crash-analysis` | Autonomous root-cause analysis for C/C++ crashes | Stable |
 | `/oss-forensics` | Evidence-backed forensic investigation for GitHub repositories | Stable |
 | `/project` | Named workspaces to organise runs and track findings over time | Stable |
@@ -349,6 +350,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 | `docs/PYTHON_CLI.md` | Python CLI reference for scripting and CI |
 | `docs/sca.md` | Software composition analysis reference |
 | `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
+| `docs/DYNAMIC_INSTRUMENTATION_QUICKSTART.md` | Frida dynamic instrumentation guide (/frida) |
 | `docs/ARCHITECTURE.md` | Technical architecture detail |
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
 | `docs/DEPENDENCIES.md` | External tools, versions, and licences |

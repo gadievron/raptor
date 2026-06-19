@@ -505,11 +505,24 @@ def mark_runtime(
 def import_runtime(
     store: CoverageStore, path, checklist: Dict[str, Any],
     fmt: Optional[str] = None, tool: Optional[str] = None,
+    binary: Optional[str] = None,
 ) -> int:
-    """Import external runtime coverage (gcov / lcov / coverage.py) into the
-    store (Phase 4). Detects the format (unless ``fmt`` given), parses executed
-    source lines, and marks them under the runtime ``tool`` label. Returns
-    marks made."""
+    """Import external runtime coverage into the store (Phase 4). Detects the
+    format (unless ``fmt`` given), parses executed source lines, and marks them
+    under the runtime ``tool`` label. Returns marks made.
+
+    Source-level formats (gcov / lcov / coverage.py) resolve directly. The
+    binary format ``drcov`` (DynamoRIO / Frida / AFL-QEMU) is address-based and
+    needs ``binary`` for DWARF resolution - it routes through ``import_drcov``
+    rather than the source parsers."""
+    if fmt == "drcov":
+        if not binary:
+            raise ValueError(
+                "import_runtime: --format drcov requires --binary for DWARF "
+                "address resolution")
+        from .collect import import_drcov
+        return import_drcov(store, path, binary, checklist, tool=tool or "drcov")
+
     from .parsers import default_tool, detect_format, parse
 
     fmt = fmt or detect_format(path)

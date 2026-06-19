@@ -2474,9 +2474,12 @@ def binary_oracle_absent(
                 enclosing,
                 key=lambda it: int(it.get("line_start") or 0),
             )]
-        else:
-            candidates = candidates[:1]
-    for item in candidates:
+        # else: line provided but matched no enclosing range - fall
+        # through and require unanimity below rather than picking the
+        # first item (a dead namesake at index 0 must not suppress a
+        # live overload).
+
+    def _item_absent(item: Dict[str, Any]) -> bool:
         meta = item.get("metadata")
         if not isinstance(meta, dict):
             return False
@@ -2499,7 +2502,13 @@ def binary_oracle_absent(
                for b in per_binary):
             return False
         return True
-    return False
+
+    # When we could NOT disambiguate to a single candidate (line==0, or
+    # a line that matched no enclosing range), require UNANIMITY: suppress
+    # only if EVERY same-name candidate is independently absent. Deciding
+    # on candidates[0] alone let a dead namesake suppress a live overload
+    # when the finding carried no line (adversarial review P0-C-3).
+    return all(_item_absent(it) for it in candidates)
 
 
 def is_lexically_dead(

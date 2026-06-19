@@ -244,9 +244,13 @@ def enable_llm_egress(config: "LLMConfig") -> None:
     os.environ["no_proxy"] = new_no_proxy
 
     _enabled = True
+    # The allowlist may contain the remote Ollama host - mask it (CLAUDE.md)
+    # while leaving non-secret cloud hosts (api.anthropic.com, etc.) visible.
+    from core.security.redaction import mask_ollama_endpoint
+    _allowlist_display = mask_ollama_endpoint(", ".join(sorted(remote_hosts)))
     logger.debug(
-        "LLM egress enabled: HTTPS_PROXY=127.0.0.1:%d, allowlist=%s",
-        proxy.port, sorted(remote_hosts),
+        "LLM egress enabled: HTTPS_PROXY=127.0.0.1:%d, allowlist=[%s]",
+        proxy.port, _allowlist_display,
     )
 
 

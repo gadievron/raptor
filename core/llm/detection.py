@@ -110,8 +110,12 @@ def _get_available_ollama_models() -> List[str]:
             _cached_ollama_models = [model['name'] for model in data.get('models', [])]
             return _cached_ollama_models
     except Exception as e:
+        from core.security.redaction import mask_ollama_endpoint
         ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
-        logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
+        # The raw exception embeds the real remote host:port (e.g.
+        # HTTPConnectionPool(host='10.x.x.x', port=11434)), which would
+        # defeat the ollama_display mask on the same line - scrub it.
+        logger.debug(f"Could not connect to Ollama at {ollama_display}: {mask_ollama_endpoint(e)}")
     _cached_ollama_models = []
     return []
 

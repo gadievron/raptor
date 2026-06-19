@@ -103,6 +103,7 @@ class RaptorConfig:
         # /agentic"), not internal subsystem axes. ``source_intel`` /
         # ``verdict-active`` mean nothing to an operator reading /doctor.
         "coccinelle":   {"binary": "spatch",    "severity": "degrades", "affects": "/codeql, /agentic (C/C++ semantic-patch verification)"},
+        "frida":        {"binary": "frida",     "severity": "degrades", "affects": "/frida (dynamic instrumentation: trace, coverage)"},
         "gdb":          {"binary": "gdb",       "severity": "required", "affects": "/crash-analysis, /fuzz"},
         "rr":           {"binary": "rr",        "severity": "degrades", "affects": "/crash-analysis"},
         "semgrep":      {"binary": "semgrep",   "group": "scanner",     "affects": "/scan, /agentic"},

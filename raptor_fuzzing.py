@@ -38,6 +38,19 @@ from packages.autonomous import (
 logger = get_logger()
 
 
+def _positive_int(value):
+    """argparse type: a strictly positive int. A zero/negative per-exec
+    timeout would disable the watchdog or be rejected by AFL, so fail closed
+    (usage error, exit 2) rather than launching a misconfigured campaign."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}")
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {n}")
+    return n
+
+
 def main() -> None:
     # So much more needed here but this is a start for us. :-)
     ap = argparse.ArgumentParser(
@@ -61,7 +74,12 @@ Examples:
 """,
     )
 
-    ap.add_argument("--binary", help="Path to binary to fuzz")
+    from core.config import RaptorConfig as _RC
+    ap.add_argument(
+        "--version", action="version", version=_RC.effective_version(),
+        help="Print the RAPTOR version and exit",
+    )
+    ap.add_argument("-b", "--binary", help="Path to binary to fuzz")
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
     ap.add_argument(
         "--prepare-corpus",
@@ -86,8 +104,8 @@ Examples:
     ap.add_argument("--duration", type=int, default=3600, help="Fuzzing duration in seconds (default: 3600)")
     ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
-    ap.add_argument("--timeout", type=int, default=1000, help="Timeout per execution in ms (default: 1000)")
-    ap.add_argument("--out", help="Output directory (default: out/fuzz_<binary_name>)")
+    ap.add_argument("--timeout", type=_positive_int, default=1000, help="Timeout per execution in ms (default: 1000)")
+    ap.add_argument("-o", "--out", help="Output directory (default: out/fuzz_<binary_name>)")
     ap.add_argument("--dict", help="Path to AFL dictionary file for structured input fuzzing")
     ap.add_argument("--input-mode", choices=["stdin", "file"], default="stdin", help="Input mode: stdin (default) or file (uses @@)")
     ap.add_argument("--check-sanitizers", action="store_true", help="Check if binary is compiled with sanitizers (ASAN, etc.)")

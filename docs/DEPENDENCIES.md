@@ -69,6 +69,13 @@ For example CodeQL does not allow commerical use.
 - Usage: RAPTOR uses for deterministic debugging in /crash-analysis command
 - Note: User installs separately, Linux only (x86_64)
 
+**Frida** (Dynamic instrumentation toolkit)
+- Install: `pipx install frida-tools` (or `pip install frida-tools`)
+- License: wxWindows Library Licence (LGPL-compatible)
+- Source: https://frida.re
+- Usage: RAPTOR calls Frida for the /frida command (spawn-only function/argument tracing and Stalker basic-block coverage)
+- Note: User installs separately, optional. Degrades gracefully when absent (the capability probe reports unavailable and /doctor shows a soft warning)
+
 **gcov** (Code coverage tool)
 - Install: Bundled with gcc (no separate install needed)
 - License: GPL (part of GCC)
@@ -127,6 +134,7 @@ For example CodeQL does not allow commerical use.
 - Semgrep (LGPL 2.1) - User installs
 - AFL++ (Apache 2.0) - User installs
 - CodeQL (GitHub Terms) - User installs
+- Frida (wxWindows Library Licence) - User installs
 - Python packages (various open source) - User installs via pip
 - System tools (GPL v3, Apache 2.0) - Pre-installed on OS
 

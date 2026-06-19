@@ -52,9 +52,10 @@ from core.security.log_sanitisation import escape_nonprintable
 
 
 _USAGE = (
-    "usage: raptor doctor [--strict] [--verbose]\n"
+    "usage: raptor doctor [--strict] [--verbose] [--json]\n"
     "  --strict     non-zero exit on warnings too (CI gate)\n"
     "  --verbose    include passing checks in the output\n"
+    "  --json       emit a machine-readable report (for CI parsing)\n"
 )
 
 
@@ -309,12 +310,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     argv = list(argv or [])
     strict = False
     verbose = False
+    as_json = False
     while argv:
         a = argv.pop(0)
         if a == "--strict":
             strict = True
         elif a in ("--verbose", "-v"):
             verbose = True
+        elif a == "--json":
+            as_json = True
         elif a in ("--help", "-h"):
             # `--help` is a help request, not a usage error: print usage to
             # stdout and exit 0, matching every other raptor.py mode. Pre-fix
@@ -340,8 +344,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
+    (tool_results, tool_warnings, llm_lines, llm_warnings,
+     env_parts, env_warnings, lang_line, project_line) = gathered
     text, n_fail, n_warn = _render(*gathered, verbose=verbose)
-    print(text)
+
+    if as_json:
+        import json as _json
+        payload = {
+            "tools": {name: ok for name, ok in tool_results},
+            "tool_warnings": list(tool_warnings),
+            "llm": list(llm_lines),
+            "llm_warnings": list(llm_warnings),
+            "env": list(env_parts),
+            "env_warnings": list(env_warnings),
+            "lang": lang_line,
+            "project": project_line,
+            "summary": {
+                "failures": n_fail,
+                "warnings": n_warn,
+                "passed": sum(1 for _, ok in tool_results if ok),
+            },
+        }
+        print(_json.dumps(payload, indent=2))
+    else:
+        print(text)
     if n_fail:
         return 1
     if strict and n_warn:

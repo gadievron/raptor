@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""raptor-frida - dynamic instrumentation (Frida) dispatch shim.
+
+Thin CLI over ``packages.dynamic_instrumentation.api`` so the ``/frida`` skill
+(and operators) can run the deterministic operations without writing Python.
+Spawn-only by design: RAPTOR instruments a binary it launches, under the
+sandbox, network blocked by default (see runner.py for the isolation model).
+
+Usage:
+  raptor-frida probe
+  raptor-frida trace  <binary> --symbols a,b,c [--out DIR] [--timeout S] [-- ARGS...]
+  raptor-frida coverage <binary> [--out DIR] [--timeout S] [--binary-for-dwarf P]
+                                 [--modules m1,m2] [-- ARGS...]
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.security._trust_guard import require_trusted_caller
+require_trusted_caller()
+
+import argparse
+import json
+
+
+def _positive_float(value):
+    """argparse type: a strictly positive timeout (seconds). A zero/negative
+    timeout would kill the target before it runs, so fail closed (exit 2)."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a number, got {value!r}")
+    if f <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {f}")
+    return f
+
+
+def _split_args(argv):
+    """Split off a trailing ``-- <target args>`` section."""
+    if "--" in argv:
+        i = argv.index("--")
+        return argv[:i], argv[i + 1:]
+    return argv, []
+
+
+def main() -> int:
+    pre, target_args = _split_args(sys.argv[1:])
+    ap = argparse.ArgumentParser(prog="raptor-frida")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_probe = sub.add_parser("probe", help="Report Frida capability (no spawn)")
+
+    p_trace = sub.add_parser("trace", help="Trace function entry + arguments")
+    p_trace.add_argument("binary")
+    p_trace.add_argument("--symbols", required=True,
+                         help="Comma-separated function names to hook")
+    p_trace.add_argument("--out", default=None, help="Output directory")
+    p_trace.add_argument("--timeout", type=_positive_float, default=30.0)
+    p_trace.add_argument("--profile", default="debug",
+                         help="Sandbox profile (debug|none|network-only)")
+
+    p_cov = sub.add_parser("coverage", help="Stalker block coverage → drcov → store")
+    p_cov.add_argument("binary")
+    p_cov.add_argument("--out", default=None, help="Output directory")
+    p_cov.add_argument("--timeout", type=_positive_float, default=30.0)
+    p_cov.add_argument("--modules", default=None,
+                       help="Comma-separated module substrings to cover")
+    p_cov.add_argument("--profile", default="debug")
+
+    args = ap.parse_args(pre)
+
+    from packages.dynamic_instrumentation import api
+    from packages.dynamic_instrumentation.capability import probe
+
+    if args.cmd == "probe":
+        rep = probe()
+        print(json.dumps({
+            "available": rep.available, "frida_python": rep.frida_python,
+            "frida_cli": rep.frida_cli, "ptrace_scope": rep.ptrace_scope,
+            "platform": rep.platform, "arch": rep.arch, "notes": rep.notes,
+            "summary": rep.summary(),
+        }, indent=2))
+        return 0 if rep.available else 1
+
+    if not probe().available:
+        print("frida not available - install with: pipx install frida-tools",
+              file=sys.stderr)
+        return 1
+
+    out_dir = args.out
+    if not out_dir:
+        from core.config import RaptorConfig
+        out_dir = str(RaptorConfig.get_out_dir() / "frida")
+
+    if args.cmd == "trace":
+        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+        res = api.trace_functions(
+            args.binary, symbols, output_dir=out_dir, timeout=args.timeout,
+            spawn_args=target_args, profile=args.profile)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    if args.cmd == "coverage":
+        modules = ([m.strip() for m in args.modules.split(",") if m.strip()]
+                   if args.modules else None)
+        res = api.collect_coverage(
+            args.binary, output_dir=out_dir, timeout=args.timeout,
+            modules=modules, spawn_args=target_args, profile=args.profile)
+        print(json.dumps(res, indent=2))
+        return 0
+
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

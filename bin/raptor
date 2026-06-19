@@ -9,11 +9,23 @@ set -euo pipefail
 
 # Resolve symlinks to find the real script location
 SCRIPT="$0"
+# Hop bound: a bare `while [ -L "$SCRIPT" ]` has no termination guard, so
+# a symlink cycle (A → B → A) in a poisoned ~/bin layout loops forever.
+# 32 matches Linux's MAXSYMLINKS; real layouts rarely exceed 2-3 hops.
+# Mirrors the guard already in libexec/raptor-cc-trust-check.
+_symhops=0
 while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "$(basename "$0"): symlink hop limit exceeded resolving $0" >&2
+        echo "  (likely a symlink cycle; refusing to resolve further)" >&2
+        exit 1
+    fi
     DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
+unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -d "$RAPTOR_DIR/core" ]; then

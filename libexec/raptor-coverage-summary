@@ -10,8 +10,9 @@ Usage:
   raptor-coverage-summary [<dir>] --mark-file <json>    Mark functions from JSON file
   raptor-coverage-summary [<dir>] --unmark <file:item>  Remove item from reviewed
   raptor-coverage-summary [<dir>] --import <path>       Ingest external runtime
-      [--format gcov|lcov|coverage.py] [--tool <label>] coverage (gcov/lcov/
-                                                        coverage.py) into the store
+      [--format gcov|lcov|coverage.py|drcov]            coverage into the store.
+      [--tool <label>] [--binary <path>]                drcov (DynamoRIO/Frida/
+                                                        AFL-QEMU) needs --binary
 
 If <dir> is omitted, uses the active project.
 Accepts: project output dir, run dir, target path, or project name.
@@ -19,19 +20,10 @@ Accepts: project output dir, run dir, target path, or project name.
 import sys
 from pathlib import Path
 
-# ─── trust-marker check (do not import; inline by design) ───
-import os
-if not (os.environ.get("CLAUDECODE")
-        or os.environ.get("_RAPTOR_TRUSTED")):
-    sys.stderr.write(
-        f"{sys.argv[0]}: internal dispatch script.\n"
-        "  Run via 'bin/raptor' instead.\n"
-        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
-    )
-    sys.exit(2)
-# ─── end trust-marker check ─────────────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.security._trust_guard import require_trusted_caller
+require_trusted_caller()
 
 
 def _is_project_dir(d: Path) -> bool:
@@ -250,15 +242,22 @@ def _cmd_unmark(unmark_targets, run_dir):
     print(f"Removed {removed} item{'s' if removed != 1 else ''} from reviewed in {run_dir.name}")
 
 
-def _cmd_import(import_path, fmt, tool, args):
-    """Ingest external runtime coverage (gcov/lcov/coverage.py) into the target's
-    durable store. The positional <dir> (if any) resolves the project/run store;
+def _cmd_import(import_path, fmt, tool, args, binary=None):
+    """Ingest external runtime coverage into the target's durable store. Source
+    formats (gcov/lcov/coverage.py) resolve directly; the binary ``drcov``
+    format (DynamoRIO / Frida / AFL-QEMU) needs ``--binary`` for DWARF address
+    resolution. The positional <dir> (if any) resolves the project/run store;
     --import names the coverage artifact. Persists under the store lock."""
     from core.coverage.importer import import_runtime
     from core.coverage.store import CoverageStore, coverage_store_lock
 
     if not Path(import_path).exists():
         print(f"ERROR: coverage path not found: {import_path}", file=sys.stderr)
+        sys.exit(1)
+    if fmt == "drcov" and not binary:
+        print("ERROR: --format drcov requires --binary <path> (drcov is "
+              "address-based; DWARF resolution needs the binary).",
+              file=sys.stderr)
         sys.exit(1)
     checklist, _run_dirs, store_path, _ann = _store_inputs(args)
     if not checklist or not store_path:
@@ -268,7 +267,8 @@ def _cmd_import(import_path, fmt, tool, args):
         sys.exit(1)
     with coverage_store_lock(store_path):
         store = CoverageStore(store_path)
-        n = import_runtime(store, import_path, checklist, fmt=fmt, tool=tool)
+        n = import_runtime(store, import_path, checklist, fmt=fmt, tool=tool,
+                           binary=binary)
         store.save()
     print(f"Imported {n} runtime coverage range(s) from {import_path} -> {store_path}")
 
@@ -288,6 +288,7 @@ def main():
     import_path, argv = _take_opt("--import", argv)
     import_fmt, argv = _take_opt("--format", argv)
     import_tool, argv = _take_opt("--tool", argv)
+    import_binary, argv = _take_opt("--binary", argv)
 
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
@@ -382,7 +383,8 @@ def main():
         return
 
     if import_path:
-        _cmd_import(import_path, import_fmt, import_tool, args)
+        _cmd_import(import_path, import_fmt, import_tool, args,
+                    binary=import_binary)
         return
 
     # All report views go through the unified store-backed renderer. `--store`

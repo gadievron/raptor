@@ -176,10 +176,21 @@ class TestMainExitCodes:
 
 class TestUsage:
     def test_unknown_flag_returns_two(self, capsys):
-        rc = main(["--json"])
+        rc = main(["--bogus-flag"])
         captured = capsys.readouterr()
         assert rc == 2
         assert "usage: raptor doctor" in captured.err
+
+    def test_json_flag_emits_valid_json(self, capsys):
+        import json
+        rc = main(["--json"])
+        captured = capsys.readouterr()
+        # rc is 0/1 depending on host tool availability, never a usage error
+        assert rc in (0, 1)
+        payload = json.loads(captured.out)
+        assert "tools" in payload and isinstance(payload["tools"], dict)
+        assert "summary" in payload
+        assert set(payload["summary"]) == {"failures", "warnings", "passed"}
 
     def test_help_flag_returns_zero_on_stdout(self, capsys):
         """`--help` is a help request: usage to stdout, exit 0.

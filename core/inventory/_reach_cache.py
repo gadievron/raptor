@@ -93,9 +93,10 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # A short header sentinel prefixed to each pickle. Lets us version-
 # bump the on-disk format without colliding with a stale pickle of
 # the same name. Also doubles as a cheap "is this a raptor cache
-# file" check before handing bytes to ``pickle.load``. The numeric
-# suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V5\n"
+# file" check before handing bytes to ``pickle.load``. Derived from
+# ``_CACHE_VERSION`` so the documented "numeric suffix tracks
+# _CACHE_VERSION" invariant can't silently drift.
+_HEADER_MAGIC = f"RAPTOR-REACHABILITY-CACHE-V{_CACHE_VERSION}\n".encode()
 
 # Hard cap on cache-file size. A genuine reachability index for a
 # kernel-scale target weighs in the low MB; anything past this is

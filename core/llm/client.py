@@ -145,6 +145,11 @@ def _sanitize_log_message(msg: str) -> str:
         msg,
         flags=re.IGNORECASE,
     )
+    # Patterns above redact secrets but preserve hostnames/IPs; a raw
+    # connection error embeds the remote Ollama host:port, so mask it here
+    # (CLAUDE.md: never disclose the remote OLLAMA server location).
+    from core.security.redaction import mask_ollama_endpoint
+    msg = mask_ollama_endpoint(msg)
     return msg
 
 
@@ -211,7 +216,9 @@ def _is_quota_error(error: Exception) -> bool:
 
     error_str = str(error).lower()
     return any([
-        "429" in error_str,
+        # \b so a model id / echoed prompt containing "4290" or "x429"
+        # doesn't read as an HTTP 429.
+        bool(re.search(r"\b429\b", error_str)),
         "quota exceeded" in error_str,
         "quota" in error_str and "exceeded" in error_str,
         "rate limit" in error_str,
@@ -226,22 +233,37 @@ def _is_retryable_error(error: Exception) -> bool:
     Non-retryable: schema validation, auth errors (401/403), bad request (400),
     Instructor failures, Pydantic validation errors.
     """
+    error_type = type(error).__name__
+
+    # Definitive non-retryable SDK exception types win before any
+    # body-substring matching. A 400/401/403/404/422 must not be flipped
+    # to retryable just because its echoed-back body (e.g. a quoted prompt
+    # or model id) contains "rate limit" / "429" / "timeout".
+    non_retryable_types = ("BadRequestError", "AuthenticationError",
+                           "PermissionDeniedError", "NotFoundError",
+                           "UnprocessableEntityError", "ValidationError")
+    if any(t in error_type for t in non_retryable_types):
+        return False
+
     # Rate limits are retryable (with backoff)
     if _is_quota_error(error):
         return True
 
     # Check exception types
-    error_type = type(error).__name__
     retryable_types = ("Timeout", "ConnectionError", "APIConnectionError",
                        "InternalServerError", "ServiceUnavailableError")
     if any(t in error_type for t in retryable_types):
         return True
 
-    # Check error message for retryable patterns
+    # Check error message for retryable patterns. Numeric status codes use
+    # \b so they match "HTTP 503" / "status 503" but not a "5031" build id
+    # or a port number echoed in the body.
     error_str = str(error).lower()
-    retryable_patterns = ("timeout", "connection", "502", "503", "504",
+    retryable_patterns = ("timeout", "connection",
                           "internal server error", "service unavailable")
     if any(p in error_str for p in retryable_patterns):
+        return True
+    if re.search(r"\b50[234]\b", error_str):
         return True
 
     # Everything else is non-retryable (schema errors, 400, 401, 403, 404,
@@ -1426,8 +1448,13 @@ class LLMClient:
                         )
                         from core.security.redaction import (
                             redact_secrets as _redact,
+                            mask_ollama_endpoint as _mask_ollama,
                         )
-                        _safe_e = _esc_np(_redact(str(e)))[:1024]
+                        # redact_secrets preserves hostnames, so for the
+                        # Ollama tier mask the remote host/IP that would
+                        # otherwise survive in the connection error (no-op
+                        # for cloud providers / loopback Ollama).
+                        _safe_e = _esc_np(_mask_ollama(_redact(str(e))))[:1024]
                         logger.warning(
                             f"Attempt {attempt + 1}/{self.config.max_retries} "
                             f"failed for {model.provider}/{model.model_name}: "
@@ -1726,8 +1753,13 @@ class LLMClient:
                         )
                         from core.security.redaction import (
                             redact_secrets as _redact,
+                            mask_ollama_endpoint as _mask_ollama,
                         )
-                        _safe_e = _esc_np(_redact(str(e)))[:1024]
+                        # redact_secrets preserves hostnames, so for the
+                        # Ollama tier mask the remote host/IP that would
+                        # otherwise survive in the connection error (no-op
+                        # for cloud providers / loopback Ollama).
+                        _safe_e = _esc_np(_mask_ollama(_redact(str(e))))[:1024]
                         logger.warning(
                             f"Structured generation attempt {attempt + 1} "
                             f"failed: {_safe_e}"

@@ -997,6 +997,25 @@ def _build_completion_manifest(orch_meta, import_result, import_sarif_files,
     return manifest
 
 
+def _recent_run_dirs(limit: int = 10):
+    """Prior run directories (those containing ``.raptor-run.json``), newest
+    first. Scans the output root one and two levels deep so both the
+    ``out/<run>`` and ``out/<project>/<run>`` (active-project) layouts are
+    covered. Used by ``--reanalyze last`` and the not-found hint (QoL #4/#13)."""
+    from core.config import RaptorConfig
+    found = set()
+    try:
+        root = RaptorConfig.get_out_dir()
+    except Exception:
+        return []
+    if not root or not Path(root).is_dir():
+        return []
+    for depth in ("*/.raptor-run.json", "*/*/.raptor-run.json"):
+        for meta in Path(root).glob(depth):
+            found.add(meta.parent)
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RAPTOR Agentic Security Testing - Scan, Analyse, Exploit, Patch",
@@ -1052,8 +1071,13 @@ Examples:
         """
     )
 
+    from core.config import RaptorConfig as _RC
     parser.add_argument(
-        "--repo", default=os.environ.get("RAPTOR_CALLER_DIR"),
+        "--version", action="version", version=_RC.effective_version(),
+        help="Print the RAPTOR version and exit",
+    )
+    parser.add_argument(
+        "-r", "--repo", default=os.environ.get("RAPTOR_CALLER_DIR"),
         help=(
             "Path to repository to analyse (default: $RAPTOR_CALLER_DIR "
             "— set by the bin/raptor wrapper to the operator's cwd at "
@@ -1091,7 +1115,8 @@ Examples:
     parser.add_argument(
         "--reanalyze", metavar="DIR",
         help=(
-            "Re-run analysis on a previous run's output directory. "
+            "Re-run analysis on a previous run's output directory (or "
+            "'last'/'latest' for the most recent run). "
             "Reads .raptor-run.json to recover target path and SARIF files, "
             "skips scanning. Equivalent to --sarif <previous SARIFs> --repo <previous target>."
         ),
@@ -1144,7 +1169,7 @@ Examples:
         action="store_true",
         help="Skip per-finding annotation emission (default: emit)",
     )
-    parser.add_argument("--out", help="Output directory")
+    parser.add_argument("-o", "--out", help="Output directory")
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
 
@@ -1471,10 +1496,28 @@ Examples:
     # --reanalyze: seed --sarif and --repo from a previous run's metadata
     if getattr(args, "reanalyze", None):
         from core.run.metadata import load_run_metadata
-        reanalyze_dir = Path(args.reanalyze).resolve()
-        args.reanalyze = str(reanalyze_dir)
+        # 'last'/'latest' resolves to the most recent prior run dir.
+        if args.reanalyze in ("last", "latest"):
+            _recent = _recent_run_dirs()
+            if not _recent:
+                parser.error("--reanalyze last: no prior runs found under the "
+                             "output directory")
+            reanalyze_dir = _recent[0]
+            args.reanalyze = str(reanalyze_dir)
+            logger.info("--reanalyze last → %s", reanalyze_dir)
+        else:
+            reanalyze_dir = Path(args.reanalyze).resolve()
+            args.reanalyze = str(reanalyze_dir)
         if not reanalyze_dir.is_dir():
-            parser.error(f"--reanalyze directory does not exist: {args.reanalyze}")
+            # List recent candidates so a fat-fingered dir name has a next
+            # step instead of a dead error.
+            _recent = _recent_run_dirs(limit=3)
+            _hint = ""
+            if _recent:
+                _hint = "\n  Recent runs (or use --reanalyze last):\n" + \
+                    "\n".join(f"    {d}" for d in _recent)
+            parser.error(
+                f"--reanalyze directory does not exist: {args.reanalyze}{_hint}")
         prev_meta = load_run_metadata(reanalyze_dir)
         if not prev_meta:
             parser.error(f"--reanalyze: no .raptor-run.json in {reanalyze_dir}")
@@ -2583,6 +2626,21 @@ Examples:
                 print(f"    Error: {stderr[:500]}")
             logger.warning(f"Phase 3 failed - rc={rc}, stderr={stderr[:200]}")
             analysis = {}
+            if rc != 0:
+                # The prep/analysis subprocess errored or timed out
+                # (run_command_streaming returns rc=-1 on timeout) and
+                # wrote no report. Do NOT fall through to the unconditional
+                # complete_run at the end of main(), which would seal a
+                # failed run as a green 'completed'. Fail loudly - mirrors
+                # the SANDBOX_ENGAGE_EXIT_CODE handling above. (rc==0 with
+                # no report is left as-is: it can be a legitimate
+                # zero-finding prep, not a failure.)
+                from core.run import fail_run
+                fail_run(
+                    out_dir,
+                    f"analysis subprocess failed (rc={rc}) with no report",
+                )
+                sys.exit(1)
 
     # ========================================================================
     # PHASE 4: AGENTIC ORCHESTRATION
@@ -3376,6 +3434,18 @@ Examples:
         ))
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
+
+    # After a long autonomous run, point the operator at the verbs to
+    # inspect/re-run rather than leaving them with a bare path.
+    try:
+        _run_name = Path(out_dir).name
+        print("\n  Next steps:")
+        print(f"    • Inspect findings:   raptor project show {_run_name}")
+        print("    • Merged findings:    raptor project findings")
+        print(f"    • Re-analyse (no rescan): python3 raptor.py agentic --reanalyze {out_dir}")
+        print(f"    • Open report:        {md_path}")
+    except Exception:
+        pass
 
     # Clean up temporary git copy (if we created one for a non-git target)
     if _git_temp_dir and _git_temp_dir.exists():

@@ -252,3 +252,41 @@ def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> s
     # tail visible in logs.
     text = re.sub(r"https?://[^\s'\"<>()]{1,8192}", _redact_url, text)
     return text
+
+
+def mask_ollama_endpoint(value: object) -> str:
+    """Replace the configured *remote* Ollama host/IP (and ``host:port`` and
+    full-URL forms) in ``value`` with ``[REMOTE-OLLAMA]``.
+
+    CLAUDE.md forbids disclosing the remote Ollama server location in code,
+    comments, or logs. The standard secret redactors (``redact_secrets`` /
+    ``_redact_url``) deliberately PRESERVE hostnames, and a raw
+    ``requests``/SDK connection error embeds the host as
+    ``HTTPConnectionPool(host='10.x.x.x', port=11434)`` - so any log/error
+    string for the Ollama tier must pass through here. Loopback endpoints
+    (localhost / 127.0.0.1) are not secrets and are left intact. No-ops
+    safely when the config can't be read or the endpoint is loopback, so it
+    is safe to apply unconditionally."""
+    text = value if isinstance(value, str) else str(value)
+    try:
+        from core.config import RaptorConfig
+        host_url = str(RaptorConfig.OLLAMA_HOST or "")
+    except Exception:
+        return text
+    if not host_url:
+        return text
+    lowered = host_url.lower()
+    if "localhost" in lowered or "127.0.0.1" in lowered:
+        return text
+    from urllib.parse import urlparse
+    parsed = urlparse(host_url if "://" in host_url else "//" + host_url)
+    host = parsed.hostname
+    if not host:
+        return text
+    # Longest/most-specific forms first so a bare-host replace doesn't
+    # leave a dangling ":port" or URL scheme behind.
+    text = text.replace(host_url, "[REMOTE-OLLAMA]")
+    if parsed.port:
+        text = text.replace(f"{host}:{parsed.port}", "[REMOTE-OLLAMA]")
+    text = text.replace(host, "[REMOTE-OLLAMA]")
+    return text

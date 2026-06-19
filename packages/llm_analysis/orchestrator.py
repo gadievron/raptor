@@ -371,6 +371,14 @@ def build_llm_config_from_flags(
         for role, model_name in role_flags:
             if not model_name:
                 continue
+            # --aggregate synthesises across multiple analysis models; with
+            # fewer than two it has nothing to synthesise, so drop it with a
+            # warning rather than billing an aggregate model for a no-op.
+            if role == "aggregate" and n_analysis < 2:
+                print("\n  Warning: --aggregate requires at least two --model "
+                      "values (it synthesises across multiple models); "
+                      "ignoring --aggregate")
+                continue
             llm_config.fallback_models = [
                 m for m in llm_config.fallback_models if m.role != role
             ]

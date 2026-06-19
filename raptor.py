@@ -90,13 +90,12 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
     forwarding so downstream scripts (scanner, agentic, codeql)
     don't have to recognise the flag.
 
-    Invalid values (non-numeric, zero, negative) print a stderr
-    warning and return ``(None, args)`` unchanged — operator's
-    typo doesn't silently uncap the run, but the run also doesn't
-    refuse to start over a bad cap value. (A hard error here
-    would force every operator typo through a full lifecycle
-    failure, which is more brittle than this warn-and-skip
-    fallback.)
+    Invalid values (non-numeric, zero, negative) FAIL CLOSED: the
+    operator passed ``--max-cost-usd`` precisely because they want a
+    cost ceiling, so a typo must refuse to start (exit 2) rather than
+    silently uncap the run - silently removing a budget cap is the
+    worst-case failure for a cost control (QoL #14). Omitting the flag
+    entirely (cap_str is None) is the normal uncapped path and is fine.
     """
     flag = "--max-cost-usd"
     prefix = f"{flag}="
@@ -121,18 +120,20 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
         cap = float(cap_str)
     except ValueError:
         print(
-            f"WARNING: --max-cost-usd value {cap_str!r} is not a number; "
-            "ignoring cap for this run",
+            f"✗ --max-cost-usd value {cap_str!r} is not a number. Refusing to "
+            "start: a malformed cost cap must not silently run UNCAPPED. "
+            "Fix the value or omit --max-cost-usd to run without a cap.",
             file=sys.stderr,
         )
-        return (None, args)
+        sys.exit(2)
     if cap <= 0:
         print(
-            f"WARNING: --max-cost-usd must be > 0 (got {cap}); "
-            "ignoring cap for this run",
+            f"✗ --max-cost-usd must be > 0 (got {cap}). Refusing to start: a "
+            "malformed cost cap must not silently run UNCAPPED. Fix the value "
+            "or omit --max-cost-usd to run without a cap.",
             file=sys.stderr,
         )
-        return (None, args)
+        sys.exit(2)
     return (cap, out)
 
 
@@ -308,7 +309,16 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # the dispatcher resolved the output dir correctly but never
     # forwarded the target into the downstream script's args.
     # Explicit --repo from args always wins (per the override pattern).
-    if target is None:
+    # EXCEPTION: --reanalyze carries its own target (the previous run's
+    # recorded target_path). Back-filling --repo from the active project /
+    # caller-dir here would make agentic's reanalyze logic see a non-empty
+    # args.repo that differs from the recorded target and discard the
+    # correct one (SARIF then rebases against the wrong tree). Leave target
+    # unset so the child resolves it from the prior run.
+    _reanalyze_mode = any(
+        a == "--reanalyze" or a.startswith("--reanalyze=") for a in args
+    )
+    if target is None and not _reanalyze_mode:
         target = resolve_default_target()
         if target is not None:
             args = args + ["--repo", target]
@@ -589,16 +599,36 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         # Engine versions + deterministically_reproducible are filled by the
         # lifecycle itself now (core.run.complete_run), uniformly for every
         # command — no per-command manifest wiring here.
-        complete_run(out_dir)
-        # Print a coverage summary at the end of /agentic (after complete_run,
-        # so the scanner + codeql + llm-read records are all materialised).
-        # /scan and /validate print their own; this closes the agentic gap.
+        #
+        # EXCEPTION: agentic self-finalizes inside raptor_agentic.main()
+        # with a richer extra/manifest (findings_count, models, …). Calling
+        # complete_run again here would re-run the finalize side-effects
+        # (coverage snapshot, sandbox summary) and log a spurious "refusing
+        # to overwrite terminal status" warning on every successful run.
+        # Every real agentic path self-seals (normal run + threat-model-only),
+        # so the launcher only finalizes the other modes.
+        if command != "agentic":
+            complete_run(out_dir)
+        # Print a coverage summary at the end of /agentic (after the run is
+        # finalized, so the scanner + codeql + llm-read records are all
+        # materialised). /scan and /validate print their own; this closes
+        # the agentic gap.
         if command == "agentic":
             try:
                 from core.coverage.store_summary import render_run_coverage
                 summary = render_run_coverage(out_dir)
                 if summary:
                     print("\n" + summary)
+            except Exception:
+                pass
+        # Point the one-shot scanners at the verbs to triage what the run
+        # produced, rather than leaving the operator with a bare path.
+        if command in ("scan", "codeql"):
+            try:
+                print("\nNext steps:")
+                print(f"  python3 raptor.py agentic --reanalyze {out_dir}   # LLM triage of these findings")
+                print("  raptor project findings                            # merged findings (in a project)")
+                print("  raptor project coverage                            # tool coverage")
             except Exception:
                 pass
     else:
@@ -1077,16 +1107,26 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     help, with nothing above it.
     """
     mode_scripts = _mode_help_scripts()
+    # Modes handled in-process by raptor.py (no child script) that parse
+    # their own --help: render their help by re-invoking raptor.py itself.
+    inprocess_modes = {"doctor", "describe", "sca"}
 
-    if mode not in mode_scripts:
+    if mode not in mode_scripts and mode not in inprocess_modes:
         print(f"✗ Unknown mode: {mode}", file=sys.stderr)
-        print(f"Available modes: {', '.join(mode_scripts.keys())}")
+        available = sorted(set(mode_scripts) | inprocess_modes)
+        print(f"Available modes: {', '.join(available)}")
         return
 
-    script_path = mode_scripts[mode]
-    if not script_path.exists():
-        print(f"✗ Script not found: {script_path}", file=sys.stderr)
-        return
+    if mode in mode_scripts:
+        script_path = mode_scripts[mode]
+        if not script_path.exists():
+            print(f"✗ Script not found: {script_path}", file=sys.stderr)
+            return
+        help_cmd = [sys.executable, str(script_path), "--help"]
+    else:
+        # In-process mode: re-invoke raptor.py <mode> --help (the handler
+        # parses --help itself, side-effect-free).
+        help_cmd = [sys.executable, str(Path(__file__)), mode, "--help"]
 
     if preamble:
         # flush=True so the header lands ABOVE the child's help. Without
@@ -1107,7 +1147,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
     try:
         from core.config import RaptorConfig
         subprocess.run(
-            [sys.executable, str(script_path), "--help"],
+            help_cmd,
             env=RaptorConfig.get_safe_env(),
             timeout=10,
         )
@@ -1129,6 +1169,8 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  describe    - Pre-flight target inspection: language mix, build system,
+                cost estimate (read-only, no LLM cost)
   doctor      - Status report for local setup (no claude needed)
 
 Examples:
@@ -1314,7 +1356,15 @@ if __name__ == "__main__":
         print("\n\nInterrupted by user")
         sys.exit(130)
     except Exception as e:
-        print(f"\n✗ Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n✗ Fatal error: {e}", file=sys.stderr)
+        # A bare traceback is noise for the common operator-facing causes
+        # (missing API key, unreadable repo, absent tool). Gate the full
+        # traceback behind RAPTOR_DEBUG and point the operator at it.
+        if os.environ.get("RAPTOR_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        else:
+            print("  Run with RAPTOR_DEBUG=1 for a full traceback, or "
+                  "'python3 raptor.py doctor' to check tool + LLM setup.",
+                  file=sys.stderr)
         sys.exit(1)
