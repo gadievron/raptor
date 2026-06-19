@@ -76,33 +76,33 @@ class TestExtractAndStrip:
         )
         assert cap == pytest.approx(0.0042)
 
-    def test_non_numeric_value_warns_and_returns_unchanged(self, capsys):
+    def test_non_numeric_value_fails_closed(self, capsys):
         raptor = _import_raptor()
-        cap, out = raptor._extract_and_strip_max_cost_usd(
-            ["--max-cost-usd", "lots", "--repo", "/x"],
-        )
-        # Bad value → no cap applied; args returned UNCHANGED so
-        # the lifecycle doesn't silently lose context.
-        assert cap is None
-        assert out == ["--max-cost-usd", "lots", "--repo", "/x"]
-        captured = capsys.readouterr()
-        assert "not a number" in captured.err
+        # QoL #14: a malformed cap FAILS CLOSED (exit 2) rather than silently
+        # running UNCAPPED - the operator passed the flag because they want a
+        # ceiling, so a typo must refuse to start.
+        import pytest
+        with pytest.raises(SystemExit) as exc:
+            raptor._extract_and_strip_max_cost_usd(
+                ["--max-cost-usd", "lots", "--repo", "/x"],
+            )
+        assert exc.value.code == 2
+        assert "not a number" in capsys.readouterr().err
 
-    def test_zero_value_warns_and_returns_unchanged(self, capsys):
+    def test_zero_value_fails_closed(self, capsys):
         raptor = _import_raptor()
-        cap, out = raptor._extract_and_strip_max_cost_usd(
-            ["--max-cost-usd", "0"],
-        )
-        assert cap is None
-        assert out == ["--max-cost-usd", "0"]
+        import pytest
+        with pytest.raises(SystemExit) as exc:
+            raptor._extract_and_strip_max_cost_usd(["--max-cost-usd", "0"])
+        assert exc.value.code == 2
         assert "> 0" in capsys.readouterr().err
 
-    def test_negative_value_warns(self, capsys):
+    def test_negative_value_fails_closed(self, capsys):
         raptor = _import_raptor()
-        cap, _ = raptor._extract_and_strip_max_cost_usd(
-            ["--max-cost-usd=-5"],
-        )
-        assert cap is None
+        import pytest
+        with pytest.raises(SystemExit) as exc:
+            raptor._extract_and_strip_max_cost_usd(["--max-cost-usd=-5"])
+        assert exc.value.code == 2
         assert "> 0" in capsys.readouterr().err
 
 

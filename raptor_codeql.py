@@ -286,10 +286,15 @@ Examples:
         """
     )
 
-    parser.add_argument("--repo", required=True, help="Repository path")
+    from core.config import RaptorConfig as _RC
+    parser.add_argument(
+        "--version", action="version", version=_RC.effective_version(),
+        help="Print the RAPTOR version and exit",
+    )
+    parser.add_argument("-r", "--repo", required=True, help="Repository path")
     parser.add_argument("--languages", help="Comma-separated languages")
     parser.add_argument("--build-command", help="Custom build command")
-    parser.add_argument("--out", help="Output directory")
+    parser.add_argument("-o", "--out", help="Output directory")
     parser.add_argument(
         "--force", action="store_true",
         help="Delete and recreate the CodeQL database from scratch. Slow — "

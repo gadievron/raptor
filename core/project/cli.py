@@ -137,6 +137,31 @@ def _emit_json_payload(payload) -> None:
     sys.stdout.buffer.write(b"\n")
 
 
+def _nonneg_int(value):
+    """argparse type: a non-negative int. Rejects negatives (and non-ints)
+    with a usage error (exit 2) rather than silently accepting a value that
+    would delete more runs than intended."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected an integer, got {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
+    return n
+
+
+def _pct_float(value):
+    """argparse type: a percentage in [0, 100]. A threshold outside that
+    range can never be met (or is trivially met), so reject it up front."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a number, got {value!r}")
+    if not (0.0 <= f <= 100.0):
+        raise argparse.ArgumentTypeError(f"must be between 0 and 100, got {f}")
+    return f
+
+
 def _detect_target_type(target_path: str):
     """Best-effort catalog detection for project-create. Returns
     a ``CatalogEntry`` or None — substrate failures (catalog
@@ -306,24 +331,28 @@ def main():
 
     # status
     p_status = sub.add_parser("status", help="Show project summary",
-                              usage="raptor project status [<name>]", **_F)
+                              usage="raptor project status [<name>] [--json]", **_F)
     p_status.add_argument("name", nargs="?", help="Project name")
+    p_status.add_argument("--json", action="store_true",
+                          help="Emit a machine-readable report (for CI parsing)")
 
     # coverage
     p_cov = sub.add_parser(
         "coverage",
         help="Show coverage summary",
-        usage="raptor project coverage [<name>] [--detailed] [--fail-under <pct>]",
+        usage="raptor project coverage [<name>] [--detailed] [--fail-under <pct>] [--json]",
         **_F,
     )
     p_cov.add_argument("name", nargs="?", help="Project name")
     p_cov.add_argument("--detailed", action="store_true", help="Per-file breakdown")
     p_cov.add_argument(
         "--fail-under",
-        type=float,
+        type=_pct_float,
         metavar="<pct>",
-        help="Exit non-zero unless LLM item coverage is at least this percentage",
+        help="Exit non-zero unless LLM item coverage is at least this percentage (0-100)",
     )
+    p_cov.add_argument("--json", action="store_true",
+                       help="Emit a machine-readable report (for CI parsing)")
 
     # provenance
     p_prov = sub.add_parser(
@@ -341,14 +370,16 @@ def main():
         usage="raptor project show <run> [<name>]",
         **_F,
     )
-    p_show.add_argument("run", help="Run directory name (or unique substring)")
+    p_show.add_argument("run", help="Run directory name, unique substring, or 'last'/'latest'")
     p_show.add_argument("name", nargs="?", help="Project name")
 
     # findings
     p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
-                                usage="raptor project findings [<name>] [--detailed]", **_F)
+                                usage="raptor project findings [<name>] [--detailed] [--json]", **_F)
     p_findings.add_argument("name", nargs="?", help="Project name")
     p_findings.add_argument("--detailed", action="store_true", help="Per-finding detail (reasoning, proof, PoC)")
+    p_findings.add_argument("--json", action="store_true",
+                            help="Emit a machine-readable report (for CI parsing)")
 
     # annotations
     p_anns = sub.add_parser(
@@ -430,7 +461,7 @@ def main():
     p_remove = sub.add_parser("remove", help="Move a run out of the project",
                               usage="raptor project remove <name> <run> --to <path>", **_F)
     p_remove.add_argument("name", help="Project name")
-    p_remove.add_argument("run", help="Run directory name")
+    p_remove.add_argument("run", help="Run: dir name, unique substring, or 'last'/'latest'")
     p_remove.add_argument("--to", required=True, metavar="<path>", help="Destination path")
 
     # report
@@ -446,16 +477,16 @@ def main():
               "[--name <project>]",
         **_F,
     )
-    p_anndiff.add_argument("run_a", help="First run dir or run name")
-    p_anndiff.add_argument("run_b", help="Second run dir or run name")
+    p_anndiff.add_argument("run_a", help="First run: dir name, unique substring, or 'last'/'latest'")
+    p_anndiff.add_argument("run_b", help="Second run: dir name, unique substring, or 'last'/'latest'")
     p_anndiff.add_argument("--name", help="Project name (default: active)")
 
     # diff
     p_diff = sub.add_parser("diff", help="Compare findings between two runs",
                             usage="raptor project diff <name> <run1> <run2>", **_F)
     p_diff.add_argument("name", help="Project name")
-    p_diff.add_argument("run1", help="Baseline run")
-    p_diff.add_argument("run2", help="Comparison run")
+    p_diff.add_argument("run1", help="Baseline run: dir name, unique substring, or 'last'/'latest'")
+    p_diff.add_argument("run2", help="Comparison run: dir name, unique substring, or 'last'/'latest'")
 
     # merge
     p_merge = sub.add_parser("merge", help="Merge runs per command type (destructive)",
@@ -468,9 +499,9 @@ def main():
     p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n",
                              usage="raptor project clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]", **_F)
     p_clean.add_argument("name", nargs="?", help="Project name")
-    p_clean.add_argument("--keep", type=int, default=1, metavar="<n>",
+    p_clean.add_argument("--keep", type=_nonneg_int, default=1, metavar="<n>",
                          help="Runs to keep per type (default: 1; 0 keeps only "
-                              "the newest — the last run is never deleted)")
+                              "the newest - the last run is never deleted)")
     p_clean.add_argument("--dedup", action="store_true",
                          help="Coverage-aware: drop only runs fully subsumed by a survivor "
                               "(provably lossless), ignoring --keep")
@@ -653,7 +684,10 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            _print_status(p)
+            if getattr(args, "json", False):
+                _emit_json_payload(_status_payload(p))
+            else:
+                _print_status(p)
 
         elif args.subcommand == "coverage":
             name = args.name or _get_active_project()
@@ -664,9 +698,15 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            result = _print_coverage(p, detailed=args.detailed, fail_under=args.fail_under)
-            if result is False:
-                sys.exit(1)
+            if getattr(args, "json", False):
+                payload, met = _coverage_payload(p, fail_under=args.fail_under)
+                _emit_json_payload(payload)
+                if met is False:
+                    sys.exit(1)
+            else:
+                result = _print_coverage(p, detailed=args.detailed, fail_under=args.fail_under)
+                if result is False:
+                    sys.exit(1)
 
         elif args.subcommand == "provenance":
             name = args.name or _get_active_project()
@@ -699,7 +739,10 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            _print_findings(p, detailed=args.detailed)
+            if getattr(args, "json", False):
+                _emit_json_payload(_findings_payload(p))
+            else:
+                _print_findings(p, detailed=args.detailed)
 
         elif args.subcommand == "annotations":
             name = args.name or _get_active_project()
@@ -877,6 +920,25 @@ def main():
                         file=sys.stderr,
                     )
                     return
+                # The basename allowlist alone does NOT close the vector the
+                # comment above describes: `EDITOR='vim -c ":!cmd"'` has an
+                # allowlisted argv[0] but vim's -c executes the command. Allow
+                # only -w/--wait (the common GUI-editor "block until closed"
+                # flag for code/subl); reject any other extra argument, which
+                # for vim (-c/--cmd/-S/+), emacs (--eval/-f/-l) and friends
+                # can run arbitrary commands.
+                _SAFE_EDITOR_FLAGS = {"-w", "--wait"}
+                _extra = [a for a in editor_argv[1:] if a not in _SAFE_EDITOR_FLAGS]
+                if _extra:
+                    print(
+                        f"Refusing to launch editor: $EDITOR carries "
+                        f"arguments {_extra!r} beyond -w/--wait. Flags like "
+                        "vim -c / emacs --eval can execute arbitrary commands; "
+                        "set $EDITOR to a bare editor name (optionally with "
+                        "-w/--wait) and try again.",
+                        file=sys.stderr,
+                    )
+                    return
                 # Capture tf_path BEFORE tf.write so a failing write (disk
                 # full, etc.) still leaves tf_path set and the finally can
                 # unlink the stub. Keep tempfile creation inside the try so
@@ -933,8 +995,15 @@ def main():
                 print(f"No new runs added (already present or none found in {args.directory})")
 
         elif args.subcommand == "remove":
-            mgr.remove_run(args.name, args.run, to_path=args.to)
-            print(f"Removed '{args.run}' from project '{args.name}'")
+            p = mgr.load(args.name)
+            if not p:
+                print(f"Project '{args.name}' not found.")
+                return
+            d = _resolve_run(p, args.run)
+            if d is None:
+                return
+            mgr.remove_run(args.name, d.name, to_path=args.to)
+            print(f"Removed '{d.name}' from project '{args.name}'")
 
         elif args.subcommand == "correlate":
             name = args.name or _get_active_project()
@@ -953,16 +1022,14 @@ def main():
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
-            dir1 = p.output_path / args.run1
-            dir2 = p.output_path / args.run2
-            if not dir1.exists():
-                print(f"Run not found: {args.run1}")
+            dir1 = _resolve_run(p, args.run1)
+            if dir1 is None:
                 return
-            if not dir2.exists():
-                print(f"Run not found: {args.run2}")
+            dir2 = _resolve_run(p, args.run2)
+            if dir2 is None:
                 return
             result = diff_runs(dir1, dir2)
-            print(f"Diff: {args.run1} (baseline) → {args.run2}")
+            print(f"Diff: {dir1.name} (baseline) -> {dir2.name}")
             _print_diff(result)
 
         elif args.subcommand == "annotations-diff":
@@ -975,13 +1042,11 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            dir1 = p.output_path / args.run_a
-            dir2 = p.output_path / args.run_b
-            if not dir1.exists():
-                print(f"Run not found: {args.run_a}")
+            dir1 = _resolve_run(p, args.run_a)
+            if dir1 is None:
                 return
-            if not dir2.exists():
-                print(f"Run not found: {args.run_b}")
+            dir2 = _resolve_run(p, args.run_b)
+            if dir2 is None:
                 return
             result = diff_annotations(dir1, dir2)
             print(format_diff(result), end="")
@@ -1374,6 +1439,116 @@ def _handle_threat_model(mgr, args) -> None:
         print(f"  - {item}")
 
 
+def _status_payload(project):
+    """Machine-readable counterpart of :func:`_print_status` - the same facts
+    (identity, threat-model presence, per-run metadata, disk usage) as a
+    JSON-serializable dict."""
+    from core.run import load_run_metadata
+    from core.run.provenance import format_repro_short, format_sha_short
+    from core.threat_model import (
+        _project_threat_model_json_path,
+        load_model,
+        project_threat_model_paths,
+    )
+
+    tm_path = _project_threat_model_json_path(project) or (
+        project_threat_model_paths(project)[0]
+    )
+    tm = None
+    if tm_path.exists():
+        model = load_model(tm_path)
+        tm = {"path": str(tm_path),
+              "focus_areas": len(model.focus_areas) if model else 0}
+
+    runs = project.get_run_dirs(sweep=False)
+    run_records = []
+    total_size = 0
+    import stat as _stat
+    for d in runs:
+        meta = load_run_metadata(d) or {}
+        manifest = meta.get("manifest")
+        run_records.append({
+            "name": d.name,
+            "command": meta.get("command", "?"),
+            "status": meta.get("status", "?"),
+            "summary": _get_output_summary(d, meta),
+            "sha": format_sha_short(manifest) or None,
+            "repro": format_repro_short(manifest) or None,
+        })
+        for root, _dirs, files in os.walk(d, followlinks=False):
+            for fname in files:
+                try:
+                    st = os.lstat(os.path.join(root, fname))
+                except OSError:
+                    continue
+                if _stat.S_ISREG(st.st_mode):
+                    total_size += st.st_size
+
+    return {
+        "name": project.name,
+        "description": project.description or None,
+        "target": project.target,
+        "output_dir": str(project.output_dir),
+        "created": project.created or None,
+        "notes": project.notes or None,
+        "threat_model": tm,
+        "run_count": len(runs),
+        "runs": run_records,
+        "disk_bytes": total_size,
+    }
+
+
+def _findings_payload(project):
+    """Machine-readable merged findings: code findings and SCA findings as
+    JSON-serializable lists (the same data :func:`_print_findings` renders)."""
+    from .merge import merge_findings
+    from .findings_utils import merge_sca_findings
+
+    run_dirs = project.get_run_dirs(sweep=False)
+    return {
+        "name": project.name,
+        "findings": merge_findings(run_dirs),
+        "sca_findings": merge_sca_findings(run_dirs),
+    }
+
+
+def _coverage_payload(project, fail_under=None):
+    """Machine-readable coverage: the store-backed view, plus the threshold
+    result when --fail-under is set. Returns (payload, met) where met is
+    True/False/None (None = no threshold requested)."""
+    from core.json import load_json
+    from core.coverage.store_summary import (
+        coverage_view,
+        store_coverage_threshold_met,
+    )
+
+    base = Path(project.output_dir)
+    try:
+        run_dirs = list(project.get_run_dirs(sweep=False))
+    except Exception:
+        run_dirs = []
+    checklist = load_json(base / "checklist.json")
+    if not checklist:
+        for d in run_dirs:
+            cl = load_json(d / "checklist.json")
+            if cl:
+                checklist = cl
+                break
+    view = coverage_view(run_dirs, checklist, base / "coverage.json",
+                         base / "annotations")
+    payload = {"name": project.name, "coverage": view}
+    met = None
+    if fail_under is not None:
+        if view is None:
+            payload["threshold"] = {"fail_under": fail_under, "met": False,
+                                    "reason": "no function inventory"}
+            met = False
+        else:
+            met = store_coverage_threshold_met(view, fail_under)
+            payload["threshold"] = {"fail_under": fail_under, "met": bool(met)}
+    return payload, met
+
+
 def _print_status(project):
     """Print project status."""
     from core.run import load_run_metadata
@@ -1457,6 +1632,12 @@ def _print_status(project):
         else:
             print(f"\nDisk usage: {total_size}B")
 
+        # Surface the drill-in verbs here: a run table alone doesn't tell a
+        # new operator what to do next.
+        print("\nTip: 'raptor project show <run>' (or 'last') for run detail, "
+              "'raptor project findings' for merged findings, "
+              "'raptor project coverage' for tool coverage.")
+
     else:
         print("\nNo runs.")
 
@@ -1472,25 +1653,39 @@ def _print_provenance(project):
     print(format_provenance_rollup(aggregate_provenance(metadatas)))
 
 
-def _print_run_provenance(project, run_query):
-    """Print one run's provenance detail. ``run_query`` matches a run dir by
-    exact name, else by unique substring."""
-    from core.run import load_run_metadata
-    from core.run.provenance import format_manifest_block
-
+def _resolve_run(project, run_query):
+    """Resolve a run-dir query to a single run Path. Accepts an exact dir
+    name, a unique substring, or 'last'/'latest' (most recent by mtime).
+    Returns the Path, or None after printing a diagnostic (no runs / not
+    found / ambiguous) so callers can just `return` on None."""
     runs = project.get_run_dirs(sweep=False)
+    if run_query in ("last", "latest"):
+        if not runs:
+            print(f"No runs in project '{project.name}'.")
+            return None
+        return max(runs, key=lambda p: p.stat().st_mtime)
     exact = [d for d in runs if d.name == run_query]
     matches = exact or [d for d in runs if run_query in d.name]
     if not matches:
         print(f"No run matching '{run_query}' in project '{project.name}'.")
-        return
+        return None
     if len(matches) > 1:
-        print(f"Ambiguous '{run_query}' — matches {len(matches)} runs:")
+        print(f"Ambiguous '{run_query}' - matches {len(matches)} runs:")
         for d in matches:
             print(f"  {d.name}")
-        return
+        return None
+    return matches[0]
 
-    d = matches[0]
+
+def _print_run_provenance(project, run_query):
+    """Print one run's provenance detail. ``run_query`` matches a run dir by
+    exact name, unique substring, or 'last'/'latest'."""
+    from core.run import load_run_metadata
+    from core.run.provenance import format_manifest_block
+
+    d = _resolve_run(project, run_query)
+    if d is None:
+        return
     meta = load_run_metadata(d) or {}
     print(f"Run: {d.name}")
     print(f"  Command: {meta.get('command', '?')}")

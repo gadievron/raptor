@@ -715,6 +715,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             output = None
             allowed_tcp_ports = None
     strict_required = profile == "strict"
+    # RAPTOR_REQUIRE_SANDBOX=1 makes the call fail closed when no isolation
+    # backend is available, instead of silently degrading to rlimits-only
+    # (the `not use_sandbox` branch below). Scoped to the full no-isolation
+    # case only: it does not force the mount-ns/strict requirement, and an
+    # explicit per-call/CLI disable is still respected.
+    _require_sandbox = os.environ.get(
+        "RAPTOR_REQUIRE_SANDBOX", "").strip().lower() in (
+        "1", "true", "yes", "on")
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
@@ -753,6 +761,15 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")
     elif not use_sandbox:
+        if _require_sandbox:
+            from .errors import SandboxSetupError
+            raise SandboxSetupError(
+                "RAPTOR_REQUIRE_SANDBOX is set but no platform isolation "
+                "backend is available (no unprivileged user namespaces / "
+                "seatbelt). Refusing to run subprocesses without namespace "
+                "isolation. Unset RAPTOR_REQUIRE_SANDBOX or pass "
+                "disabled=True to opt out deliberately."
+            )
         if state.warn_once("_sandbox_unavailable_warned"):
             logger.warning(
                 "Sandbox unavailable — subprocesses run without namespace isolation"

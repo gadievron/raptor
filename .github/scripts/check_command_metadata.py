@@ -146,10 +146,23 @@ def main() -> int:
             "lint or restore the sentence."
         )
     else:
-        excluded_in_index = set(re.findall(r"raptor-[\w-]+|\b\w[\w-]+\b", m.group(0)))
+        # Scan ONLY the part after the "e.g.," marker so the anchor word
+        # "commands" (from "internal/duplicate commands") isn't tokenised as
+        # a listed name - that coincidentally matched commands.md's stem and
+        # let the parity pass by accident. Splitting on "e.g.," scopes the
+        # capture to the actual listed names.
+        span = m.group(0)
+        _eg = re.split(r"e\.g\.,?", span, maxsplit=1, flags=re.IGNORECASE)
+        scan_text = _eg[1] if len(_eg) > 1 else span
+        excluded_in_index = set(re.findall(r"raptor-[\w-]+|\b\w[\w-]+\b", scan_text))
         # Drop noise tokens; only keep names that correspond to .md files.
         md_names = {p.stem for p in md_files}
         excluded_in_index = excluded_in_index & md_names
+
+        # The index file itself (commands.md) carries exclude_from_listing -
+        # it shouldn't list itself in its own exclusion sentence - so don't
+        # require its stem to appear in the index text.
+        excluded_via_frontmatter = excluded_via_frontmatter - {COMMANDS_INDEX.stem}
 
         missing_in_md = excluded_in_index - excluded_via_frontmatter
         missing_in_index = excluded_via_frontmatter - excluded_in_index

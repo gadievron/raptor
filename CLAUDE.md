@@ -40,6 +40,7 @@ When a `/command` fires:
 
 /project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
+/frida - Dynamic instrumentation: function/argument trace + Stalker coverage (spawn-only, sandboxed)
 /exploit /patch - Generate PoCs and fixes (beta)
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)

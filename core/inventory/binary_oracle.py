@@ -33,9 +33,11 @@ classifier is the consumer-facing contract, not the parsing details.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +46,26 @@ from typing import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Warn at most once per process when namespace isolation is unavailable and
+# the binutils parsers fall back to the rlimits-only (run_trusted) path.
+_warned_no_sandbox = False
+
+
+def _argv_target_dir(argv: List[str]) -> Optional[str]:
+    """Directory of the ELF being parsed - the last argv element that is an
+    existing file (binutils takes the binary as a positional). Used as the
+    sandbox ``target`` so the tool can read the binary while Landlock denies
+    everything else (``$HOME``, credentials, the rest of the tree). Returns
+    ``None`` when no path-like argument exists (e.g. ``c++filt`` reading
+    stdin), in which case the caller keeps the trusted rlimits-only path."""
+    for tok in reversed(argv[1:]):
+        try:
+            if Path(tok).is_file():
+                return str(Path(tok).parent)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 Classification = Literal["symbol_present", "inlined", "absent", "folded"]
@@ -90,19 +112,44 @@ def _run(argv: List[str], timeout: int = 60) -> str:
     """Capture stdout from a system tool; return ``''`` on any failure
     rather than raise — the classifier is best-effort and surface-only.
 
-    Uses ``core.sandbox.run_trusted`` (matches the existing pattern for
-    ELF/binutils tools in ``exploit_feasibility``/``binary_analysis``):
-    applies ``RaptorConfig.get_safe_env()`` + resource rlimits to keep
-    the tool's ambient state hostile-input-resistant. Read-only tools
-    (readelf, nm, objdump, c++filt) are RAPTOR-picked even when the
-    binary path is operator-supplied.
+    When the argv names a target binary (readelf/nm/objdump on a file)
+    the *content* is attacker-controlled even though RAPTOR picked the
+    tool - binutils/libbfd have a long RCE-on-malformed-input history.
+    Those calls run with ``block_network=True`` (network-namespace
+    isolation), so a code-exec in the parser cannot phone home or
+    exfiltrate over the network - the highest-value mitigation that is
+    reliably available. (Filesystem read-restriction needs Landlock,
+    which is host-dependent and, where the mount namespace can't be set
+    up, breaks the parser entirely; network isolation is robust and is
+    what we depend on here.) When no path argument exists (``c++filt``
+    reading stdin) the rlimits-only ``run_trusted`` path is kept. If
+    unprivileged user namespaces are unavailable, ``run`` raises
+    ``SandboxSetupError`` and we fall back to ``run_trusted`` (warning
+    once) rather than disabling the oracle.
     """
+    global _warned_no_sandbox
     # Lazy import — keep the classifier independently importable in
     # unit tests that stub the sandbox module.
-    from core.sandbox import run_trusted
+    from core.sandbox import run, run_trusted, SandboxSetupError
+    target_dir = _argv_target_dir(argv)
     try:
-        proc = run_trusted(argv, capture_output=True, text=True,
-                           check=False, timeout=timeout)
+        if target_dir is not None:
+            try:
+                proc = run(argv, block_network=True, capture_output=True,
+                           text=True, check=False, timeout=timeout)
+            except SandboxSetupError as e:
+                if not _warned_no_sandbox:
+                    _warned_no_sandbox = True
+                    logger.warning(
+                        "binary_oracle: namespace sandbox unavailable (%s); "
+                        "binutils parsers run with rlimits only - untrusted "
+                        "ELF parsing is not network-isolated on this host", e,
+                    )
+                proc = run_trusted(argv, capture_output=True, text=True,
+                                   check=False, timeout=timeout)
+        else:
+            proc = run_trusted(argv, capture_output=True, text=True,
+                               check=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("binary_oracle: %s failed: %s", argv[0], e)
         return ""
@@ -118,15 +165,50 @@ def _stream(argv: List[str], timeout: int) -> Iterator[str]:
     binary produces 1-3 GB of text); ``_run`` would buffer it all into
     memory and OOM. Yields each line stripped of its trailing newline.
 
-    Manual ``get_safe_env`` application — ``run_trusted`` is one-shot
-    (capture_output=True) and would defeat the memory-bounded streaming
-    we need here. Same env hygiene as ``_run`` (no namespace/Landlock —
-    that's the ``run_trusted`` protection level: env + rlimits only).
+    When the argv names a target binary, the parser (objdump --dwarf on
+    an attacker-controlled ELF - a real libbfd RCE surface) runs with
+    ``block_network=True`` and its stdout redirected to a temp file,
+    which is then stream-read. This keeps memory bounded (disk-backed,
+    not buffered) AND adds network-namespace isolation so a code-exec in
+    the parser cannot exfiltrate over the network. (No mount-ns/Landlock
+    here - that path is host-fragile and would break the parser; network
+    isolation is the robust mitigation.) If user namespaces are
+    unavailable the call falls back to the prior rlimits-only streaming
+    ``Popen``.
 
     On any failure (tool missing, non-zero rc with no output, timeout)
     yields nothing — same swallow-and-degrade contract as ``_run``.
     """
+    global _warned_no_sandbox
     from core.config import RaptorConfig
+    target_dir = _argv_target_dir(argv)
+    if target_dir is not None:
+        from core.sandbox import run, SandboxSetupError
+        try:
+            with tempfile.TemporaryDirectory(prefix="raptor-bo-dwarf-") as td:
+                dump = os.path.join(td, "dump.txt")
+                with open(dump, "wb") as fh:
+                    # The already-open fd is inherited across exec; stdout
+                    # of the sandboxed child writes to our temp file.
+                    run(argv, block_network=True, check=False,
+                        timeout=timeout, stdout=fh,
+                        stderr=subprocess.DEVNULL)
+                with open(dump, "r", errors="replace") as fh:
+                    for line in fh:
+                        yield line.rstrip("\n")
+            return
+        except SandboxSetupError as e:
+            if not _warned_no_sandbox:
+                _warned_no_sandbox = True
+                logger.warning(
+                    "binary_oracle: namespace sandbox unavailable (%s); "
+                    "objdump runs with rlimits only - untrusted ELF parsing "
+                    "is not network-isolated on this host", e,
+                )
+            # fall through to the rlimits-only streaming path
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.debug("binary_oracle: %s failed: %s", argv[0], e)
+            return
     deadline = time.monotonic() + timeout
     try:
         proc = subprocess.Popen(
@@ -615,6 +697,13 @@ def _parse_dwarf(binary_path: Path) -> Tuple[Dict[int, _SubprogramDIE], List[int
                 if not cur_die.name:
                     cur_die.name = linkage
             elif attr == "low_pc":
+                # A bare "DW_AT_low_pc : 0" (no 0x prefix) is left unparsed
+                # on purpose. In a linked binary (the only input this oracle
+                # parses) a zero low_pc means the function was garbage-
+                # collected (--gc-sections), i.e. genuinely absent; parsing
+                # it as a real address would flip a GC'd function to
+                # symbol_present. A real function at address 0 only occurs
+                # in relocatable .o files, out of scope here.
                 ma2 = addr_re.search(value)
                 if ma2:
                     cur_die.low_pc = int(ma2.group(1), 16)
@@ -1122,10 +1211,18 @@ def enrich_inventory_with_binary_oracle(
         # downgrade is the safety net) and only on projects wide
         # enough for the floor to be meaningful.
         any_full = any(w.tier == "full" for w in verdicts.values())
-        if (any_full
-                and n_project >= SRC_FLOOR_MIN_PROJECT_NAMES
-                and (matched < SRC_COVERAGE_MIN_MATCHED
-                     or ratio < SRC_COVERAGE_FLOOR)):
+        # Absolute floor at any project size: a wrong / planted binary
+        # unrelated to this source tree matches zero project names, so
+        # require at least one match even on a 1-7 function module. Only
+        # matched >= 1 (not the full count) so a legit small binary with
+        # some genuinely-dead functions isn't over-dropped. The stronger
+        # ratio + min-3 floor still applies once the project is wide enough
+        # for the percentage to carry signal.
+        ratio_floor_active = n_project >= SRC_FLOOR_MIN_PROJECT_NAMES
+        floor = (SRC_COVERAGE_MIN_MATCHED if ratio_floor_active else 1)
+        if any_full and n_project > 0 and (
+                matched < floor
+                or (ratio_floor_active and ratio < SRC_COVERAGE_FLOOR)):
             logger.warning(
                 "binary_oracle: dropping %s — only %d of %d project source "
                 "names matched (%.1f%%, floor %.0f%% / min %d). Likely the "
@@ -1133,7 +1230,7 @@ def enrich_inventory_with_binary_oracle(
                 "vendored test binary, or planted ELF). Pass --binary "
                 "explicitly to override.",
                 bp.name, matched, n_project, ratio * 100,
-                SRC_COVERAGE_FLOOR * 100, SRC_COVERAGE_MIN_MATCHED,
+                SRC_COVERAGE_FLOOR * 100, floor,
             )
             continue
         kept.append((bp, build_id, verdicts))

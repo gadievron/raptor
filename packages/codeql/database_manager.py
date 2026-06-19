@@ -805,12 +805,45 @@ class DatabaseManager:
         try:
             from core.sandbox import run as sandbox_run
             from core.sandbox.fingerprint import HOST_CPU_COUNT
+            # `codeql database create` runs the target repo's autobuild /
+            # --command build (attacker-controlled), which by default has
+            # full $HOME read access and could stage ~/.ssh, ~/.aws, etc.
+            # into the build outputs RAPTOR later collects. Opt-in
+            # (RAPTOR_CODEQL_RESTRICT_READS=1) because read-restriction can
+            # starve $HOME toolchains: when enabled, keep common build caches
+            # readable (Maven/Gradle/cargo/codeql) while denying credential
+            # dirs (~/.ssh, ~/.aws, ~/.config, ~/.gnupg, ~/.docker, ~/.kube,
+            # ~/.netrc). Writes stay unrestricted, so the build still writes
+            # its staging/db normally; no-op on hosts without Landlock (network stays
+            # blocked).
+            _restrict = os.environ.get(
+                "RAPTOR_CODEQL_RESTRICT_READS", ""
+            ).strip().lower() in ("1", "true", "yes", "on")
+            _hardening: Dict = {}
+            if _restrict:
+                _home = Path.home()
+                _cache_names = (
+                    ".codeql", ".m2", ".gradle", ".sbt", ".ivy2", ".cargo",
+                    ".rustup", ".cache", ".npm", ".nvm", ".yarn", "go",
+                    ".pyenv", ".local", ".conan", ".conan2", ".cmake",
+                    ".swiftpm", ".dotnet", ".nuget",
+                )
+                _readable = [
+                    str(_home / n) for n in _cache_names
+                    if (_home / n).exists()
+                ]
+                _hardening = dict(
+                    restrict_reads=True,
+                    target=str(working_dir),
+                    readable_paths=_readable,
+                )
             result = sandbox_run(
                 cmd,
                 block_network=True,
                 cwd=working_dir,
                 env=env,
                 tool_paths=self._sandbox_tool_paths(),
+                **_hardening,
                 # Audit JSONL home (only used when --audit is engaged).
                 # Decoupled from output= because the build subprocess
                 # writes to working_dir / db_path / ~/.codeql, none of

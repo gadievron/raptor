@@ -71,6 +71,16 @@ def _stage_binary_oracle_absent(ctx: "_ClassifyCtx", R) -> Optional[str]:
     if R.binary_oracle_absent(
         ctx.inventory, ctx.file_path, ctx.name, ctx.line,
     ):
+        # Affirmative reachability evidence beats a name-lookup "absent":
+        # an incoming direct call edge proves the function exists and is
+        # called, so the name-based absent verdict (which can miss a
+        # function under a C++ demangling / ICF spelling mismatch) must not
+        # hard-suppress it. _stage_binary_call_edge runs later in
+        # PRECEDENCE, so check it here before suppressing.
+        if R.binary_call_edge_present(
+            ctx.inventory, ctx.file_path, ctx.name, ctx.line,
+        ):
+            return None
         return "binary_oracle_absent"
     return None
 

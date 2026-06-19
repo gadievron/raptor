@@ -91,8 +91,10 @@ def detect_JAVA_HOME() -> Optional[str]:
         if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
             try:
                 import subprocess
+                from core.config import RaptorConfig
                 r = subprocess.run(
                     [macos_helper], capture_output=True, text=True, timeout=5,
+                    env=RaptorConfig.get_safe_env(),
                 )
                 if r.returncode == 0 and r.stdout.strip():
                     candidate = r.stdout.strip()
@@ -176,9 +178,18 @@ def detect_RUSTUP_HOME() -> Optional[str]:
     if rustup_bin:
         try:
             import subprocess
+            from core.config import RaptorConfig
+            # Safe env strips exec-hijack vars (LD_PRELOAD, DYLD_*, …) but
+            # also drops RUSTUP_HOME; preserve the operator's own
+            # RUSTUP_HOME so `rustup show home` still reports a custom
+            # toolchain location rather than silently defaulting to ~/.rustup.
+            _env = RaptorConfig.get_safe_env()
+            if os.environ.get("RUSTUP_HOME"):
+                _env["RUSTUP_HOME"] = os.environ["RUSTUP_HOME"]
             r = subprocess.run(
                 [rustup_bin, "show", "home"],
                 capture_output=True, text=True, timeout=5,
+                env=_env,
             )
             if r.returncode == 0 and r.stdout.strip():
                 candidate = r.stdout.strip()

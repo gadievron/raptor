@@ -308,6 +308,11 @@ def dispatch_task(
           + f" (max {max_parallel} parallel)")
 
     results = []
+    # Terminal (item_id, model_key) pairs: the unit of work is the
+    # (model, item) pair, not the item, so the abort back-fill can record a
+    # cancelled model's contribution to an item another model already
+    # completed (else multi-model correlation under-counts contributors).
+    _completed_pairs: set = set()
     completed = 0
     running_cost = 0.0
     abort = False
@@ -350,6 +355,17 @@ def dispatch_task(
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
+                # Stop spending budget on a model already declared dead (3
+                # consecutive failures): all (model, item) futures are
+                # submitted up front, so without this guard its remaining
+                # items keep calling the provider. Best-effort read of
+                # _per_model_dead; routes through the per-future error
+                # handler so the (item, model) pair is recorded and the
+                # abort back-fill stays consistent.
+                if _model_key(m) in _per_model_dead:
+                    raise RuntimeError(
+                        "model marked dead (consecutive failures) - "
+                        "skipping dispatch")
                 # Prefilter hook (fast-tier scorecard) — fires before
                 # prompt build and full dispatch so we don't pay for
                 # token-heavy work when the cheap-tier verdict is
@@ -396,6 +412,7 @@ def dispatch_task(
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
                 results.append(processed)
+                _completed_pairs.add((item_id, model_key))
                 # Reset this model's consecutive-failure counter
                 # — successful response means we're not in a
                 # death spiral for this model.
@@ -482,6 +499,7 @@ def dispatch_task(
                 error_type = _classify_error(err_str)
                 results.append({"finding_id": item_id, "error": err_str,
                                 "error_type": error_type})
+                _completed_pairs.add((item_id, model_key))
                 display = task.get_item_display(item)
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")
@@ -565,11 +583,16 @@ def dispatch_task(
                         break
 
     if abort:
-        completed_ids = {r.get("finding_id") for r in results}
-        for item in selected:
+        # Back-fill over (model, item) WORK pairs, not items: in multi-model
+        # mode an item completed by one model must still get an error record
+        # for every other model whose future was cancelled, else that model
+        # silently drops out of the per-finding contributor set.
+        for model, item in work:
             item_id = task.get_item_id(item)
-            if item_id not in completed_ids:
-                results.append({"finding_id": item_id, "error": "aborted (auth failure)"})
+            mk = _model_key(model)
+            if (item_id, mk) not in _completed_pairs:
+                results.append({"finding_id": item_id, "analysed_by": mk,
+                                "error": "aborted (auth failure)"})
 
     # Finalize (e.g. consensus verdict rules)
     results = task.finalize(results, prior_results)
