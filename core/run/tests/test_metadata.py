@@ -126,6 +126,8 @@ class TestRunLifecycle(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         from core.json import save_json
         with TemporaryDirectory() as d:
             project = Path(d) / "project"
@@ -157,6 +159,8 @@ class TestRunLifecycle(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         with TemporaryDirectory() as d:
             project = Path(d) / "project"
             project.mkdir()
@@ -176,6 +180,8 @@ class TestRunLifecycle(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         with TemporaryDirectory() as d:
             project = Path(d) / "project"
             project.mkdir()
@@ -194,6 +200,8 @@ class TestFindClaudeAncestor(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         from core.run.metadata import _find_claude_ancestor
         pid = _find_claude_ancestor()
         self.assertIsNotNone(pid)
@@ -205,6 +213,8 @@ class TestFindClaudeAncestor(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         from core.run.metadata import _find_claude_ancestor
         pid1 = _find_claude_ancestor()
         pid2 = _find_claude_ancestor()
@@ -215,6 +225,8 @@ class TestFindClaudeAncestor(unittest.TestCase):
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        if not Path("/proc").is_dir():
+            self.skipTest("_find_claude_ancestor walks /proc — Linux only")
         from core.run.metadata import _find_claude_ancestor
         with TemporaryDirectory() as d:
             out = Path(d) / "test-run"
