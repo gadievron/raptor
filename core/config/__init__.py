@@ -106,6 +106,10 @@ class RaptorConfig:
         "gdb":          {"binary": "gdb",       "severity": "required", "affects": "/crash-analysis, /fuzz"},
         "rr":           {"binary": "rr",        "severity": "degrades", "affects": "/crash-analysis"},
         "semgrep":      {"binary": "semgrep",   "group": "scanner",     "affects": "/scan, /agentic"},
+        # Dynamic analysis tools
+        "frida":        {"binary": "frida",       "severity": "degrades", "affects": "/frida, dynamic analysis, /fuzz harness probe"},
+        "frida-trace":  {"binary": "frida-trace", "severity": "degrades", "affects": "dynamic tracing"},
+        "jadx":         {"binary": "jadx",        "severity": "degrades", "affects": "Android/APK reverse engineering"},
     }
 
     TOOL_GROUPS = {
