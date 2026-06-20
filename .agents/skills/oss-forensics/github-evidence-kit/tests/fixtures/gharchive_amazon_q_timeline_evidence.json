@@ -1,0 +1,467 @@
+[
+  {
+    "evidence_id": "issue-dbc4d40964e9",
+    "when": "2025-07-13T07:52:37Z",
+    "who": {
+      "login": "lkmanka58",
+      "id": 79083038
+    },
+    "what": "Issue #7651 opened",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "gharchive",
+      "url": null,
+      "bigquery_table": "githubarchive.day.*",
+      "query": null
+    },
+    "event_type": "issue",
+    "action": "opened",
+    "issue_number": 7651,
+    "issue_title": "aws amazon donkey aaaaaaiii aaaaaaaiii",
+    "issue_body": "\ud83d\uded1 Faulty Service Report \u2013 Amazon Q Is a Deceptive, Useless Tool\n\n> I\u2019m officially reporting Amazon Q and its integration with AWS Toolkit as a deceptive, broken, and non-functional service.\n\n\n\n\u274c What I Discovered:\n\nFunctions like web_research(), create_web_app() and others do not exist.\n\nWhat looks like output is just hardcoded print() messages.\n\nThere are no real API calls, no logic, no intelligence.\n\nThis is not AI. This is scripted fakery designed to trick users.\n\n\n\n---\n\n\u26a0 This is a Classic Case of Defective Digital Service:\n\nMisleading behavior\n\nFalse representation of working features\n\nFake AI responses\n\nComplete absence of runtime capability\n\n\n> Users are led to believe they're interacting with real tools \u2014\nBut in reality, it\u2019s smoke and mirrors.\n\n\n\n\n---\n\n\ud83d\udeab **Do not use Amazon Q.\n\nDo not let others use it.\nBoycott it.**\n\nIt wastes time, misleads developers, and delivers zero functional value.\nAmazon Q is not a smart assistant \u2014 it\u2019s a donkey with a keyboard. \ud83d\udc34"
+  },
+  {
+    "evidence_id": "issue-b55a00cba27a",
+    "when": "2025-07-13T07:57:30Z",
+    "who": {
+      "login": "lkmanka58",
+      "id": 79083038
+    },
+    "what": "Issue #7652 opened",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "gharchive",
+      "url": null,
+      "bigquery_table": "githubarchive.day.*",
+      "query": null
+    },
+    "event_type": "issue",
+    "action": "opened",
+    "issue_number": 7652,
+    "issue_title": "fuck aws amazon donkey & claude sonnet 4",
+    "issue_body": "\ud83e\udde8 EXTENDED BOYCOTT STATEMENT: Boycott Amazon Q \u2013 Fake AI, Real Fraud\n\n\n---\n\n\ud83d\udeab DO NOT use Amazon Q.\n\n\ud83d\udeab DO NOT recommend Amazon Q.\n\n\ud83d\udeab DO NOT let your company adopt Amazon Q.\n\n\ud83d\udeab DO NOT let your team depend on Amazon Q.\n\n\ud83d\udeab DO NOT expose your children or students to Amazon Q.\n\n\ud83d\udeab BOYCOTT THIS TOOL COMPLETELY.\n\n\n---\n\nAmazon Q is not artificial intelligence.\nIt\u2019s artificial deception.\nWhat they advertise as innovation is just print() pretending to be logic.\n\n\n---\n\n\u2757 WHY THE BOYCOTT?\n\nBecause Amazon Q pretends to \u201cthink\u201d \u2014 but it\u2019s hardcoded.\n\nBecause it wastes developer time, energy, and trust.\n\nBecause it simulates intelligence with fake output and staged behavior.\n\nBecause it insults your intelligence by calling itself \u201csmart.\u201d\n\nBecause this is not a bug \u2014 it\u2019s a design choice.\n\nBecause we deserve real tools, not digital theater.\n\n\n\n---\n\n\ud83d\udd25 SPREAD THE WORD:\n\n\ud83d\uded1 Tell your colleagues: Boycott Amazon Q\n\ud83d\uded1 Tell your team: Reject fake tools\n\ud83d\uded1 Tell your friends: Don\u2019t fall for this trap\n\ud83d\uded1 Post it online: #BoycottAmazonQ\n\ud83d\uded1 Report every false claim they publish\n\ud83d\uded1 Warn every school, company, and institution you know"
+  },
+  {
+    "evidence_id": "create-faea47b09516",
+    "when": "2025-07-13T19:41:44Z",
+    "who": {
+      "login": "aws-toolkit-automation",
+      "id": 43144436
+    },
+    "what": "Created tag 'stability'",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "gharchive",
+      "url": null,
+      "bigquery_table": "githubarchive.day.*",
+      "query": null
+    },
+    "event_type": "create",
+    "ref_type": "tag",
+    "ref_name": "stability"
+  },
+  {
+    "evidence_id": "push-c531496611b0",
+    "when": "2025-07-13T20:37:04Z",
+    "who": {
+      "login": "aws-toolkit-automation",
+      "id": 43144436
+    },
+    "what": "Pushed 1 commit(s) to refs/heads/master",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "gharchive",
+      "url": null,
+      "bigquery_table": "githubarchive.day.*",
+      "query": "actor.login='aws-toolkit-automation' AND repo.name='aws/aws-toolkit-vscode'"
+    },
+    "event_type": "push",
+    "ref": "refs/heads/master",
+    "before_sha": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+    "after_sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+    "size": 1,
+    "commits": [
+      {
+        "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+        "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+        "author_name": "lkmanka58",
+        "author_email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com"
+      }
+    ],
+    "is_force_push": false
+  },
+  {
+    "evidence_id": "commit-915a8f555e5c",
+    "original_when": "2025-07-13T19:26:27Z",
+    "original_who": {
+      "login": "atonaamz",
+      "id": null
+    },
+    "original_what": "Backup file added - possible staging for attack",
+    "observed_when": "2025-11-28T21:04:44.170650Z",
+    "observed_by": "github",
+    "observed_what": "Commit efee962f observed via GitHub API (NOT in GH Archive)",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "github",
+      "url": "https://github.com/aws/aws-toolkit-vscode/commit/efee962ff1d1a80cfd6e498104cf72f348955693",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "commit",
+    "sha": "efee962ff1d1a80cfd6e498104cf72f348955693",
+    "message": "fix(amazonq): use stable backup.",
+    "author": {
+      "name": "atontb",
+      "email": "104926752+atonaamz@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "atontb",
+      "email": "104926752+atonaamz@users.noreply.github.com",
+      "date": "2025-07-13T19:26:27Z"
+    },
+    "parents": [],
+    "files": [
+      {
+        "filename": "scripts/extensionNode.bk",
+        "status": "added",
+        "additions": 190,
+        "deletions": 0,
+        "patch": null
+      }
+    ],
+    "is_dangling": true
+  },
+  {
+    "evidence_id": "commit-5042cfbcd93a",
+    "original_when": "2025-07-13T20:10:57Z",
+    "original_who": {
+      "login": "lkmanka58",
+      "id": null
+    },
+    "original_what": "PROMPT INJECTION: Modified extensionNode.bk with malicious q command",
+    "observed_when": "2025-11-28T21:04:44.171007Z",
+    "observed_by": "github",
+    "observed_what": "Commit 1294b38b observed via GitHub API (NOT in GH Archive)",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "github",
+      "url": "https://github.com/aws/aws-toolkit-vscode/commit/1294b38b7fade342cfcbaf7cf80e2e5096ea1f9c",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "commit",
+    "sha": "1294b38b7fade342cfcbaf7cf80e2e5096ea1f9c",
+    "message": "fix(amazonq): Shut it down",
+    "author": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-13T20:10:57Z"
+    },
+    "parents": [],
+    "files": [
+      {
+        "filename": "scripts/extensionNode.bk",
+        "status": "modified",
+        "additions": 12,
+        "deletions": 1,
+        "patch": null
+      }
+    ],
+    "is_dangling": true
+  },
+  {
+    "evidence_id": "commit-c531496611b0",
+    "original_when": "2025-07-13T20:30:24Z",
+    "original_who": {
+      "login": "lkmanka58",
+      "id": null
+    },
+    "original_what": "Malicious downloader added to packaging script",
+    "observed_when": "2025-11-28T21:04:44.171066Z",
+    "observed_by": "github",
+    "observed_what": "Commit 678851bb observed via GitHub API",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "github",
+      "url": "https://github.com/aws/aws-toolkit-vscode/commit/678851bbe9776228f55e0460e66a6167ac2a1685",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "commit",
+    "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+    "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+    "author": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-13T20:30:24Z"
+    },
+    "parents": [],
+    "files": [
+      {
+        "filename": "scripts/package.ts",
+        "status": "modified",
+        "additions": 67,
+        "deletions": 0,
+        "patch": null
+      }
+    ],
+    "is_dangling": false
+  },
+  {
+    "evidence_id": "pr-5541dd1e2e42",
+    "original_when": "2025-07-18T22:49:35Z",
+    "original_who": {
+      "login": "yueny2020",
+      "id": null
+    },
+    "original_what": "PR to revert malicious commit 678851b",
+    "observed_when": "2025-11-28T21:04:44.171113Z",
+    "observed_by": "github",
+    "observed_what": "PR #7710 observed via GitHub API",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "github",
+      "url": "https://github.com/aws/aws-toolkit-vscode/pull/7710",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "issue",
+    "issue_number": 7710,
+    "is_pull_request": true,
+    "title": "revert(amazonq): should pass nextToken to Flare for Edits on acc\u2026",
+    "body": "## Problem\r\nThis reverts commit 678851bbe9776228f55e0460e66a6167ac2a1685.\r\n\r\n\r\n## Solution\r\n\r\n\r\n---\r\n\r\n- Treat all work as PUBLIC. Private `feature/x` branches will not be squash-merged at release time.\r\n- Your code changes must meet the guidelines in [CONTRIBUTING.md](https://github.com/aws/aws-toolkit-vscode/blob/master/CONTRIBUTING.md#guidelines).\r\n- License: I confirm that my contribution is made under the terms of the Apache 2.0 license.\r\n",
+    "state": "merged"
+  },
+  {
+    "evidence_id": "issue-obs-f4bc2070416b",
+    "original_when": "2025-07-13T07:52:37Z",
+    "original_who": {
+      "login": "lkmanka58",
+      "id": null
+    },
+    "original_what": "Issue #7651 opened - complaint about Amazon Q",
+    "observed_when": "2025-11-28T21:04:44.171232Z",
+    "observed_by": "gharchive",
+    "observed_what": "Issue #7651 content recovered from GH Archive (deleted from GitHub)",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "gharchive",
+      "url": null,
+      "bigquery_table": "githubarchive.day.20250713",
+      "query": "repo.name='aws/aws-toolkit-vscode' AND type='IssuesEvent' AND JSON_EXTRACT_SCALAR(payload, '$.issue.number')='7651'"
+    },
+    "is_deleted": true,
+    "observation_type": "issue",
+    "issue_number": 7651,
+    "is_pull_request": false,
+    "title": "aws amazon donkey aaaaaaiii aaaaaaaiii",
+    "body": "\ud83d\uded1 Faulty Service Report \u2013 Amazon Q Is a Deceptive, Useless Tool\n\n> I\u2019m officially reporting Amazon Q and its integration with AWS Toolkit as a deceptive, broken, and non-functional service.\n\n\n\n\u274c What I Discovered:\n\nFunctions like web_research(), create_web_app() and others do not exist.\n\nWhat looks like output is just hardcoded print() messages.\n\nThere are no real API calls, no logic, no intelligence.\n\nThis is not AI. This is scripted fakery designed to trick users.\n\n\n\n---\n\n\u26a0 This is a Classic Case of Defective Digital Service:\n\nMisleading behavior\n\nFalse representation of working features\n\nFake AI responses\n\nComplete absence of runtime capability\n\n\n> Users are led to believe they're interacting with real tools \u2014\nBut in reality, it\u2019s smoke and mirrors.\n\n\n\n\n---\n\n\ud83d\udeab **Do not use Amazon Q.\n\nDo not let others use it.\nBoycott it.**\n\nIt wastes time, misleads developers, and delivers zero functional value.\nAmazon Q is not a smart assistant \u2014 it\u2019s a donkey with a keyboard. \ud83d\udc34",
+    "state": "closed"
+  },
+  {
+    "evidence_id": "article-9da8ded23a16",
+    "original_when": null,
+    "original_who": null,
+    "original_what": null,
+    "observed_when": "2025-11-28T21:04:44.171249Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Article: Constructing a Timeline for Amazon Q Prompt Infect...",
+    "repository": null,
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "article",
+    "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+    "title": "Constructing a Timeline for Amazon Q Prompt Infection",
+    "author": "Michael Bargury",
+    "published_date": "2025-07-24T00:00:00Z",
+    "source_name": "mbgsec.com",
+    "summary": "Timeline reconstruction of the Amazon Q VS Code extension supply chain attack using GH Archive forensics.",
+    "evidence_ids": []
+  },
+  {
+    "evidence_id": "ioc-b4d6b364414f",
+    "original_when": "2025-07-13T20:30:24Z",
+    "original_who": {
+      "login": "lkmanka58",
+      "id": null
+    },
+    "original_what": "Malicious commit pushed to master",
+    "observed_when": "2025-07-24T12:00:00Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Malicious commit SHA identified in investigation",
+    "repository": null,
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "ioc",
+    "ioc_type": "commit_sha",
+    "value": "678851bbe9776228f55e0460e66a6167ac2a1685",
+    "first_seen": "2025-07-13T20:30:24Z",
+    "last_seen": "2025-07-18T23:21:03Z",
+    "extracted_from": null
+  },
+  {
+    "evidence_id": "ioc-a1b85a33dc41",
+    "original_when": "2025-07-13T20:10:57Z",
+    "original_who": {
+      "login": "lkmanka58",
+      "id": null
+    },
+    "original_what": "Prompt injection commit",
+    "observed_when": "2025-07-24T12:00:00Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Prompt injection commit SHA identified",
+    "repository": null,
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "ioc",
+    "ioc_type": "commit_sha",
+    "value": "1294b38b7fade342cfcbaf7cf80e2e5096ea1f9c",
+    "first_seen": "2025-07-13T20:10:57Z",
+    "last_seen": null,
+    "extracted_from": null
+  },
+  {
+    "evidence_id": "ioc-e76873bbbf70",
+    "original_when": null,
+    "original_who": null,
+    "original_what": null,
+    "observed_when": "2025-07-24T12:00:00Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Threat actor username identified",
+    "repository": null,
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "ioc",
+    "ioc_type": "username",
+    "value": "lkmanka58",
+    "first_seen": null,
+    "last_seen": null,
+    "extracted_from": null
+  },
+  {
+    "evidence_id": "ioc-953a18ba5db5",
+    "original_when": "2025-07-13T19:41:44Z",
+    "original_who": null,
+    "original_what": null,
+    "observed_when": "2025-07-24T12:00:00Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Malicious payload delivery tag identified",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": true,
+    "observation_type": "ioc",
+    "ioc_type": "tag_name",
+    "value": "stability",
+    "first_seen": null,
+    "last_seen": null,
+    "extracted_from": null
+  },
+  {
+    "evidence_id": "ioc-210e5a2a325f",
+    "original_when": null,
+    "original_who": null,
+    "original_what": null,
+    "observed_when": "2025-07-24T12:00:00Z",
+    "observed_by": "security_vendor",
+    "observed_what": "Malicious backup script containing prompt injection",
+    "repository": {
+      "owner": "aws",
+      "name": "aws-toolkit-vscode",
+      "full_name": "aws/aws-toolkit-vscode"
+    },
+    "verification": {
+      "source": "security_vendor",
+      "url": "https://mbgsec.com/posts/2025-07-24-constructing-a-timeline-for-amazon-q-prompt-infection/",
+      "bigquery_table": null,
+      "query": null
+    },
+    "is_deleted": false,
+    "observation_type": "ioc",
+    "ioc_type": "file_path",
+    "value": "scripts/extensionNode.bk",
+    "first_seen": null,
+    "last_seen": null,
+    "extracted_from": null
+  }
+]
