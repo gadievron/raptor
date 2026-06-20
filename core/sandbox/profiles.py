@@ -82,4 +82,9 @@ _SANDBOX_KWARGS = frozenset({
     # the persona is built once per context and reused across run()
     # calls. Per-call override would silently no-op.
     "sanitise_host_fingerprint", "cpu_count", "require_sanitisation",
+    # etc_overlay — dict mapping in-sandbox /etc paths to host source
+    # files that should be bind-mounted over them inside the sandbox.
+    # Sandbox-context-level because the bind happens during mount-ns
+    # init; per-call override would silently no-op.
+    "etc_overlay",
 })

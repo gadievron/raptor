@@ -171,7 +171,8 @@ def _shadows_per_ns(path: str) -> bool:
 def setup_mount_ns(target: Optional[str], output: Optional[str],
                    extra_ro_paths: Optional[Iterable[str]] = None,
                    root_path: Optional[str] = None,
-                   persona: Optional["Persona"] = None) -> None:
+                   persona: Optional["Persona"] = None,
+                   etc_overlay: Optional[dict] = None) -> None:
     """Establish pivot_root'd tmpfs sandbox root.
 
     Must be called AFTER the child has entered the new user-ns and acquired
@@ -404,6 +405,97 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
     if persona is not None:
         from .fingerprint import apply_overlay
         apply_overlay(persona, root_prefix=root)
+
+    # 8d. Caller-supplied etc_overlay. ``etc_overlay`` is a dict mapping
+    # the in-sandbox target path (e.g. ``/etc/sudoers``) to the host
+    # source path (a file under work_dir the caller pre-populated).
+    # Each pair is bind-mounted with ``MS_BIND`` before pivot_root and
+    # before Landlock — same window the persona overlay uses, for the
+    # same reason: mount topology changes are blocked once Landlock is
+    # installed on kernel 6.15+, and mounting on top of the RO /etc
+    # bind from step 4 only succeeds while we still have CAP_SYS_ADMIN
+    # in the user-ns.
+    if etc_overlay:
+        # If any entry needs a new file/dir created under /etc (which
+        # got bound RO in step 4 above), drop the RO on /etc for the
+        # duration of overlay creation, then re-remount RO once all
+        # overlays are bound. MS_REMOUNT can flip the read-only flag
+        # in either direction within a user-ns mount. This addresses
+        # /etc/pam.d/<service> overlays where the host has no PAM
+        # config for the service (e.g. sudoedit) — previously the
+        # create raised EROFS and the overlay was silently dropped.
+        _etc_remounted_rw = False
+        for ns_target in etc_overlay:
+            if not isinstance(ns_target, str):
+                continue
+            if ns_target.startswith("/etc/") and not os.path.exists(
+                f"{root}{ns_target}"
+            ):
+                try:
+                    _mount("/etc", f"{root}/etc", None, MS_REMOUNT | MS_BIND)
+                    _etc_remounted_rw = True
+                except OSError:
+                    # Stays RO; create attempts below will fail and
+                    # be reported by the existing warn_post_fork.
+                    pass
+                break
+        for ns_target, host_source in etc_overlay.items():
+            if not isinstance(ns_target, str) or not isinstance(host_source, str):
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: etc_overlay entry skipped - "
+                    b"both keys and values must be str paths\n"
+                )
+                continue
+            inside = f"{root}{ns_target}"
+            if not os.path.exists(host_source):
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: etc_overlay source missing; "
+                    b"skipping bind\n"
+                )
+                continue
+            # If the in-sandbox target doesn't exist yet, create it. For
+            # /etc/<filename> entries the target ALWAYS exists (the
+            # whole /etc tree got bound RO at step 4), so this branch
+            # only fires for caller-supplied paths under the
+            # per-sandbox tmpfs (/tmp/<x>, /run/<x>) where the path
+            # genuinely needs to be created before the bind. We mirror
+            # the source's kind (file → touch, dir → mkdir) so the
+            # subsequent bind has the right target type.
+            if not os.path.exists(inside):
+                try:
+                    if os.path.isdir(host_source):
+                        os.makedirs(inside, exist_ok=True)
+                    else:
+                        os.makedirs(os.path.dirname(inside), exist_ok=True)
+                        # Empty placeholder so the bind has a file
+                        # target (Linux requires source/target kinds
+                        # to match for a non-recursive bind).
+                        open(inside, "w").close()
+                except OSError:
+                    warn_post_fork(
+                        b"RAPTOR: mount_ns: etc_overlay could not "
+                        b"create in-sandbox target; skipping bind\n"
+                    )
+                    continue
+            try:
+                _mount(host_source, inside, None, MS_BIND)
+            except OSError:
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: etc_overlay bind failed; "
+                    b"target will see host /etc\n"
+                )
+        # Restore RO on /etc if we dropped it for overlay creation.
+        if _etc_remounted_rw:
+            try:
+                _mount(
+                    "/etc", f"{root}/etc", None,
+                    MS_REMOUNT | MS_BIND | MS_RDONLY,
+                )
+            except OSError:
+                warn_post_fork(
+                    b"RAPTOR: mount_ns: failed to restore /etc RO "
+                    b"after overlay; relying on Landlock\n"
+                )
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

@@ -329,9 +329,11 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             audit_run_dir: Optional[str] = None,
             observe: bool = False,
             writable_paths: Optional[list] = None,
+            exclude_tmp_baseline: bool = False,
             sanitise_host_fingerprint: bool = False,
             cpu_count: Optional[int] = None,
-            require_sanitisation: bool = False):
+            require_sanitisation: bool = False,
+            etc_overlay: Optional[dict] = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -811,7 +813,17 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     extra_writable_paths = list(writable_paths or [])
     writable_paths = None
     if target or output or allowed_tcp_ports or extra_writable_paths:
-        writable_paths = ["/tmp"]
+        # ``/tmp`` is in the writable baseline so Python's pyc cache
+        # and the C compiler's intermediate files survive. Callers that
+        # specifically don't want a sandboxed child to be able to write
+        # ANYWHERE under /tmp (e.g. the exploit-engine substrate, where
+        # an LLM-emitted producer could otherwise rewrite the target
+        # wrapper script at ``/tmp/compile-and-run-target-*/target``)
+        # set ``exclude_tmp_baseline=True``. ONLY use this when you've
+        # verified the sandboxed program doesn't need /tmp to start —
+        # ``python3 -S`` exploits don't write pyc cache, but a normal
+        # ``python3`` import will.
+        writable_paths = [] if exclude_tmp_baseline else ["/tmp"]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
             # open in the mount-ns child after pivot_root (the new
@@ -1777,6 +1789,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             restrict_reads=restrict_reads,
                             strict_env=strict_env,
                             persona=_persona,
+                            etc_overlay=etc_overlay,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and
@@ -1789,6 +1802,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             # docstring) pass start_new_session=False
                             # explicitly and that is honoured.
                             start_new_session=kwargs.get("start_new_session", True),
+                            inherit_netns=kwargs.get("inherit_netns", False),
+                            skip_pid_ns=kwargs.get("skip_pid_ns", False),
                         )
                         used_spawn = True
                         # Authoritative setup-failure signal from the exec-
@@ -2358,9 +2373,11 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         audit_run_dir: Optional[str] = None,
         observe: bool = False,
         writable_paths: Optional[list] = None,
+        exclude_tmp_baseline: bool = False,
         sanitise_host_fingerprint: bool = False,
         cpu_count: Optional[int] = None,
         require_sanitisation: bool = False,
+        etc_overlay: Optional[dict] = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -2385,9 +2402,11 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  audit_run_dir=audit_run_dir,
                  observe=observe,
                  writable_paths=writable_paths,
+                 exclude_tmp_baseline=exclude_tmp_baseline,
                  sanitise_host_fingerprint=sanitise_host_fingerprint,
                  cpu_count=cpu_count,
-                 require_sanitisation=require_sanitisation) as _run:
+                 require_sanitisation=require_sanitisation,
+                 etc_overlay=etc_overlay) as _run:
         return _run(cmd, **kwargs)
 
 
