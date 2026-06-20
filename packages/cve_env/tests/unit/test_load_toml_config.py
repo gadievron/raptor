@@ -1,17 +1,15 @@
-"""Phase 43.1.1 (2026-05-16): coverage gap closure for `_load_toml_config`.
+"""Coverage for `_load_toml_config`.
 
-Per Phase 42.5 coverage report — `_load_toml_config` was in the MED-risk
-no-test category. The function reads `cve-env.toml` from CWD or
-`CVE_ENV_CONFIG_FILE` env var; errors are intentionally non-fatal.
+The function reads from the path in `CVE_ENV_CONFIG_FILE` env var only;
+CWD auto-loading is disabled to prevent malicious repos from planting config.
+Errors are intentionally non-fatal.
 
 Tests cover:
 - Missing file → empty dict
 - Empty file → empty dict
 - Malformed TOML → empty dict (non-fatal error swallowed)
-- Valid TOML → parsed dict
-- CVE_ENV_CONFIG_FILE override
-
-Location: src/cve_env/config.py:33-48.
+- Valid TOML via explicit env var → parsed dict
+- CWD file ignored without env var (security hardening)
 """
 
 from __future__ import annotations
@@ -105,14 +103,29 @@ def test_load_toml_parses_nested_tables(
     assert result == {"budget": {"modes": {"research": "hard", "verify": "soft"}}}
 
 
-def test_load_toml_reads_from_cwd_default(
+def test_load_toml_ignores_cwd_without_env_var(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """No CVE_ENV_CONFIG_FILE → reads `cve-env.toml` from CWD."""
+    """No CVE_ENV_CONFIG_FILE → {} even if cve-env.toml exists in CWD.
+
+    CWD auto-loading was removed to prevent a malicious repo from planting
+    a cve-env.toml that silently reconfigures the tool.
+    """
     cfg = tmp_path / "cve-env.toml"
     cfg.write_text('[test]\nkey = "value"\n')
     monkeypatch.delenv("CVE_ENV_CONFIG_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
+    result = cve_config._load_toml_config()
+    assert result == {}
+
+
+def test_load_toml_reads_explicit_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CVE_ENV_CONFIG_FILE pointing at a valid file → parses it."""
+    cfg = tmp_path / "cve-env.toml"
+    cfg.write_text('[test]\nkey = "value"\n')
+    monkeypatch.setenv("CVE_ENV_CONFIG_FILE", str(cfg))
     result = cve_config._load_toml_config()
     assert result == {"test": {"key": "value"}}
 
