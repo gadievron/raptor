@@ -699,16 +699,24 @@ class RaptorConfig:
             return RaptorConfig.BASE_OUT_DIR
         resolved = Path(base).resolve()
         forbidden = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys")
-        resolved_str = str(resolved)
-        for prefix in forbidden:
-            # Component-boundary match: equals or starts with `prefix/`.
-            if resolved_str == prefix or resolved_str.startswith(prefix + "/"):
-                raise ValueError(
-                    f"RAPTOR_OUT_DIR={resolved!r} resolves under system "
-                    f"path {prefix!r}. Refusing to create output there. "
-                    f"Set RAPTOR_OUT_DIR to a path under your home or a "
-                    f"dedicated work directory."
-                )
+        # Check BOTH the lexically-normalised input and the symlink-
+        # resolved path. On macOS /etc, /var and /tmp are symlinks into
+        # /private, so a literal RAPTOR_OUT_DIR=/etc resolves to
+        # /private/etc and would slip past a resolved-only check — catch
+        # the operator-typed system path via os.path.normpath too. The
+        # resolved check still guards against a symlink that points into
+        # a (Linux-named) system directory.
+        candidates = (os.path.normpath(base), str(resolved))
+        for path_str in candidates:
+            for prefix in forbidden:
+                # Component-boundary match: equals or starts with `prefix/`.
+                if path_str == prefix or path_str.startswith(prefix + "/"):
+                    raise ValueError(
+                        f"RAPTOR_OUT_DIR={base!r} resolves under system "
+                        f"path {prefix!r}. Refusing to create output there. "
+                        f"Set RAPTOR_OUT_DIR to a path under your home or a "
+                        f"dedicated work directory."
+                    )
         # Validate the parent exists. `mkdir(parents=True)` would
         # silently create a deep directory tree under what may be a
         # typo (`RAPTOR_OUT_DIR=/home/raptr/out` — note the missing

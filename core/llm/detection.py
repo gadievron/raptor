@@ -73,11 +73,35 @@ class LLMAvailability:
 
 
 def _validate_ollama_url(url: str) -> str:
-    """Validate and normalize Ollama URL."""
-    url = url.rstrip('/')
+    """Validate and normalise an Ollama URL.
+
+    Ollama's own canonical ``OLLAMA_HOST`` is a schemeless ``host:port``
+    (e.g. ``127.0.0.1:11434``), so a missing scheme is the common,
+    *valid* case rather than an error — we default it to ``http://``.
+    An empty value is still rejected so a genuinely unset/blank config
+    surfaces loudly instead of becoming ``http:///api/tags``.
+    """
+    url = url.strip().rstrip('/')
+    if not url:
+        raise ValueError("Ollama URL is empty (set OLLAMA_HOST)")
     if not url.startswith(('http://', 'https://')):
-        raise ValueError(f"Invalid Ollama URL (must start with http:// or https://): {url}")
+        url = f"http://{url}"
     return url
+
+
+def _host_is_local(raw: str) -> bool:
+    """True if ``raw`` (a URL or bare ``host[:port]``) points at the
+    local machine.
+
+    Parses the hostname instead of substring-matching so a remote host
+    such as ``localhost.attacker.example`` or ``127.0.0.1.evil`` is not
+    mis-classified as local (which would disclose a remote OLLAMA host
+    in logs — CLAUDE.md: "never disclose remote OLLAMA server location").
+    """
+    from urllib.parse import urlparse
+    candidate = raw if "://" in raw else f"//{raw}"
+    host = (urlparse(candidate).hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 _cached_ollama_models: Optional[List[str]] = None
@@ -110,7 +134,7 @@ def _get_available_ollama_models() -> List[str]:
             _cached_ollama_models = [model['name'] for model in data.get('models', [])]
             return _cached_ollama_models
     except Exception as e:
-        ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
+        ollama_display = RaptorConfig.OLLAMA_HOST if _host_is_local(RaptorConfig.OLLAMA_HOST) else '[REMOTE-OLLAMA]'
         logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
     _cached_ollama_models = []
     return []
