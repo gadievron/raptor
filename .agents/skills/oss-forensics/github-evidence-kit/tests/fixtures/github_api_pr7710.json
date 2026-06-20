@@ -1,0 +1,13 @@
+{
+  "number": 7710,
+  "title": "revert(amazonq): should pass nextToken to Flare for Edits on acc…",
+  "state": "closed",
+  "body": "## Problem\r\nThis reverts commit 678851bbe9776228f55e0460e66a6167ac2a1685.\r\n\r\n\r\n## Solution\r\n\r\n\r\n---\r\n\r\n- Treat all work as PUBLIC. Private `feature/x` branches will not be squash-merged at release time.\r\n- Your code changes must meet the guidelines in [CONTRIBUTING.md](https://github.com/aws/aws-toolkit-vscode/blob/master/CONTRIBUTING.md#guidelines).\r\n- License: I confirm that my contribution is made under the terms of the Apache 2.0 license.\r\n",
+  "user": {
+    "login": "yueny2020"
+  },
+  "merged": true,
+  "merged_at": "2025-07-18T23:21:03Z",
+  "created_at": "2025-07-18T22:49:35Z",
+  "closed_at": "2025-07-18T23:21:03Z"
+}

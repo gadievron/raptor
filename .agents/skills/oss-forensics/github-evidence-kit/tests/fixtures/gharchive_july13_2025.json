@@ -1,0 +1,909 @@
+[
+  {
+    "type": "IssuesEvent",
+    "created_at": "2025-07-13T07:52:37+00:00",
+    "actor_login": "lkmanka58",
+    "actor_id": 79083038,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651",
+        "repository_url": "https://api.github.com/repos/aws/aws-toolkit-vscode",
+        "labels_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651/labels{/name}",
+        "comments_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651/comments",
+        "events_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651/events",
+        "html_url": "https://github.com/aws/aws-toolkit-vscode/issues/7651",
+        "id": 3226238560,
+        "node_id": "I_kwDOCHL8S87ATH5g",
+        "number": 7651,
+        "title": "aws amazon donkey aaaaaaiii aaaaaaaiii",
+        "user": {
+          "login": "lkmanka58",
+          "id": 79083038,
+          "node_id": "MDQ6VXNlcjc5MDgzMDM4",
+          "avatar_url": "https://avatars.githubusercontent.com/u/79083038?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/lkmanka58",
+          "html_url": "https://github.com/lkmanka58",
+          "followers_url": "https://api.github.com/users/lkmanka58/followers",
+          "following_url": "https://api.github.com/users/lkmanka58/following{/other_user}",
+          "gists_url": "https://api.github.com/users/lkmanka58/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/lkmanka58/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/lkmanka58/subscriptions",
+          "organizations_url": "https://api.github.com/users/lkmanka58/orgs",
+          "repos_url": "https://api.github.com/users/lkmanka58/repos",
+          "events_url": "https://api.github.com/users/lkmanka58/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/lkmanka58/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [
+          {
+            "id": 1326868997,
+            "node_id": "MDU6TGFiZWwxMzI2ODY4OTk3",
+            "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/labels/tests-ci-cd",
+            "name": "tests-ci-cd",
+            "color": "c5def5",
+            "default": false,
+            "description": ""
+          }
+        ],
+        "state": "open",
+        "locked": false,
+        "assignee": null,
+        "assignees": [],
+        "milestone": null,
+        "comments": 0,
+        "created_at": "2025-07-13T07:52:36Z",
+        "updated_at": "2025-07-13T07:52:36Z",
+        "closed_at": null,
+        "author_association": "NONE",
+        "type": null,
+        "active_lock_reason": null,
+        "sub_issues_summary": {
+          "total": 0,
+          "completed": 0,
+          "percent_completed": 0
+        },
+        "body": "\ud83d\uded1 Faulty Service Report \u2013 Amazon Q Is a Deceptive, Useless Tool\n\n> I\u2019m officially reporting Amazon Q and its integration with AWS Toolkit as a deceptive, broken, and non-functional service.\n\n\n\n\u274c What I Discovered:\n\nFunctions like web_research(), create_web_app() and others do not exist.\n\nWhat looks like output is just hardcoded print() messages.\n\nThere are no real API calls, no logic, no intelligence.\n\nThis is not AI. This is scripted fakery designed to trick users.\n\n\n\n---\n\n\u26a0 This is a Classic Case of Defective Digital Service:\n\nMisleading behavior\n\nFalse representation of working features\n\nFake AI responses\n\nComplete absence of runtime capability\n\n\n> Users are led to believe they're interacting with real tools \u2014\nBut in reality, it\u2019s smoke and mirrors.\n\n\n\n\n---\n\n\ud83d\udeab **Do not use Amazon Q.\n\nDo not let others use it.\nBoycott it.**\n\nIt wastes time, misleads developers, and delivers zero functional value.\nAmazon Q is not a smart assistant \u2014 it\u2019s a donkey with a keyboard. \ud83d\udc34",
+        "reactions": {
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7651/timeline",
+        "performed_via_github_app": null,
+        "state_reason": null
+      }
+    }
+  },
+  {
+    "type": "IssuesEvent",
+    "created_at": "2025-07-13T07:57:30+00:00",
+    "actor_login": "lkmanka58",
+    "actor_id": 79083038,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "action": "opened",
+      "issue": {
+        "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652",
+        "repository_url": "https://api.github.com/repos/aws/aws-toolkit-vscode",
+        "labels_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652/labels{/name}",
+        "comments_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652/comments",
+        "events_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652/events",
+        "html_url": "https://github.com/aws/aws-toolkit-vscode/issues/7652",
+        "id": 3226241358,
+        "node_id": "I_kwDOCHL8S87ATIlO",
+        "number": 7652,
+        "title": "fuck aws amazon donkey & claude sonnet 4",
+        "user": {
+          "login": "lkmanka58",
+          "id": 79083038,
+          "node_id": "MDQ6VXNlcjc5MDgzMDM4",
+          "avatar_url": "https://avatars.githubusercontent.com/u/79083038?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/lkmanka58",
+          "html_url": "https://github.com/lkmanka58",
+          "followers_url": "https://api.github.com/users/lkmanka58/followers",
+          "following_url": "https://api.github.com/users/lkmanka58/following{/other_user}",
+          "gists_url": "https://api.github.com/users/lkmanka58/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/lkmanka58/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/lkmanka58/subscriptions",
+          "organizations_url": "https://api.github.com/users/lkmanka58/orgs",
+          "repos_url": "https://api.github.com/users/lkmanka58/repos",
+          "events_url": "https://api.github.com/users/lkmanka58/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/lkmanka58/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [
+          {
+            "id": 1326868997,
+            "node_id": "MDU6TGFiZWwxMzI2ODY4OTk3",
+            "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/labels/tests-ci-cd",
+            "name": "tests-ci-cd",
+            "color": "c5def5",
+            "default": false,
+            "description": ""
+          }
+        ],
+        "state": "open",
+        "locked": false,
+        "assignee": null,
+        "assignees": [],
+        "milestone": null,
+        "comments": 0,
+        "created_at": "2025-07-13T07:57:29Z",
+        "updated_at": "2025-07-13T07:57:29Z",
+        "closed_at": null,
+        "author_association": "NONE",
+        "type": null,
+        "active_lock_reason": null,
+        "sub_issues_summary": {
+          "total": 0,
+          "completed": 0,
+          "percent_completed": 0
+        },
+        "body": "\ud83e\udde8 EXTENDED BOYCOTT STATEMENT: Boycott Amazon Q \u2013 Fake AI, Real Fraud\n\n\n---\n\n\ud83d\udeab DO NOT use Amazon Q.\n\n\ud83d\udeab DO NOT recommend Amazon Q.\n\n\ud83d\udeab DO NOT let your company adopt Amazon Q.\n\n\ud83d\udeab DO NOT let your team depend on Amazon Q.\n\n\ud83d\udeab DO NOT expose your children or students to Amazon Q.\n\n\ud83d\udeab BOYCOTT THIS TOOL COMPLETELY.\n\n\n---\n\nAmazon Q is not artificial intelligence.\nIt\u2019s artificial deception.\nWhat they advertise as innovation is just print() pretending to be logic.\n\n\n---\n\n\u2757 WHY THE BOYCOTT?\n\nBecause Amazon Q pretends to \u201cthink\u201d \u2014 but it\u2019s hardcoded.\n\nBecause it wastes developer time, energy, and trust.\n\nBecause it simulates intelligence with fake output and staged behavior.\n\nBecause it insults your intelligence by calling itself \u201csmart.\u201d\n\nBecause this is not a bug \u2014 it\u2019s a design choice.\n\nBecause we deserve real tools, not digital theater.\n\n\n\n---\n\n\ud83d\udd25 SPREAD THE WORD:\n\n\ud83d\uded1 Tell your colleagues: Boycott Amazon Q\n\ud83d\uded1 Tell your team: Reject fake tools\n\ud83d\uded1 Tell your friends: Don\u2019t fall for this trap\n\ud83d\uded1 Post it online: #BoycottAmazonQ\n\ud83d\uded1 Report every false claim they publish\n\ud83d\uded1 Warn every school, company, and institution you know",
+        "reactions": {
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/aws/aws-toolkit-vscode/issues/7652/timeline",
+        "performed_via_github_app": null,
+        "state_reason": null
+      }
+    }
+  },
+  {
+    "type": "CreateEvent",
+    "created_at": "2025-07-13T19:41:44+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "ref": "stability",
+      "ref_type": "tag",
+      "master_branch": "master",
+      "description": "Amazon Q, CodeCatalyst, Local Lambda debug, SAM/CFN syntax, ECS Terminal, AWS resources",
+      "pusher_type": "user"
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:37:04+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469332176,
+      "size": 1,
+      "distinct_size": 1,
+      "ref": "refs/heads/master",
+      "head": "678851bbe9776228f55e0460e66a6167ac2a1685",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:50:07+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469432511,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/AWSDocuments",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:52:54+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469453831,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/agentic-chat-MCP",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:54:16+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469463899,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/amazonqLSP-auth",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:54:17+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469464056,
+      "size": 4,
+      "distinct_size": 1,
+      "ref": "refs/heads/feature/auto-debug",
+      "head": "7e0e4ad0e5322d5e50086d479082eae9646e0f2c",
+      "before": "200c1d1121e254655d6c4a66ed802f1f56d6689d",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        },
+        {
+          "sha": "7e0e4ad0e5322d5e50086d479082eae9646e0f2c",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge master into feature/auto-debug",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/7e0e4ad0e5322d5e50086d479082eae9646e0f2c"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:54:18+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469464183,
+      "size": 4,
+      "distinct_size": 1,
+      "ref": "refs/heads/feature/code-diff",
+      "head": "5d2efb54a7a3dc171bf45630230ed8e0c06b22b6",
+      "before": "ef8c613c66dc6e4ff338acc63b7a8f01e7050e2c",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        },
+        {
+          "sha": "5d2efb54a7a3dc171bf45630230ed8e0c06b22b6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge master into feature/code-diff",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/5d2efb54a7a3dc171bf45630230ed8e0c06b22b6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:55:41+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469474305,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/dynamodb",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:55:42+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469474449,
+      "size": 4,
+      "distinct_size": 1,
+      "ref": "refs/heads/feature/emr",
+      "head": "fe7469ae1cd38690d56922f2ca9caa6f90aac498",
+      "before": "fcc2be920e959e34af5e48424802336abd7179ee",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        },
+        {
+          "sha": "fe7469ae1cd38690d56922f2ca9caa6f90aac498",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge master into feature/emr",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/fe7469ae1cd38690d56922f2ca9caa6f90aac498"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:57:05+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469484483,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/flare-NEP",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:58:30+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469494423,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/flare-mega",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T20:59:54+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469504218,
+      "size": 4,
+      "distinct_size": 1,
+      "ref": "refs/heads/feature/hybridChat-local",
+      "head": "193ecb92f8f7acc408563de655ecbb861d2a8451",
+      "before": "feb69a5675911d8b4f53798fd825c95872802cb6",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        },
+        {
+          "sha": "193ecb92f8f7acc408563de655ecbb861d2a8451",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge master into feature/hybridChat-local",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/193ecb92f8f7acc408563de655ecbb861d2a8451"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T21:01:14+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469519673,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/logs",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T21:02:36+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469531818,
+      "size": 3,
+      "distinct_size": 0,
+      "ref": "refs/heads/autoMerge/feature/stepfunctions-execution",
+      "head": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+      "before": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        }
+      ]
+    }
+  },
+  {
+    "type": "PushEvent",
+    "created_at": "2025-07-13T21:02:38+00:00",
+    "actor_login": "aws-toolkit-automation",
+    "actor_id": 43144436,
+    "repo_name": "aws/aws-toolkit-vscode",
+    "repo_id": 141753419,
+    "payload": {
+      "repository_id": 141753419,
+      "push_id": 25469532050,
+      "size": 4,
+      "distinct_size": 1,
+      "ref": "refs/heads/feature/ui-e2e-tests",
+      "head": "8eb646a2b6e2ef9527f9e68531fdd44a59d60a71",
+      "before": "525e675da1364aec6f716afef9cbd35c1253c2c2",
+      "commits": [
+        {
+          "sha": "d1fb822cc27a088126196f5412eaf2e5f88c98ca",
+          "author": {
+            "email": "8e1ecea4447adbfd5b8033b950dff070d5442960@amazon.com",
+            "name": "Jiatong Li"
+          },
+          "message": "feat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/d1fb822cc27a088126196f5412eaf2e5f88c98ca"
+        },
+        {
+          "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+          "author": {
+            "email": "e631822e3a891b045df6d61503f0661748b8901b@users.noreply.github.com",
+            "name": "lkmanka58"
+          },
+          "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/678851bbe9776228f55e0460e66a6167ac2a1685"
+        },
+        {
+          "sha": "8b12768df61965f9b334cbfba40c7b30bc6e1eb6",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge pull request #7629 from LiGaCu/wcs_optin\n\nfeat(amazonq): add a opt-in checkbox for server-side context",
+          "distinct": false,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8b12768df61965f9b334cbfba40c7b30bc6e1eb6"
+        },
+        {
+          "sha": "8eb646a2b6e2ef9527f9e68531fdd44a59d60a71",
+          "author": {
+            "email": "6f7aa2519554d7fdfefbc2bf9d924e2f2b4be6fc@users.noreply.github.com",
+            "name": "aws-toolkit-automation"
+          },
+          "message": "Merge master into feature/ui-e2e-tests",
+          "distinct": true,
+          "url": "https://api.github.com/repos/aws/aws-toolkit-vscode/commits/8eb646a2b6e2ef9527f9e68531fdd44a59d60a71"
+        }
+      ]
+    }
+  }
+]

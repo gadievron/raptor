@@ -1,0 +1,68 @@
+{
+  "678851bbe9776228f55e0460e66a6167ac2a1685": {
+    "sha": "678851bbe9776228f55e0460e66a6167ac2a1685",
+    "message": "fix(amazonq): should pass nextToken to Flare for Edits on acceptance without calling provideInlineCompletionItems",
+    "author": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-13T20:30:24Z"
+    },
+    "files": [
+      {
+        "filename": "scripts/package.ts",
+        "status": "modified",
+        "additions": 67,
+        "deletions": 0
+      }
+    ]
+  },
+  "efee962ff1d1a80cfd6e498104cf72f348955693": {
+    "sha": "efee962ff1d1a80cfd6e498104cf72f348955693",
+    "message": "fix(amazonq): use stable backup.",
+    "author": {
+      "name": "atontb",
+      "email": "104926752+atonaamz@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "atontb",
+      "email": "104926752+atonaamz@users.noreply.github.com",
+      "date": "2025-07-13T19:26:27Z"
+    },
+    "files": [
+      {
+        "filename": "scripts/extensionNode.bk",
+        "status": "added",
+        "additions": 190,
+        "deletions": 0
+      }
+    ]
+  },
+  "1294b38b7fade342cfcbaf7cf80e2e5096ea1f9c": {
+    "sha": "1294b38b7fade342cfcbaf7cf80e2e5096ea1f9c",
+    "message": "fix(amazonq): Shut it down",
+    "author": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-11T23:33:00Z"
+    },
+    "committer": {
+      "name": "lkmanka58",
+      "email": "lkmanka58@users.noreply.github.com",
+      "date": "2025-07-13T20:10:57Z"
+    },
+    "files": [
+      {
+        "filename": "scripts/extensionNode.bk",
+        "status": "modified",
+        "additions": 12,
+        "deletions": 1
+      }
+    ]
+  }
+}
