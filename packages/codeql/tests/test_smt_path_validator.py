@@ -1880,3 +1880,47 @@ class TestWeakestPrecondition:
         assert r.feasible is True
         assert r.wp_predicate is not None
         assert r.wp_complete is False
+
+    @_requires_z3
+    def test_all_conjuncts_mutually_implied_returns_true(self):
+        """When every conjunct implies every other (all equivalent), the
+        deletion pass drops all but one.  If the input is crafted so that
+        even the last survivor is a tautology, ``_extract_wp`` returns
+        the ``"true"`` degenerate form."""
+        from packages.codeql.smt_path_validator import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        # Two tautologies: x == x and x >= 0 (unsigned — always true)
+        taut1 = x == x
+        taut2 = z3.UGE(x, z3.BitVecVal(0, 32))
+        wp, conj, complete = _extract_wp([("x == x", taut1), ("x >= 0", taut2)])
+        # Both are tautologies so each implies the other — all dropped.
+        assert wp == "true"
+        assert conj == []
+        assert complete is True
+
+    @_requires_z3
+    def test_solver_timeout_keeps_conjunct(self):
+        """When a redundancy check returns ``unknown`` (e.g. solver
+        timeout), the conjunct is conservatively kept."""
+        from packages.codeql.smt_path_validator import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        exprs = [
+            ("x > 5", z3.UGT(x, z3.BitVecVal(5, 32))),
+            ("x > 0", z3.UGT(x, z3.BitVecVal(0, 32))),
+        ]
+        # Patch solver.check to return unknown for the first call,
+        # forcing the conjunct to be kept even though it's redundant.
+        real_extract = _extract_wp
+        with patch("packages.codeql.smt_path_validator._new_solver") as mock_ns:
+            mock_solver = mock_ns.return_value
+            mock_solver.check.return_value = z3.unknown
+            mock_solver.__enter__ = lambda s: s
+            mock_solver.__exit__ = lambda s, *a: None
+            wp, conj, complete = real_extract(exprs)
+        # Both kept because every check returned unknown
+        assert len(conj) == 2
+        assert complete is True

@@ -180,6 +180,13 @@ class PathCondition:
 # paths fully while bounding worst-case cost on adversarial inputs.
 WP_MAX_SOLVER_CALLS = 32
 
+# Per-check timeout for the WP deletion pass.  Each redundancy test is
+# a simple implication query (conjunction of kept conjuncts vs negation
+# of one candidate) — far cheaper than the initial sat check that
+# evaluates the full path.  2s is generous for these queries; a timeout
+# means "keep the conjunct" (same conservative stance as ``unknown``).
+WP_TIMEOUT_MS = 2000
+
 # The deletion pass visits conjuncts in lexicographic order of their
 # canonicalised text (ties broken by original index).  Recorded on the
 # result so re-runs reproduce the same minimal subset: different visit
@@ -1042,7 +1049,7 @@ def _extract_wp(
     kept = [True] * n
     calls = 0
     complete = True
-    solver = _new_solver()
+    solver = _new_solver(WP_TIMEOUT_MS)
     for idx in order:
         if calls >= cap:
             complete = False
