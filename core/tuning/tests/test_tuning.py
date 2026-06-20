@@ -111,7 +111,10 @@ class TestLoadTuning(unittest.TestCase):
                 "max_codeql_workers": "auto",
                 "max_fuzz_parallel": "auto",
             }))
-            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=8):
+            # Mock RAM too: max_codeql_workers is RAM-capped (it's memory-
+            # heavy), so without this the test is non-hermetic and resolves
+            # to 3 on a low-RAM CI runner (~7 GB) instead of the cpu-bound 4.
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=8), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 4)
             self.assertEqual(t.max_codeql_workers, 4)
