@@ -9,7 +9,7 @@
 ║             ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝            ║
 ║                                                                           ║
 ║             Autonomous Offensive/Defensive Research Framework             ║
-║             Based on Claude Code (v3.0.0)                                 ║
+║             Agent-ready: Claude Code + OpenAI Codex                        ║
 ║                                                                           ║
 ║             Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake)    ║
 ║             Michael Bargury, John Cartwright                              ║
@@ -41,7 +41,7 @@
 
 ## What is RAPTOR?
 
-RAPTOR is an autonomous security research framework built on top of Claude Code (but not tied to it -- you can plug in your own analysis layer too). It chains together static analysis, binary analysis, LLM-powered vulnerability validation, exploit generation, and patch writing into a single workflow you can run against a codebase or binary.
+RAPTOR is an autonomous security research framework built for agentic coding environments: Claude Code, OpenAI Codex, or the Python CLI if you just want the mechanical bits. It chains together static analysis, binary analysis, LLM-powered vulnerability validation, exploit generation, and patch writing into a single workflow you can run against a codebase or binary.
 
 It is not polished software. It was built in free time, held together with enthusiasm and duct tape, and it works well enough that we can't stop using it. If you want to make it better, open a PR.
 
@@ -61,14 +61,18 @@ cd raptor
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install Claude Code (required)
+# Install an agent shell
 npm install -g @anthropic-ai/claude-code
+# or
+npm install -g @openai/codex
 
 # Install Semgrep (required for scanning)
 pip install semgrep
 
-# Open RAPTOR
+# Open RAPTOR in Claude Code or Codex
 claude
+# or
+codex
 ```
 
 ### Option 2: Devcontainer (recommended)
@@ -198,7 +202,7 @@ CodeQL needs network access only during initial setup to download the CLI and qu
 
 RAPTOR has two separate model layers, and it is worth knowing how both work before you change anything.
 
-The **orchestration layer** is always Claude Code. The CLAUDE.md, skills, and commands all run as Claude Code instructions. To change which Claude model orchestrates RAPTOR, use Claude Code's `--model` flag or the `/model` command inside a session.
+The **orchestration layer** is the agent shell you launch RAPTOR in. Claude Code uses `.claude/commands`, `.claude/skills`, and `CLAUDE.md`. OpenAI Codex uses `AGENTS.md`, `.agents/skills`, and `.codex/agents`. Both surfaces load the same RAPTOR methodology and call the same Python/libexec execution layer.
 
 The **analysis dispatch layer** is the LLM that analyses individual vulnerability findings. This is separate from the orchestration layer and can be any supported provider. Configure it in `~/.config/raptor/models.json`:
 
@@ -306,7 +310,7 @@ RAPTOR is two layers.
 
 The **Python execution layer** (`raptor.py`, `packages/`, `core/`, `engine/`) handles the heavy lifting: running Semgrep and CodeQL, managing subprocesses, parsing SARIF, deduplicating findings, dispatching LLM API calls, tracking costs, writing output files. It does not make decisions. It executes.
 
-The **Claude Code decision layer** (`.claude/`, `tiers/`, `CLAUDE.md`) makes the calls: which findings to prioritise, how to interpret results, what the attack scenario is, whether the exploit is realistic. Implemented as Claude Code skills, commands, and agents that load progressively.
+The **agent decision layer** (`.claude/` for Claude Code, `.agents/` + `AGENTS.md` for Codex, plus `tiers/`) makes the calls: which findings to prioritise, how to interpret results, what the attack scenario is, whether the exploit is realistic. Implemented as progressively loaded skills, commands, and specialist agents.
 
 ```
 CLAUDE.md              always loaded -- bootstrap, routing, security rules
@@ -314,9 +318,13 @@ CLAUDE.md              always loaded -- bootstrap, routing, security rules
 .claude/skills/        methodology detail, loaded on demand
 tiers/                 adversarial thinking, recovery, expert personas
 .claude/agents/        specialist sub-agents (offsec, crash analysis, forensics)
+
+AGENTS.md              Codex repository instructions
+.agents/skills/        OpenAI/Codex agent skills
+.codex/agents/         Codex sub-agent definitions
 ```
 
-The split means you can run the Python layer from a CI pipeline (`python3 raptor.py scan --repo ...`) and get structured SARIF output without Claude Code, or run it interactively with the full agentic workflow.
+The split means you can run the Python layer from a CI pipeline (`python3 raptor.py scan --repo ...`) and get structured SARIF output without an agent shell, or run it interactively with the full agentic workflow.
 
 ---
 
@@ -324,7 +332,7 @@ The split means you can run the Python layer from a CI pipeline (`python3 raptor
 
 `/oss-forensics` investigates public GitHub repositories using evidence from multiple sources: the GitHub API, GH Archive (immutable event history via BigQuery), the Wayback Machine, and local git history. It runs a structured pipeline from evidence collection through hypothesis formation to a final forensic report.
 
-Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery access. See `.claude/commands/oss-forensics.md` for details.
+Requires `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery access. See `.claude/commands/oss-forensics.md` or `.agents/skills/source-command-oss-forensics/SKILL.md` for details.
 
 ---
 
@@ -344,7 +352,7 @@ CodeQL Dataflow Analyst         Query writing and path analysis
 CodeQL Finding Analyst          Triage and false positive identification
 ```
 
-Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
+Tell the active agent which one to use, e.g. "Use the Binary Exploitation Specialist".
 
 ---
 
@@ -352,7 +360,8 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 
 | File | Contents |
 |------|----------|
-| `docs/CLAUDE_CODE_USAGE.md` | Complete usage guide for interactive sessions |
+| `docs/CLAUDE_CODE_USAGE.md` | Claude Code usage guide for interactive sessions |
+| `docs/OPENAI_CODEX.md` | OpenAI Codex setup and `.agents` skill layout |
 | `docs/PYTHON_CLI.md` | Python CLI reference for scripting and CI |
 | `docs/sca.md` | Software composition analysis reference |
 | `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
@@ -360,6 +369,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
 | `docs/DEPENDENCIES.md` | External tools, versions, and licences |
 | `.claude/commands/oss-forensics.md` | OSS forensics investigation guide |
+| `.agents/skills/` | OpenAI/Codex skill surface |
 | `tiers/personas/README.md` | Persona reference |
 
 ---

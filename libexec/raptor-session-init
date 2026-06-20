@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: env file setup and startup banner.
 
-Called automatically by Claude Code on session start (via .claude/settings.json).
+Called automatically by Claude Code and Codex session-start hooks.
 Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
 the startup banner in .startup-output.
 
@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 def write_env_file():
     """Write the env file with static vars. Overwrites to ensure clean state."""
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
+    env_file = os.environ.get("RAPTOR_ENV_FILE") or os.environ.get("CLAUDE_ENV_FILE")
     if not env_file:
         return
 
