@@ -90,18 +90,33 @@ def _validate_ollama_url(url: str) -> str:
 
 
 def _host_is_local(raw: str) -> bool:
-    """True if ``raw`` (a URL or bare ``host[:port]``) points at the
+    """True if *raw* (a URL or bare ``host[:port]``) resolves to the
     local machine.
 
-    Parses the hostname instead of substring-matching so a remote host
-    such as ``localhost.attacker.example`` or ``127.0.0.1.evil`` is not
-    mis-classified as local (which would disclose a remote OLLAMA host
-    in logs — CLAUDE.md: "never disclose remote OLLAMA server location").
+    Uses ``urlparse`` so ``localhost.attacker.example`` and
+    ``127.0.0.1.evil`` are not mis-classified as local (which would
+    disclose a remote OLLAMA host in logs).
+
+    Covers the full 127.0.0.0/8 loopback range, IPv6 ``::1``, and
+    ``0.0.0.0`` (INADDR_ANY — Ollama's default bind on some installs).
     """
+    from ipaddress import ip_address
     from urllib.parse import urlparse
+
     candidate = raw if "://" in raw else f"//{raw}"
     host = (urlparse(candidate).hostname or "").lower()
-    return host in ("localhost", "127.0.0.1", "::1")
+    if host in ("localhost", "0.0.0.0"):
+        return True
+    # Try the parsed hostname first, then fall back to the raw value
+    # stripped of brackets (handles bare "::1" which urlparse can't parse).
+    for attempt in (host, raw.strip().strip("[]")):
+        if not attempt:
+            continue
+        try:
+            return ip_address(attempt).is_loopback
+        except ValueError:
+            continue
+    return False
 
 
 _cached_ollama_models: Optional[List[str]] = None
