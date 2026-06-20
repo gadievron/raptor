@@ -28,6 +28,7 @@ def prompt_text() -> str:
 
 
 def test_nvd_lookup_threshold_parity(prompt_text: str) -> None:
+    pytest.importorskip("claude_agent_sdk")
     """``_NVD_LOOKUP_THRESHOLD = 2`` must be advertised verbatim in the prompt.
 
     Phase 35.4 guard short-circuits agents that re-research mid-CVE. Drift here
@@ -96,6 +97,7 @@ def test_refusal_two_systems_disjoint() -> None:
     same shape with different mechanisms (existing test_refusals.py only
     checks ``len >= 8`` for SIGNATURES; disjointness is uncovered).
     """
+    pytest.importorskip("claude_agent_sdk")
     from cve_env.agent.llm import _REFUSAL_SIGNATURES
     from cve_env.agent.refusals import _REFUSAL_PATTERNS
 

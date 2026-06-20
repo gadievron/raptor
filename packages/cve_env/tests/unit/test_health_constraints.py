@@ -10,6 +10,10 @@ for SYSTEM_PROMPT prefix. Empty input → empty output (no spurious section).
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 from cve_env.agent.health_constraints import (
     ServiceConstraint,
     derive_constraints,

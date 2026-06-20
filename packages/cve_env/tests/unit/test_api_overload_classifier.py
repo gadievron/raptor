@@ -19,6 +19,10 @@ Reference: 33.3 reconciled-final artifact-final.md Cat 2 E1 +
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 
 def _try_import_classifier():
     """Try to import the api_overload classifier.

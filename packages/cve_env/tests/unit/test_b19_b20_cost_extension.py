@@ -16,6 +16,10 @@ to MAX_TURN_EXTENSIONS times.
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 import os
 from unittest.mock import patch
 

@@ -11,6 +11,7 @@ check_logs(), check_exec(), dockerfile_gen().
 """
 
 from __future__ import annotations
+import pytest
 
 import asyncio
 import json
@@ -214,6 +215,7 @@ def test_check_http_request_rejects_string_expected_status() -> None:
 
 
 def _call_dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
+    pytest.importorskip("claude_agent_sdk")
     from cve_env.agent.tools import dockerfile_gen
 
     return asyncio.run(dockerfile_gen.handler(args))

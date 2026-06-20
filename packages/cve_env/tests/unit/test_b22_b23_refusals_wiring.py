@@ -41,34 +41,19 @@ class TestOutcomeRefusalsField:
 class TestCliOutcomeDictSerialization:
     """cli.py outcome_dict must include `refusals` as int from outcome.refusals."""
 
-    def test_cli_serialization_includes_refusals_int(self) -> None:
-        # Reproduce the exact dict construction at cli.py:80-96.
-        outcome = Outcome(
-            cve_id="CVE-2024-X",
-            status="success",
-            reason="",
-            refusals=2,
+    def test_cli_serialization_includes_refusals_key(self) -> None:
+        """cli.py's _cmd_build must include 'refusals' in its outcome_dict."""
+        from pathlib import Path
+
+        cli_path = Path(__file__).resolve().parents[2] / "cve_env" / "cli.py"
+        src = cli_path.read_text()
+        assert '"refusals"' in src or "'refusals'" in src, (
+            "cli.py _cmd_build must include a 'refusals' key in outcome_dict"
         )
-        # Mirror cli.py:80-96 — the serialization happens inside async build().
-        # We test the pattern directly to lock the contract.
-        outcome_dict = {
-            "cve_id": outcome.cve_id,
-            "status": outcome.status,
-            "verify_passed": outcome.verify_passed,
-            "give_up_reason": outcome.give_up_reason,
-            "give_up_detail": outcome.give_up_detail,
-            "num_turns": outcome.num_turns,
-            "total_cost_usd": outcome.total_cost_usd,
-            "stop_reason": outcome.stop_reason,
-            "reason": outcome.reason,
-            "tool_names_called": outcome.tool_names_called,
-            "final_text": outcome.final_text,
-            "audit_path": str(outcome.audit_path) if outcome.audit_path else None,
-            "refusals": outcome.refusals,
-        }
-        assert "refusals" in outcome_dict
-        assert outcome_dict["refusals"] == 2
-        assert isinstance(outcome_dict["refusals"], int)
+        # Verify it reads from outcome.refusals (not a hardcoded value).
+        assert "outcome.refusals" in src, (
+            "cli.py _cmd_build must read refusals from outcome.refusals"
+        )
 
     def test_cli_serialization_default_zero_serializes_as_int_not_none(self) -> None:
         """Regression guard: bench50-20260507-021212 had refusals=null in JSON
@@ -81,32 +66,57 @@ class TestCliOutcomeDictSerialization:
 
 
 class TestB22LoopConstructionFormula:
-    """loop.py builds refusals = max(len(scanner.events), int(state.refusal_stop_reason_seen))."""
+    """loop.py builds refusals = max(len(scanner.events), int(state.refusal_stop_reason_seen)).
 
-    def test_b22_formula_zero_events_no_latch_yields_zero(self) -> None:
-        events_len = 0
-        latch_seen = False
-        result = max(events_len, int(latch_seen))
-        assert result == 0
+    The formula is embedded inline in two Outcome constructors inside
+    loop.build() (happy path + exception path). Since build() is a large
+    async function that requires the full SDK, we verify the formula's
+    presence via inspect.getsource — the same pattern used by other wiring
+    tests in this package (test_api_overload, test_post_build_refusal, etc.).
+    """
 
-    def test_b22_formula_three_events_yields_three(self) -> None:
-        events_len = 3
-        latch_seen = False
-        result = max(events_len, int(latch_seen))
-        assert result == 3
+    def test_b22_refusals_formula_present_in_loop_build(self) -> None:
+        """The refusals=max(len(...events), int(...refusal_stop_reason_seen))
+        pattern must appear in build()'s source."""
+        from pathlib import Path
 
-    def test_b22_formula_zero_events_but_latch_seen_yields_one(self) -> None:
-        """Latch-fallback covers SDK refusal stop_reason without text-matched events."""
-        events_len = 0
-        latch_seen = True
-        result = max(events_len, int(latch_seen))
-        assert result == 1
+        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        src = loop_path.read_text()
+        assert src.count("refusals=max(") >= 2, (
+            "expected refusals=max(...) formula in at least 2 Outcome "
+            "constructors inside build()"
+        )
 
-    def test_b22_formula_events_dominate_when_higher(self) -> None:
-        events_len = 5
-        latch_seen = True
-        result = max(events_len, int(latch_seen))
-        assert result == 5  # events_len wins, not 1+5
+    def test_b22_refusals_formula_uses_scanner_events(self) -> None:
+        """The refusals formula must reference refusal_scanner.events."""
+        from pathlib import Path
+
+        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        src = loop_path.read_text()
+        assert "len(refusal_scanner.events)" in src, (
+            "refusals formula must use len(refusal_scanner.events)"
+        )
+
+    def test_b22_refusals_formula_uses_stop_reason_latch(self) -> None:
+        """The refusals formula must reference the SDK stop_reason latch."""
+        from pathlib import Path
+
+        loop_path = Path(__file__).resolve().parents[2] / "cve_env" / "agent" / "loop.py"
+        src = loop_path.read_text()
+        assert "int(state.refusal_stop_reason_seen)" in src, (
+            "refusals formula must use int(state.refusal_stop_reason_seen)"
+        )
+
+    def test_b22_refusals_formula_semantic_check(self) -> None:
+        """Verify the formula's arithmetic: max(events, latch) produces the
+        expected values for the four quadrants."""
+        # The actual formula in loop.py is:
+        #   refusals=max(len(refusal_scanner.events), int(state.refusal_stop_reason_seen))
+        # Verify the arithmetic contract the Outcome consumer relies on.
+        assert max(0, int(False)) == 0   # no events, no latch
+        assert max(3, int(False)) == 3   # events dominate
+        assert max(0, int(True)) == 1    # latch fallback
+        assert max(5, int(True)) == 5    # events dominate over latch
 
 
 # ============================================================================

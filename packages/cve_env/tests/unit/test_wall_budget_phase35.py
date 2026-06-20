@@ -18,6 +18,10 @@ handler).
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 import time
 
 import pytest

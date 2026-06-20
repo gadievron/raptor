@@ -1113,12 +1113,28 @@ def test_phase61_tarball_filter_blocks_relative_escape_symlink(
         assert not p.is_symlink(), f"symlink leaked to disk at {p}"
 
 
+class _FakeHeaders:
+    """Minimal stand-in for http.client.HTTPMessage."""
+
+    def __init__(self, headers: dict[str, str] | None = None) -> None:
+        self._headers = headers or {}
+
+    def get(self, name: str, default: str = "") -> str:
+        return self._headers.get(name, default)
+
+
 class _FakeResp:
     """Tiny stand-in for urllib.request's context-manager response."""
 
-    def __init__(self, body: bytes, status: int = 200) -> None:
+    def __init__(
+        self,
+        body: bytes,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._body = body
         self.status = status
+        self.headers = _FakeHeaders(headers)
 
     def __enter__(self) -> _FakeResp:  # noqa: PYI034 -- matches urllib shape
         return self
@@ -1577,22 +1593,26 @@ def test_archive_fallback_download_failure_warns(tmp_path: Path) -> None:
 
 
 def test_list_tags_via_api_oserror_returns_empty() -> None:
-    """Lines 489-490: an OSError from the HTTP helper → empty list."""
+    """An OSError from the HTTP helper → empty list."""
     builder = SourceBuilder()
-    with patch.object(sb, "_http_get_json", side_effect=OSError("boom")):
+    with patch.object(sb, "_http_get_json_paginated", side_effect=OSError("boom")):
         assert builder._list_tags_via_api("foo", "bar") == []
 
 
 def test_list_tags_via_api_non_list_response() -> None:
-    """Lines 491-492: a non-list JSON body → empty list."""
+    """A non-list JSON body → empty list."""
     builder = SourceBuilder()
-    with patch.object(sb, "_http_get_json", return_value={"message": "rate limited"}):
+    with patch.object(
+        sb,
+        "_http_get_json_paginated",
+        return_value=({"message": "rate limited"}, None),
+    ):
         assert builder._list_tags_via_api("foo", "bar") == []
 
 
 def test_list_tags_via_api_skips_non_dict_and_nameless_entries() -> None:
-    """Line 496 + 498->494: non-dict entries and entries without a usable
-    ``name`` are skipped; only valid string names survive."""
+    """Non-dict entries and entries without a usable ``name`` are skipped;
+    only valid string names survive."""
     builder = SourceBuilder()
     payload = [
         "not-a-dict",
@@ -1602,8 +1622,29 @@ def test_list_tags_via_api_skips_non_dict_and_nameless_entries() -> None:
         {"name": "v1.0"},
         {"name": "v1.1"},
     ]
-    with patch.object(sb, "_http_get_json", return_value=payload):
+    with patch.object(sb, "_http_get_json_paginated", return_value=(payload, None)):
         assert builder._list_tags_via_api("foo", "bar") == ["v1.0", "v1.1"]
+
+
+def test_list_tags_via_api_follows_pagination() -> None:
+    """_list_tags_via_api follows Link: rel=next headers to fetch all pages."""
+    builder = SourceBuilder()
+    page1 = [{"name": f"v1.{i}"} for i in range(100)]
+    page2 = [{"name": f"v2.{i}"} for i in range(50)]
+    call_count = {"n": 0}
+
+    def fake_paginated(url: str, *, timeout: int) -> tuple:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return (page1, "https://api.github.com/repos/foo/bar/tags?page=2")
+        return (page2, None)
+
+    with patch.object(sb, "_http_get_json_paginated", side_effect=fake_paginated):
+        tags = builder._list_tags_via_api("foo", "bar")
+    assert len(tags) == 150
+    assert tags[0] == "v1.0"
+    assert tags[100] == "v2.0"
+    assert call_count["n"] == 2
 
 
 # -- _download_tarball pure branches (512-515, 520, 525-530, 541, 548, 551) -

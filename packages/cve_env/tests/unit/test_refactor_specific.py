@@ -8,6 +8,10 @@ module lands.
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 import ast
 from pathlib import Path
 

@@ -39,7 +39,7 @@ def _reload_module_with_env(
 def test_load_toml_returns_empty_when_file_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """No cve-env.toml in CWD → empty dict."""
+    """No CVE_ENV_CONFIG_FILE set → empty dict."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CVE_ENV_CONFIG_FILE", raising=False)
     result = cve_config._load_toml_config()

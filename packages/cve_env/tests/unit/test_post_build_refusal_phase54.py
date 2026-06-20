@@ -17,6 +17,10 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 import asyncio
 import json
 from pathlib import Path

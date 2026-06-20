@@ -26,6 +26,10 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("claude_agent_sdk")
+
+import pytest
+
 
 def _try_import_helper():
     try:

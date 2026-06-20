@@ -23,6 +23,10 @@ CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION so control == current production.
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 from typing import Any
 
 import pytest

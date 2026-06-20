@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+pytest.importorskip("claude_agent_sdk")
+
 
 def test_reset_all_tool_state_invokes_every_registered_handler(
     monkeypatch: Any,

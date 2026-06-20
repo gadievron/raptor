@@ -1,6 +1,7 @@
 """Tests for :mod:`cve_env.tools.dockerfile_gen`."""
 
 from __future__ import annotations
+import pytest
 
 from unittest.mock import MagicMock, patch
 
@@ -343,6 +344,7 @@ def test_render_payload_includes_p20_issues_for_cve_named_pkg() -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
+    pytest.importorskip("claude_agent_sdk")
     """A clean FROM+RUN render auto-builds (fuse render→build), closing the
     render→build gap that had 0% prompt follow-through (loop.py:992). No
     copy_ops + build omitted → build immediately."""
@@ -364,6 +366,7 @@ def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
+    pytest.importorskip("claude_agent_sdk")
     """copy_ops present → no auto-build (the agent must stage the COPY context
     first); stays render-only unless build=True is explicit."""
     from cve_env.agent.tools import _maybe_fuse_build
@@ -380,6 +383,7 @@ def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
+    pytest.importorskip("claude_agent_sdk")
     """build=False is an explicit opt-out even without copy_ops."""
     from cve_env.agent.tools import _maybe_fuse_build
     from cve_env.tools.dockerfile_gen import render_to_payload
@@ -392,6 +396,7 @@ def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_surfaces_build_failure(mock_run: object) -> None:
+    pytest.importorskip("claude_agent_sdk")
     """A failed fused build is SURFACED (agent sees it + retries), not hidden."""
     mock_run.return_value = MagicMock(  # type: ignore[attr-defined]
         returncode=1, stdout="", stderr="E: build broke"
