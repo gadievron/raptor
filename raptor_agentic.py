@@ -1414,9 +1414,6 @@ Examples:
     add_cli_args(parser)
     args = parser.parse_args()
 
-    if os.environ.get("RAPTOR_ARGPARSE_ONLY") == "1":
-        return
-
     apply_cli_args(args, parser=parser)
 
     if args.threat_model_only:
