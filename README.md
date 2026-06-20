@@ -188,7 +188,35 @@ Run these commands in your terminal to mount the release checkout in the tools
 container. The image digest pins the tools environment separately from RAPTOR:
 
 ```bash
-git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
+git clone https://github.com/gadievron/raptor.git
+cd raptor
+uv sync --locked
+source .venv/bin/activate
+
+# Install Claude Code (if you don't already have it)
+npm install -g @anthropic-ai/claude-code
+# or
+npm install -g @openai/codex
+
+# Install Semgrep (required for scanning)
+uv tool install semgrep
+export PATH="$PATH:$PWD/bin"
+raptor
+```
+
+Use the `raptor` launcher from any directory. It loads RAPTOR's configuration,
+performs pre-flight checks, tracks coverage, and remembers your caller directory.
+For persistent PATH setup, launcher flags, and optional installation protection,
+see [manual installation](docs/installation.md#option-1-install-manually).
+
+### Option 2: Run in a container (recommended)
+
+The image includes analysis, fuzzing, and browser tooling. It is large and
+expects this checkout mounted at `/workspaces/raptor`. These commands pin the latest
+published image by digest. Run in your terminal:
+
+```bash
+git clone https://github.com/gadievron/raptor.git
 cd raptor
 docker pull docker.io/danielcuthbert/raptor:latest@sha256:79fdfbfe829f1094e707ef6a008165a5b913d0625b600f3c3d3f85e024561248
 docker run -it \
