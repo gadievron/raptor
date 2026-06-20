@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-import os
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -231,9 +230,8 @@ def _migrate_2(conn: sqlite3.Connection) -> None:
         )
         return
 
-    suffix = f"{os.getpid()}_{id(conn) & 0xffff:x}"
-    nodes_old = f"nodes_v1_{suffix}"
-    edges_old = f"edges_v1_{suffix}"
+    nodes_old = "nodes_v1_tmp"
+    edges_old = "edges_v1_tmp"
 
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute("PRAGMA legacy_alter_table=ON")
@@ -256,7 +254,7 @@ def _migrate_2(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        """
+        f"""
         INSERT OR IGNORE INTO nodes
         (id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json)
         SELECT id, kind, stable_key, name, file, line_start, line_end, snapshot_id, stale, props_json
@@ -281,7 +279,7 @@ def _migrate_2(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        """
+        f"""
         INSERT OR IGNORE INTO edges
         (id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json)
         SELECT id, src_id, dst_id, kind, confidence, snapshot_id, stale, evidence_json, props_json
@@ -307,11 +305,13 @@ def _recover_interrupted_v2_migration(conn: sqlite3.Connection) -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    if "nodes_v1" in tables and "nodes" in tables:
-        conn.execute("DROP TABLE nodes_v1")
-    elif "nodes_v1" in tables and "nodes" not in tables:
-        conn.execute("ALTER TABLE nodes_v1 RENAME TO nodes")
-    if "edges_v1" in tables and "edges" in tables:
-        conn.execute("DROP TABLE edges_v1")
-    elif "edges_v1" in tables and "edges" not in tables:
-        conn.execute("ALTER TABLE edges_v1 RENAME TO edges")
+    for old_name in ("nodes_v1_tmp", "nodes_v1"):
+        if old_name in tables and "nodes" in tables:
+            conn.execute(f"DROP TABLE [{old_name}]")
+        elif old_name in tables and "nodes" not in tables:
+            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO nodes")
+    for old_name in ("edges_v1_tmp", "edges_v1"):
+        if old_name in tables and "edges" in tables:
+            conn.execute(f"DROP TABLE [{old_name}]")
+        elif old_name in tables and "edges" not in tables:
+            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO edges")
