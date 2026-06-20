@@ -73,11 +73,18 @@ claude
 
 ### Option 2: Devcontainer (recommended)
 
-Everything pre-installed. Open in VS Code with **Dev Containers: Open Folder in Container**, or build manually:
+Everything pre-installed. Open in VS Code with **Dev Containers: Open Folder in Container**, or pull the prebuilt image:
+
+```bash
+docker pull danielcuthbert/raptor:latest
+docker run --privileged -it -v "$(pwd):/workspaces/raptor" danielcuthbert/raptor:latest
+```
+
+Or build it yourself instead of pulling:
 
 ```bash
 docker build -f .devcontainer/Dockerfile -t raptor:latest .
-docker run --privileged -it raptor:latest
+docker run --privileged -it -v "$(pwd):/workspaces/raptor" raptor:latest
 ```
 
 The `--privileged` flag is required for the `rr` deterministic debugger. The image is large (around 6 GB). It starts from the Microsoft Python 3.12 devcontainer and adds static analysis, fuzzing, and browser automation tooling.

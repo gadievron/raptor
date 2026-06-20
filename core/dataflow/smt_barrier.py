@@ -67,6 +67,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
+from core.dataflow import sanitizer_cut_config as _sc_config
 from core.smt_solver import z3, z3_available as _z3_available
 
 
@@ -743,8 +744,203 @@ def _same_function_in_order(
     return v_fn is not None and v_fn is s_fn
 
 
+# ``sink_class`` (xss / sqli / cmdi / pathtrav) is the per-sink-family
+# tag the SMT-barrier proof flow uses; the value-bound finding
+# resolver wants a CWE id. Pick the canonical CWE in each family —
+# any CWE in the family round-trips through
+# :func:`core.dataflow.sanitizer_catalog.sink_classes_for_cwe` back
+# to the same sink_class set, so the choice doesn't affect catalog
+# lookup. Used only by the Phase 7 wire-up below.
+_SINK_CLASS_TO_CWE = {
+    "xss": "CWE-79",
+    "sqli": "CWE-89",
+    "cmdi": "CWE-78",
+    "pathtrav": "CWE-22",
+}
+
+
+# The gate's behaviour (value-bound on/off, lexical fallback on/off,
+# parity-log path) is resolved centrally in
+# :mod:`core.dataflow.sanitizer_cut_config` (imported at the top of
+# this module as ``_sc_config``) from the consuming command's
+# ``--sanitizer-cut`` flag, falling back to the legacy env vars. The
+# "no lexical fallback" end-state corresponds to the ``strict`` mode
+# there; parity telemetry to ``shadow`` mode (or an explicit
+# ``--sanitizer-cut-parity-log``). See review #4 on PR #794.
+def _no_lexical_fallback() -> bool:
+    """True when the lexical fallback is disabled (the ``strict``
+    end-state). Footgun-guarded: the config layer never returns a state
+    with both the value-bound gate and the lexical fallback off."""
+    return not _sc_config.lexical_fallback_enabled()
+
+
+def lexical_fallback_status() -> dict:
+    """Introspection surface for the arc's closure state. Returns a
+    dict describing whether the lexical fallback is currently active
+    and why it is retained. Consumed by the closure test and useful
+    for operators auditing a run's suppression behaviour."""
+    return {
+        "lexical_fallback_disabled": _no_lexical_fallback(),
+        "retained": not _no_lexical_fallback(),
+        "retention_reason": (
+            "Phase 15 parity gate not cleared — the value-bound gate "
+            "does not cover validator-guard / substitution shapes the "
+            "lexical check handles. Use --sanitizer-cut=strict to "
+            "disable the fallback (value-bound only); delete the "
+            "lexical bodies once the parity gate clears twice on real "
+            "data."
+        ),
+        "mode": _sc_config.current().mode,
+        "horizon_doc": "docs/sanitizer-cut-parity/HORIZON.md",
+    }
+
+
+def _maybe_record_parity(
+    *,
+    kind: str,
+    file_path: Optional[str],
+    validator_line: int,
+    sink_line: int,
+    cwe: Optional[str],
+    language: Optional[str],
+    lexical_suppressed: bool,
+) -> None:
+    """Phase 15 shadow telemetry. When a parity-log path is configured
+    (``shadow`` mode or an explicit ``--sanitizer-cut-parity-log``),
+    compute the value-bound verdict alongside the lexical decision and
+    append a :class:`ParityRecord` to the log. No-op and near-zero cost
+    when no path is configured. Never raises — telemetry must not break
+    a real run."""
+    log_path = _sc_config.parity_log_path()
+    if not log_path:
+        return
+    if not (file_path and cwe and language):
+        return
+    try:
+        from core.dataflow.sanitizer_cut_parity import (
+            append_parity_record,
+            build_parity_record,
+            value_bound_verdict_for,
+        )
+        finding = {
+            "cwe": cwe,
+            "file_path": file_path,
+            "source_line": validator_line,
+            "sink_line": sink_line,
+            "language": language,
+        }
+        verdict = value_bound_verdict_for(finding)
+        record = build_parity_record(
+            finding_id=f"{file_path}:{validator_line}:{sink_line}:{cwe}",
+            file=file_path,
+            cwe=cwe,
+            language=language,
+            source_line=validator_line,
+            sink_line=sink_line,
+            kind=kind,
+            lexical_suppressed=lexical_suppressed,
+            value_bound_verdict=verdict,
+        )
+        append_parity_record(log_path, record)
+    except Exception:                                       # noqa: BLE001
+        # Telemetry is best-effort; swallow everything.
+        pass
+
+
+def _value_bound_dominates(
+    *,
+    file_path: Optional[str],
+    validator_line: int,
+    sink_line: int,
+    cwe: Optional[str],
+    language: Optional[str],
+):
+    """Phase 7 of the value-binding arc — wire ``validator_dominates_sink``
+    and ``substitution_dominates_sink`` through the value-bound gate.
+
+    Returns:
+
+    * ``True``  → value-bound vertex-cut suppresses; the caller treats
+      this as dominance proved by value flow (stronger than the
+      lexical check could prove).
+    * ``False`` → ``VERDICT_NO_SUPPRESS``; the gate found a path
+      bypassing every catalog sanitizer. The caller treats this as
+      "value-bound disagrees — no dominance" even if the lexical
+      heuristic would have said yes.
+    * ``None``  → "consult lexical fallback." Returned when the
+      value-bound gate is disabled (``off`` / ``shadow`` mode), the
+      resolver can't normalise the finding (missing kwargs, file
+      unreadable, function not found, non-python language, …), or the
+      gate's verdict was ``candidate_only`` (control-flow holds but
+      value binding unproven).
+
+    Lazy import of the inventory + dataflow packages so this module
+    stays cheap to import; the heavier dependencies are paid only
+    when the gate is enabled on a real run.
+    """
+    if not _sc_config.value_bound_enabled():
+        return None
+    if not (file_path and cwe and language):
+        return None
+
+    from core.inventory.finding_resolver import (
+        ResolvedFinding,
+        resolve_finding,
+    )
+    from core.inventory.sanitizer_cut import (
+        VERDICT_NO_SUPPRESS,
+        VERDICT_SUPPRESS,
+        evaluate_finding,
+    )
+
+    finding = {
+        "cwe": cwe,
+        "file_path": file_path,
+        "source_line": validator_line,
+        "sink_line": sink_line,
+        "language": language,
+    }
+    # Review #2: the value-bound resolver/evaluator pulls in optional
+    # dependencies (tree-sitter wheels) and parses arbitrary scanned
+    # source, so any of ImportError / KeyError / SyntaxError / a
+    # malformed inventory could raise. The design contract is
+    # "resolver failure → lexical fallback", so every failure mode must
+    # fall through to ``None`` rather than escaping and crashing the
+    # /agentic run mid-flight.
+    try:
+        resolved = resolve_finding(finding)
+        if not isinstance(resolved, ResolvedFinding):
+            return None
+        result = evaluate_finding(
+            resolved.cfg,
+            [resolved.source_node],
+            resolved.sink_node,
+            cwe=resolved.cwe,
+            language=resolved.language,
+            source_symbols=resolved.source_symbols,
+            sink_arg=resolved.sink_arg,
+        )
+    except Exception:                                       # noqa: BLE001
+        return None
+    if result.verdict == VERDICT_SUPPRESS:
+        return True
+    if result.verdict == VERDICT_NO_SUPPRESS:
+        return False
+    # VERDICT_CANDIDATE_ONLY (or any verdict this gate doesn't act on)
+    # — control-flow may hold but value-binding is unproven; defer to
+    # the lexical heuristic. A defensive fallthrough rather than an
+    # ``assert`` so a future verdict value can't turn into a crash.
+    return None
+
+
 def validator_dominates_sink(
-    source_text: str, validator_line: int, sink_line: int,
+    source_text: str,
+    validator_line: int,
+    sink_line: int,
+    *,
+    file_path: Optional[str] = None,
+    cwe: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> bool:
     """Sound dominance for the ``kind="charset"`` form — whole-string
     allowlist guarded by an ``if``-statement.
@@ -761,7 +957,54 @@ def validator_dominates_sink(
     Substitution-form (``kind="charset_sub"``) uses a different check
     (no ``if`` block, instead a no-reassignment guard) — see
     :func:`substitution_dominates_sink`.
+
+    Phase 7 of the value-binding arc adds the optional ``file_path``
+    / ``cwe`` / ``language`` kwargs. When the value-bound gate is
+    enabled (``--sanitizer-cut=on``/``strict``) AND all three are
+    supplied, the function first consults
+    :func:`_value_bound_dominates`. The lexical AST check below is the
+    fallback for ``candidate_only`` results, resolver failures, missing
+    kwargs, and the gate-off path.
     """
+    vb = _value_bound_dominates(
+        file_path=file_path,
+        validator_line=validator_line,
+        sink_line=sink_line,
+        cwe=cwe,
+        language=language,
+    )
+    lexical = _lexical_validator_dominates(
+        source_text, validator_line, sink_line,
+    )
+    # Phase 15 — shadow telemetry. Records BOTH decisions for every
+    # finding when a parity-log path is configured (shadow mode or an
+    # explicit --sanitizer-cut-parity-log), regardless of the
+    # suppression mode. Zero overhead when no path is configured (the
+    # check returns immediately).
+    _maybe_record_parity(
+        kind="charset",
+        file_path=file_path, validator_line=validator_line,
+        sink_line=sink_line, cwe=cwe, language=language,
+        lexical_suppressed=lexical,
+    )
+    if vb is not None:
+        return vb
+    # Phase 16 — with the lexical fallback disabled, a verdict the
+    # value-bound gate can't make becomes "we don't know → don't
+    # suppress" rather than deferring to the lexical heuristic.
+    if _no_lexical_fallback():
+        return False
+    return lexical
+
+
+def _lexical_validator_dominates(
+    source_text: str, validator_line: int, sink_line: int,
+) -> bool:
+    """Pure lexical (charset-validator) dominance check — the body
+    that Phase 16 will remove. Extracted so the Phase 15 parity hook
+    can record what the lexical heuristic *would* have decided
+    without re-entering :func:`validator_dominates_sink` (which now
+    also consults the value-bound gate)."""
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
@@ -938,7 +1181,14 @@ def _python_chain_reaches_sink(
 
 
 def substitution_dominates_sink(
-    source_text: str, validator_line: int, sink_line: int, var_name: str,
+    source_text: str,
+    validator_line: int,
+    sink_line: int,
+    var_name: str,
+    *,
+    file_path: Optional[str] = None,
+    cwe: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> bool:
     """Sound dominance for ``kind="charset_sub"`` — assignment-form
     sanitizer (``x = re.sub('[forbidden]+', '', x)``).
@@ -951,7 +1201,42 @@ def substitution_dominates_sink(
          sanitization and invalidate the post-sub language claim.
          Mutating-subscript assignments (``x[0] = ...``) don't rebind
          ``x`` itself and aren't flagged.
+
+    Phase 7 of the value-binding arc adds the optional ``file_path``
+    / ``cwe`` / ``language`` kwargs (same shape as
+    :func:`validator_dominates_sink`). When the value-bound gate is
+    enabled (``--sanitizer-cut=on``/``strict``) AND all three are
+    supplied, the value-bound gate is consulted first; the lexical
+    no-reassignment check is the fallback.
     """
+    vb = _value_bound_dominates(
+        file_path=file_path,
+        validator_line=validator_line,
+        sink_line=sink_line,
+        cwe=cwe,
+        language=language,
+    )
+    lexical = _lexical_substitution_dominates(
+        source_text, validator_line, sink_line, var_name,
+    )
+    _maybe_record_parity(
+        kind="charset_sub",
+        file_path=file_path, validator_line=validator_line,
+        sink_line=sink_line, cwe=cwe, language=language,
+        lexical_suppressed=lexical,
+    )
+    if vb is not None:
+        return vb
+    if _no_lexical_fallback():
+        return False
+    return lexical
+
+
+def _lexical_substitution_dominates(
+    source_text: str, validator_line: int, sink_line: int, var_name: str,
+) -> bool:
+    """Pure lexical (substitution-form) dominance check — the body
+    Phase 16 will remove. Extracted for the Phase 15 parity hook."""
     try:
         tree = ast.parse(source_text)
     except SyntaxError:
@@ -1195,14 +1480,28 @@ def try_tier0(
                f"would then return from a different function than the "
                f"sink's)")
     elif spec.kind == "charset_sub":
+        # Phase 7 plumbing: pass the resolved absolute path + CWE +
+        # language through so the dominance function can consult the
+        # value-bound gate when it is enabled. Defaults (None) keep the
+        # lexical-only behaviour for the gate-off path and for callers
+        # from outside this module who don't
+        # yet populate these kwargs.
         dominates = substitution_dominates_sink(
             source_text, line, sink_line, spec.var_name,
+            file_path=str(src_path),
+            cwe=_SINK_CLASS_TO_CWE.get(sink_class),
+            language=language,
         )
         why = (f"either out of source order, in a different function, "
                f"or {spec.var_name} was reassigned between the "
                f"substitution and the sink (undoing sanitization)")
     else:
-        dominates = validator_dominates_sink(source_text, line, sink_line)
+        dominates = validator_dominates_sink(
+            source_text, line, sink_line,
+            file_path=str(src_path),
+            cwe=_SINK_CLASS_TO_CWE.get(sink_class),
+            language=language,
+        )
         why = ("either out of source order, in a different function, "
                "or the `if not X:` block doesn't exit on failure")
     if not dominates:

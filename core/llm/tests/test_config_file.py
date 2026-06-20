@@ -648,7 +648,11 @@ class TestWarnUnusableKeys:
         with patch.dict(os.environ, {}, clear=False), \
              patch("core.llm.detection.OPENAI_SDK_AVAILABLE", False), \
              patch("core.llm.detection.logger") as mock_logger:
-            os.environ.pop("OPENAI_API_KEY", None)
+            # Clear every provider key _warn_unusable_keys inspects so the
+            # "no key present" precondition holds regardless of a dev's
+            # ambient env (patch.dict restores the full environ on exit).
+            for _k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+                os.environ.pop(_k, None)
             _warn_unusable_keys()
         mock_logger.warning.assert_not_called()
 

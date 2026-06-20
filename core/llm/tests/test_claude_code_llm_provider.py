@@ -177,12 +177,12 @@ def test_generate_disables_internal_cc_tools(monkeypatch) -> None:
 
 
 def test_generate_with_system_prompt_uses_system_flag(monkeypatch) -> None:
-    """`system_prompt` flows through CC's --system flag, not via prompt prepend.
+    """`system_prompt` flows through CC's --system-prompt flag, not via prompt prepend.
 
     Pre-cluster-107 the provider concatenated `f"{system_prompt}\\n\\n{prompt}"`
     and sent the combined text as the user message. That folded the
     system instruction into user content, where a hostile user prompt
-    could re-instruct over it. Routing through `--system` keeps the
+    could re-instruct over it. Routing through `--system-prompt` keeps the
     system layer in its own role-channel.
     """
     captured: dict[str, Any] = {}
@@ -197,11 +197,11 @@ def test_generate_with_system_prompt_uses_system_flag(monkeypatch) -> None:
     p.generate("user question", system_prompt="you are helpful")
 
     # User-side input contains only the user prompt — system was
-    # routed through the --system flag.
+    # routed through the --system-prompt flag.
     assert captured["input"] == "user question"
     cmd = captured["cmd"]
-    assert "--system" in cmd
-    sys_idx = cmd.index("--system") + 1
+    assert "--system-prompt" in cmd
+    sys_idx = cmd.index("--system-prompt") + 1
     assert cmd[sys_idx] == "you are helpful"
 
 
@@ -617,12 +617,12 @@ def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
 
 
 def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
-    """``system`` arg goes via the CC `--system` flag.
+    """``system`` arg goes via the CC `--system-prompt` flag.
 
     Pre-cluster-107 system was concatenated into the user prompt so
     the assertion looked for `"be careful"` in the input. Now that
     `ClaudeCodeLLMProvider.generate` routes system through the
-    `--system` argv flag, the assertion checks the cmd argv instead.
+    `--system-prompt` argv flag, the assertion checks the cmd argv instead.
     """
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -637,8 +637,8 @@ def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
         system="be careful",
     )
     cmd = captured["cmd"]
-    assert "--system" in cmd
-    sys_idx = cmd.index("--system") + 1
+    assert "--system-prompt" in cmd
+    sys_idx = cmd.index("--system-prompt") + 1
     # Tool-use fallback wraps the system message with the JSON
     # protocol; the operator's "be careful" must be present
     # inside the system block.

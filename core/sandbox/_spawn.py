@@ -448,6 +448,9 @@ def run_sandboxed(
     restrict_reads: bool = False,
     strict_env: bool = False,
     persona: Optional["Persona"] = None,
+    inherit_netns: bool = False,
+    etc_overlay: Optional[dict] = None,
+    skip_pid_ns: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -1087,7 +1090,8 @@ def run_sandboxed(
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
                                root_path=_root_dir,
-                               persona=persona)
+                               persona=persona,
+                               etc_overlay=etc_overlay)
 
             # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
             # to a mask of size persona.cpu_count. The persona's
@@ -1153,16 +1157,49 @@ def run_sandboxed(
             # threads survived the parent fork) so the multi-threaded
             # warning shouldn't fire here, but suppress defensively
             # to match every other production fork() site.
+            #
+            # skip_pid_ns=True keeps the child in the parent's pid-ns
+            # (still forks once for the exec-in-child pattern, but no
+            # CLONE_NEWPID). This is the escape hatch for tools that
+            # break inside a fresh pid-ns — chiefly gdb, whose host-
+            # info probe reads /proc/1/* and gets EPERM when PID 1
+            # resolves to systemd (in init_user_ns, where our user-ns
+            # CAP_SYS_PTRACE doesn't apply). Found via bpftrace 2026-06-14:
+            # __ptrace_may_access fires with target_pid=1 target_comm=systemd
+            # then returns -EPERM, breaking gdb's bp insertion.
             import warnings as _warnings
             with _warnings.catch_warnings():
                 _warnings.filterwarnings(
                     "ignore", category=DeprecationWarning,
                     message=r".*fork.*may lead to deadlocks.*",
                 )
-                os.unshare(CLONE_NEWPID)
+                if not skip_pid_ns:
+                    os.unshare(CLONE_NEWPID)
                 grand = os.fork()
             if grand == 0:
                 # Grandchild runs as PID 1 in the new pid-ns.
+                #
+                # /proc was bind-mounted from HOST in setup_mount_ns
+                # (step 6) before the pid-ns existed, so it exposes
+                # host pids. Inside the new pid-ns the grandchild has
+                # ns-local PIDs (1, 2, ...), and any tool that does
+                # path lookups on /proc/<pid> (gdb's ptrace+POKE plumbing,
+                # for instance) gets ENOENT — the host procfs doesn't
+                # know about the ns-local pid. Remount a FRESH proc fs
+                # in our newly-entered pid-ns so /proc/<ns-pid> resolves.
+                # This is best-effort: if mount fails (no CAP_SYS_ADMIN
+                # in the right user-ns, or the kernel disallows the
+                # second mount), we keep the bind-mounted host /proc
+                # and accept that ns-pid procfs lookups will ENOENT.
+                try:
+                    import ctypes as _ctypes
+                    _libc = _ctypes.CDLL("libc.so.6", use_errno=True)
+                    _libc.mount(b"proc", b"/proc", b"proc", 0, None)
+                except Exception:  # noqa: BLE001
+                    warn_post_fork(
+                        b"_spawn: grandchild fresh proc mount failed; "
+                        b"/proc/<ns-pid>/* will ENOENT for gdb/ptrace\n"
+                    )
                 if env is not None:
                     exec_env = env
                     # Defense-in-depth: context.py:run() already strips

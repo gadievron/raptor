@@ -1,0 +1,74 @@
+name: Publish devcontainer image to Docker Hub
+
+# Builds + pushes the operator-facing devcontainer image
+# (.devcontainer/Dockerfile) to Docker Hub so users can `docker pull`
+# instead of building ~6GB locally. See gadievron/raptor#191.
+#
+# Tags pushed:
+#   :latest      — moving tag, updated on every push to main that touches
+#                  the Dockerfile (mirrors ci-deps-image.yml's pattern).
+#   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z).
+#
+# Uses the plain `docker` CLI rather than docker/* marketplace actions,
+# to keep the third-party action surface to just actions/checkout
+# (pinned to the same SHA the rest of the repo uses).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.devcontainer/Dockerfile'
+      - '.github/workflows/dockerhub-publish.yml'
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          image="danielcuthbert/raptor"
+          if [[ "${GITHUB_REF}" == refs/tags/v*.*.* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            echo "tags=${image}:${version}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${image}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+      - name: Build and push
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          build_args=()
+          for tag in ${TAGS//,/ }; do
+            build_args+=(-t "${tag}")
+          done
+          docker build -f .devcontainer/Dockerfile "${build_args[@]}" .
+          for tag in ${TAGS//,/ }; do
+            docker push "${tag}"
+          done

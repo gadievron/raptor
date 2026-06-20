@@ -261,6 +261,7 @@ class FuzzingOrchestrator:
         dict_path: Optional[Path] = None,
         binary_understand: bool = True,
         source_context_dir: Optional[Path] = None,
+        seed_profile: str = "default",
     ) -> Dict[str, Any]:
         """Execute a planned campaign. Raises if plan.can_run is False.
 
@@ -300,6 +301,7 @@ class FuzzingOrchestrator:
             out_dir=out_dir,
             corpus_dir=corpus_dir,
             source_context_dir=source_context_dir,
+            seed_profile=seed_profile,
         )
 
         # Optional pre-fuzz: binary-level adversarial analysis via radare2.
@@ -350,8 +352,9 @@ class FuzzingOrchestrator:
         out_dir: Path,
         corpus_dir: Optional[Path],
         source_context_dir: Optional[Path],
+        seed_profile: str = "default",
     ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
-        """Generate an agentic seed corpus when the caller did not provide one."""
+        """Generate or materialise a seed corpus when the caller did not provide one."""
         if corpus_dir is not None:
             return corpus_dir, None
         try:
@@ -365,17 +368,18 @@ class FuzzingOrchestrator:
             )
         except Exception as e:
             logger.warning(f"Autonomous corpus generator unavailable: {e}")
-            return corpus_dir, None
+            return self._prepare_builtin_corpus(out_dir, seed_profile)
 
         try:
             seeds = generator.generate_autonomous_corpus(generated_dir, max_seeds=64)
         except Exception as e:
             logger.warning(f"Autonomous corpus generation failed: {e}")
-            return corpus_dir, None
+            return self._prepare_builtin_corpus(out_dir, seed_profile)
         if seeds <= 0:
-            return corpus_dir, None
+            return self._prepare_builtin_corpus(out_dir, seed_profile)
 
         info = {
+            "source": "autonomous",
             "path": str(generated_dir),
             "seeds": seeds,
             "source_context_dir": str(context_dir),
@@ -385,6 +389,30 @@ class FuzzingOrchestrator:
         (out_dir / "generated-corpus.json").write_text(json.dumps(info, indent=2))
         logger.info(f"Generated agentic fuzz corpus: {seeds} seeds at {generated_dir}")
         return generated_dir, info
+
+    def _prepare_builtin_corpus(
+        self,
+        out_dir: Path,
+        seed_profile: str = "default",
+    ) -> tuple[Path, Dict[str, Any]]:
+        """Materialise RAPTOR's checked-in baseline corpus for this campaign."""
+        from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
+
+        seed_dir = out_dir / "seed-corpus"
+        manifest = prepare_builtin_seed_corpus(seed_dir, profile=seed_profile)
+        info = {
+            "source": "raptor_builtin_seed_corpus",
+            "profile": seed_profile,
+            "path": str(seed_dir),
+            "seeds": manifest["seed_count"],
+            "manifest": str(seed_dir / "manifest.json"),
+        }
+        (out_dir / "seed-corpus.json").write_text(json.dumps(info, indent=2) + "\n")
+        logger.info(
+            "Using RAPTOR built-in seed corpus: "
+            f"{manifest['seed_count']} seeds at {seed_dir}"
+        )
+        return seed_dir, info
 
     def _run_afl(
         self,

@@ -39,6 +39,33 @@ _HOST_ALLOWED_GUARD = (
 pytestmark = pytest.mark.skipif(_CODEQL is None, reason="codeql CLI not installed")
 
 
+def _query_pack_available() -> bool:
+    """True only if the prebuilt ``codeql/python-queries`` pack the
+    pipeline test runs is actually resolvable.
+
+    Having ``codeql`` on PATH is not enough — that pack must be
+    downloaded (``codeql pack download``), which needs network. In
+    offline / sandboxed environments (and CI without the pack) it is
+    absent and ``codeql database analyze`` hard-fails with "Query pack
+    ... cannot be found". Skip there instead, in the spirit of "only
+    run CodeQL when real CodeQL will run". The synthesized-barrier test
+    below resolves ``codeql/python-all`` (the library pack, bundled) and
+    so does not depend on this.
+    """
+    if _CODEQL is None:
+        return False
+    try:
+        return subprocess.run(
+            [_CODEQL, "resolve", "queries", _QUERY],
+            capture_output=True, text=True, timeout=120,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+_QUERY_PACK_AVAILABLE = _query_pack_available()
+
+
 def _build_db(src: Path, db: Path) -> None:
     subprocess.run(
         [_CODEQL, "database", "create", str(db), "--language=python",
@@ -57,6 +84,10 @@ def codeql_dbs(tmp_path_factory):
     return before_db, after_db
 
 
+@pytest.mark.skipif(
+    not _QUERY_PACK_AVAILABLE,
+    reason="codeql/python-queries pack not downloaded (needs `codeql pack download`)",
+)
 def test_pipeline_labels_post_fix_finding_as_missing_sanitizer_fp(codeql_dbs, tmp_path):
     before_db, after_db = codeql_dbs
     pairs = generate_corpus_for_pair(

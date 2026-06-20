@@ -387,3 +387,97 @@ class TestSmtPathValidatorAnonMap:
         assert len(r.anon_var_map) == 2
         assert r.anon_var_map["_anon_0"] == "strlen(input)"
         assert r.anon_var_map["_anon_1"] == "strlen(other)"
+
+
+# -- Phase 9: weakest-precondition predicate as a hard constraint ----------
+
+class TestWpPredicateInWitness:
+    """The WP predicate (Phase 8) rides on the smt_witness record and is
+    rendered as a HARD CONSTRAINT in the exploit prompt: the witness
+    model is one solution; the predicate is what every valid trigger
+    must satisfy, so the LLM can generalise the seed without leaving the
+    dangerous path."""
+
+    def test_predicate_renders_as_hard_constraint(self):
+        out = _format_smt_witness({
+            "model": {"count": 268435457},
+            "path_conditions": ["count > 0x10000000"],
+            "path_profile": "uint32",
+            "wp_predicate": "(bvugt count #x10000000)",
+            "wp_conjuncts": ["count > 0x10000000"],
+            "wp_complete": True,
+        })
+        assert "HARD CONSTRAINT" in out
+        assert "(bvugt count #x10000000)" in out
+
+    def test_no_predicate_no_hard_constraint(self):
+        """Backwards-compatible: a witness without wp_predicate (older
+        substrate, or no z3) renders exactly as before — no constraint
+        block."""
+        out = _format_smt_witness({
+            "model": {"x": 1},
+            "path_conditions": ["x > 0"],
+        })
+        assert "HARD CONSTRAINT" not in out
+
+    def test_incomplete_predicate_carries_caveat(self):
+        out = _format_smt_witness({
+            "model": {"x": 1},
+            "wp_predicate": "(bvugt x #x00000000)",
+            "wp_conjuncts": ["x > 0"],
+            "wp_complete": False,
+        })
+        assert "HARD CONSTRAINT" in out
+        assert "cap" in out.lower()  # the not-minimal caveat
+
+    def test_tier4_attaches_wp_fields(self):
+        """validate_path's wp_* fields flow through _tier4_smt_refine
+        onto analysis['smt_witness']."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        from packages.hypothesis_validation.result import ValidationResult
+
+        analysis = {"path_conditions": ["x > 5"], "path_profile": "uint32"}
+        finding = {"finding_id": "f1"}
+        confirmed = ValidationResult(verdict="confirmed", evidence=[], iterations=1)
+
+        with patch(
+            "packages.exploit_feasibility.smt_path.validate_path"
+        ) as mock_validate:
+            mock_validate.return_value = {
+                "feasible": True,
+                "smt_available": True,
+                "model": {"x": 6},
+                "reasoning": "satisfiable",
+                "satisfied": [],
+                "unsatisfied": [],
+                "unknown": [],
+                "unknown_reasons": [],
+                "wp_predicate": "(bvugt x #x00000005)",
+                "wp_conjuncts": ["x > 5"],
+                "wp_complete": True,
+            }
+            _, outcome = _tier4_smt_refine(confirmed, finding, analysis)
+
+        assert outcome == "smt_witness"
+        sw = analysis["smt_witness"]
+        assert sw["wp_predicate"] == "(bvugt x #x00000005)"
+        assert sw["wp_conjuncts"] == ["x > 5"]
+        assert sw["wp_complete"] is True
+
+    def test_predicate_reaches_exploit_prompt_end_to_end(self):
+        """The predicate surfaces in the assembled exploit prompt text."""
+        bundle = build_exploit_prompt_bundle(
+            rule_id="r1", file_path="/x.c", start_line=42, level="warning",
+            analysis={
+                "is_exploitable": True,
+                "smt_witness": {
+                    "model": {"count": 268435457},
+                    "wp_predicate": "(bvugt count #x10000000)",
+                    "wp_conjuncts": ["count > 0x10000000"],
+                    "wp_complete": True,
+                },
+            },
+        )
+        text = "\n".join(m.content for m in bundle.messages)
+        assert "(bvugt count #x10000000)" in text
+        assert "HARD CONSTRAINT" in text

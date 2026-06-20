@@ -5,10 +5,7 @@
 # policy — minor / patch upgrades come via dedicated PRs so any
 # breakage is bisectable. See requirements-dev.txt for the parallel
 # pinning rationale on pytest et al.
-# 2.33.1 (patch bump from 2.33.0) satisfies packages/cve_env's floor
-# (requests>=2.33.1,<3) while staying compatible with urllib3==2.7.0 and
-# core.http — the integration's only cross-package pin reconciliation.
-requests==2.33.1
+requests==2.34.2
 # core.http.urllib_backend uses urllib3 directly for connection pooling
 # and to avoid the no_proxy bypass that stdlib urllib.request.ProxyHandler
 # silently performs. Already a transitive dep of `requests` but pinned

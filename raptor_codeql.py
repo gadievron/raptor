@@ -328,6 +328,9 @@ Examples:
     )
     from core.inventory.binary_oracle_cli import add_binary_args
     add_binary_args(parser)
+    # Sanitizer-cut value-bound suppression mode (review #4, PR #794).
+    from core.dataflow import sanitizer_cut_config
+    sanitizer_cut_config.add_cli_arguments(parser)
     # ``--max-findings`` default 20 is intentionally HIGHER than
     # ``raptor_agentic.py``'s default 10: codeql-only mode does one
     # pass per finding (filter + summarise), while agentic does the
@@ -369,6 +372,13 @@ Examples:
     # 'auto' leaves it unset (per-target detection). See raptor_agentic.py.
     if getattr(args, "target_kind", "auto") != "auto":
         os.environ[RaptorConfig.ENV_TARGET_KIND] = args.target_kind
+    # --sanitizer-cut → resolve + export so the dataflow gate (in-proc
+    # and any analysis subprocess) sees a consistent mode (review #4).
+    _sc = sanitizer_cut_config.configure_from_args(
+        args, run_dir=args.out, export_env=True,
+    )
+    if _sc is not None:
+        logger.info(f"Sanitizer-cut mode: {_sc.mode}")
     # All ``--binary`` / ``--binary-auto`` / ``--binary-edges`` plumbing
     # lives in the shared CLI helper — explicit path validation,
     # auto-detect walk, active-project binary layering, RaptorConfig

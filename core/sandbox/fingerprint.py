@@ -91,6 +91,21 @@ logger = logging.getLogger(__name__)
 HOST_CPU_COUNT = -1
 
 
+def _host_cpu_count() -> int:
+    """Schedulable CPU count, portable across platforms.
+
+    Linux exposes the cpuset-aware count via ``os.sched_getaffinity``;
+    on platforms without it (macOS, Windows) fall back to
+    ``os.cpu_count()``. Mirrors the guard in ``core.tuning`` so
+    ``build_persona(cpu_count=HOST_CPU_COUNT)`` does not raise
+    ``AttributeError`` off Linux.
+    """
+    getaff = getattr(os, "sched_getaffinity", None)
+    if getaff is not None:
+        return len(getaff(0))
+    return os.cpu_count() or 1
+
+
 # === Persona constants ===
 
 # Hostname / domainname — applied via sethostname() / setdomainname()
@@ -244,7 +259,7 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     gracefully (tools fall back to default code paths).
     """
     if cpu_count == HOST_CPU_COUNT:
-        cpu_count = len(os.sched_getaffinity(0))
+        cpu_count = _host_cpu_count()
     if cpu_count < 1:
         raise ValueError(
             f"cpu_count must be >= 1 or HOST_CPU_COUNT, got {cpu_count}"
@@ -484,6 +499,8 @@ def set_cpu_affinity(cpu_count: int) -> int:
     """
     if cpu_count < 1:
         raise ValueError(f"cpu_count must be >= 1, got {cpu_count}")
+    if not hasattr(os, "sched_getaffinity"):
+        raise NotImplementedError("set_cpu_affinity requires Linux (sched_setaffinity syscall)")
     available = os.sched_getaffinity(0)
     effective = min(cpu_count, len(available))
     if effective < cpu_count:

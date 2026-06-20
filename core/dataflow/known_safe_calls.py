@@ -216,6 +216,66 @@ _TABLE: Tuple[KnownSafeCall, ...] = (
     # object that's then executed).  Not a single-call transform —
     # leaving for a future entry-kind that models multi-step
     # parameterised-query patterns.
+
+    # ------------------------------------------------------------------
+    # C / C++ — Phase 11 entries
+    # ------------------------------------------------------------------
+    #
+    # Selection rule for C / C++: only "transform" sanitizers that
+    # return a newly-allocated value qualify. Destination-buffer
+    # writers (``mysql_real_escape_string(conn, dst, src, len)``,
+    # ``realpath(in, dst)``) are excluded because Phase 10's
+    # may_escape policy would downgrade them to candidate_only anyway
+    # — wiring them through the catalog would only generate audit
+    # noise. Such patterns will become value-bound under Phase 12-14's
+    # inter-procedural taint or a future alias-tracking refinement.
+    #
+    # All four entries below are GLib / SQLite library calls because
+    # those libraries publish soundness contracts in their API docs.
+    # Adding entries from other libraries should follow the same
+    # bar: a documented "returns sanitized output" contract.
+    KnownSafeCall(
+        library_call="g_markup_escape_text",
+        sink_class="xss",
+        languages=("c", "cpp"),
+        input_arg_kind="transform",
+        soundness_note=(
+            "GLib g_markup_escape_text (since GLib 2.0) escapes the XML "
+            "metacharacters &, <, >, \", ' to their entity references. "
+            "Returns a newly-allocated gchar* that is XML-safe and "
+            "(by extension) HTML-safe for text content."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="g_uri_escape_string",
+        sink_class="pathtrav",
+        languages=("c", "cpp"),
+        input_arg_kind="transform",
+        soundness_note=(
+            "GLib g_uri_escape_string (since GLib 2.16) percent-encodes "
+            "every byte that isn't in the user-supplied reserved set, "
+            "by default escaping path separators and traversal sequences. "
+            "Returns a newly-allocated URI-safe string."
+        ),
+    ),
+    KnownSafeCall(
+        library_call="g_shell_quote",
+        sink_class="cmdi",
+        languages=("c", "cpp"),
+        input_arg_kind="transform",
+        soundness_note=(
+            "GLib g_shell_quote (since GLib 2.0) returns a newly-allocated "
+            "string wrapped in single quotes with any embedded single "
+            "quotes properly escaped. The output is safe for inclusion "
+            "in a shell command line per POSIX sh(1) quoting rules."
+        ),
+    ),
+    # NOTE: sqlite3_mprintf is deliberately NOT in this catalog. Only its
+    # %q/%Q format specifiers escape; a generic %s does not, so keying
+    # suppression on the call name alone would falsely clear
+    # sqlite3_mprintf("... = %s", tainted) — the exact wrong-format-
+    # specifier FN this arc exists to prevent (review #1 on PR #794).
+    # Re-add only behind per-format-specifier discrimination.
 )
 
 

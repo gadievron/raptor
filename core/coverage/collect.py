@@ -180,7 +180,9 @@ def parse_drcov(path) -> Dict[str, Dict[str, Any]]:
         if s.startswith("Columns:") or not s:
             continue
         if in_mod and s[0].isdigit():
-            parts = [p.strip() for p in s.split(",")]
+            # drcov v2: id, base, end, entry, checksum, timestamp, path
+            # maxsplit=6 so commas inside the path field are preserved.
+            parts = [p.strip() for p in s.split(",", 6)]
             try:
                 mid, base = int(parts[0]), int(parts[1], 0)
             except (ValueError, IndexError):

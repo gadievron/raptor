@@ -1413,6 +1413,16 @@ def _tier4_smt_refine(
                 # anything actionable. Empty dict when no
                 # substitution happened (named-locals conditions).
                 "anon_var_map": dict(smt.get("anon_var_map") or {}),
+                # Phase 9: the weakest-precondition predicate (Phase 8).
+                # `model` is one concrete solution; `wp_predicate` is the
+                # full constraint every valid trigger must satisfy. The
+                # /exploit prompt renders it as a HARD constraint so the
+                # LLM can generalise the seed (e.g. fuzz around it) while
+                # staying on the dangerous path. `None`/absent when the
+                # substrate didn't compute one (older substrate, no z3).
+                "wp_predicate": smt.get("wp_predicate"),
+                "wp_conjuncts": list(smt.get("wp_conjuncts") or []),
+                "wp_complete": smt.get("wp_complete", True),
             })
         refined = ValidationResult(
             verdict=result.verdict,

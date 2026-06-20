@@ -84,25 +84,45 @@ def decay_weight(age_days: float, half_life_days: Union[float, None]) -> float:
     return 0.5 ** (age_days / half_life_days)
 
 
+def _coerce_count(value: object) -> float:
+    """Defensive coercion to float. Buckets are currently integer-valued,
+    but the deferred Phase 4 (posterior-weighted updates) will introduce
+    fractional values, so the read path accepts ``int`` and ``float``
+    interchangeably — no migration needed when that lands. A wrong-type
+    entry (``None``, ``"abc"``, a JSON list) is treated as zero rather
+    than aborting the read."""
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def flatten_counts(
     buckets: Mapping[str, object],
-) -> Tuple[int, int]:
+) -> Tuple[float, float]:
     """Sum ``(correct, incorrect)`` across all buckets, unweighted. The
     decay-disabled / back-compat read path. Defensive: a flat v1-shaped
     ``{"correct", "incorrect"}`` that slips past migration is returned as-is
-    (treated as a single bucket) rather than crashing."""
+    (treated as a single bucket) rather than crashing.
+
+    Returns floats — integer buckets flatten cleanly to floats with no
+    information loss, and the read path is ready for the fractional
+    values the deferred Phase 4 will introduce."""
     if not is_bucketed(buckets):
-        return int(buckets.get("correct", 0)), int(buckets.get("incorrect", 0))
-    correct = 0
-    incorrect = 0
+        return (
+            _coerce_count(buckets.get("correct", 0)),
+            _coerce_count(buckets.get("incorrect", 0)),
+        )
+    correct = 0.0
+    incorrect = 0.0
     for counts in buckets.values():
-        correct += int(counts.get("correct", 0))
-        incorrect += int(counts.get("incorrect", 0))
+        correct += _coerce_count(counts.get("correct", 0))
+        incorrect += _coerce_count(counts.get("incorrect", 0))
     return correct, incorrect
 
 
 def weighted_counts(
-    buckets: Mapping[str, Mapping[str, int]],
+    buckets: Mapping[str, Mapping[str, object]],
     half_life_days: Union[float, None],
     now: datetime,
 ) -> Tuple[float, float]:
@@ -115,14 +135,13 @@ def weighted_counts(
     """
     if not half_life_days or half_life_days <= 0 or not is_bucketed(buckets):
         # Decay disabled, or a flat (ageless) entry → no decay possible.
-        c, i = flatten_counts(buckets)
-        return float(c), float(i)
+        return flatten_counts(buckets)
     correct = 0.0
     incorrect = 0.0
     for bucket, counts in buckets.items():
         w = decay_weight(bucket_age_days(bucket, now), half_life_days)
-        correct += w * int(counts.get("correct", 0))
-        incorrect += w * int(counts.get("incorrect", 0))
+        correct += w * _coerce_count(counts.get("correct", 0))
+        incorrect += w * _coerce_count(counts.get("incorrect", 0))
     return correct, incorrect
 
 
