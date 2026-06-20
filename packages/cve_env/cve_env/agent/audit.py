@@ -226,16 +226,19 @@ class AuditWriter:
             "reason": entry.reason,
         }
         line = json.dumps(payload, sort_keys=True, default=str) + "\n"
-        # Boundary repair: prepend ``\n`` when the file already has content,
-        # so a legacy partial-line state (from an earlier crash) is properly
-        # bounded. Uses fh.tell() within the same open to avoid the TOCTOU
-        # of reading the last byte in a separate handle. The reader skips
-        # blank lines, so a double-newline when the file already ended with
-        # ``\n`` is harmless.
-        with path.open("a", encoding="utf-8") as fh:
-            if fh.tell() > 0:
-                fh.write("\n")
-            fh.write(line)
+        # Boundary repair: if the file already has content and does not end
+        # in a newline (partial line from a prior crash), prepend ``\n`` so
+        # the partial is bounded and skipped on read. Single ``a+b`` open
+        # eliminates the TOCTOU of the original two-handle approach.
+        raw = line.encode("utf-8")
+        with path.open("a+b") as fh:
+            fh.seek(0, 2)
+            pos = fh.tell()
+            if pos > 0:
+                fh.seek(pos - 1)
+                if fh.read(1) != b"\n":
+                    fh.write(b"\n")
+            fh.write(raw)
             fh.flush()
         # Security: restrict the audit file to the owner (0600). Idempotent.
         with contextlib.suppress(OSError):
