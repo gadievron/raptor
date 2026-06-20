@@ -1,5 +1,6 @@
 ---
 description: Dynamic instrumentation via Frida (alpha) - attach or spawn, hook with JS templates, capture runtime events
+dispatch: libexec/raptor-frida
 ---
 
 # /raptor-frida - Frida Dynamic Instrumentation (alpha)
