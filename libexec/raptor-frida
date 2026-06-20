@@ -54,7 +54,7 @@ fi
 . "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
 
 export RAPTOR_DIR
-# Make `python3 -m core.dynamic.frida.cli` importable regardless of the
+# Make `python3 -m packages.frida.cli` importable regardless of the
 # caller's cwd. Relying on cwd==RAPTOR_DIR (the caller having cd'd in)
 # silently breaks direct `libexec/raptor-frida` invocations and the
 # `raptor frida` route once it stops cd-ing (so operator-relative
@@ -67,7 +67,7 @@ export PYTHONPATH="$RAPTOR_DIR${PYTHONPATH:+:$PYTHONPATH}"
 for a in "$@"; do
     case "$a" in
         --list-templates|-h|--help)
-            exec python3 -m core.dynamic.frida.cli "$@"
+            exec python3 -m packages.frida.cli "$@"
             ;;
     esac
 done
@@ -136,7 +136,7 @@ PASS_ARGS+=("--out" "$OUT")
 
 # ─── run the Python CLI ─────────────────────────────────────────────
 set +e
-python3 -m core.dynamic.frida.cli "${PASS_ARGS[@]}"
+python3 -m packages.frida.cli "${PASS_ARGS[@]}"
 RC=$?
 set -e
 

@@ -266,6 +266,10 @@ def run(cfg: RunConfig,
             with events_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, default=str) + "\n")
             event_count["n"] += 1
+            if data is not None:
+                payload = message.get("payload")
+                if isinstance(payload, dict) and payload.get("_drcov"):
+                    (cfg.out_dir / "coverage.drcov").write_bytes(data)
         if on_event is not None:
             try:
                 on_event(record)

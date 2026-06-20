@@ -1,6 +1,6 @@
 """CLI entry point for ``raptor frida``.
 
-Invoked as ``python3 -m core.dynamic.frida.cli`` from the libexec
+Invoked as ``python3 -m packages.frida.cli`` from the libexec
 wrapper (which also handles the run-lifecycle output directory). The
 ``--out`` flag is injected by the lifecycle layer, so this module
 treats it as a required input rather than constructing one itself.

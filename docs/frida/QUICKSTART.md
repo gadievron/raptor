@@ -81,4 +81,4 @@ Contents:
 
 ## Status
 
-Alpha. Templates and runner are minimal starters - richer bundle in progress. See `docs/frida-integration-proposal.md` for the v2 design and roadmap.
+Alpha. Templates and runner are minimal starters - richer bundle in progress.

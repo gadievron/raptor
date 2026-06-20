@@ -1,4 +1,4 @@
-"""Unit tests for core.dynamic.frida.runner.
+"""Unit tests for packages.frida.runner.
 
 The runner integrates with the real frida-python binding when present,
 but the binding requires a running target to attach to and shells out
@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 
-from core.dynamic.frida import runner
+from packages.frida import runner
 
 
 class FakeScript:

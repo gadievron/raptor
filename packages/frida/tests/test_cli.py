@@ -1,4 +1,4 @@
-"""CLI tests for core.dynamic.frida.cli.
+"""CLI tests for packages.frida.cli.
 
 These exercise argument parsing and the wiring from CLI flags to
 ``runner.RunConfig``. The actual frida call is mocked via the same
@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.dynamic.frida import cli, runner
+from packages.frida import cli, runner
 
 
 class _FakeDevice:

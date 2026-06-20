@@ -1019,7 +1019,7 @@ def mode_frida(args: list) -> int:
     """Run a Frida dynamic-instrumentation session.
 
     The libexec wrapper owns lifecycle setup (output directory + run
-    state tracking) and dispatches to :mod:`core.dynamic.frida.cli`.
+    state tracking) and dispatches to :mod:`packages.frida.cli`.
     Routing through the wrapper rather than calling the cli module
     directly keeps the lifecycle behaviour identical whether the
     operator runs ``bin/raptor frida ...`` or invokes the wrapper

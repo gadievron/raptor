@@ -44,7 +44,7 @@ On the target (typically an embedded device or VM):
 ./frida-server -l 0.0.0.0:27042 &
 ```
 
-**The `-l 0.0.0.0:27042` is critical.** Default builds bind to `127.0.0.1` only, which is unreachable from another host. (We tripped on this during proposal drafting - host pinged but every frida port refused connection. See `docs/frida-integration-proposal.md` "Operational note from the field.")
+**The `-l 0.0.0.0:27042` is critical.** Default builds bind to `127.0.0.1` only, which is unreachable from another host.
 
 From the RAPTOR host:
 

@@ -95,19 +95,6 @@ raptor frida --target Safari --script ./my-hook.js --duration 30
 
 Frida-instrumented targets are **untrusted** - that's the whole point. The current runner does **not** wrap frida in `core/sandbox/`; that's tracked for a follow-up. Treat the host you run frida from accordingly. `--unsafe-attach` is a forward-looking flag (logged into `metadata.json`) for when the sandbox envelope lands; it doesn't change behaviour today.
 
-## Related: pipeline-side frida
-
-This skill is the **operator-facing** frida tool: you pick a target and a hook, it captures `send(...)` events into a run dir. It is distinct from `packages/dynamic_analysis/frida_local.py`, the **pipeline library** the fuzzing/coverage stages call programmatically:
-
-| | This skill (`core/dynamic/frida/`) | `packages/dynamic_analysis/frida_local.py` |
-|---|---|---|
-| Audience | operator, interactive | called by harness/coverage code |
-| Interface | `/frida`, `raptor frida`, JS templates | `enumerate_exports` / `stalk_coverage` / `probe_function` |
-| Targets | local, USB, remote frida-server | local spawn only |
-| Output | `events.jsonl` + report in a run dir | structured dataclasses |
-
-They share no code (separate packages, separate frida-unavailable shims) by design - don't fold one into the other. If you need block coverage or argument-shape probing for harness generation, reach for `packages/dynamic_analysis`, not this skill.
-
 ## Status
 
-Alpha. Two templates ship; richer set in progress (collab with @Splinters-io). Integration into `/validate --runtime` and `/crash-analysis` on macOS is in `docs/frida-integration-proposal.md`. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice. Pipeline-side block coverage / argument probing already landed separately in `packages/dynamic_analysis/` (see *Related* above).
+Alpha. Two templates ship; richer set in progress (collab with @Splinters-io). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice.

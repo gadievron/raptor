@@ -95,7 +95,7 @@ Read `metadata.json` first. Common patterns:
 
 ## Status
 
-Alpha. Two templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned - see `docs/frida-integration-proposal.md`.
+Alpha. Two templates ship; richer set in progress (collab with @Splinters-io after his abandoned PR #57). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned.
 
 The runner currently does **not** wrap frida in `core/sandbox/`; the `--unsafe-attach` flag is forward-looking and logged into `metadata.json` for when the sandbox envelope lands.
 
