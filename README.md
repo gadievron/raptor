@@ -81,6 +81,8 @@ uv sync --locked
 
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
+# or
+npm install -g @openai/codex
 
 # Install Semgrep (required for scanning)
 pip install semgrep

@@ -1,0 +1,7 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+BASH_DEFAULT_TIMEOUT_MS = "300000"
+RAPTOR_ENV_FILE = ".codex/raptor.env"
+RAPTOR_MAINTAIN_PROJECT_WORKING_DIR = "1"
