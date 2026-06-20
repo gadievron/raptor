@@ -568,10 +568,16 @@ class TestParametricProfile:
             profile=BV_C_UINT32,
         )
         assert r.feasible is True
-        offset, length = r.model["offset"], r.model["length"]
-        # The wraparound is the whole point: (offset + length) mod 2^32 ≤ 64.
-        assert (offset + length) & 0xFFFFFFFF <= 64
-        assert offset > 0x10000 and length > 0x10000
+        m = r.model
+        assert m["sum"] <= 64, f"sum={m['sum']} violates sum<=buffer_size"
+        assert m["buffer_size"] == 64
+        assert m["offset"] > 0x10000, f"offset={m['offset']}"
+        assert m["length"] > 0x10000, f"length={m['length']}"
+        wrap = (m["offset"] + m["length"]) & 0xFFFFFFFF
+        assert m["sum"] == wrap, (
+            f"model inconsistency: sum={m['sum']} but "
+            f"(offset+length) mod 2^32 = {wrap}"
+        )
 
     @_requires_z3
     def test_uint32_profile_catches_mask_wraparound(self):

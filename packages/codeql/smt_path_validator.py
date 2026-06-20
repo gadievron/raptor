@@ -1284,6 +1284,7 @@ def check_verb_feasibility(
     ``smt_available=False`` case before calling this helper.
     """
     mode = profile.describe()
+    tautology_solver = _new_solver()
     solver = _new_solver()
 
     satisfied: List[str] = []
@@ -1293,7 +1294,7 @@ def check_verb_feasibility(
 
     for cond in text_guards:
         sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, solver, profile=profile,
+            cond, vars_, tautology_solver, profile=profile,
         )
         if sat_display is not None:
             satisfied.append(sat_display)
@@ -1413,6 +1414,12 @@ def check_path_feasibility(
         )
 
     vars_: Dict[str, Any] = {}
+    # Tautology checks (push/add(Not(expr))/check/pop) run on a
+    # throwaway solver so residual push/pop state cannot leak into
+    # the final solve.  Z3 4.15.4.0 has been observed to return
+    # models that violate tracked assertions after repeated
+    # push/pop cycles on the same solver instance.
+    tautology_solver = _new_solver()
     # Per-call timeout override. Default to the substrate's
     # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
     # solving-cost profile (CWE-190 wraparound is fast; CWE-787
@@ -1464,7 +1471,7 @@ def check_path_feasibility(
 
     for cond in conditions:
         sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, solver, profile=profile,
+            cond, vars_, tautology_solver, profile=profile,
             anon_map=anon_map, dedup_window=dedup_window,
         )
         if sat_display is not None:
