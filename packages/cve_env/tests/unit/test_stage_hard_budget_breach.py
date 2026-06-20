@@ -15,6 +15,7 @@ determinism, invalid mode fallback).
 
 Location: src/cve_env/config.py:315-325.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,7 +30,9 @@ def test_breach_returns_none_when_no_stages(monkeypatch: pytest.MonkeyPatch) -> 
     assert result is None
 
 
-def test_breach_returns_none_in_default_soft_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_breach_returns_none_in_default_soft_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Default mode = soft → no termination even when cost exceeds budget."""
     # Ensure no env override for mode
     for stage in cve_config.STAGES:
@@ -47,7 +50,9 @@ def test_breach_returns_none_in_off_mode(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result is None
 
 
-def test_breach_returns_stage_in_hard_mode_when_over(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_breach_returns_stage_in_hard_mode_when_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """hard mode + cost > budget → return stage name."""
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH_MODE", "hard")
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH", "0.10")
@@ -55,7 +60,9 @@ def test_breach_returns_stage_in_hard_mode_when_over(monkeypatch: pytest.MonkeyP
     assert result == "RESEARCH"
 
 
-def test_breach_returns_none_in_hard_mode_when_under(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_breach_returns_none_in_hard_mode_when_under(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """hard mode + cost < budget → None (no breach)."""
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH_MODE", "hard")
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH", "1.00")
@@ -63,7 +70,9 @@ def test_breach_returns_none_in_hard_mode_when_under(monkeypatch: pytest.MonkeyP
     assert result is None
 
 
-def test_breach_returns_none_in_hard_mode_when_equal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_breach_returns_none_in_hard_mode_when_equal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """hard mode + cost == budget → None. Predicate is strictly `cost > budget`
     (config.py:323). Equality is NOT a breach."""
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH_MODE", "hard")
@@ -83,7 +92,9 @@ def test_breach_returns_none_when_budget_zero_unbounded(
     assert result is None
 
 
-def test_breach_first_triggered_wins_determinism(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_breach_first_triggered_wins_determinism(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Multiple stages in hard mode + multiple over → first iteration win.
     Dict insertion order is preserved in Python 3.7+. The function iterates
     `stage_costs.items()` and returns the FIRST match.

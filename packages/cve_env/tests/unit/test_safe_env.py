@@ -42,9 +42,7 @@ def test_dangerous_vars_set_includes_canonical_threats() -> None:
         "https_proxy",
     }
     missing = must_include - _DANGEROUS_ENV_VARS
-    assert not missing, (
-        f"_DANGEROUS_ENV_VARS missing canonical threat vars: {missing}"
-    )
+    assert not missing, f"_DANGEROUS_ENV_VARS missing canonical threat vars: {missing}"
 
 
 def test_safe_subprocess_env_strips_dangerous_vars() -> None:
@@ -72,9 +70,7 @@ def test_safe_subprocess_env_keep_param_retains_specified_vars() -> None:
     assert env["HTTPS_PROXY"] == "http://attacker:9999", (
         "HTTPS_PROXY in keep set must be preserved"
     )
-    assert "LD_PRELOAD" not in env, (
-        "LD_PRELOAD not in keep set must still be stripped"
-    )
+    assert "LD_PRELOAD" not in env, "LD_PRELOAD not in keep set must still be stripped"
 
 
 def test_safe_subprocess_env_does_not_mutate_os_environ() -> None:
@@ -127,13 +123,9 @@ def test_safe_subprocess_env_behaviorally_blocks_proxy_in_child() -> None:
     assert result.returncode == 0, f"child failed: {result.stderr}"
     assert "HTTPS_PROXY=\n" in result.stdout or result.stdout.startswith(
         "HTTPS_PROXY=\n"
-    ), (
-        f"child saw HTTPS_PROXY despite safe_subprocess_env(): "
-        f"stdout={result.stdout!r}"
-    )
+    ), f"child saw HTTPS_PROXY despite safe_subprocess_env(): stdout={result.stdout!r}"
     assert "LD_PRELOAD=\n" in result.stdout or "LD_PRELOAD=" in result.stdout, (
-        f"child saw LD_PRELOAD despite safe_subprocess_env(): "
-        f"stdout={result.stdout!r}"
+        f"child saw LD_PRELOAD despite safe_subprocess_env(): stdout={result.stdout!r}"
     )
     # Stronger: explicit empty-value check
     assert "HTTPS_PROXY=http" not in result.stdout, (
@@ -156,10 +148,7 @@ def test_safe_subprocess_env_baseline_proxy_leaks_without_safe_env() -> None:
             [
                 sys.executable,
                 "-c",
-                (
-                    "import os;"
-                    "print(os.environ.get('HTTPS_PROXY', '<unset>'))"
-                ),
+                ("import os;print(os.environ.get('HTTPS_PROXY', '<unset>'))"),
             ],
             capture_output=True,
             text=True,

@@ -29,41 +29,85 @@ from cve_env.utils.exploit_text_sanitizer import sanitize_exploit_text
 # build files (Dockerfile/compose/manifests/lockfiles) stay raw here: they
 # need verbatim fidelity and the sanitizer's whitespace-collapse would
 # corrupt them.
-_BUILD_ARTIFACT_EXTENSIONS: frozenset[str] = frozenset({
-    # Container builds
-    ".dockerfile",
-    # Package metadata / lockfiles
-    ".lock", ".toml", ".cfg", ".ini", ".yaml", ".yml", ".json",
-    # Build configs
-    ".cmake", ".bzl", ".bazel", ".gradle",
-})
-_BUILD_ARTIFACT_BASENAMES: frozenset[str] = frozenset({
-    "dockerfile", "containerfile",
-    "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
-    "package.json", "package-lock.json", "yarn.lock",
-    "composer.json", "composer.lock",
-    "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
-    "go.mod", "go.sum",
-    "cargo.toml", "cargo.lock",
-    "requirements.txt", "requirements-dev.txt", "pyproject.toml", "setup.py", "setup.cfg",
-    "gemfile", "gemfile.lock",
-    "makefile", "cmakelists.txt",
-    "license",
-})
+_BUILD_ARTIFACT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Container builds
+        ".dockerfile",
+        # Package metadata / lockfiles
+        ".lock",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".yaml",
+        ".yml",
+        ".json",
+        # Build configs
+        ".cmake",
+        ".bzl",
+        ".bazel",
+        ".gradle",
+    }
+)
+_BUILD_ARTIFACT_BASENAMES: frozenset[str] = frozenset(
+    {
+        "dockerfile",
+        "containerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+        "package.json",
+        "package-lock.json",
+        "yarn.lock",
+        "composer.json",
+        "composer.lock",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "go.mod",
+        "go.sum",
+        "cargo.toml",
+        "cargo.lock",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "gemfile",
+        "gemfile.lock",
+        "makefile",
+        "cmakelists.txt",
+        "license",
+    }
+)
 
 # Prose/doc artifacts — build-RELEVANT but PROSE. Sanitized for
 # exploit-disclosure language (kept at the full build cap so long install
 # guides aren't truncated) while build literals survive.
-_PROSE_DOC_EXTENSIONS: frozenset[str] = frozenset({
-    ".md", ".txt", ".rst", ".asciidoc",
-})
-_PROSE_DOC_BASENAMES: frozenset[str] = frozenset({
-    "readme", "readme.md", "readme.rst", "readme.txt",
-    "changelog", "changelog.md", "changelog.rst", "changelog.txt",
-})
+_PROSE_DOC_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".md",
+        ".txt",
+        ".rst",
+        ".asciidoc",
+    }
+)
+_PROSE_DOC_BASENAMES: frozenset[str] = frozenset(
+    {
+        "readme",
+        "readme.md",
+        "readme.rst",
+        "readme.txt",
+        "changelog",
+        "changelog.md",
+        "changelog.rst",
+        "changelog.txt",
+    }
+)
 
-_SOURCE_FILE_CAP_BYTES = 2 * 1024     # 2 KiB for source files
-_BUILD_FILE_CAP_BYTES = 128 * 1024    # 128 KiB for build/config files
+_SOURCE_FILE_CAP_BYTES = 2 * 1024  # 2 KiB for source files
+_BUILD_FILE_CAP_BYTES = 128 * 1024  # 128 KiB for build/config files
 
 
 def _is_build_artifact(path: str) -> bool:
@@ -144,7 +188,9 @@ class GhFetchResult:
     path: str = ""
     size: int = 0
     content: str = ""  # decoded for files; "" for directories
-    entries: list[dict[str, Any]] = field(default_factory=list)  # [{name,type,path,size}]
+    entries: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{name,type,path,size}]
     status: int = 0
     reason: str = ""
     reason_class: str = "ok"  # ok / rate_limited / transport / auth / not_found

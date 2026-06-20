@@ -200,8 +200,7 @@ def test_quit_after_image_resolve_yields_to_phase_51b_when_docker_built_ok() -> 
     status, reason = _map_status("end_turn", state)
     assert status == "unresolvable"
     assert state.give_up_reason == "quit_without_verify_after_build", (
-        f"Phase 51B precedence broken; got give_up_reason="
-        f"{state.give_up_reason!r}"
+        f"Phase 51B precedence broken; got give_up_reason={state.give_up_reason!r}"
     )
 
 
@@ -242,8 +241,7 @@ def test_quit_after_image_resolve_yields_when_source_build_attempted() -> None:
     status, reason = _map_status("end_turn", state)
     assert status == "unresolvable"
     assert state.give_up_reason == "quit_without_verify_or_giveup", (
-        f"source_build path should yield generic marker; got: "
-        f"{state.give_up_reason!r}"
+        f"source_build path should yield generic marker; got: {state.give_up_reason!r}"
     )
 
 
@@ -260,6 +258,5 @@ def test_image_resolve_ok_false_does_not_emit_marker() -> None:
     _seed_tool_uses(state, ["ToolSearch", "nvd_lookup", "Bash"])
     status, reason = _map_status("end_turn", state)
     assert state.give_up_reason != "quit_after_image_resolve", (
-        f"marker fired with image_resolve_ok=False; got: "
-        f"{state.give_up_reason!r}"
+        f"marker fired with image_resolve_ok=False; got: {state.give_up_reason!r}"
     )

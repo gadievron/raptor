@@ -43,7 +43,7 @@ def _load_toml_config() -> dict[str, Any]:
     try:
         with open(path, "rb") as f:
             return tomllib.load(f)
-    except Exception:
+    except (OSError, ValueError):
         return {}
 
 
@@ -63,6 +63,7 @@ def _get_toml_value(toml_path: list[str], default: Any = None) -> Any:
             return default
         d = d[key]
     return d
+
 
 DEFAULT_MODEL: str = "claude-opus-4-7"
 """Override via CVE_ENV_MODEL env."""
@@ -90,16 +91,24 @@ bump to finish the verify loop. Extensions are gated on recent PRODUCTIVE
 progress + cost<85% cap, so only actively-building/verifying CVEs extend —
 not the whole corpus. Override via --max-turn-extensions CLI arg."""
 
-PRODUCTIVE_TOOLS: frozenset[str] = frozenset({
-    "image_resolve", "docker_build", "docker_run",
-    "docker_compose_up", "source_build",
-})
+PRODUCTIVE_TOOLS: frozenset[str] = frozenset(
+    {
+        "image_resolve",
+        "docker_build",
+        "docker_run",
+        "docker_compose_up",
+        "source_build",
+    }
+)
 """Tools whose successful (.ok=True) outcome marks the agent as 'productive'.
 Used by ``loop.should_extend_turn_cap`` to gate auto-extension."""
 
-POST_BUILD_PRODUCTIVE_TOOLS: frozenset[str] = frozenset({
-    "verify", "run_in_container",
-})
+POST_BUILD_PRODUCTIVE_TOOLS: frozenset[str] = frozenset(
+    {
+        "verify",
+        "run_in_container",
+    }
+)
 """Tools that count as 'productive' ONLY after a build has already succeeded
 (state.docker_built_ok). A build-then-verify CVE iterating on
 verify/run_in_container near its turn cap is making progress, not thrashing —
@@ -124,27 +133,45 @@ of the cap-hit. Beyond this window the agent is presumed stuck."""
 # When adding a new tool, update all four. Sync (modulo documented
 # divergence) enforced by refactor/tests/unit/test_stage_table_sync.py.
 STAGES: tuple[str, ...] = (
-    "RESEARCH", "RESOLVE", "ACQUIRE", "LAUNCH",
-    "VERIFY", "DIAGNOSTIC", "TERMINAL", "OTHER",
+    "RESEARCH",
+    "RESOLVE",
+    "ACQUIRE",
+    "LAUNCH",
+    "VERIFY",
+    "DIAGNOSTIC",
+    "TERMINAL",
+    "OTHER",
 )
 """Stages tracked for cost attribution. ``OTHER`` is the fallback bucket
 for tool names not in :data:`TOOL_TO_STAGE`."""
 
 TOOL_TO_STAGE: dict[str, str] = {
     # RESEARCH — discovery, lookup, fetching evidence
-    "ToolSearch": "RESEARCH", "nvd_lookup": "RESEARCH",
-    "github_fetch": "RESEARCH", "WebFetch": "RESEARCH", "WebSearch": "RESEARCH",
+    "ToolSearch": "RESEARCH",
+    "nvd_lookup": "RESEARCH",
+    "github_fetch": "RESEARCH",
+    "WebFetch": "RESEARCH",
+    "WebSearch": "RESEARCH",
     # RESOLVE — image lookup and registry resolution
-    "image_resolve": "RESOLVE", "vulhub_lookup": "RESOLVE",
+    "image_resolve": "RESOLVE",
+    "vulhub_lookup": "RESOLVE",
     # ACQUIRE — build artifacts (docker images, source trees)
-    "docker_build": "ACQUIRE", "dockerfile_gen": "ACQUIRE", "source_build": "ACQUIRE",
+    "docker_build": "ACQUIRE",
+    "dockerfile_gen": "ACQUIRE",
+    "source_build": "ACQUIRE",
     # LAUNCH — start the container or service
-    "docker_run": "LAUNCH", "docker_compose_up": "LAUNCH", "run_in_container": "LAUNCH",
+    "docker_run": "LAUNCH",
+    "docker_compose_up": "LAUNCH",
+    "run_in_container": "LAUNCH",
     # VERIFY — confirm the environment behaves as expected
-    "verify": "VERIFY", "log_check": "VERIFY",
+    "verify": "VERIFY",
+    "log_check": "VERIFY",
     # DIAGNOSTIC — agent's introspection / scratch work
-    "Bash": "DIAGNOSTIC", "Read": "DIAGNOSTIC", "Write": "DIAGNOSTIC",
-    "Edit": "DIAGNOSTIC", "Grep": "DIAGNOSTIC",
+    "Bash": "DIAGNOSTIC",
+    "Read": "DIAGNOSTIC",
+    "Write": "DIAGNOSTIC",
+    "Edit": "DIAGNOSTIC",
+    "Grep": "DIAGNOSTIC",
     # TERMINAL — explicit give_up
     "give_up": "TERMINAL",
 }
@@ -432,7 +459,11 @@ def get_enable_proprietary_verify_continuation() -> bool:
     already probed image_resolve (confirmed-negative class), so a
     genuinely-proprietary target costs ≤1 extra probe. Explicitly DISABLE with
     ``CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION`` in {0, false, no, off}."""
-    v = os.environ.get("CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION", "").strip().lower()
+    v = (
+        os.environ.get("CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION", "")
+        .strip()
+        .lower()
+    )
     return v not in ("0", "false", "no", "off")
 
 
@@ -608,16 +639,12 @@ def stage_hard_budget_breach(stage_costs: dict[str, float]) -> str | None:
 # Adaptive cost extension constants. Mirrors the productive-extension for the
 # cost dimension. Defaults are deliberately conservative (1 × 10% by default);
 # users opt in to more aggressive behavior via env vars.
-COST_EXTENSION_PCT: float = float(
-    os.environ.get("CVE_ENV_COST_EXTENSION_PCT", "0.10")
-)
+COST_EXTENSION_PCT: float = float(os.environ.get("CVE_ENV_COST_EXTENSION_PCT", "0.10"))
 """Multiplier applied to ``max_cost_usd`` on each granted extension.
 Default 0.10 (10% more budget). Override via env var
 ``CVE_ENV_COST_EXTENSION_PCT``."""
 
-MAX_COST_EXTENSIONS: int = int(
-    os.environ.get("CVE_ENV_MAX_COST_EXTENSIONS", "1")
-)
+MAX_COST_EXTENSIONS: int = int(os.environ.get("CVE_ENV_MAX_COST_EXTENSIONS", "1"))
 """Maximum number of cost-cap extensions per CVE. Default 1 (single
 extension); set to 0 to fully disable adaptive extension. Override via env var
 ``CVE_ENV_MAX_COST_EXTENSIONS``."""
@@ -756,6 +783,7 @@ def should_extend_cost_cap(
         return None
     return max_cost_usd * (1.0 + extension_pct)
 
+
 # The SDK can emit ResultMessage.total_cost_usd=0 even when input/output
 # tokens were consumed. Token-based fallback provides a conservative cost
 # estimate so cost-loss never zeros out the per-CVE total. Rates are USD per
@@ -837,6 +865,7 @@ def estimate_cost_from_turns(num_turns: int, model: str = MODEL) -> float:
 # (i.e. either enables → effective on). A CLI flag cannot disable an
 # env-var-enabled option; a future ``--no-auto-*`` would be additive.
 
+
 def _env_bool(name: str, default: bool = False) -> bool:
     """Parse a boolean env var. Truthy: 'true', '1', 'yes', 'on' (case-insensitive).
     Falsy or unset returns ``default``. Unknown values also return default."""
@@ -865,6 +894,7 @@ CLI override: ``--auto-stop-colima`` (cli.py)."""
 # cleanup_result_images). Defined ONCE here so a rename can't desync a writer
 # from a reader.
 CVE_LABEL = "cve-env.cve-id"
+
 
 # Paths.
 def _find_repo_root() -> Path:

@@ -8,6 +8,7 @@ call sites. Helper now also catches ``OSError`` (transport-layer
 spawn failures) for two probe-style sites that previously caught it
 (docker_compose_up._compose_invocation, github_fetch.resolve_github_token).
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -47,9 +48,7 @@ def test_run_with_timeout_handles_missing_binary() -> None:
     BEFORE TimeoutExpired when cmd[0] is not on PATH. The helper must catch it
     and return a RunOutcome instead of leaking the exception — that's the whole
     point of a uniform 'never raises' boundary."""
-    outcome = run_with_timeout(
-        ["definitely_not_a_real_binary_zzzz_12345"], timeout=2.0
-    )
+    outcome = run_with_timeout(["definitely_not_a_real_binary_zzzz_12345"], timeout=2.0)
     assert isinstance(outcome, RunOutcome)
     assert outcome.timed_out is False
     assert outcome.returncode is None  # process never started

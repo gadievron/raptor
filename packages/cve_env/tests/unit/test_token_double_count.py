@@ -11,6 +11,7 @@ would over-report ~2x under API-key auth. Fix: merge the cumulative RM usage via
 max(), not +=, preserving the per-message AssistantMessage accumulation (which
 also covers give_up runs that never reach a terminal ResultMessage).
 """
+
 from __future__ import annotations
 
 from cve_env.agent.loop import _accum_tokens, _merge_cumulative_tokens, _StreamState
@@ -22,7 +23,9 @@ def test_result_message_usage_does_not_double_count() -> None:
     total must become the cumulative 100/20, NOT 110/22 (the double-count)."""
     st = _StreamState()
     _accum_tokens(st, {"input_tokens": 10, "output_tokens": 2})  # AM per-message
-    _merge_cumulative_tokens(st, {"input_tokens": 100, "output_tokens": 20})  # RM cumulative
+    _merge_cumulative_tokens(
+        st, {"input_tokens": 100, "output_tokens": 20}
+    )  # RM cumulative
     assert st.total_input_tokens == 100, st.total_input_tokens
     assert st.total_output_tokens == 20, st.total_output_tokens
 
@@ -40,10 +43,13 @@ def test_merge_never_lowers_the_running_total() -> None:
 def test_merge_handles_object_and_none_usage() -> None:
     """Object-shaped usage (.input_tokens attrs) and None are both handled."""
     import types
+
     st = _StreamState()
     _merge_cumulative_tokens(st, None)  # no-op
     assert st.total_input_tokens == 0
-    _merge_cumulative_tokens(st, types.SimpleNamespace(input_tokens=42, output_tokens=7))
+    _merge_cumulative_tokens(
+        st, types.SimpleNamespace(input_tokens=42, output_tokens=7)
+    )
     assert st.total_input_tokens == 42
     assert st.total_output_tokens == 7
 

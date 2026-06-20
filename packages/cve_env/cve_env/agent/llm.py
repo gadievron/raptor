@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 ToolFn = Callable[[Any], Awaitable[dict[str, Any]]]
 
+
 class GiveUpReceived(Exception):  # noqa: N818 -- stable name; renaming would break tests + audit log
     """Raised by on_message when the agent's give_up tool result arrives with
     terminal=True. Signals _run_query_once to terminate the SDK iteration
@@ -379,7 +380,9 @@ async def _run_query_once(
         poll = min([*bounds, get_sdk_idle_poll_s()])
         while True:
             await asyncio.sleep(poll)
-            idle_for = time.monotonic() - max(last_message_at[0], _activity.last_activity())
+            idle_for = time.monotonic() - max(
+                last_message_at[0], _activity.last_activity()
+            )
             verdict = _watchdog_verdict(
                 tool_in_flight=_activity.tool_in_flight(),
                 inflight_age=_activity.inflight_age(),
@@ -505,7 +508,9 @@ async def run_agent(
         # Recreate the server + options on each attempt: a crashed subprocess
         # may have left the MCP server in a bad state, so a clean rebuild
         # is the safer path.
-        server = create_sdk_mcp_server(name=mcp_server_name, version="0.1.0", tools=tools)
+        server = create_sdk_mcp_server(
+            name=mcp_server_name, version="0.1.0", tools=tools
+        )
         tool_names = [f"mcp__{mcp_server_name}__{t.name}" for t in tools]
         env: dict[str, str] = {}
         if api_key := os.environ.get("ANTHROPIC_API_KEY"):
@@ -574,7 +579,10 @@ async def run_agent(
             # A connectivity idle-timeout won't clear within the 2s/4s backoff,
             # and repeated idle waits could approach the external wall — cap it
             # at one retry (surface as error so the bench can pause/notify).
-            if isinstance(exc, SdkIdleTimeout) and attempt >= get_sdk_idle_max_attempts():
+            if (
+                isinstance(exc, SdkIdleTimeout)
+                and attempt >= get_sdk_idle_max_attempts()
+            ):
                 logger.error(
                     "%s category=api-unreachable attempt=%d/%d — idle cap reached, "
                     "not retrying further (%s)",

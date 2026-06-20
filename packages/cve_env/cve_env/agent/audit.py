@@ -63,7 +63,9 @@ def _redact_secrets(obj: Any) -> Any:
     typed sub-keys, never raw secret substrings) are unaffected.
     """
     if isinstance(obj, str):
-        return _URL_CRED_RE.sub(rf"\1{_REDACTED}@", _SECRET_TOKEN_RE.sub(_REDACTED, obj))
+        return _URL_CRED_RE.sub(
+            rf"\1{_REDACTED}@", _SECRET_TOKEN_RE.sub(_REDACTED, obj)
+        )
     if isinstance(obj, dict):
         return {k: _redact_secrets(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -71,6 +73,7 @@ def _redact_secrets(obj: Any) -> Any:
     if isinstance(obj, tuple):
         return tuple(_redact_secrets(v) for v in obj)
     return obj
+
 
 AuditStatus = Literal[
     "tool_ok",
@@ -133,7 +136,10 @@ def _sanitize_cve_id(cve_id: str) -> str:
     Prevents free-form debugging strings from escaping the audit root
     via path separators or ``..``.
     """
-    return "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in cve_id) or "UNKNOWN"
+    return (
+        "".join(c if c.isalnum() or c in {"-", "_", "."} else "_" for c in cve_id)
+        or "UNKNOWN"
+    )
 
 
 @dataclass(frozen=True)

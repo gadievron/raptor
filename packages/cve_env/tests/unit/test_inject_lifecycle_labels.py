@@ -19,6 +19,7 @@ Tests cover:
 
 Location: src/cve_env/tools/docker_compose_up.py:239-269.
 """
+
 from __future__ import annotations
 
 from cve_env.tools.docker_compose_up import _inject_lifecycle_labels

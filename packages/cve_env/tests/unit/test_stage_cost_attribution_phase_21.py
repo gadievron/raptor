@@ -111,7 +111,12 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
     ``test_loop.py:_fake_run_agent_factory`` so this test exercises the
     same shim shape used by Phase 12.1 tests.
     """
-    from cve_env.agent.llm import AgentRunOutcome, BudgetCapExceeded, GiveUpReceived, TurnCapReached
+    from cve_env.agent.llm import (
+        AgentRunOutcome,
+        BudgetCapExceeded,
+        GiveUpReceived,
+        TurnCapReached,
+    )
 
     async def fake_run_agent(
         *,
@@ -145,7 +150,9 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
             return AgentRunOutcome(
                 stop_reason=early_stop_reason,
                 num_turns=result_msg.num_turns if result_msg else 0,
-                total_cost_usd=(result_msg.total_cost_usd or 0.0) if result_msg else 0.0,
+                total_cost_usd=(result_msg.total_cost_usd or 0.0)
+                if result_msg
+                else 0.0,
                 is_error=False,
                 session_id=result_msg.session_id if result_msg else "",
                 final_text="",
@@ -171,8 +178,9 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
 # ─── Contract tests: token-derived attribution (Phase 21 behaviour) ─
 
 
-
-def test_phase_21_token_attribution_when_resultmessage_cost_zero(tmp_path: Path) -> None:
+def test_phase_21_token_attribution_when_resultmessage_cost_zero(
+    tmp_path: Path,
+) -> None:
     """Heartbleed pattern: AssistantMessage has usage (tokens), final
     ResultMessage has cost_usd=0. Pre-Phase-21: stage_costs all zeros.
     Post-Phase-21: stage of the last tool gets non-zero cost.
@@ -210,7 +218,6 @@ def test_phase_21_token_attribution_when_resultmessage_cost_zero(tmp_path: Path)
     )
 
 
-
 def test_phase_21_token_attribution_credits_previous_turn_stage(tmp_path: Path) -> None:
     """Multi-turn: AssistantMessage cost credits the stage of the
     PREVIOUS turn's tool (whose result motivated this LLM call), NOT
@@ -239,14 +246,15 @@ def test_phase_21_token_attribution_credits_previous_turn_stage(tmp_path: Path) 
         )
     research = outcome.stage_costs.get("RESEARCH", 0.0)
     launch = outcome.stage_costs.get("LAUNCH", 0.0)
-    assert research > 0, f"RESEARCH should get cost from turn 2's AssistantMessage; got {outcome.stage_costs}"
+    assert research > 0, (
+        f"RESEARCH should get cost from turn 2's AssistantMessage; got {outcome.stage_costs}"
+    )
     # The first AssistantMessage's tokens attribute to OTHER (no previous tool).
     # The second's attribute to RESEARCH. The docker_run tool itself has no
     # ResultMessage cost — so LAUNCH gets nothing in this scenario.
     assert launch == 0.0 or launch < research, (
         f"LAUNCH should not be primary recipient; research={research}, launch={launch}"
     )
-
 
 
 def test_phase_21_first_assistantmessage_attributes_to_other(tmp_path: Path) -> None:
@@ -316,7 +324,6 @@ def test_phase_21_resultmessage_only_path_still_works(tmp_path: Path) -> None:
     # Sum should approximate $0.50 (ResultMessage path is exact).
     summed = sum(outcome.stage_costs.values())
     assert abs(summed - 0.50) < 0.05, f"sum {summed} should approximate $0.50"
-
 
 
 def test_phase_21_stage_costs_sum_approximates_total_cost_usd(tmp_path: Path) -> None:
@@ -399,8 +406,9 @@ def test_phase_21_dedup_avoids_doublecount_when_both_paths_fire(tmp_path: Path) 
 # max(AM_estimate, RM_reported_cost). These 3 tests pin the behavior.
 
 
-
-def test_phase_21_3_rm_cost_dominates_when_larger_than_am_estimate(tmp_path: Path) -> None:
+def test_phase_21_3_rm_cost_dominates_when_larger_than_am_estimate(
+    tmp_path: Path,
+) -> None:
     """Most-common bench pattern: AM emits tokens worth ~$0.01 estimate,
     RM reports actual SDK cost of ~$0.50. Pre-Phase-21.3: dedup skips
     RM → stage_costs sum stuck at ~$0.01. Post-Phase-21.3: RM tops up
@@ -458,7 +466,6 @@ def test_phase_21_3_am_estimate_used_when_no_rm_cost(tmp_path: Path) -> None:
     )
 
 
-
 def test_phase_21_3_per_segment_max_in_multisegment_run(tmp_path: Path) -> None:
     """Multi-segment: each segment's stage_cost is max(AM_estimate,
     RM_cost). Two segments — first with big RM ($0.40), second with
@@ -483,9 +490,14 @@ def test_phase_21_3_per_segment_max_in_multisegment_run(tmp_path: Path) -> None:
         # about per-segment stage-cost, not continuation. Without it the
         # continuation re-runs run_agent and the replaying fake doubles the cost.
         _assistant_with_usage(
-            _tool_use("tu-gu", "mcp__cve_env__give_up", {"reason": "no_image"}), usage=None
+            _tool_use("tu-gu", "mcp__cve_env__give_up", {"reason": "no_image"}),
+            usage=None,
         ),
-        _user(_tool_result("tu-gu", {"terminal": True, "reason": "no_image", "detail": ""})),
+        _user(
+            _tool_result(
+                "tu-gu", {"terminal": True, "reason": "no_image", "detail": ""}
+            )
+        ),
         _result("end_turn", cost_usd=0.0),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):

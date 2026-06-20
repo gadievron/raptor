@@ -20,6 +20,7 @@ This does NOT fix the contradictory bench output — that's a per-call vs
 cumulative reporting artifact and is correct behavior. The lock test
 prevents future drift between the two layers.
 """
+
 from __future__ import annotations
 
 import re
@@ -71,21 +72,33 @@ _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
     (
         "exec_check_apache_v_present",
         [
-            {"type": "exec_check", "passed": True, "details": {"command": "apache2 -v"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "apache2 -v"},
+            },
         ],
         True,
     ),
     (
         "exec_check_pip_show_present",
         [
-            {"type": "exec_check", "passed": True, "details": {"command": "pip show keystone"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "pip show keystone"},
+            },
         ],
         True,
     ),
     (
         "exec_check_dpkg_l_present",
         [
-            {"type": "exec_check", "passed": False, "details": {"command": "dpkg -l libssl"}},
+            {
+                "type": "exec_check",
+                "passed": False,
+                "details": {"command": "dpkg -l libssl"},
+            },
         ],
         # Whether the check PASSED is irrelevant — both layers ignore the
         # passed flag and just look for the command pattern.
@@ -94,22 +107,33 @@ _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
     (
         "exec_check_arbitrary_command_no_version",
         [
-            {"type": "exec_check", "passed": True, "details": {"command": "echo hello"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "echo hello"},
+            },
         ],
         False,
     ),
     (
         "exec_check_with_php_version",
         [
-            {"type": "exec_check", "passed": True, "details": {"command": "php --version"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "php --version"},
+            },
         ],
         True,
     ),
     (
         "exec_check_find_jar",
         [
-            {"type": "exec_check", "passed": True,
-             "details": {"command": "find /opt -name '*.jar' -ls"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "find /opt -name '*.jar' -ls"},
+            },
         ],
         True,
     ),
@@ -139,7 +163,11 @@ _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
         [
             # http_check whose "command" looks like apache2 -v should NOT match —
             # only exec_check entries are inspected.
-            {"type": "http_check", "passed": True, "details": {"command": "apache2 -v"}},
+            {
+                "type": "http_check",
+                "passed": True,
+                "details": {"command": "apache2 -v"},
+            },
         ],
         False,
     ),
@@ -147,9 +175,17 @@ _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
         "mixed_with_version",
         [
             {"type": "container_status", "passed": True},
-            {"type": "http_check", "passed": True, "details": {"command": "apache2 -v"}},
+            {
+                "type": "http_check",
+                "passed": True,
+                "details": {"command": "apache2 -v"},
+            },
             {"type": "exec_check", "passed": True, "details": {"command": "echo nope"}},
-            {"type": "exec_check", "passed": True, "details": {"command": "drush status"}},
+            {
+                "type": "exec_check",
+                "passed": True,
+                "details": {"command": "drush status"},
+            },
         ],
         True,
     ),

@@ -10,6 +10,7 @@ The new ``_find_repo_root`` walks up from ``__file__`` looking for a
 ``pyproject.toml`` or ``.git`` marker, with an env-var escape hatch
 (``CVE_ENV_REPO_ROOT``) for pip-installed users.
 """
+
 from __future__ import annotations
 
 import os
@@ -88,8 +89,9 @@ def test_finder_env_var_takes_precedence_over_marker(tmp_path: Path) -> None:
     custom_root = tmp_path / "override"
     custom_root.mkdir()
 
-    with patch("cve_env.config.__file__", str(nested)), patch.dict(
-        os.environ, {"CVE_ENV_REPO_ROOT": str(custom_root)}
+    with (
+        patch("cve_env.config.__file__", str(nested)),
+        patch.dict(os.environ, {"CVE_ENV_REPO_ROOT": str(custom_root)}),
     ):
         result = _find_repo_root()
 
@@ -110,8 +112,9 @@ def test_finder_falls_back_when_no_marker_anywhere(tmp_path: Path) -> None:
 
     # Strip env var if set in test env
     env_clean = {k: v for k, v in os.environ.items() if k != "CVE_ENV_REPO_ROOT"}
-    with patch("cve_env.config.__file__", str(isolated_file)), patch.dict(
-        os.environ, env_clean, clear=True
+    with (
+        patch("cve_env.config.__file__", str(isolated_file)),
+        patch.dict(os.environ, env_clean, clear=True),
     ):
         result = _find_repo_root()
 

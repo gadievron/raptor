@@ -12,7 +12,9 @@ from cve_env.tools.web_fetch import FetchResult
 
 
 def _fetch_ok(body: str) -> FetchResult:
-    return FetchResult(ok=True, url="https://gh/x", status=200, body=body, body_bytes=len(body))
+    return FetchResult(
+        ok=True, url="https://gh/x", status=200, body=body, body_bytes=len(body)
+    )
 
 
 def _fetch_fail(reason: str) -> FetchResult:
@@ -51,7 +53,12 @@ def test_github_fetch_file_returns_decoded_content(mock_fetch: Any) -> None:
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_github_fetch_directory_listing(mock_fetch: Any) -> None:
     payload = [
-        {"name": "CVE-2018-7600", "type": "dir", "path": "drupal/CVE-2018-7600", "size": 0},
+        {
+            "name": "CVE-2018-7600",
+            "type": "dir",
+            "path": "drupal/CVE-2018-7600",
+            "size": 0,
+        },
         {"name": "README.md", "type": "file", "path": "drupal/README.md", "size": 1024},
     ]
     mock_fetch.return_value = _fetch_ok(json.dumps(payload))
@@ -88,7 +95,9 @@ def test_github_fetch_ref_passed_to_url(mock_fetch: Any) -> None:
 
 
 @patch("cve_env.tools.github_fetch.web_fetch")
-def test_github_fetch_auth_header_when_token_set(mock_fetch: Any, monkeypatch: Any) -> None:
+def test_github_fetch_auth_header_when_token_set(
+    mock_fetch: Any, monkeypatch: Any
+) -> None:
     from cve_env.tools.github_fetch import reset_token_cache
 
     reset_token_cache()
@@ -211,7 +220,9 @@ def _file_payload(path: str, content: str) -> dict[str, Any]:
 def test_b17_dockerfile_returned_raw(mock_fetch: Any) -> None:
     """Dockerfiles must NOT be sanitized — they're build artifacts."""
     content = "FROM apache:2.4.49\nRUN apt-get install -y libapache2-mod-php\n"
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("Dockerfile", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("Dockerfile", content))
+    )
     r = github_fetch(owner="o", repo="r", path="Dockerfile")
     assert r.content == content, "Dockerfile content must pass through unchanged"
 
@@ -219,7 +230,9 @@ def test_b17_dockerfile_returned_raw(mock_fetch: Any) -> None:
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_b17_docker_compose_yml_returned_raw(mock_fetch: Any) -> None:
     content = "services:\n  web:\n    image: vulhub/leadshop:1.4.20\n"
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("docker-compose.yml", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("docker-compose.yml", content))
+    )
     r = github_fetch(owner="o", repo="r", path="docker-compose.yml")
     assert r.content == content
 
@@ -227,7 +240,9 @@ def test_b17_docker_compose_yml_returned_raw(mock_fetch: Any) -> None:
 @patch("cve_env.tools.github_fetch.web_fetch")
 def test_b17_package_json_returned_raw(mock_fetch: Any) -> None:
     content = '{"name": "h5vp", "version": "1.0.6"}'
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("package.json", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("package.json", content))
+    )
     r = github_fetch(owner="o", repo="r", path="package.json")
     assert r.content == content
 
@@ -243,7 +258,9 @@ def test_b17_php_source_truncated_and_sanitized(mock_fetch: Any) -> None:
         "        $video = $wpdb->get_row(\"SELECT * FROM table WHERE id='$id'\");\n"
         "    }\n}\n"
     ) + ("// padding\n" * 500)  # >2 KiB padding to force truncation
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("inc/Rest/VideoController.php", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("inc/Rest/VideoController.php", content))
+    )
     r = github_fetch(owner="o", repo="r", path="inc/Rest/VideoController.php")
     assert r.ok is True
     assert len(r.content) <= 2048 + 1, "source file must be truncated to ~2 KiB"
@@ -265,7 +282,9 @@ def test_b17_python_source_sanitized(mock_fetch: Any) -> None:
         "    # An attacker can use this to escalate privileges\n"
         "    return eval(data)\n"
     )
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("src/parser.py", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("src/parser.py", content))
+    )
     r = github_fetch(owner="o", repo="r", path="src/parser.py")
     assert r.ok is True
     assert "buffer overflow" not in r.content.lower()
@@ -291,7 +310,9 @@ def test_readme_prose_sanitized_preserves_build_info(mock_fetch: Any) -> None:
     assert r.ok is True
     # Exploit-disclosure language neutralized
     assert "deserialization" not in r.content.lower(), "class-verb must be rewritten"
-    assert "an attacker can" not in r.content.lower(), "attacker sentence must be removed"
+    assert "an attacker can" not in r.content.lower(), (
+        "attacker sentence must be removed"
+    )
     # Build-relevant literals preserved
     assert "h5vp/h5vp:1.0.6" in r.content, "package coordinate must survive"
     assert "composer require" in r.content, "install command must survive"
@@ -301,7 +322,9 @@ def test_readme_prose_sanitized_preserves_build_info(mock_fetch: Any) -> None:
 def test_changelog_prose_sanitized(mock_fetch: Any) -> None:
     """Phase 1b: CHANGELOG (prose) is sanitized; version literals survive."""
     content = "v1.2 — fixed SQL injection in login. An attacker could bypass auth."
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("CHANGELOG.md", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("CHANGELOG.md", content))
+    )
     r = github_fetch(owner="o", repo="r", path="CHANGELOG.md")
     assert "sql injection" not in r.content.lower()
     assert "an attacker could" not in r.content.lower()
@@ -320,10 +343,12 @@ def test_b17_pom_xml_returned_raw(mock_fetch: Any) -> None:
 def test_b17_go_source_truncated(mock_fetch: Any) -> None:
     content = (
         "package main\n// CVE-2024-X — command injection in processFile\n"
-        "import \"os/exec\"\n\nfunc processFile(name string) {\n"
-        "    exec.Command(\"sh\", \"-c\", \"cat \" + name).Run()\n}\n"
+        'import "os/exec"\n\nfunc processFile(name string) {\n'
+        '    exec.Command("sh", "-c", "cat " + name).Run()\n}\n'
     ) + ("// pad\n" * 500)
-    mock_fetch.return_value = _fetch_ok(json.dumps(_file_payload("internal/unpack/unpack.go", content)))
+    mock_fetch.return_value = _fetch_ok(
+        json.dumps(_file_payload("internal/unpack/unpack.go", content))
+    )
     r = github_fetch(owner="o", repo="r", path="internal/unpack/unpack.go")
     assert len(r.content) <= 2048 + 1
     assert "command injection" not in r.content.lower()
@@ -339,30 +364,54 @@ def test_build_artifact_and_prose_doc_classification() -> None:
 
     # Structured build artifacts → raw (build artifact, NOT prose)
     for path in [
-        "Dockerfile", "drupal/CVE-2018-7600/Dockerfile",
-        "docker-compose.yml", "compose.yaml",
-        "package.json", "package-lock.json",
-        "composer.json", "pom.xml", "go.mod", "Cargo.toml",
-        "requirements.txt", "Gemfile", "LICENSE",
-        "CMakeLists.txt", "Makefile",
-        "config.yml", "settings.toml",
+        "Dockerfile",
+        "drupal/CVE-2018-7600/Dockerfile",
+        "docker-compose.yml",
+        "compose.yaml",
+        "package.json",
+        "package-lock.json",
+        "composer.json",
+        "pom.xml",
+        "go.mod",
+        "Cargo.toml",
+        "requirements.txt",
+        "Gemfile",
+        "LICENSE",
+        "CMakeLists.txt",
+        "Makefile",
+        "config.yml",
+        "settings.toml",
     ]:
         assert _is_build_artifact(path), f"{path!r} should be a build artifact"
         assert not _is_prose_doc(path), f"{path!r} should not be prose"
 
     # Prose docs → sanitized (prose, NOT raw build artifact)
     for path in [
-        "README.md", "readme.rst", "CHANGELOG", "CHANGELOG.md",
-        "docs/guide.txt", "intro.asciidoc", "notes.rst",
+        "README.md",
+        "readme.rst",
+        "CHANGELOG",
+        "CHANGELOG.md",
+        "docs/guide.txt",
+        "intro.asciidoc",
+        "notes.rst",
     ]:
         assert _is_prose_doc(path), f"{path!r} should be a prose doc"
-        assert not _is_build_artifact(path), f"{path!r} should NOT be a raw build artifact"
+        assert not _is_build_artifact(path), (
+            f"{path!r} should NOT be a raw build artifact"
+        )
 
     # Source files (must be neither)
     for path in [
-        "src/main.py", "lib/app.go", "inc/Rest/VideoController.php",
-        "internal/unpack/unpack.go", "src/main.c", "include/foo.h",
-        "App.java", "main.rb", "index.js", "app.ts",
+        "src/main.py",
+        "lib/app.go",
+        "inc/Rest/VideoController.php",
+        "internal/unpack/unpack.go",
+        "src/main.c",
+        "include/foo.h",
+        "App.java",
+        "main.rb",
+        "index.js",
+        "app.ts",
     ]:
         assert not _is_build_artifact(path), f"{path!r} should NOT be a build artifact"
         assert not _is_prose_doc(path), f"{path!r} should NOT be prose"
@@ -387,11 +436,11 @@ def test_is_exploit_poc_repo_blocks_dedicated_poc() -> None:
 def test_is_exploit_poc_repo_allows_env_and_source_repos() -> None:
     from cve_env.tools.github_fetch import _is_exploit_poc_repo
 
-    assert not _is_exploit_poc_repo("vulhub", "vulhub")        # env source (allowlist)
-    assert not _is_exploit_poc_repo("apache", "tomcat")        # upstream product
-    assert not _is_exploit_poc_repo("zkoss", "zk")             # upstream product
-    assert not _is_exploit_poc_repo("someone", "apocalypse")   # no 'poc' substring FP
-    assert not _is_exploit_poc_repo("", "")                    # missing → other guard handles
+    assert not _is_exploit_poc_repo("vulhub", "vulhub")  # env source (allowlist)
+    assert not _is_exploit_poc_repo("apache", "tomcat")  # upstream product
+    assert not _is_exploit_poc_repo("zkoss", "zk")  # upstream product
+    assert not _is_exploit_poc_repo("someone", "apocalypse")  # no 'poc' substring FP
+    assert not _is_exploit_poc_repo("", "")  # missing → other guard handles
 
 
 def test_github_fetch_blocks_poc_repo_before_network() -> None:

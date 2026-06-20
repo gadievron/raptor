@@ -11,7 +11,9 @@ from cve_env.tools.web_fetch import FetchResult
 
 
 def _fetch_ok(body: str) -> FetchResult:
-    return FetchResult(ok=True, url="https://nvd/x", status=200, body=body, body_bytes=len(body))
+    return FetchResult(
+        ok=True, url="https://nvd/x", status=200, body=body, body_bytes=len(body)
+    )
 
 
 def _fetch_fail(reason: str) -> FetchResult:
@@ -78,9 +80,7 @@ def _nvd_payload(
     if cvss is not None:
         base, sev = cvss
         metrics = {
-            "cvssMetricV31": [
-                {"cvssData": {"baseScore": base, "baseSeverity": sev}}
-            ]
+            "cvssMetricV31": [{"cvssData": {"baseScore": base, "baseSeverity": sev}}]
         }
     return json.dumps(
         {
@@ -182,7 +182,11 @@ def test_osv_fallback_when_nvd_throttled(mock_fetch: Any) -> None:
         "references": [{"url": "https://heartbleed.com"}],
     }
     nvd_fail = FetchResult(
-        ok=False, url="https://nvd/x", status=429, reason="429", reason_class="rate_limited"
+        ok=False,
+        url="https://nvd/x",
+        status=429,
+        reason="429",
+        reason_class="rate_limited",
     )
     osv_ok = _fetch_ok(json.dumps(osv_payload))
     mock_fetch.side_effect = [nvd_fail, osv_ok]
@@ -216,7 +220,11 @@ def test_osv_fallback_description_is_sanitized(mock_fetch: Any) -> None:
         ],
     }
     nvd_fail = FetchResult(
-        ok=False, url="https://nvd/x", status=429, reason="429", reason_class="rate_limited"
+        ok=False,
+        url="https://nvd/x",
+        status=429,
+        reason="429",
+        reason_class="rate_limited",
     )
     osv_ok = _fetch_ok(json.dumps(osv_payload))
     mock_fetch.side_effect = [nvd_fail, osv_ok]
@@ -224,7 +232,9 @@ def test_osv_fallback_description_is_sanitized(mock_fetch: Any) -> None:
     assert r.ok is True
     lo = r.description.lower()
     for phrase in ("attackers", "arbitrary", "execute", "crafted"):
-        assert phrase not in lo, f"OSV description not sanitized ({phrase!r}): {r.description!r}"
+        assert phrase not in lo, (
+            f"OSV description not sanitized ({phrase!r}): {r.description!r}"
+        )
     assert "3.1.0" in r.description, f"version must survive: {r.description!r}"
 
 
@@ -244,10 +254,18 @@ def test_osv_fallback_when_nvd_returns_no_entry(mock_fetch: Any) -> None:
 def test_osv_fallback_silently_fails_when_osv_also_down(mock_fetch: Any) -> None:
     """If both NVD AND OSV fail, return the original NVD failure."""
     nvd_fail = FetchResult(
-        ok=False, url="https://nvd/x", status=429, reason="429", reason_class="rate_limited"
+        ok=False,
+        url="https://nvd/x",
+        status=429,
+        reason="429",
+        reason_class="rate_limited",
     )
     osv_fail = FetchResult(
-        ok=False, url="https://osv/x", status=500, reason="500", reason_class="transport"
+        ok=False,
+        url="https://osv/x",
+        status=500,
+        reason="500",
+        reason_class="transport",
     )
     mock_fetch.side_effect = [nvd_fail, osv_fail]
     r = nvd_lookup("CVE-2014-0160")

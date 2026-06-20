@@ -21,6 +21,7 @@ build path is unchanged. Reuses ``last_productive_turn`` (already tracked for
 ``should_extend_turn_cap``) and the established raise-based on_message guard
 pattern (mirrors ``_check_wall_budget`` / ``WallBudgetExceeded``).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -29,6 +30,7 @@ import pytest
 def _try_import_helper():
     try:
         from cve_env.agent.loop import _check_no_progress  # type: ignore
+
         return _check_no_progress
     except ImportError:
         return None
@@ -37,12 +39,14 @@ def _try_import_helper():
 def _try_import_exception():
     try:
         from cve_env.agent.llm import NoProgressReached  # type: ignore
+
         return NoProgressReached
     except ImportError:
         return None
 
 
 # ---- helper (raise-based on_message guard) ----
+
 
 def test_no_progress_helper_raises_when_gap_exceeds() -> None:
     """gap (current_turn - last_productive_turn) > threshold AND threshold > 0
@@ -88,19 +92,23 @@ def test_no_progress_boundary_is_strictly_greater() -> None:
 
 # ---- config getter (default OFF, env-driven, rejects junk) ----
 
+
 def test_config_default_is_off() -> None:
     from cve_env.config import get_no_progress_giveup_turns  # type: ignore
+
     assert get_no_progress_giveup_turns() == 0
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from cve_env import config
+
     monkeypatch.setenv("CVE_ENV_NO_PROGRESS_GIVEUP_TURNS", "80")
     assert config.get_no_progress_giveup_turns() == 80
 
 
 def test_config_rejects_negative_and_junk(monkeypatch: pytest.MonkeyPatch) -> None:
     from cve_env import config
+
     monkeypatch.setenv("CVE_ENV_NO_PROGRESS_GIVEUP_TURNS", "-5")
     assert config.get_no_progress_giveup_turns() == 0
     monkeypatch.setenv("CVE_ENV_NO_PROGRESS_GIVEUP_TURNS", "abc")
@@ -109,10 +117,12 @@ def test_config_rejects_negative_and_junk(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_module_constant_present_and_off_by_default() -> None:
     from cve_env import config
+
     assert config.NO_PROGRESS_GIVEUP_TURNS == 0
 
 
 # ---- data-floor drift-lock: the safe threshold rationale must stay documented ----
+
 
 def test_data_floor_documented_in_config() -> None:
     """A future edit must not silently drop the empirical safe-floor rationale
@@ -121,6 +131,7 @@ def test_data_floor_documented_in_config() -> None:
     import inspect
 
     from cve_env import config
+
     src = inspect.getsource(config.get_no_progress_giveup_turns)
     assert "71" in src or "CVE-2020-15308" in src, (
         "the data-derived safe floor (≥72; 71-turn winner gap) must be documented"

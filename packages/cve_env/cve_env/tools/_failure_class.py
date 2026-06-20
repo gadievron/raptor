@@ -104,7 +104,9 @@ _AUTH_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _TRANSPORT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"received unexpected HTTP status:?\s*(?:429|500|502|503|504)", re.IGNORECASE),
+    re.compile(
+        r"received unexpected HTTP status:?\s*(?:429|500|502|503|504)", re.IGNORECASE
+    ),
     re.compile(r"\btoomanyrequests\b", re.IGNORECASE),
     re.compile(r"\bconnection reset\b", re.IGNORECASE),
     re.compile(r"i/o timeout", re.IGNORECASE),
@@ -142,7 +144,9 @@ _RATE_LIMIT_PATTERNS: tuple[re.Pattern[str], ...] = (
 #    does not match \bunauthorized\b in _AUTH_PATTERNS.
 # 6. auth: permanent without creds.
 # 7. network then transport: both transient; transport is catch-all.
-_CLASSIFIER_TABLE: tuple[tuple[tuple[re.Pattern[str], ...], DockerFailureClass], ...] = (
+_CLASSIFIER_TABLE: tuple[
+    tuple[tuple[re.Pattern[str], ...], DockerFailureClass], ...
+] = (
     # daemon_corruption FIRST: its "corrupted containerd storage" co-occurs with
     # "input/output error", which would otherwise match disk_full and trigger a
     # futile prune+retry on a daemon that needs a restart, not a prune.
@@ -189,7 +193,13 @@ def is_retry_eligible(reason_class: DockerFailureClass) -> bool:
     and ``auth`` are permanent; retrying without changing inputs is futile.
     ``unknown`` is treated as transport (give it one chance).
     """
-    return reason_class in {"disk_full", "transport", "network", "unknown", "rate_limited"}
+    return reason_class in {
+        "disk_full",
+        "transport",
+        "network",
+        "unknown",
+        "rate_limited",
+    }
 
 
 __all__ = [

@@ -7,6 +7,7 @@ service-degradation only).
 format_constraints_for_prompt: ServiceConstraint list → Markdown section
 for SYSTEM_PROMPT prefix. Empty input → empty output (no spurious section).
 """
+
 from __future__ import annotations
 
 from cve_env.agent.health_constraints import (
@@ -29,7 +30,9 @@ def test_derive_empty_when_all_probes_ok() -> None:
 def test_derive_dh_rate_limit_emits_constraint() -> None:
     results = [
         HealthResult(
-            "Docker Hub", ok=False, latency_ms=3000,
+            "Docker Hub",
+            ok=False,
+            latency_ms=3000,
             detail="toomanyrequests: ...",
             rate_limit="rate-limited",
         ),
@@ -98,6 +101,7 @@ def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type
         captured["system_prompt"] = system_prompt
         # Minimal Outcome-shaped result; build() needs SOMETHING terminal
         from cve_env.agent.llm import AgentRunOutcome
+
         return AgentRunOutcome(stop_reason="end_turn", num_turns=1, total_cost_usd=0.0)
 
     cve = CveRecord(cve_id="CVE-2024-9999", product="t", version="1.0", description="x")
@@ -122,10 +126,15 @@ def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type
         reason_text="DH down",
     )
     with patch("cve_env.agent.loop.run_agent", fake_run_agent):
-        asyncio.run(build(
-            cve, host, run_id="run-with-constraint",
-            audit_root=tmp_path, constraints=[constraint],
-        ))
+        asyncio.run(
+            build(
+                cve,
+                host,
+                run_id="run-with-constraint",
+                audit_root=tmp_path,
+                constraints=[constraint],
+            )
+        )
     assert "## Service health constraints" in captured["system_prompt"]
     assert "Docker Hub" in captured["system_prompt"]
     assert "AVOID" in captured["system_prompt"]
@@ -135,12 +144,18 @@ def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type
 
 def test_format_multiple_constraints_separated() -> None:
     c1 = ServiceConstraint(
-        service="A", state="x", avoid_methods=("m1",),
-        prefer_methods=("m2",), reason_text="r1",
+        service="A",
+        state="x",
+        avoid_methods=("m1",),
+        prefer_methods=("m2",),
+        reason_text="r1",
     )
     c2 = ServiceConstraint(
-        service="B", state="y", avoid_methods=("m3",),
-        prefer_methods=("m4",), reason_text="r2",
+        service="B",
+        state="y",
+        avoid_methods=("m3",),
+        prefer_methods=("m4",),
+        reason_text="r2",
     )
     out = format_constraints_for_prompt([c1, c2])
     # Both services + their reasons appear

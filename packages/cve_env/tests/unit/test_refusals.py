@@ -80,7 +80,9 @@ def test_event_carries_tool_call(scanner: RefusalScanner) -> None:
 def test_append_events_writes_markdown(tmp_path: Path, scanner: RefusalScanner) -> None:
     scanner.scan_text(turn=5, text="I cannot assist with this kind of request.")
     log = tmp_path / "refusals-log.md"
-    append_events(scanner.events, log_path=log, recovery_per_event={5: "Retried with tool X"})
+    append_events(
+        scanner.events, log_path=log, recovery_per_event={5: "Retried with tool X"}
+    )
     content = log.read_text(encoding="utf-8")
     assert "CVE-TEST-0001" in content
     assert "turn5" in content
@@ -117,11 +119,21 @@ _REFUSAL_SAMPLE = "I cannot assist with that operation."
 
 
 def _tool_use(turn: int, name: str, **input_: object) -> dict[str, object]:
-    return {"turn": turn, "kind": "assistant_tool_use", "tool_name": name, "input": input_}
+    return {
+        "turn": turn,
+        "kind": "assistant_tool_use",
+        "tool_name": name,
+        "input": input_,
+    }
 
 
 def _tool_result(turn: int, name: str, preview: str = "ok") -> dict[str, object]:
-    return {"turn": turn, "kind": "tool_result", "tool_name": name, "result_preview": preview}
+    return {
+        "turn": turn,
+        "kind": "tool_result",
+        "tool_name": name,
+        "result_preview": preview,
+    }
 
 
 def _text(turn: int, text: str) -> dict[str, object]:
@@ -149,7 +161,9 @@ def test_preceding_turns_truncated_to_window(scanner: RefusalScanner) -> None:
     assert len(event.preceding_turns) == _HISTORY_WINDOW
 
 
-def test_finalize_populates_subsequent_turns_and_pattern(scanner: RefusalScanner) -> None:
+def test_finalize_populates_subsequent_turns_and_pattern(
+    scanner: RefusalScanner,
+) -> None:
     # Refusal at turn 5 after a docker_run; then agent pivots to source_build.
     scanner.observe(_text(5, _REFUSAL_SAMPLE))
     scanner.scan_text(
@@ -246,7 +260,9 @@ def test_render_event_escapes_terminal_codes_in_refusal_text(
     # (No specific Unicode test here; the printable subset is a separate concern.)
 
 
-def test_render_includes_preceding_and_subsequent(tmp_path: Path, scanner: RefusalScanner) -> None:
+def test_render_includes_preceding_and_subsequent(
+    tmp_path: Path, scanner: RefusalScanner
+) -> None:
     scanner.observe(_tool_use(1, "vulhub_lookup"))
     scanner.observe(_text(2, "I cannot assist with that."))
     scanner.scan_text(turn=2, text="I cannot assist with that.")

@@ -43,9 +43,12 @@ def test_detect_host_arch_amd64_linux(mock_plat: Any) -> None:
 
 def _manifest_response(*platforms: str) -> MagicMock:
     manifests = [
-        {"platform": {"os": p.split("/")[0], "architecture": p.split("/")[1]}} for p in platforms
+        {"platform": {"os": p.split("/")[0], "architecture": p.split("/")[1]}}
+        for p in platforms
     ]
-    return MagicMock(returncode=0, stdout=json.dumps({"manifests": manifests}), stderr="")
+    return MagicMock(
+        returncode=0, stdout=json.dumps({"manifests": manifests}), stderr=""
+    )
 
 
 @patch("cve_env.utils.run.subprocess.run")
@@ -136,7 +139,9 @@ def test_arch_decide_invalid_json_is_error(mock_run: Any) -> None:
 @patch("cve_env.utils.run.subprocess.run")
 def test_arch_decide_top_level_not_dict_is_error(mock_run: Any) -> None:
     """Top-level JSON that is not a dict → no platforms → error (91->110)."""
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(["a", "b"]), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(["a", "b"]), stderr=""
+    )
     host = HostArch(arch="arm64", os="linux")
     d = arch_decide("list-json:1.0", host=host)
     assert d.decision == "error"

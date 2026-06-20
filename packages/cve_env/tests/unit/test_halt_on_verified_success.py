@@ -46,7 +46,9 @@ def test_flag_defaults_off() -> None:
     assert config.get_enable_halt_on_verified_success() is False
 
 
-def test_halt_fires_on_final_success_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_halt_fires_on_final_success_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", "1")
     assert _should_halt_on_verified_success("final_success") is True
 
@@ -57,8 +59,12 @@ def test_no_halt_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _should_halt_on_verified_success("final_success") is False
 
 
-@pytest.mark.parametrize("status", ["final_turn_cap", "budget_exhausted", "final_no_verify", "final_give_up"])
-def test_halt_never_fires_on_non_success(monkeypatch: pytest.MonkeyPatch, status: str) -> None:
+@pytest.mark.parametrize(
+    "status", ["final_turn_cap", "budget_exhausted", "final_no_verify", "final_give_up"]
+)
+def test_halt_never_fires_on_non_success(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
     # Even with the flag ON, only `final_success` triggers the halt.
     monkeypatch.setenv("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", "1")
     assert _should_halt_on_verified_success(status) is False
@@ -68,8 +74,17 @@ def test_terminal_status_distinguishes_endturn_from_cap() -> None:
     """The SAFETY invariant the halt relies on: cap+verify_passed is NEVER
     final_success (so the halt cannot weaken BUG-007/008)."""
     # clean end_turn (non-cap) + verify_passed -> final_success (halt-eligible)
-    assert _terminal_status_for_result(_state(verify_passed=True), "end_turn") == "final_success"
+    assert (
+        _terminal_status_for_result(_state(verify_passed=True), "end_turn")
+        == "final_success"
+    )
     # max_turns + verify_passed -> final_turn_cap (cap wins; NOT halt-eligible)
-    assert _terminal_status_for_result(_state(verify_passed=True), "max_turns_reached") == "final_turn_cap"
+    assert (
+        _terminal_status_for_result(_state(verify_passed=True), "max_turns_reached")
+        == "final_turn_cap"
+    )
     # budget + verify_passed -> budget_exhausted (cap wins; NOT halt-eligible)
-    assert _terminal_status_for_result(_state(verify_passed=True), "budget_exceeded") == "budget_exhausted"
+    assert (
+        _terminal_status_for_result(_state(verify_passed=True), "budget_exceeded")
+        == "budget_exhausted"
+    )

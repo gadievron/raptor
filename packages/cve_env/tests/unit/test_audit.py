@@ -111,7 +111,6 @@ def test_phase67_audit_write_atomic_or_partial_recovery(tmp_path: Path) -> None:
 # state dict.
 
 
-
 from cve_env.agent.loop import _StreamState
 
 
@@ -140,8 +139,14 @@ def test_phase53_impl1_tool_input_round_trips_via_state() -> None:
     """
     state = _StreamState()
     # Mirror loop.py:1156 set site — capture at llm_turn handler
-    state.tool_input_by_id["tool_use_id_1"] = {"command": "ls /tmp", "description": "list /tmp"}
-    state.tool_input_by_id["tool_use_id_2"] = {"image": "nginx:1.0", "container_port": 8080}
+    state.tool_input_by_id["tool_use_id_1"] = {
+        "command": "ls /tmp",
+        "description": "list /tmp",
+    }
+    state.tool_input_by_id["tool_use_id_2"] = {
+        "image": "nginx:1.0",
+        "container_port": 8080,
+    }
     # Mirror loop.py:1370 area retrieve site — at tool_result writer
     retrieved_1 = state.tool_input_by_id.get("tool_use_id_1", {})
     retrieved_2 = state.tool_input_by_id.get("tool_use_id_2", {})
@@ -167,7 +172,10 @@ def test_phase53_impl1_tool_input_by_id_parallels_tool_name_by_id() -> None:
     # Parallel set: same key for both maps
     block_id = "msg_abc123"
     state.tool_name_by_id[block_id] = "docker_build"
-    state.tool_input_by_id[block_id] = {"context_dir": "/tmp/cve-X", "dockerfile_text": "FROM nginx"}
+    state.tool_input_by_id[block_id] = {
+        "context_dir": "/tmp/cve-X",
+        "dockerfile_text": "FROM nginx",
+    }
     # Parallel retrieval works for both
     assert state.tool_name_by_id.get(block_id) == "docker_build"
     assert state.tool_input_by_id.get(block_id) == {
@@ -176,7 +184,9 @@ def test_phase53_impl1_tool_input_by_id_parallels_tool_name_by_id() -> None:
     }
 
 
-def test_phase53_impl1_audit_writer_serializes_tool_input_on_tool_result(tmp_path: Path) -> None:
+def test_phase53_impl1_audit_writer_serializes_tool_input_on_tool_result(
+    tmp_path: Path,
+) -> None:
     """Cand 3 regression-lock: `AuditWriter` already supports `tool_input` on
     tool_result-shape entries (verified at write_appends_and_reads_back line 38).
     This test pins that the writer contract STAYS — Phase 53-impl.1's loop.py
@@ -228,8 +238,12 @@ def test_audit_redacts_github_token_in_tool_io(tmp_path: Path) -> None:
             turn=1,
             status="tool_ok",
             tool_name="Bash",
-            tool_input={"command": f'curl -H "Authorization: Bearer {token}" https://x'},
-            tool_result={"stdout": f"cloned https://x-access-token:{token}@github.com/o/r"},
+            tool_input={
+                "command": f'curl -H "Authorization: Bearer {token}" https://x'
+            },
+            tool_result={
+                "stdout": f"cloned https://x-access-token:{token}@github.com/o/r"
+            },
         ),
     )
     raw = (tmp_path / "sec-redact" / "CVE-SEC-1.jsonl").read_text()
@@ -254,7 +268,10 @@ def test_audit_does_not_redact_benign_build_text(tmp_path: Path) -> None:
         ),
     )
     entry = writer.read(cve_id="CVE-SEC-2")[0]
-    assert entry["tool_input"] == {"image_tag": "nginx:1.21.0", "context_dir": "/tmp/cve-x"}
+    assert entry["tool_input"] == {
+        "image_tag": "nginx:1.21.0",
+        "context_dir": "/tmp/cve-x",
+    }
     raw = (tmp_path / "sec-benign" / "CVE-SEC-2.jsonl").read_text()
     assert "[REDACTED]" not in raw, "benign build text must not trip redaction"
 

@@ -19,6 +19,7 @@ ELSE existing logic (research-only as the empty-tools default).
 This test asserts the new branch fires correctly + doesn't disturb
 existing cases.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -39,9 +40,7 @@ def test_cli_has_api_aborted_pathway_branch() -> None:
     AND _classify_api_overload — assigning pathway='api-aborted'.
     """
     body = _read_cli_source()
-    assert "api-aborted" in body, (
-        "cli.py pathway block missing 'api-aborted' label"
-    )
+    assert "api-aborted" in body, "cli.py pathway block missing 'api-aborted' label"
     assert "_classify_api_overload" in body, (
         "cli.py pathway block must import + use _classify_api_overload "
         "(Phase 34.1 B4 helper) for the new branch"
@@ -66,7 +65,9 @@ def test_cli_research_only_no_longer_default_for_empty_tools() -> None:
         if 'pathway = "research-only"' in line:
             research_only_line_idx = i
             break
-    assert research_only_line_idx is not None, "pathway=research-only assignment missing"
+    assert research_only_line_idx is not None, (
+        "pathway=research-only assignment missing"
+    )
     # The previous non-empty line should be `else:` (not `tools = ...`
     # or some other init pattern)
     prev = research_only_line_idx - 1

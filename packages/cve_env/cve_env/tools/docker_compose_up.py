@@ -140,7 +140,8 @@ def _extract_container_ports(spec: Any) -> list[int]:
 
 
 def rewrite_for_localhost(
-    compose_file: Path, cve_id: str = "",
+    compose_file: Path,
+    cve_id: str = "",
 ) -> tuple[Path, Path]:
     """Copy ``compose_file``'s parent dir to a tmpdir + rewrite ports to 127.0.0.1:0.
 
@@ -215,7 +216,14 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
     services = data.get("services")
     if not isinstance(services, dict):
         return
-    dangerous_caps = {"SYS_ADMIN", "SYS_PTRACE", "NET_ADMIN", "SYS_MODULE", "SYS_RAWIO", "ALL"}
+    dangerous_caps = {
+        "SYS_ADMIN",
+        "SYS_PTRACE",
+        "NET_ADMIN",
+        "SYS_MODULE",
+        "SYS_RAWIO",
+        "ALL",
+    }
     for spec in services.values():
         if not isinstance(spec, dict):
             continue
@@ -337,7 +345,9 @@ def _run_compose(
     if outcome.returncode != 0:
         stderr = (outcome.stderr or "").strip()
         stdout = (outcome.stdout or "").strip()
-        msg = f"compose {args[0]!r} failed (rc={outcome.returncode}): {stderr or stdout}"
+        msg = (
+            f"compose {args[0]!r} failed (rc={outcome.returncode}): {stderr or stdout}"
+        )
         raise ComposeError(msg, stderr=stderr or stdout)
     return outcome.stdout or ""
 
@@ -399,8 +409,15 @@ def down_stack(
     """``docker compose down -v --remove-orphans``. Best-effort; never raises."""
     try:
         _run_compose(
-            ["-p", project_name, "-f", str(compose_file),
-             "down", "-v", "--remove-orphans"],
+            [
+                "-p",
+                project_name,
+                "-f",
+                str(compose_file),
+                "down",
+                "-v",
+                "--remove-orphans",
+            ],
             timeout=timeout_seconds,
         )
     except ComposeError as exc:
@@ -567,7 +584,9 @@ def docker_compose_up_payload(
         return {
             "ok": False,
             "reason": f"could not stage compose dir: {exc}",
-            "reason_class": "disk_full" if "no space" in str(exc).lower() else "unknown",
+            "reason_class": "disk_full"
+            if "no space" in str(exc).lower()
+            else "unknown",
             "cve_id": cve_id,
         }
 
@@ -575,6 +594,7 @@ def docker_compose_up_payload(
     # Auto-retry-on-transient. If `up_stack` fails with a retry-eligible
     # class, prune + retry once before surfacing.
     from cve_env.tools._failure_class import classify_docker_stderr, is_retry_eligible
+
     last_exc: ComposeError | None = None
     last_class = "ok"
     for attempt in range(1, 3):  # 2 attempts total
@@ -595,6 +615,7 @@ def docker_compose_up_payload(
                 # failures (a prune timeout must not break the retry) and we
                 # ignore the result.
                 from cve_env.utils.run import run_with_timeout
+
                 run_with_timeout(
                     ["docker", "system", "prune", "-f"],
                     timeout=30,

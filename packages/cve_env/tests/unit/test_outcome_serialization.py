@@ -17,6 +17,7 @@ block, extract its keys, then compare against the Phase 12.x field
 list. Future Phase 12.x extensions can add to ``_PHASE_12_FIELDS``
 to enforce parity.
 """
+
 from __future__ import annotations
 
 import re
@@ -30,11 +31,13 @@ CLI_PY = SHIP_FINAL / "cli.py"
 
 # Phase 12.x fields that MUST appear in cli.py's outcome_dict.
 # Add to this list when shipping new outcome telemetry.
-_PHASE_12_FIELDS: frozenset[str] = frozenset({
-    "stage_costs",          # Phase 12.1
-    "stage_calls",          # Phase 12.1
-    "over_budget_stages_list",  # Phase 12.2
-})
+_PHASE_12_FIELDS: frozenset[str] = frozenset(
+    {
+        "stage_costs",  # Phase 12.1
+        "stage_calls",  # Phase 12.1
+        "over_budget_stages_list",  # Phase 12.2
+    }
+)
 
 
 def _read_outcome_dict_keys() -> set[str]:
@@ -43,9 +46,7 @@ def _read_outcome_dict_keys() -> set[str]:
     # Find the outcome_dict literal. Permissive across formatting changes.
     m = re.search(r"outcome_dict\s*=\s*\{(.+?)\n\s*\}\s*\n", src, re.DOTALL)
     if not m:
-        raise AssertionError(
-            f"could not locate `outcome_dict = {{...}}` in {CLI_PY}"
-        )
+        raise AssertionError(f"could not locate `outcome_dict = {{...}}` in {CLI_PY}")
     body = m.group(1)
     # Extract quoted keys (each line is `"key": expression,`).
     keys = re.findall(r'^\s*"([^"]+)":', body, re.MULTILINE)
@@ -90,13 +91,19 @@ def test_derive_build_method_taxonomy() -> None:
     """Mirrors scripts/heartbeat_status.sh method detection — KEEP IN SYNC."""
     from cve_env.models import derive_build_method
 
-    assert derive_build_method(["nvd_lookup", "source_build", "verify"]) == "source-build"
-    assert derive_build_method(["image_resolve", "docker_compose_up"]) == "vulhub-compose"
+    assert (
+        derive_build_method(["nvd_lookup", "source_build", "verify"]) == "source-build"
+    )
+    assert (
+        derive_build_method(["image_resolve", "docker_compose_up"]) == "vulhub-compose"
+    )
     assert (
         derive_build_method(["dockerfile_gen", "docker_build", "docker_run"])
         == "custom-dockerfile"
     )
-    assert derive_build_method(["image_resolve", "docker_run", "verify"]) == "vulhub-image"
+    assert (
+        derive_build_method(["image_resolve", "docker_run", "verify"]) == "vulhub-image"
+    )
     assert derive_build_method(["nvd_lookup", "github_fetch"]) == "researching"
     assert derive_build_method([]) == "researching"
     # cascade: order preserved, comma-joined
@@ -111,7 +118,9 @@ def test_derive_build_method_taxonomy() -> None:
     )
     # vulhub-image suppressed when a real build tool ran (matches heartbeat)
     assert (
-        derive_build_method(["image_resolve", "docker_run", "dockerfile_gen", "docker_build"])
+        derive_build_method(
+            ["image_resolve", "docker_run", "dockerfile_gen", "docker_build"]
+        )
         == "custom-dockerfile"
     )
 
@@ -137,6 +146,10 @@ def test_outcome_has_daemon_corruption_field() -> None:
 
     o = Outcome(cve_id="CVE-2099-0001", status="unresolvable", verify_passed=False)
     assert o.daemon_corruption is False  # defaults off
-    o2 = Outcome(cve_id="CVE-2099-0002", status="unresolvable",
-                 verify_passed=False, daemon_corruption=True)
+    o2 = Outcome(
+        cve_id="CVE-2099-0002",
+        status="unresolvable",
+        verify_passed=False,
+        daemon_corruption=True,
+    )
     assert o2.daemon_corruption is True

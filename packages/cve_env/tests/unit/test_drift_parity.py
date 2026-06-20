@@ -51,9 +51,9 @@ def test_functional_smoke_heuristic_parity(prompt_text: str) -> None:
     from cve_env.tools.verify import _ACTIVE_PROBE_TYPES
 
     expected_types = frozenset({"http_request_check", "exec_check", "tcp_probe_check"})
-    assert (
-        expected_types == _ACTIVE_PROBE_TYPES
-    ), "Active vuln-types changed; update prompts.py + this lock-test."
+    assert expected_types == _ACTIVE_PROBE_TYPES, (
+        "Active vuln-types changed; update prompts.py + this lock-test."
+    )
 
     for check_type in _ACTIVE_PROBE_TYPES:
         assert check_type in prompt_text, (

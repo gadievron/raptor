@@ -16,13 +16,14 @@ assertion the agent forgot — not lied about the result).
 
 RED→GREEN per Phase 21.1 / 26.1 pattern.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 
 def _try_import_injector():
     try:
         from cve_env.tools.verify import _inject_version_assertion
+
         return _inject_version_assertion
     except ImportError:
         return None

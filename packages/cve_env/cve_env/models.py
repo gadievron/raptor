@@ -12,17 +12,17 @@ from typing import Any, Literal
 
 OutcomeStatus = Literal[
     "success",
-    "success_partial",       # legacy alias for verified_partial
-    "verified_partial",      # canonical replacement for success_partial
+    "success_partial",  # legacy alias for verified_partial
+    "verified_partial",  # canonical replacement for success_partial
     "unresolvable",
     "budget_exhausted",
     "turn_cap",
-    "no_verify_pass",        # legacy alias for verify_failed
-    "verify_failed",         # canonical replacement for no_verify_pass
-    "launched_unverified",   # legacy alias for launched_no_verify
-    "launched_no_verify",    # canonical replacement for launched_unverified
-    "incomplete",            # legacy alias for interrupted
-    "interrupted",           # canonical replacement for incomplete
+    "no_verify_pass",  # legacy alias for verify_failed
+    "verify_failed",  # canonical replacement for no_verify_pass
+    "launched_unverified",  # legacy alias for launched_no_verify
+    "launched_no_verify",  # canonical replacement for launched_unverified
+    "incomplete",  # legacy alias for interrupted
+    "interrupted",  # canonical replacement for incomplete
     # Anthropic 529/overload throttle — re-runnable, not a merit failure.
     "rate_limited",
     "error",
@@ -198,7 +198,9 @@ def derive_build_method(tool_names_called: list[str]) -> str:
     if (
         has("image_resolve")
         and has("docker_run")
-        and not (has("source_build") or has("dockerfile_gen") or has("docker_compose_up"))
+        and not (
+            has("source_build") or has("dockerfile_gen") or has("docker_compose_up")
+        )
     ):
         methods.append("vulhub-image")
     return ", ".join(methods) if methods else "researching"

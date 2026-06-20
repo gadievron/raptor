@@ -100,20 +100,60 @@ def test_watchdog_verdict_policy() -> None:
     idle-only, in-flight exemption, wedged-tool trip, and MAX disabled."""
     v = llm._watchdog_verdict
     # idle, no tool, under timeout → keep waiting
-    assert v(tool_in_flight=False, inflight_age=0.0, idle_for=10.0,
-             idle_timeout_s=300.0, max_inflight_s=900.0) is None
+    assert (
+        v(
+            tool_in_flight=False,
+            inflight_age=0.0,
+            idle_for=10.0,
+            idle_timeout_s=300.0,
+            max_inflight_s=900.0,
+        )
+        is None
+    )
     # idle, no tool, past timeout → idle (API unreachable)
-    assert v(tool_in_flight=False, inflight_age=0.0, idle_for=300.0,
-             idle_timeout_s=300.0, max_inflight_s=900.0) == "idle"
+    assert (
+        v(
+            tool_in_flight=False,
+            inflight_age=0.0,
+            idle_for=300.0,
+            idle_timeout_s=300.0,
+            max_inflight_s=900.0,
+        )
+        == "idle"
+    )
     # tool in flight, age < max → exempt even with a huge idle gap (legit build)
-    assert v(tool_in_flight=True, inflight_age=100.0, idle_for=9999.0,
-             idle_timeout_s=300.0, max_inflight_s=900.0) is None
+    assert (
+        v(
+            tool_in_flight=True,
+            inflight_age=100.0,
+            idle_for=9999.0,
+            idle_timeout_s=300.0,
+            max_inflight_s=900.0,
+        )
+        is None
+    )
     # tool in flight, age >= max → wedged
-    assert v(tool_in_flight=True, inflight_age=900.0, idle_for=0.0,
-             idle_timeout_s=300.0, max_inflight_s=900.0) == "wedged_tool"
+    assert (
+        v(
+            tool_in_flight=True,
+            inflight_age=900.0,
+            idle_for=0.0,
+            idle_timeout_s=300.0,
+            max_inflight_s=900.0,
+        )
+        == "wedged_tool"
+    )
     # MAX disabled (0) → never wedged, even in-flight forever
-    assert v(tool_in_flight=True, inflight_age=99999.0, idle_for=0.0,
-             idle_timeout_s=300.0, max_inflight_s=0.0) is None
+    assert (
+        v(
+            tool_in_flight=True,
+            inflight_age=99999.0,
+            idle_for=0.0,
+            idle_timeout_s=300.0,
+            max_inflight_s=0.0,
+        )
+        is None
+    )
 
 
 def test_idle_timeout_aborts_a_stalled_sdk_stream(monkeypatch: Any) -> None:
@@ -179,7 +219,9 @@ def test_breaker_is_suppressed_while_a_tool_is_in_flight(monkeypatch: Any) -> No
 
 @patch("cve_env.agent.llm.asyncio.sleep", return_value=None)
 @patch("cve_env.agent.llm._run_query_once")
-def test_idle_timeout_is_capped_at_one_retry(mock_run_once: Any, mock_sleep: Any) -> None:
+def test_idle_timeout_is_capped_at_one_retry(
+    mock_run_once: Any, mock_sleep: Any
+) -> None:
     """A connectivity SdkIdleTimeout is retried at most once (2 attempts), not
     the full SDK_RETRY_MAX_ATTEMPTS — a dead API won't recover in backoff and
     3×idle could approach the 1440s wall.

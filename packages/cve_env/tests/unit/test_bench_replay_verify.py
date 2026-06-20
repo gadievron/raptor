@@ -27,9 +27,7 @@ from cve_env.tools.verify import verify
 # Corpus discovery
 # ---------------------------------------------------------------------------
 
-_AUDIT_ROOT = (
-    pathlib.Path(__file__).parent.parent.parent.parent / "output" / "agentic"
-)
+_AUDIT_ROOT = pathlib.Path(__file__).parent.parent.parent.parent / "output" / "agentic"
 
 # 2026-05-26 build-only purification: the active-probe check types
 # ``http_payload_check`` / ``tcp_payload_check`` were renamed to
@@ -164,7 +162,8 @@ def test_bench_replay_verify_no_schema_rejection(
         r
         for r in result["results"]
         if "unknown check type" in (r.get("reason") or "")
-        and r.get("type") not in _RETIRED_CHECK_TYPES  # tolerate intentionally-retired types
+        and r.get("type")
+        not in _RETIRED_CHECK_TYPES  # tolerate intentionally-retired types
     ]
     assert not bad, (
         f"{case_id}: verify() schema-rejected {len(bad)} step(s): "

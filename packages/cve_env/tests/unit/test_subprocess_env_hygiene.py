@@ -39,6 +39,7 @@ Transitive (covered by run_with_timeout's safe default, REC-2 prong 2):
 Helper used: ``cve_env.utils.safe_env.safe_subprocess_env()`` —
 returns ``os.environ`` minus 19 dangerous vars (raptor parity).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -120,7 +121,9 @@ def test_docker_run_strips_dangerous_env(proxy_set: str) -> None:
         if "inspect" in cmd:
             stdout = '{"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"49000"}]}'
         else:
-            stdout = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n"
+            stdout = (
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\n"
+            )
         return RunOutcome(returncode=0, stdout=stdout, stderr="", timed_out=False)
 
     # Stage 3E-b (2026-05-27): the inspect/logs sites migrated from bare
@@ -211,7 +214,8 @@ def test_run_with_timeout_keep_env_opt_in(
     monkeypatch.setattr(run_mod.subprocess, "run", mock_subprocess_run)
 
     run_mod.run_with_timeout(
-        ["echo", "hi"], timeout=2.0,
+        ["echo", "hi"],
+        timeout=2.0,
         keep_env=frozenset({"HTTPS_PROXY"}),
     )
     assert captured

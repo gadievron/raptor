@@ -6,12 +6,15 @@ reset_nvd_lookup_state / reset_docker_build_state). A new tool's reset was easy 
 forget. This locks a single registry-driven ``reset_all_tool_state()`` so the set
 is in one place. RED until the aggregator + registry exist.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 
-def test_reset_all_tool_state_invokes_every_registered_handler(monkeypatch: Any) -> None:
+def test_reset_all_tool_state_invokes_every_registered_handler(
+    monkeypatch: Any,
+) -> None:
     from cve_env.agent import tools as T
 
     seen: list[int] = []

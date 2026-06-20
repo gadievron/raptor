@@ -234,19 +234,26 @@ def test_kernel_hint_not_fired_for_non_kernel_cve(mock_payload: Any) -> None:
 def test_extract_github_repo_canonical() -> None:
     from cve_env.agent.tools import _extract_github_repo
 
-    assert _extract_github_repo(
-        {"references": [{"url": "https://github.com/yogeshojha/rengine/issues/1"}]}
-    ) == "https://github.com/yogeshojha/rengine"
-    assert _extract_github_repo(
-        {"references": ["https://github.com/o/r.git"]}
-    ) == "https://github.com/o/r"
+    assert (
+        _extract_github_repo(
+            {"references": [{"url": "https://github.com/yogeshojha/rengine/issues/1"}]}
+        )
+        == "https://github.com/yogeshojha/rengine"
+    )
+    assert (
+        _extract_github_repo({"references": ["https://github.com/o/r.git"]})
+        == "https://github.com/o/r"
+    )
     # advisory/non-repo github paths skipped; no-github → ""
-    assert _extract_github_repo(
-        {"references": [{"url": "https://github.com/advisories/GHSA-xxxx"}]}
-    ) == ""
-    assert _extract_github_repo(
-        {"references": [{"url": "https://example.com/x"}]}
-    ) == ""
+    assert (
+        _extract_github_repo(
+            {"references": [{"url": "https://github.com/advisories/GHSA-xxxx"}]}
+        )
+        == ""
+    )
+    assert (
+        _extract_github_repo({"references": [{"url": "https://example.com/x"}]}) == ""
+    )
 
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
@@ -272,15 +279,19 @@ def test_extract_github_repo_references_urls_alt_schema() -> None:
     from cve_env.agent.tools import _extract_github_repo
 
     # alt schema: references_urls is a list[str] (not references[].url)
-    assert _extract_github_repo(
-        {"references_urls": ["https://github.com/acme/widget/blob/main/x"]}
-    ) == "https://github.com/acme/widget"
+    assert (
+        _extract_github_repo(
+            {"references_urls": ["https://github.com/acme/widget/blob/main/x"]}
+        )
+        == "https://github.com/acme/widget"
+    )
     # schemeless ref is skipped (no "://")
     assert _extract_github_repo({"references": ["github.com/acme/widget"]}) == ""
     # single path segment is not a repo
-    assert _extract_github_repo(
-        {"references": [{"url": "https://github.com/owneronly"}]}
-    ) == ""
+    assert (
+        _extract_github_repo({"references": [{"url": "https://github.com/owneronly"}]})
+        == ""
+    )
 
 
 @patch("cve_env.agent.tools._image_resolve.image_resolve_to_payload")

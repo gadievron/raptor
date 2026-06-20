@@ -11,10 +11,12 @@ on entry and removes it on exit (via ``acquire_lock`` / ``release_lock``).
 when no OTHER active builds are present (own PID excluded; stale-PID locks
 are cleaned up opportunistically as a side-effect of the count).
 """
+
 from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from cve_env.config import CVE_LABEL
@@ -22,7 +24,7 @@ from cve_env.utils.run import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
-LOCK_DIR = Path("/tmp")
+LOCK_DIR = Path(tempfile.gettempdir())
 LOCK_PREFIX = "cve-env-"
 LOCK_SUFFIX = ".lock"
 
@@ -53,7 +55,7 @@ def count_other_active_builds() -> int:
         if not stem.startswith(LOCK_PREFIX):
             continue
         try:
-            pid = int(stem[len(LOCK_PREFIX):])
+            pid = int(stem[len(LOCK_PREFIX) :])
         except ValueError:
             continue
         if pid == own_pid:
@@ -133,9 +135,12 @@ def cleanup_result_images(cve_id: str, timeout: float = 30.0) -> int:
     # (1) label-scoped — the normal-exit path (docker_build labels the image).
     label_result = run_with_timeout(
         [
-            "docker", "images",
-            "--filter", f"label={CVE_LABEL}={cve_id}",
-            "--format", "{{.Repository}}:{{.Tag}}",
+            "docker",
+            "images",
+            "--filter",
+            f"label={CVE_LABEL}={cve_id}",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
         ],
         timeout=timeout,
     )

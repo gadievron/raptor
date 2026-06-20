@@ -25,6 +25,7 @@ Tests cover:
 
 Location: src/cve_env/agent/loop.py:477-491.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

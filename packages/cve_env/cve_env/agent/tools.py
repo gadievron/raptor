@@ -460,12 +460,20 @@ def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str
 )
 async def dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
     for _field in (
-        "install_steps", "cmd", "ports", "apt_packages", "copy_ops", "cve_named_packages"
+        "install_steps",
+        "cmd",
+        "ports",
+        "apt_packages",
+        "copy_ops",
+        "cve_named_packages",
     ):
         _val = args.get(_field)
         if _val is not None and not isinstance(_val, list):
             return _ok(
-                {"ok": False, "issues": [f"{_field} must be a list, got {type(_val).__name__}"]}
+                {
+                    "ok": False,
+                    "issues": [f"{_field} must be a list, got {type(_val).__name__}"],
+                }
             )
     payload = _dockerfile_gen.render_to_payload(
         base_image=str(args["base_image"]),
@@ -550,7 +558,9 @@ async def source_build(args: dict[str, Any]) -> dict[str, Any]:
             str,
             "optional: raw Dockerfile text; if omitted, uses context_dir/Dockerfile",
         ],
-        "image_tag": Annotated[str, "tag to assign the built image, e.g. 'cve-env-local:build'"],
+        "image_tag": Annotated[
+            str, "tag to assign the built image, e.g. 'cve-env-local:build'"
+        ],
     },
 )
 async def docker_build(args: dict[str, Any]) -> dict[str, Any]:
@@ -588,7 +598,9 @@ async def docker_build(args: dict[str, Any]) -> dict[str, Any]:
     "(no_image, no_host_port, etc.) -- not an exception.",
     {
         "image": Annotated[str, "image reference to run"],
-        "container_port": Annotated[int, "the service port inside the container, e.g. 80"],
+        "container_port": Annotated[
+            int, "the service port inside the container, e.g. 80"
+        ],
         "run_id": Annotated[str, "bench run identifier, used as a container label"],
         "cve_id": Annotated[str, "CVE ID, used as a container label"],
         "platform": Annotated[
@@ -732,14 +744,16 @@ async def run_in_container(args: dict[str, Any]) -> dict[str, Any]:
 async def verify(args: dict[str, Any]) -> dict[str, Any]:
     plan = args["plan"]
     if not isinstance(plan, list):
-        return _ok({
-            "passed": False,
-            "results": [],
-            "reason": (
-                f"verify: plan must be a list, got {type(plan).__name__} — "
-                "agent may have passed json.dumps(plan) instead of plan"
-            ),
-        })
+        return _ok(
+            {
+                "passed": False,
+                "results": [],
+                "reason": (
+                    f"verify: plan must be a list, got {type(plan).__name__} — "
+                    "agent may have passed json.dumps(plan) instead of plan"
+                ),
+            }
+        )
     result = _verify.verify(
         container_id=str(args["container_id"]),
         host_ip=str(args["host_ip"]),

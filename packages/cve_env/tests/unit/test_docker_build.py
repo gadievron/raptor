@@ -29,8 +29,7 @@ def _find_docker_build_cmd(mock_run: object) -> list[str]:
         ):
             return cmd
     raise AssertionError(
-        f"no `docker build ...` call found; "
-        f"calls: {mock_run.call_args_list}"  # type: ignore[attr-defined]
+        f"no `docker build ...` call found; calls: {mock_run.call_args_list}"  # type: ignore[attr-defined]
     )
 
 
@@ -41,8 +40,11 @@ def test_docker_build_appends_pull_for_external_from_image(mock_run: MagicMock) 
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     dockerfile_text = "FROM debian:11\nRUN echo hi\n"
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
-        docker_build(context_dir=tmp, dockerfile_text=dockerfile_text, image_tag="cve-test:1")
+        docker_build(
+            context_dir=tmp, dockerfile_text=dockerfile_text, image_tag="cve-test:1"
+        )
     cmd = _find_docker_build_cmd(mock_run)
     assert "--pull" in cmd, f"missing --pull for external FROM: {cmd}"
 
@@ -54,8 +56,11 @@ def test_docker_build_skips_pull_for_local_from_image(mock_run: MagicMock) -> No
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     dockerfile_text = "FROM cve-2015-10010-base:build\nRUN echo hi\n"
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
-        docker_build(context_dir=tmp, dockerfile_text=dockerfile_text, image_tag="cve-test:2")
+        docker_build(
+            context_dir=tmp, dockerfile_text=dockerfile_text, image_tag="cve-test:2"
+        )
     cmd = _find_docker_build_cmd(mock_run)
     assert "--pull" not in cmd, f"--pull should not appear for local FROM: {cmd}"
 
@@ -70,6 +75,7 @@ def test_docker_build_labels_image_with_cve_id(mock_run: MagicMock) -> None:
     reset_docker_build_state()
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         docker_build(
             context_dir=tmp,
@@ -88,6 +94,7 @@ def test_docker_build_no_cve_label_when_cve_id_empty(mock_run: MagicMock) -> Non
     reset_docker_build_state()
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         docker_build(
             context_dir=tmp,
@@ -111,7 +118,9 @@ def test_classify_build_error_matches_missing_header() -> None:
 
 
 def test_classify_build_error_matches_missing_library() -> None:
-    stderr = "/usr/bin/ld: cannot find -lpcre\ncollect2: error: ld returned 1 exit status\n"
+    stderr = (
+        "/usr/bin/ld: cannot find -lpcre\ncollect2: error: ld returned 1 exit status\n"
+    )
     assert classify_build_error(stderr) == ["libpcre3-dev"]
 
 
@@ -135,7 +144,9 @@ def test_classify_build_error_falls_through_on_unknown() -> None:
 
 
 @patch("cve_env.utils.run.subprocess.run")
-def test_docker_build_autocreates_missing_context(mock_run: MagicMock, tmp_path: object) -> None:
+def test_docker_build_autocreates_missing_context(
+    mock_run: MagicMock, tmp_path: object
+) -> None:
     """R1 (2026-05-23): a missing context dir is auto-created (mkdir -p) and
     the build proceeds, instead of erroring bad_context. Forensic: the agent
     often calls docker_build before mkdir-ing the context (CVE-2022-44542
@@ -146,7 +157,9 @@ def test_docker_build_autocreates_missing_context(mock_run: MagicMock, tmp_path:
     newctx = Path(str(tmp_path)) / "ctx-not-yet-created"
     assert not newctx.exists()
     r = docker_build(context_dir=str(newctx), image_tag="cve-env-local:r1")
-    assert r.reason != "bad_context", "missing context must be auto-created, not rejected"
+    assert r.reason != "bad_context", (
+        "missing context must be auto-created, not rejected"
+    )
     assert newctx.is_dir(), "docker_build must mkdir -p the missing context"
 
 
@@ -179,14 +192,18 @@ def test_docker_build_success(mock_run: MagicMock, tmp_path: object) -> None:
 
 
 @patch("cve_env.utils.run.subprocess.run")
-def test_docker_build_default_tag_embeds_cve_id(mock_run: MagicMock, tmp_path: object) -> None:
+def test_docker_build_default_tag_embeds_cve_id(
+    mock_run: MagicMock, tmp_path: object
+) -> None:
     """When image_tag is omitted but cve_id is set, the auto-generated default tag
     embeds the cve_id (``cve-env-local:<cve_id>-<uuid>``) so that a SIGKILL'd build's
     orphan image — which may miss the cve-env.cve-id LABEL — is still reclaimable by
     a cve-id-scoped TAG sweep on the kill path. Regression-locks the wall-kill leak
     (bench50-20260609: cve-env-local:CVE-2022-4547 survived, unlabeled)."""
     reset_docker_build_state()
-    mock_run.return_value = MagicMock(returncode=0, stdout="Successfully built abc\n", stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="Successfully built abc\n", stderr=""
+    )
     r = docker_build(context_dir=str(tmp_path), cve_id="CVE-2022-4547")
     assert r.image_tag.startswith("cve-env-local:CVE-2022-4547"), (
         f"default tag must embed cve_id for kill-path tag-sweep, got: {r.image_tag}"
@@ -194,12 +211,18 @@ def test_docker_build_default_tag_embeds_cve_id(mock_run: MagicMock, tmp_path: o
 
 
 @patch("cve_env.utils.run.subprocess.run")
-def test_docker_build_default_tag_uuid_when_no_cve_id(mock_run: MagicMock, tmp_path: object) -> None:
+def test_docker_build_default_tag_uuid_when_no_cve_id(
+    mock_run: MagicMock, tmp_path: object
+) -> None:
     """No cve_id → fall back to the uuid-only default tag (back-compat)."""
     reset_docker_build_state()
-    mock_run.return_value = MagicMock(returncode=0, stdout="Successfully built abc\n", stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="Successfully built abc\n", stderr=""
+    )
     r = docker_build(context_dir=str(tmp_path))
-    assert r.image_tag.startswith("cve-env-local:"), f"unexpected default tag: {r.image_tag}"
+    assert r.image_tag.startswith("cve-env-local:"), (
+        f"unexpected default tag: {r.image_tag}"
+    )
     assert "CVE-" not in r.image_tag, f"no cve_id → no CVE in tag: {r.image_tag}"
 
 
@@ -219,7 +242,9 @@ def test_docker_build_returns_suggested_patch_on_missing_dep(
 def test_docker_build_no_hint_on_generic_failure(
     mock_run: MagicMock, tmp_path: object
 ) -> None:
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="unrelated failure\n")
+    mock_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="unrelated failure\n"
+    )
     r = docker_build(context_dir=str(tmp_path))
     assert r.ok is False
     assert r.reason == "build_failed"
@@ -382,7 +407,9 @@ def test_phase37_3_different_tag_not_blocked(
     """
     reset_docker_build_state()
     mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="config.c:10:23: fatal error: openssl/ssl.h: No such file\n"
+        returncode=1,
+        stdout="",
+        stderr="config.c:10:23: fatal error: openssl/ssl.h: No such file\n",
     )
     docker_build(context_dir=str(tmp_path), image_tag="cve-env-local:old")
     mock_run.reset_mock()
@@ -491,7 +518,6 @@ def test_phase38_2_reset_clears_gpg_recovery_state() -> None:
 # bypasses the policy that the structured ``dockerfile_gen`` tool enforces.
 # Phase 67.2 will run the same validators on raw text before invoking
 # subprocess.run.
-
 
 
 @patch("cve_env.utils.run.subprocess.run")

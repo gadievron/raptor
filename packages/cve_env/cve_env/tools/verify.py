@@ -74,6 +74,7 @@ def _container_logs_tail(container_id: str, tail_bytes: int = 1024) -> str:
     # run_with_timeout folds timeout and missing-docker-binary into
     # RunOutcome.returncode=None, so one check covers both cases → "".
     from cve_env.utils.run import run_with_timeout
+
     outcome = run_with_timeout(
         ["docker", "logs", "--tail", "200", container_id],
         timeout=10,
@@ -116,10 +117,16 @@ def _container_status_failure_hint(state: dict[str, Any], logs_tail: str) -> str
             "host file with wrong UID, executable without +x, or app "
             "writing to a read-only path. Inspect logs_tail."
         )
-    if any(p in sl for p in (
-        "modulenotfounderror", "no module named", "cannot find module",
-        "package.*not.installed", "command not found"
-    )):
+    if any(
+        p in sl
+        for p in (
+            "modulenotfounderror",
+            "no module named",
+            "cannot find module",
+            "package.*not.installed",
+            "command not found",
+        )
+    ):
         return (
             "missing language deps. Add to install_steps "
             "(pip install / npm install / apt-get install) and rebuild."
@@ -130,19 +137,35 @@ def _container_status_failure_hint(state: dict[str, Any], logs_tail: str) -> str
             "COPY it via dockerfile_gen(copy_ops=...) or generate it via "
             "an install_step."
         )
-    if any(p in sl for p in (
-        "database connection", "connection refused", "could not connect",
-        "mysql", "postgres", "redis"
-    )) and "refused" in sl:
+    if (
+        any(
+            p in sl
+            for p in (
+                "database connection",
+                "connection refused",
+                "could not connect",
+                "mysql",
+                "postgres",
+                "redis",
+            )
+        )
+        and "refused" in sl
+    ):
         return (
             "DB-connection failure. Single-container CVEs usually need "
             "an embedded SQLite — or you need docker_compose_up with a "
             "DB sidecar. Check the app's required services."
         )
-    if any(p in sl for p in (
-        "fatal error", "uncaught exception", "panic:", "traceback",
-        "segmentation fault"
-    )):
+    if any(
+        p in sl
+        for p in (
+            "fatal error",
+            "uncaught exception",
+            "panic:",
+            "traceback",
+            "segmentation fault",
+        )
+    ):
         return (
             "app crashed at startup; read the traceback in logs_tail and "
             "fix the underlying error (often missing env var like APP_KEY, "
@@ -258,7 +281,9 @@ def _http_request_check_failure_hint(
         return "unexpected status; verify the endpoint contract"
     # marker_absent
     if response_size == 0:
-        return "empty response; endpoint may not exist or returns 204/304 — check the path"
+        return (
+            "empty response; endpoint may not exist or returns 204/304 — check the path"
+        )
     body_lower = body_text.lower()
     if "<html" in body_lower or "<!doctype" in body_lower:
         return (
@@ -297,9 +322,7 @@ def check_http(
         return {
             "type": "http_check",
             "passed": False,
-            "reason": (
-                f"check_http: method must be str, got {type(method).__name__}"
-            ),
+            "reason": (f"check_http: method must be str, got {type(method).__name__}"),
             "details": {},
         }
     if method.upper() not in _ALLOWED_METHODS:
@@ -343,7 +366,9 @@ def check_http(
             "details": {},
         }
     expected = (
-        list(expected_status) if isinstance(expected_status, list) else [int(expected_status)]
+        list(expected_status)
+        if isinstance(expected_status, list)
+        else [int(expected_status)]
     )
     url = f"http://{host_ip}:{host_port}{path}"
     start = time.monotonic()
@@ -432,7 +457,11 @@ def check_logs(
             "details": {},
         }
     if not expected_patterns:
-        return {"type": "log_check", "passed": True, "details": {"tail": tail, "patterns": 0}}
+        return {
+            "type": "log_check",
+            "passed": True,
+            "details": {"tail": tail, "patterns": 0},
+        }
 
     # On timeout/missing-binary/OSError, treat as no logs available → mark
     # log_check as not-passed with a structured error so a docker-logs failure
@@ -480,7 +509,10 @@ def check_logs(
     return {
         "type": "log_check",
         "passed": True,
-        "details": {"patterns_matched": len(expected_patterns), "log_chars": len(combined)},
+        "details": {
+            "patterns_matched": len(expected_patterns),
+            "log_chars": len(combined),
+        },
     }
 
 
@@ -848,9 +880,7 @@ def check_tcp_probe(
         }
 
     try:
-        send_bytes = (
-            bytes.fromhex(send_hex) if has_hex else send_text.encode("utf-8")
-        )
+        send_bytes = bytes.fromhex(send_hex) if has_hex else send_text.encode("utf-8")
     except ValueError as exc:
         return {
             "type": "tcp_probe_check",
@@ -942,27 +972,35 @@ def check_tcp_probe(
             "type": "tcp_probe_check",
             "passed": False,
             "reason": "connection refused",
-            "details": {**details, "duration_s": time.monotonic() - start, "hint": hint},
+            "details": {
+                **details,
+                "duration_s": time.monotonic() - start,
+                "hint": hint,
+            },
         }
     except TimeoutError:
-        hint = _tcp_probe_check_failure_hint(
-            failure_kind="timeout", response_size=0
-        )
+        hint = _tcp_probe_check_failure_hint(failure_kind="timeout", response_size=0)
         return {
             "type": "tcp_probe_check",
             "passed": False,
             "reason": f"timeout after {timeout_seconds}s",
-            "details": {**details, "duration_s": time.monotonic() - start, "hint": hint},
+            "details": {
+                **details,
+                "duration_s": time.monotonic() - start,
+                "hint": hint,
+            },
         }
     except ssl.SSLError as exc:
-        hint = _tcp_probe_check_failure_hint(
-            failure_kind="tls_error", response_size=0
-        )
+        hint = _tcp_probe_check_failure_hint(failure_kind="tls_error", response_size=0)
         return {
             "type": "tcp_probe_check",
             "passed": False,
             "reason": f"TLS error: {exc}",
-            "details": {**details, "duration_s": time.monotonic() - start, "hint": hint},
+            "details": {
+                **details,
+                "duration_s": time.monotonic() - start,
+                "hint": hint,
+            },
         }
     except OSError as exc:
         return {
@@ -1026,7 +1064,9 @@ def check_tcp_probe(
                 "duration_s": duration_s,
                 "response_size_bytes": response_size,
                 "response_tail_hex": response_tail_hex,
-                "response_tail_ascii": sanitize_exploit_text(response_tail_ascii, max_chars=400),
+                "response_tail_ascii": sanitize_exploit_text(
+                    response_tail_ascii, max_chars=400
+                ),
                 "hint": hint,
             },
         }
@@ -1043,7 +1083,9 @@ def check_tcp_probe(
             "duration_s": duration_s,
             "response_size_bytes": response_size,
             "response_tail_hex": response_tail_hex,
-            "response_tail_ascii": sanitize_exploit_text(response_tail_ascii, max_chars=400),
+            "response_tail_ascii": sanitize_exploit_text(
+                response_tail_ascii, max_chars=400
+            ),
         },
     }
 
@@ -1068,7 +1110,9 @@ def check_exec(
     Passes iff ``exit_code == expected_exit`` AND (when
     ``expected_stdout_contains`` is set) the substring appears in stdout.
     """
-    if expected_stdout_contains is not None and not isinstance(expected_stdout_contains, str):
+    if expected_stdout_contains is not None and not isinstance(
+        expected_stdout_contains, str
+    ):
         return {
             "type": "exec_check",
             "passed": False,
@@ -1141,10 +1185,12 @@ def check_exec(
             "type": "exec_check",
             "passed": False,
             "reason": (
-                f"stdout missing required substring "
-                f"{expected_stdout_contains!r}"
+                f"stdout missing required substring {expected_stdout_contains!r}"
             ),
-            "details": {**details, "expected_stdout_contains": expected_stdout_contains},
+            "details": {
+                **details,
+                "expected_stdout_contains": expected_stdout_contains,
+            },
         }
     # Propagate expected_stdout_contains into details on the PASS branch too,
     # mirroring the FAIL branch above. Without symmetry, the strict-marker gate
@@ -1263,7 +1309,9 @@ _TCP_PROBE_KEY_ALIASES: dict[str, str] = {
 }
 
 
-def _normalize_kwargs(kwargs: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+def _normalize_kwargs(
+    kwargs: dict[str, Any], aliases: dict[str, str]
+) -> dict[str, Any]:
     """Remap common LLM-synonym keys to our canonical names."""
     out: dict[str, Any] = {}
     for k, v in kwargs.items():
@@ -1330,7 +1378,9 @@ def _inject_version_assertion(
             new_plan.append(step)
             continue
         command = step.get("command")
-        if not isinstance(command, str) or not VERSION_ASSERTION_CMD_PATTERN.search(command):
+        if not isinstance(command, str) or not VERSION_ASSERTION_CMD_PATTERN.search(
+            command
+        ):
             new_plan.append(step)
             continue
         existing = step.get("expected_stdout_contains")
@@ -1484,8 +1534,7 @@ def verify(
                 "passed": False,
                 "results": results,
                 "reason": (
-                    f"verify: each plan step must be a dict, "
-                    f"got {type(step).__name__}"
+                    f"verify: each plan step must be a dict, got {type(step).__name__}"
                 ),
             }
         ctype = step.get("type")

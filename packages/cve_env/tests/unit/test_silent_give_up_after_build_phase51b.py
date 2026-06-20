@@ -25,6 +25,7 @@ Phase 51B has two layers (per past-bench-lessons §1 #1 paired-fix):
 Per past-bench-lessons §13 #1 TDD: RED commit first; GREEN flip atomic
 in 51.B.2 (runtime) + 51.B.3 (prompt).
 """
+
 from __future__ import annotations
 
 
@@ -113,8 +114,7 @@ def test_launched_no_verify_branch_takes_precedence_over_new_marker() -> None:
     _seed_tool_uses(state, ["docker_build", "docker_run"])
     status, reason = _map_status("end_turn", state)
     assert status == "launched_no_verify", (
-        f"Phase 57 branch should fire first when launched_ok=True; "
-        f"got: {status!r}"
+        f"Phase 57 branch should fire first when launched_ok=True; got: {status!r}"
     )
     # New marker must not have set give_up_reason
     assert state.give_up_reason != "quit_without_verify_after_build", (
@@ -139,6 +139,7 @@ def test_phase_51b_build_failure_commitment_rule_present_in_prompt() -> None:
     new rule landed.
     """
     from cve_env.agent import prompts as prompts_mod
+
     text = prompts_mod.SYSTEM_PROMPT.lower()
     # Phase 51B sentinel phrases — any one of these proves the new rule
     # landed. None should match pre-impl.

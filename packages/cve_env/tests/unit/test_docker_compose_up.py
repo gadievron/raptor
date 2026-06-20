@@ -134,26 +134,34 @@ def test_rewrite_for_localhost_copies_siblings(tmp_path: Path) -> None:
 # -- Phase 20A.2: lifecycle label injection --------------------------------
 
 
-def test_rewrite_ports_injects_cve_id_label_when_cve_id_provided(tmp_path: Path) -> None:
+def test_rewrite_ports_injects_cve_id_label_when_cve_id_provided(
+    tmp_path: Path,
+) -> None:
     """Phase 20A.2: every service gets ``labels: cve-env.cve-id={cve_id}``
     when ``_rewrite_ports_in_place`` is called with a non-empty cve_id.
     """
     compose = tmp_path / "docker-compose.yml"
     compose.write_text(
-        yaml.safe_dump({
-            "services": {
-                "web": {"image": "nginx:1.20", "ports": ["8080:80"]},
-                "db": {"image": "postgres:14"},
+        yaml.safe_dump(
+            {
+                "services": {
+                    "web": {"image": "nginx:1.20", "ports": ["8080:80"]},
+                    "db": {"image": "postgres:14"},
+                }
             }
-        })
+        )
     )
     _rewrite_ports_in_place(compose, cve_id="CVE-2024-12345")
     data = yaml.safe_load(compose.read_text())
     for svc_name, spec in data["services"].items():
         labels = spec.get("labels", {})
-        assert isinstance(labels, dict), f"{svc_name}: expected dict, got {type(labels).__name__}"
+        assert isinstance(labels, dict), (
+            f"{svc_name}: expected dict, got {type(labels).__name__}"
+        )
         assert labels.get("cve-env.owner") == "cve-env", f"{svc_name}: missing owner"
-        assert labels.get("cve-env.cve-id") == "CVE-2024-12345", f"{svc_name}: missing cve-id"
+        assert labels.get("cve-env.cve-id") == "CVE-2024-12345", (
+            f"{svc_name}: missing cve-id"
+        )
 
 
 def test_rewrite_ports_no_labels_when_cve_id_empty(tmp_path: Path) -> None:
@@ -173,14 +181,16 @@ def test_rewrite_ports_merges_with_existing_dict_labels(tmp_path: Path) -> None:
     """
     compose = tmp_path / "docker-compose.yml"
     compose.write_text(
-        yaml.safe_dump({
-            "services": {
-                "web": {
-                    "image": "nginx",
-                    "labels": {"user.tier": "prod", "cve-env.owner": "overridden"},
+        yaml.safe_dump(
+            {
+                "services": {
+                    "web": {
+                        "image": "nginx",
+                        "labels": {"user.tier": "prod", "cve-env.owner": "overridden"},
+                    }
                 }
             }
-        })
+        )
     )
     _rewrite_ports_in_place(compose, cve_id="CVE-2024-99999")
     labels = yaml.safe_load(compose.read_text())["services"]["web"]["labels"]
@@ -195,11 +205,13 @@ def test_rewrite_ports_merges_with_existing_list_labels(tmp_path: Path) -> None:
     """
     compose = tmp_path / "docker-compose.yml"
     compose.write_text(
-        yaml.safe_dump({
-            "services": {
-                "web": {"image": "nginx", "labels": ["user.tier=prod", "team=red"]}
+        yaml.safe_dump(
+            {
+                "services": {
+                    "web": {"image": "nginx", "labels": ["user.tier=prod", "team=red"]}
+                }
             }
-        })
+        )
     )
     _rewrite_ports_in_place(compose, cve_id="CVE-2024-12345")
     labels = yaml.safe_load(compose.read_text())["services"]["web"]["labels"]
@@ -219,9 +231,13 @@ def test_rewrite_for_localhost_threads_cve_id_to_rewrite(tmp_path: Path) -> None
     src = tmp_path / "src_compose"
     src.mkdir()
     (src / "docker-compose.yml").write_text(
-        yaml.safe_dump({"services": {"web": {"image": "nginx:1.20", "ports": ["8080:80"]}}})
+        yaml.safe_dump(
+            {"services": {"web": {"image": "nginx:1.20", "ports": ["8080:80"]}}}
+        )
     )
-    rewritten, staging = rewrite_for_localhost(src / "docker-compose.yml", cve_id="CVE-2024-99999")
+    rewritten, staging = rewrite_for_localhost(
+        src / "docker-compose.yml", cve_id="CVE-2024-99999"
+    )
     try:
         labels = yaml.safe_load(rewritten.read_text())["services"]["web"]["labels"]
         assert labels.get("cve-env.cve-id") == "CVE-2024-99999"
@@ -258,7 +274,9 @@ def test_phase_20a_2_compose_label_cleanup_end_to_end(tmp_path: Path) -> None:
     try:
         probe = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if probe.returncode != 0:
             pytest.skip(f"docker daemon not available: {probe.stderr.strip()}")
@@ -279,31 +297,41 @@ def test_phase_20a_2_compose_label_cleanup_end_to_end(tmp_path: Path) -> None:
     src = tmp_path / "src_compose"
     src.mkdir()
     (src / "docker-compose.yml").write_text(
-        yaml.safe_dump({
-            "services": {
-                "worker": {
-                    "image": "alpine:3.19",
-                    "command": ["sleep", "60"],
+        yaml.safe_dump(
+            {
+                "services": {
+                    "worker": {
+                        "image": "alpine:3.19",
+                        "command": ["sleep", "60"],
+                    }
                 }
             }
-        })
+        )
     )
 
-    rewritten, staging = rewrite_for_localhost(src / "docker-compose.yml", cve_id=cve_id)
+    rewritten, staging = rewrite_for_localhost(
+        src / "docker-compose.yml", cve_id=cve_id
+    )
     project = project_name_for(cve_id)
     try:
         # Bring the stack up. Real subprocess; honor the host's docker.
         up = subprocess.run(
             [*compose_argv, "-f", str(rewritten), "-p", project, "up", "-d"],
-            capture_output=True, text=True, timeout=90,
+            capture_output=True,
+            text=True,
+            timeout=90,
         )
         if up.returncode != 0:
-            pytest.skip(f"docker compose up failed (likely image pull): {up.stderr[:300]}")
+            pytest.skip(
+                f"docker compose up failed (likely image pull): {up.stderr[:300]}"
+            )
 
         # Verify the container exists with our cve-id label.
         ps_pre = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=cve-env.cve-id={cve_id}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         assert ps_pre.returncode == 0
         pre_ids = [i for i in ps_pre.stdout.strip().splitlines() if i.strip()]
@@ -319,7 +347,9 @@ def test_phase_20a_2_compose_label_cleanup_end_to_end(tmp_path: Path) -> None:
         # Verify removal: container should be gone.
         ps_post = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=cve-env.cve-id={cve_id}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         post_ids = [i for i in ps_post.stdout.strip().splitlines() if i.strip()]
         assert not post_ids, (
@@ -330,16 +360,22 @@ def test_phase_20a_2_compose_label_cleanup_end_to_end(tmp_path: Path) -> None:
         # Belt-and-suspenders teardown for any survivors.
         subprocess.run(
             [*compose_argv, "-f", str(rewritten), "-p", project, "down", "-v"],
-            capture_output=True, timeout=60,
+            capture_output=True,
+            timeout=60,
         )
         survivors = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=cve-env.cve-id={cve_id}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         ids = [i for i in (survivors.stdout or "").strip().splitlines() if i.strip()]
         if ids:
-            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, timeout=30)
+            subprocess.run(
+                ["docker", "rm", "-f", *ids], capture_output=True, timeout=30
+            )
         import shutil as _sh
+
         _sh.rmtree(staging, ignore_errors=True)
 
 
@@ -410,20 +446,32 @@ def test_pick_host_port_ignores_bad_shape() -> None:
 
 
 def test_pick_primary_prefers_web_hint() -> None:
-    a = ComposeContainer(service="db", container_id="a", host_port=5432, container_port=5432)
-    b = ComposeContainer(service="web", container_id="b", host_port=80, container_port=80)
+    a = ComposeContainer(
+        service="db", container_id="a", host_port=5432, container_port=5432
+    )
+    b = ComposeContainer(
+        service="web", container_id="b", host_port=80, container_port=80
+    )
     assert pick_primary((a, b)).service == "web"
 
 
 def test_pick_primary_fallback_to_first_with_port() -> None:
-    a = ComposeContainer(service="worker", container_id="a", host_port=None, container_port=None)
-    b = ComposeContainer(service="queue", container_id="b", host_port=5672, container_port=5672)
+    a = ComposeContainer(
+        service="worker", container_id="a", host_port=None, container_port=None
+    )
+    b = ComposeContainer(
+        service="queue", container_id="b", host_port=5672, container_port=5672
+    )
     assert pick_primary((a, b)).service == "queue"
 
 
 def test_pick_primary_fallback_to_first_when_no_ports() -> None:
-    a = ComposeContainer(service="worker", container_id="a", host_port=None, container_port=None)
-    b = ComposeContainer(service="bg", container_id="b", host_port=None, container_port=None)
+    a = ComposeContainer(
+        service="worker", container_id="a", host_port=None, container_port=None
+    )
+    b = ComposeContainer(
+        service="bg", container_id="b", host_port=None, container_port=None
+    )
     assert pick_primary((a, b)).service == "worker"
 
 
@@ -460,7 +508,11 @@ def test_payload_up_success_returns_primary(mock_run: Any, tmp_path: Path) -> No
     compose = tmp_path / "docker-compose.yml"
     compose.write_text(
         yaml.safe_dump(
-            {"services": {"web": {"image": "vulhub/drupal:8.5.0", "ports": ["8080:80"]}}}
+            {
+                "services": {
+                    "web": {"image": "vulhub/drupal:8.5.0", "ports": ["8080:80"]}
+                }
+            }
         )
     )
     result = docker_compose_up_payload(
@@ -630,7 +682,9 @@ def test_compose_strips_docker_socket_volume_keeps_others(tmp_path: Path) -> Non
         },
     )
     vols = web.get("volumes", [])
-    assert not any("docker.sock" in str(v) for v in vols), "docker socket mount must be stripped"
+    assert not any("docker.sock" in str(v) for v in vols), (
+        "docker socket mount must be stripped"
+    )
     assert "./data:/data" in vols, "non-socket volumes must be kept"
 
 
@@ -641,7 +695,9 @@ def test_compose_strips_cap_add_all(tmp_path: Path) -> None:
 
 def test_compose_strips_string_form_privileged(tmp_path: Path) -> None:
     web = _rewrite_and_reload(tmp_path, {"image": "x", "privileged": "true"})
-    assert str(web.get("privileged")).lower() != "true", "string privileged 'true' must be stripped"
+    assert str(web.get("privileged")).lower() != "true", (
+        "string privileged 'true' must be stripped"
+    )
 
 
 def test_compose_strips_security_opt_and_host_namespaces(tmp_path: Path) -> None:
@@ -662,7 +718,9 @@ def test_compose_strips_security_opt_and_host_namespaces(tmp_path: Path) -> None
 def test_compose_keeps_devices_intentionally(tmp_path: Path) -> None:
     """``devices:`` is intentionally NOT stripped (a hardware-class CVE may
     legitimately need a device mapping)."""
-    web = _rewrite_and_reload(tmp_path, {"image": "x", "devices": ["/dev/foo:/dev/foo"]})
+    web = _rewrite_and_reload(
+        tmp_path, {"image": "x", "devices": ["/dev/foo:/dev/foo"]}
+    )
     assert web.get("devices") == ["/dev/foo:/dev/foo"]
 
 
@@ -670,6 +728,7 @@ def test_compose_keeps_devices_intentionally(tmp_path: Path) -> None:
 # Cache-bypass cascade-leak fix. Compose stacks reference registry images
 # (vulhub/X, library/X, etc.); --pull always forces fresh fetch, bypassing
 # the local Docker layer cache (the cascade-test Phase 2 leak source).
+
 
 @patch("cve_env.tools.docker_compose_up._run_compose")
 def test_up_stack_appends_pull_always(mock_run: MagicMock, tmp_path: Path) -> None:
@@ -680,12 +739,19 @@ def test_up_stack_appends_pull_always(mock_run: MagicMock, tmp_path: Path) -> No
     # JSON with a container so up_stack doesn't raise.
     mock_run.side_effect = [
         "",  # up -d output
-        json.dumps([{
-            "Name": "test_web_1", "Service": "web", "State": "running",
-            "Publishers": [{"PublishedPort": 8080, "TargetPort": 80}],
-        }]),
+        json.dumps(
+            [
+                {
+                    "Name": "test_web_1",
+                    "Service": "web",
+                    "State": "running",
+                    "Publishers": [{"PublishedPort": 8080, "TargetPort": 80}],
+                }
+            ]
+        ),
     ]
     import contextlib
+
     with contextlib.suppress(ComposeError):
         up_stack("test", compose_file, up_timeout_seconds=10.0)
     # First call to _run_compose is the `up` command; assert --pull always present

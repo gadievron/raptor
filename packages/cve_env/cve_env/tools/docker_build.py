@@ -49,6 +49,7 @@ def _extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
         return rest.strip() or None
     return None
 
+
 DEPENDENCY_PACKAGE_MAP: dict[str, str] = {
     # APR (Apache Portable Runtime)
     "apr.h": "libapr1-dev",
@@ -312,7 +313,9 @@ def docker_build(
             reason="bad_context",
             reason_class="unknown",
             stderr_tail="context_dir is empty",
-            next_step_hint=_docker_build_next_step_hint("bad_context", "unknown", None, ""),
+            next_step_hint=_docker_build_next_step_hint(
+                "bad_context", "unknown", None, ""
+            ),
         )
     ctx = Path(context_dir)
     if not ctx.exists():
@@ -324,7 +327,9 @@ def docker_build(
                 reason="bad_context",
                 reason_class="unknown",
                 stderr_tail=f"{context_dir}: cannot create context dir ({exc})",
-                next_step_hint=_docker_build_next_step_hint("bad_context", "unknown", None, ""),
+                next_step_hint=_docker_build_next_step_hint(
+                    "bad_context", "unknown", None, ""
+                ),
             )
     if not ctx.is_dir():
         return BuildResult(
@@ -521,6 +526,7 @@ def docker_build(
         # that's a higher-signal classification — preserve it via "missing_dependency"
         # reason but still surface reason_class for retry decisions.
         from cve_env.tools._failure_class import classify_docker_stderr
+
         failure_class = classify_docker_stderr(outcome.stderr or "")
 
         # Track gpg_signature failures by image_tag so the next docker_build

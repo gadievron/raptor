@@ -55,7 +55,11 @@ def _classify_exec_exit(exit_code: int, stderr: str) -> str:
         return "disk_full"
     if exit_code == 137 or "out of memory" in sl or "killed" in sl[:80]:
         return "oom_killed"
-    if exit_code == 127 or "command not found" in sl or "executable file not found" in sl:
+    if (
+        exit_code == 127
+        or "command not found" in sl
+        or "executable file not found" in sl
+    ):
         return "command_not_found"
     if exit_code == 126 or "permission denied" in sl:
         return "permission_denied"

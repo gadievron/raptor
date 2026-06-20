@@ -18,6 +18,7 @@ RED: tests assert post-sanitize text does NOT contain trigger phrases.
 GREEN flip is atomic with Phase 51.A.2 impl (xfail markers removed
 in the same commit per past-bench-lessons §13 #1 TDD discipline).
 """
+
 from __future__ import annotations
 
 

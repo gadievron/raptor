@@ -45,11 +45,22 @@ _APT_INSTALL_RE = re.compile(
 )
 _APT_GET_UPDATE_RE = re.compile(r"\bapt(?:-get)?\s+update\b", re.IGNORECASE)
 # Tokens that are flags / known options, not package names.
-_APT_FLAGS = frozenset({
-    "-y", "--yes", "-q", "--quiet", "-qq", "--no-install-recommends",
-    "--no-install-suggests", "-f", "--fix-broken", "--reinstall",
-    "--allow-unauthenticated", "--allow-downgrades",
-})
+_APT_FLAGS = frozenset(
+    {
+        "-y",
+        "--yes",
+        "-q",
+        "--quiet",
+        "-qq",
+        "--no-install-recommends",
+        "--no-install-suggests",
+        "-f",
+        "--fix-broken",
+        "--reinstall",
+        "--allow-unauthenticated",
+        "--allow-downgrades",
+    }
+)
 
 
 def _detect_dep_drift(
@@ -89,7 +100,8 @@ def _detect_dep_drift(
             arg_blob = match.group(1)
             tokens = arg_blob.split()
             unpinned = [
-                t for t in tokens
+                t
+                for t in tokens
                 if not t.startswith("-")
                 and t not in _APT_FLAGS
                 and "=" not in t
@@ -140,7 +152,9 @@ def _validate_copy_ops(copy_ops: list[dict[str, str]]) -> list[str]:
         if not isinstance(src, str) or not src:
             issues.append(f"copy_ops[{i}].src must be a non-empty string")
         elif src.startswith("/"):
-            issues.append(f"copy_ops[{i}].src {src!r} must be context-relative (no leading /)")
+            issues.append(
+                f"copy_ops[{i}].src {src!r} must be context-relative (no leading /)"
+            )
         elif ".." in src.split("/"):
             issues.append(f"copy_ops[{i}].src {src!r} must not contain '..'")
         if not isinstance(dst, str) or not dst:
@@ -186,7 +200,9 @@ def render_dockerfile(
     if base_issues:
         issues.extend(f"base_image: {msg}" for msg in base_issues)
 
-    if not isinstance(install_steps, list) or not all(isinstance(s, str) for s in install_steps):
+    if not isinstance(install_steps, list) or not all(
+        isinstance(s, str) for s in install_steps
+    ):
         issues.append("install_steps must be a list of strings")
 
     if workdir and (not isinstance(workdir, str) or not workdir.startswith("/")):
@@ -208,9 +224,7 @@ def render_dockerfile(
 
     clean_apt = list(apt_packages or [])
     if issues:
-        return DockerfileRenderResult(
-            ok=False, issues=issues, warnings=drift_warnings
-        )
+        return DockerfileRenderResult(ok=False, issues=issues, warnings=drift_warnings)
 
     lines: list[str] = [f"FROM {base_image}"]
     lines.append(f"WORKDIR {workdir}")
@@ -261,7 +275,9 @@ def render_dockerfile(
             ok=False, dockerfile_text=text, issues=issues, warnings=drift_warnings
         )
 
-    return DockerfileRenderResult(ok=True, dockerfile_text=text, warnings=drift_warnings)
+    return DockerfileRenderResult(
+        ok=True, dockerfile_text=text, warnings=drift_warnings
+    )
 
 
 def render_to_payload(

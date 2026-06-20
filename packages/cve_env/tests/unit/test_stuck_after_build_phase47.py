@@ -23,6 +23,7 @@ status, richer reason for analysis.
 
 Per past-bench-lessons §1 — TDD with RED test first.
 """
+
 from __future__ import annotations
 
 

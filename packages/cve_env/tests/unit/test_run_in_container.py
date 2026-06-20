@@ -51,7 +51,9 @@ def test_exec_nonzero_exit_is_not_ok(mock_run: Any) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_exec_timeout_returns_structured_failure(mock_run: Any) -> None:
-    mock_run.side_effect = subprocess.TimeoutExpired(cmd=["docker", "exec"], timeout=1.0)
+    mock_run.side_effect = subprocess.TimeoutExpired(
+        cmd=["docker", "exec"], timeout=1.0
+    )
     r = run_in_container(container_id="cid", command="sleep 60", timeout_seconds=1.0)
     assert r.ok is False
     assert "timeout" in r.reason
@@ -159,7 +161,9 @@ def test_reason_class_oom_killed_on_137(mock_run: Any) -> None:
 @patch("cve_env.utils.run.subprocess.run")
 def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="cp: cannot create '/foo': No space left on device"
+        returncode=1,
+        stdout="",
+        stderr="cp: cannot create '/foo': No space left on device",
     )
     r = run_in_container(container_id="cid", command="cp big /foo")
     assert r.ok is False
@@ -168,7 +172,9 @@ def test_reason_class_disk_full_via_stderr(mock_run: Any) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_reason_class_unknown_for_generic_failure(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=42, stdout="", stderr="weird app error")
+    mock_run.return_value = MagicMock(
+        returncode=42, stdout="", stderr="weird app error"
+    )
     r = run_in_container(container_id="cid", command="myapp")
     assert r.ok is False
     assert r.reason_class == "unknown"

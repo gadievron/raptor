@@ -45,14 +45,20 @@ def test_read_allocated_host_port_poll_is_bounded(monkeypatch: Any) -> None:
         return RunOutcome(returncode=None, stdout="", stderr="", timed_out=True)
 
     monkeypatch.setattr(dr, "run_with_timeout", fake_rwt)
-    monkeypatch.setattr(dr.time, "sleep", lambda *_a, **_k: None)  # don't really sleep the poll gap
+    monkeypatch.setattr(
+        dr.time, "sleep", lambda *_a, **_k: None
+    )  # don't really sleep the poll gap
 
     start = time.monotonic()
-    with pytest.raises(dr.RunError):  # never finds a port → no_host_port after the deadline
+    with pytest.raises(
+        dr.RunError
+    ):  # never finds a port → no_host_port after the deadline
         dr._read_allocated_host_port("cid", container_port=8080, timeout_s=0.3)
     elapsed = time.monotonic() - start
 
     assert seen.get("timeout", 0) > 0, (
         "each docker-inspect poll must be bounded via run_with_timeout."
     )
-    assert elapsed < 2.0, f"poll loop ran {elapsed:.1f}s — should be bounded by timeout_s (0.3)."
+    assert elapsed < 2.0, (
+        f"poll loop ran {elapsed:.1f}s — should be bounded by timeout_s (0.3)."
+    )

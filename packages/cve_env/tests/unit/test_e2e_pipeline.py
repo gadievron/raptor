@@ -28,6 +28,7 @@ Reused patterns:
 - `tests/unit/test_verify.py:709-736 _FakeTCPSocket` — partial-mock
   socket pattern; redefined locally.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -242,17 +243,13 @@ def _e2e_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(
-            patch("cve_env.utils.run.subprocess.run", subproc)
-        )
+        stack.enter_context(patch("cve_env.utils.run.subprocess.run", subproc))
         # verify.py — requests.request (http_check, http_request_check)
         req_mock = MagicMock()
         req_mock.return_value.status_code = 200
         req_mock.return_value.content = b"hello"
         req_mock.return_value.text = "hello"
-        stack.enter_context(
-            patch("cve_env.tools.verify.requests.request", req_mock)
-        )
+        stack.enter_context(patch("cve_env.tools.verify.requests.request", req_mock))
         # verify.py — socket.create_connection (tcp_probe_check)
         sock_factory = MagicMock(return_value=_FakeTCPSocket(response=b"+PONG\r\n"))
         stack.enter_context(
@@ -298,15 +295,32 @@ def _stream_vulhub_image(verify_payload: dict[str, Any]) -> list[Any]:
     return [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True, "product": "drupal"})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "drupal", "version": "8.5.0"})),
-        _user(_tool_result("t2", {
-            "ok": True,
-            "matches": [{"image_ref": "vulhub/drupal:8.5.0", "category": "vulhub"}],
-        })),
-        _assistant(_tool_use("t3", "mcp__cve_env__docker_run",
-                             {"image_ref": "vulhub/drupal:8.5.0"})),
-        _user(_tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use(
+                "t2",
+                "mcp__cve_env__image_resolve",
+                {"product": "drupal", "version": "8.5.0"},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t2",
+                {
+                    "ok": True,
+                    "matches": [
+                        {"image_ref": "vulhub/drupal:8.5.0", "category": "vulhub"}
+                    ],
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t3", "mcp__cve_env__docker_run", {"image_ref": "vulhub/drupal:8.5.0"}
+            )
+        ),
+        _user(
+            _tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t4", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t4", verify_payload)),
         _assistant(_text_block("Done.")),
@@ -321,17 +335,37 @@ def _stream_vulhub_compose(verify_payload: dict[str, Any]) -> list[Any]:
     return [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
-        _user(_tool_result("t2", {
-            "ok": True,
-            "compose_dir": "/tmp/compose/cve-x",
-        })),
-        _assistant(_tool_use("t3", "mcp__cve_env__docker_compose_up",
-                             {"compose_dir": "/tmp/compose/cve-x"})),
-        _user(_tool_result("t3", {
-            "ok": True, "container_id": "c1", "host_port": 8080,
-        })),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
+        _user(
+            _tool_result(
+                "t2",
+                {
+                    "ok": True,
+                    "compose_dir": "/tmp/compose/cve-x",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__docker_compose_up",
+                {"compose_dir": "/tmp/compose/cve-x"},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "container_id": "c1",
+                    "host_port": 8080,
+                },
+            )
+        ),
         _assistant(_tool_use("t4", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t4", verify_payload)),
         _assistant(_text_block("Done.")),
@@ -347,21 +381,43 @@ def _stream_custom_dockerfile(verify_payload: dict[str, Any]) -> list[Any]:
     return [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),  # no_match
-        _assistant(_tool_use("t3", "mcp__cve_env__dockerfile_gen",
-                             {"product": "p", "version": "v", "copy_ops": []})),
-        _user(_tool_result("t3", {
-            "ok": True, "dockerfile_text": "FROM alpine\n",
-            "context_dir": "/tmp/ctx-x",
-        })),
-        _assistant(_tool_use("t4", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/ctx-x", "image_tag": "cve-x:build"})),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__dockerfile_gen",
+                {"product": "p", "version": "v", "copy_ops": []},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "dockerfile_text": "FROM alpine\n",
+                    "context_dir": "/tmp/ctx-x",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/ctx-x", "image_tag": "cve-x:build"},
+            )
+        ),
         _user(_tool_result("t4", {"ok": True, "image_ref": "cve-x:build"})),
-        _assistant(_tool_use("t5", "mcp__cve_env__docker_run",
-                             {"image_ref": "cve-x:build"})),
-        _user(_tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use("t5", "mcp__cve_env__docker_run", {"image_ref": "cve-x:build"})
+        ),
+        _user(
+            _tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t6", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t6", verify_payload)),
         _assistant(_text_block("Done.")),
@@ -377,22 +433,47 @@ def _stream_source_build(verify_payload: dict[str, Any]) -> list[Any]:
     return [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),
-        _assistant(_tool_use("t3", "mcp__cve_env__source_build",
-                             {"source_url": "https://github.com/x/x",
-                              "product": "p", "version": "v"})),
-        _user(_tool_result("t3", {
-            "ok": True, "repo_dir": "/tmp/repo-x",
-            "dockerfile_text": "FROM alpine\n",
-        })),
-        _assistant(_tool_use("t4", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/repo-x", "image_tag": "cve-x:src"})),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__source_build",
+                {
+                    "source_url": "https://github.com/x/x",
+                    "product": "p",
+                    "version": "v",
+                },
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "repo_dir": "/tmp/repo-x",
+                    "dockerfile_text": "FROM alpine\n",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/repo-x", "image_tag": "cve-x:src"},
+            )
+        ),
         _user(_tool_result("t4", {"ok": True, "image_ref": "cve-x:src"})),
-        _assistant(_tool_use("t5", "mcp__cve_env__docker_run",
-                             {"image_ref": "cve-x:src"})),
-        _user(_tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use("t5", "mcp__cve_env__docker_run", {"image_ref": "cve-x:src"})
+        ),
+        _user(
+            _tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t6", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t6", verify_payload)),
         _assistant(_text_block("Done.")),
@@ -408,29 +489,59 @@ def _stream_plugin_overlay(verify_payload: dict[str, Any]) -> list[Any]:
     return [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),
-        _assistant(_tool_use("t3", "mcp__cve_env__source_build",
-                             {"source_url": "https://github.com/x/x",
-                              "product": "x-plugin", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__source_build",
+                {
+                    "source_url": "https://github.com/x/x",
+                    "product": "x-plugin",
+                    "version": "v",
+                },
+            )
+        ),
         _user(_tool_result("t3", {"ok": True, "repo_dir": "/tmp/x-plugin"})),
-        _assistant(_tool_use(
-            "t4", "mcp__cve_env__dockerfile_gen",
-            {"product": "wordpress", "version": "5.7",
-             "copy_ops": [{"src": "/tmp/x-plugin", "dst": "/var/www/wp/plugin"}]},
-        )),
-        _user(_tool_result("t4", {
-            "ok": True, "dockerfile_text": "FROM wordpress:5.7\n",
-            "context_dir": "/tmp/ctx-overlay",
-        })),
-        _assistant(_tool_use("t5", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/ctx-overlay",
-                              "image_tag": "cve-x:overlay"})),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__dockerfile_gen",
+                {
+                    "product": "wordpress",
+                    "version": "5.7",
+                    "copy_ops": [{"src": "/tmp/x-plugin", "dst": "/var/www/wp/plugin"}],
+                },
+            )
+        ),
+        _user(
+            _tool_result(
+                "t4",
+                {
+                    "ok": True,
+                    "dockerfile_text": "FROM wordpress:5.7\n",
+                    "context_dir": "/tmp/ctx-overlay",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t5",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/ctx-overlay", "image_tag": "cve-x:overlay"},
+            )
+        ),
         _user(_tool_result("t5", {"ok": True, "image_ref": "cve-x:overlay"})),
-        _assistant(_tool_use("t6", "mcp__cve_env__docker_run",
-                             {"image_ref": "cve-x:overlay"})),
-        _user(_tool_result("t6", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use("t6", "mcp__cve_env__docker_run", {"image_ref": "cve-x:overlay"})
+        ),
+        _user(
+            _tool_result("t6", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t7", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t7", verify_payload)),
         _assistant(_text_block("Done.")),
@@ -447,28 +558,44 @@ _METHOD_FIXTURES: dict[str, dict[str, Any]] = {
     "vulhub-compose": {
         "stream_fn": _stream_vulhub_compose,
         "expected_tools": [
-            "nvd_lookup", "image_resolve", "docker_compose_up", "verify",
+            "nvd_lookup",
+            "image_resolve",
+            "docker_compose_up",
+            "verify",
         ],
     },
     "custom-dockerfile": {
         "stream_fn": _stream_custom_dockerfile,
         "expected_tools": [
-            "nvd_lookup", "image_resolve", "dockerfile_gen",
-            "docker_build", "docker_run", "verify",
+            "nvd_lookup",
+            "image_resolve",
+            "dockerfile_gen",
+            "docker_build",
+            "docker_run",
+            "verify",
         ],
     },
     "source-build": {
         "stream_fn": _stream_source_build,
         "expected_tools": [
-            "nvd_lookup", "image_resolve", "source_build",
-            "docker_build", "docker_run", "verify",
+            "nvd_lookup",
+            "image_resolve",
+            "source_build",
+            "docker_build",
+            "docker_run",
+            "verify",
         ],
     },
     "plugin-overlay": {
         "stream_fn": _stream_plugin_overlay,
         "expected_tools": [
-            "nvd_lookup", "image_resolve", "source_build",
-            "dockerfile_gen", "docker_build", "docker_run", "verify",
+            "nvd_lookup",
+            "image_resolve",
+            "source_build",
+            "dockerfile_gen",
+            "docker_build",
+            "docker_run",
+            "verify",
         ],
     },
 }
@@ -511,9 +638,7 @@ def test_e2e_method_happy_path_yields_success(
     verify_payload = _verify_passed_payload()
     messages = fixture["stream_fn"](verify_payload)
     expected_tools = fixture["expected_tools"]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id=f"e2e-{method_name}", audit_root=tmp_path)
         )
@@ -553,31 +678,48 @@ def test_e2e_verify_failed_yields_no_verify_pass(tmp_path: Path) -> None:
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
-        _user(_tool_result("t2", {
-            "ok": True,
-            "matches": [{"image_ref": "test:1.0"}],
-        })),
-        _assistant(_tool_use("t3", "mcp__cve_env__docker_run",
-                             {"image_ref": "test:1.0"})),
-        _user(_tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
+        _user(
+            _tool_result(
+                "t2",
+                {
+                    "ok": True,
+                    "matches": [{"image_ref": "test:1.0"}],
+                },
+            )
+        ),
+        _assistant(
+            _tool_use("t3", "mcp__cve_env__docker_run", {"image_ref": "test:1.0"})
+        ),
+        _user(
+            _tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t4", "mcp__cve_env__verify", {"container_id": "c1"})),
-        _user(_tool_result("t4", {
-            "passed": False,
-            "results": [
-                {"type": "container_status", "passed": True},
-                {"type": "exec_check", "passed": False,
-                 "details": {"command": "apache2 -v"}},
-            ],
-            "reason": "exec_check exit_code=1",
-        })),
+        _user(
+            _tool_result(
+                "t4",
+                {
+                    "passed": False,
+                    "results": [
+                        {"type": "container_status", "passed": True},
+                        {
+                            "type": "exec_check",
+                            "passed": False,
+                            "details": {"command": "apache2 -v"},
+                        },
+                    ],
+                    "reason": "exec_check exit_code=1",
+                },
+            )
+        ),
         _assistant(_text_block("Verify failed.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-verify-fail", audit_root=tmp_path)
         )
@@ -606,30 +748,40 @@ def test_e2e_lifecycle_only_smoke_yields_success_partial(tmp_path: Path) -> None
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": [{"image_ref": "x:1"}]})),
-        _assistant(_tool_use("t3", "mcp__cve_env__docker_run",
-                             {"image_ref": "x:1"})),
-        _user(_tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(_tool_use("t3", "mcp__cve_env__docker_run", {"image_ref": "x:1"})),
+        _user(
+            _tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t4", "mcp__cve_env__verify", {"container_id": "c1"})),
-        _user(_tool_result("t4", {
-            "passed": True,
-            "results": [
-                {"type": "container_status", "passed": True},
-                {"type": "stability_wait", "passed": True},
-                # ONE active check, lacks smoke (smoke needs ≥3 active)
-                {"type": "exec_check", "passed": True,
-                 "details": {"command": "apache2 -v"}},
-            ],
-            "reason": None,
-        })),
+        _user(
+            _tool_result(
+                "t4",
+                {
+                    "passed": True,
+                    "results": [
+                        {"type": "container_status", "passed": True},
+                        {"type": "stability_wait", "passed": True},
+                        # ONE active check, lacks smoke (smoke needs ≥3 active)
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "apache2 -v"},
+                        },
+                    ],
+                    "reason": None,
+                },
+            )
+        ),
         _assistant(_text_block("Built but smoke is thin.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-partial", audit_root=tmp_path)
         )
@@ -656,22 +808,33 @@ def test_e2e_give_up_yields_unresolvable(tmp_path: Path) -> None:
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__give_up",
-                             {"reason": "proprietary",
-                              "detail": "Vendor closed-source; no buildable artifact."})),
+        _assistant(
+            _tool_use(
+                "t2",
+                "mcp__cve_env__give_up",
+                {
+                    "reason": "proprietary",
+                    "detail": "Vendor closed-source; no buildable artifact.",
+                },
+            )
+        ),
         # tool_result must include `reason` because loop reads it from the
         # tool_result payload, not the tool_input args.
-        _user(_tool_result("t2", {
-            "ok": True, "terminal": True,
-            "reason": "proprietary",
-            "detail": "Vendor closed-source; no buildable artifact.",
-        })),
+        _user(
+            _tool_result(
+                "t2",
+                {
+                    "ok": True,
+                    "terminal": True,
+                    "reason": "proprietary",
+                    "detail": "Vendor closed-source; no buildable artifact.",
+                },
+            )
+        ),
         _assistant(_text_block("Cannot build proprietary code.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-give-up", audit_root=tmp_path)
         )
@@ -702,9 +865,7 @@ def test_e2e_no_tool_calls_yields_no_verify_pass(tmp_path: Path) -> None:
         _assistant(_text_block("Stopping early without verifying.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-noverify", audit_root=tmp_path)
         )
@@ -734,19 +895,21 @@ def test_e2e_phase57_launched_unverified_when_docker_run_then_end_turn(
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": [{"image_ref": "x:1"}]})),
-        _assistant(_tool_use("t3", "mcp__cve_env__docker_run",
-                             {"image_ref": "x:1"})),
-        _user(_tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(_tool_use("t3", "mcp__cve_env__docker_run", {"image_ref": "x:1"})),
+        _user(
+            _tool_result("t3", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         # Agent stops here without calling verify
         _assistant(_text_block("Container running. Stopping.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-phase57", audit_root=tmp_path)
         )
@@ -760,9 +923,14 @@ def test_e2e_phase57_launched_unverified_when_docker_run_then_end_turn(
 
 # Set of audit-event status literals from cve_env.agent.audit.AuditStatus
 _KNOWN_AUDIT_STATUSES = {
-    "tool_ok", "tool_rejected", "tool_error", "llm_turn",
+    "tool_ok",
+    "tool_rejected",
+    "tool_error",
+    "llm_turn",
     "budget_exhausted",
-    "final_success", "final_give_up", "final_turn_cap",
+    "final_success",
+    "final_give_up",
+    "final_turn_cap",
 }
 _TERMINAL_STATUSES = {"final_success", "final_give_up", "final_turn_cap"}
 
@@ -771,9 +939,7 @@ def _run_happy_path_and_load_audit(tmp_path: Path) -> list[dict[str, Any]]:
     """Helper: run the vulhub-image happy-path stream and parse the
     emitted audit JSONL. Used by Phase 4 audit-shape tests."""
     messages = _stream_vulhub_image(_verify_passed_payload())
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="audit-shape-test", audit_root=tmp_path)
         )
@@ -807,7 +973,9 @@ def test_audit_jsonl_every_event_has_turn_and_status(tmp_path: Path) -> None:
         assert "turn" in e, f"event {i} missing turn: {e}"
         assert isinstance(e["turn"], int), f"event {i} turn not int: {e['turn']!r}"
         assert "status" in e, f"event {i} missing status: {e}"
-        assert isinstance(e["status"], str), f"event {i} status not str: {e['status']!r}"
+        assert isinstance(e["status"], str), (
+            f"event {i} status not str: {e['status']!r}"
+        )
 
 
 def test_audit_jsonl_status_values_in_known_literal(tmp_path: Path) -> None:
@@ -872,8 +1040,7 @@ def test_audit_jsonl_tool_events_have_tool_name(tmp_path: Path) -> None:
     """
     events = _run_happy_path_and_load_audit(tmp_path)
     tool_events = [
-        e for e in events
-        if e["status"] in {"tool_ok", "tool_error", "tool_rejected"}
+        e for e in events if e["status"] in {"tool_ok", "tool_error", "tool_rejected"}
     ]
     assert tool_events, "vulhub-image happy-path must produce ≥1 tool_* event"
     for e in tool_events:
@@ -922,31 +1089,52 @@ def test_e2e_pivot_vulhub_to_source_build_yields_success(tmp_path: Path) -> None
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
         # First attempt: vulhub-image (image_resolve returns no_match)
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),
         # Pivot to source-build
-        _assistant(_tool_use("t3", "mcp__cve_env__source_build",
-                             {"source_url": "https://github.com/x/x",
-                              "product": "p", "version": "v"})),
-        _user(_tool_result("t3", {
-            "ok": True, "repo_dir": "/tmp/repo-x",
-            "dockerfile_text": "FROM alpine\n",
-        })),
-        _assistant(_tool_use("t4", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/repo-x", "image_tag": "x:src"})),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__source_build",
+                {
+                    "source_url": "https://github.com/x/x",
+                    "product": "p",
+                    "version": "v",
+                },
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "repo_dir": "/tmp/repo-x",
+                    "dockerfile_text": "FROM alpine\n",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/repo-x", "image_tag": "x:src"},
+            )
+        ),
         _user(_tool_result("t4", {"ok": True, "image_ref": "x:src"})),
-        _assistant(_tool_use("t5", "mcp__cve_env__docker_run",
-                             {"image_ref": "x:src"})),
-        _user(_tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(_tool_use("t5", "mcp__cve_env__docker_run", {"image_ref": "x:src"})),
+        _user(
+            _tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t6", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t6", _verify_passed_payload())),
         _assistant(_text_block("Built via source-build after vulhub no_match.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-pivot", audit_root=tmp_path)
         )
@@ -958,8 +1146,12 @@ def test_e2e_pivot_vulhub_to_source_build_yields_success(tmp_path: Path) -> None
     assert "source_build" in outcome.tool_names_called
     # Order: research → vulhub-attempt → source-build pivot → verify
     expected_subsequence = [
-        "nvd_lookup", "image_resolve", "source_build",
-        "docker_build", "docker_run", "verify",
+        "nvd_lookup",
+        "image_resolve",
+        "source_build",
+        "docker_build",
+        "docker_run",
+        "verify",
     ]
     assert outcome.tool_names_called == expected_subsequence, (
         f"pivot tool sequence: expected {expected_subsequence}, "
@@ -981,29 +1173,49 @@ def test_e2e_pivot_vulhub_to_custom_dockerfile_yields_success(tmp_path: Path) ->
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),
-        _assistant(_tool_use("t3", "mcp__cve_env__dockerfile_gen",
-                             {"product": "p", "version": "v", "copy_ops": []})),
-        _user(_tool_result("t3", {
-            "ok": True, "dockerfile_text": "FROM alpine\n",
-            "context_dir": "/tmp/ctx-x",
-        })),
-        _assistant(_tool_use("t4", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/ctx-x", "image_tag": "x:custom"})),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__dockerfile_gen",
+                {"product": "p", "version": "v", "copy_ops": []},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "dockerfile_text": "FROM alpine\n",
+                    "context_dir": "/tmp/ctx-x",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/ctx-x", "image_tag": "x:custom"},
+            )
+        ),
         _user(_tool_result("t4", {"ok": True, "image_ref": "x:custom"})),
-        _assistant(_tool_use("t5", "mcp__cve_env__docker_run",
-                             {"image_ref": "x:custom"})),
-        _user(_tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use("t5", "mcp__cve_env__docker_run", {"image_ref": "x:custom"})
+        ),
+        _user(
+            _tool_result("t5", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t6", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t6", _verify_passed_payload())),
         _assistant(_text_block("Built via custom-dockerfile after vulhub no_match.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-pivot-custom", audit_root=tmp_path)
         )
@@ -1032,40 +1244,76 @@ def test_e2e_intra_method_retry_yields_success(tmp_path: Path) -> None:
     messages = [
         _assistant(_tool_use("t1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("t1", {"hit": True})),
-        _assistant(_tool_use("t2", "mcp__cve_env__image_resolve",
-                             {"product": "p", "version": "v"})),
+        _assistant(
+            _tool_use(
+                "t2", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("t2", {"ok": True, "matches": []})),
-        _assistant(_tool_use("t3", "mcp__cve_env__dockerfile_gen",
-                             {"product": "p", "version": "v", "copy_ops": []})),
-        _user(_tool_result("t3", {
-            "ok": True, "dockerfile_text": "FROM alpine:bad\n",
-            "context_dir": "/tmp/ctx-1",
-        })),
+        _assistant(
+            _tool_use(
+                "t3",
+                "mcp__cve_env__dockerfile_gen",
+                {"product": "p", "version": "v", "copy_ops": []},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t3",
+                {
+                    "ok": True,
+                    "dockerfile_text": "FROM alpine:bad\n",
+                    "context_dir": "/tmp/ctx-1",
+                },
+            )
+        ),
         # First docker_build attempt FAILS
-        _assistant(_tool_use("t4", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/ctx-1", "image_tag": "x:try1"})),
+        _assistant(
+            _tool_use(
+                "t4",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/ctx-1", "image_tag": "x:try1"},
+            )
+        ),
         _user(_tool_result("t4", {"ok": False, "reason": "build error"})),
         # Agent regenerates dockerfile and retries
-        _assistant(_tool_use("t5", "mcp__cve_env__dockerfile_gen",
-                             {"product": "p", "version": "v", "copy_ops": []})),
-        _user(_tool_result("t5", {
-            "ok": True, "dockerfile_text": "FROM alpine:fixed\n",
-            "context_dir": "/tmp/ctx-2",
-        })),
-        _assistant(_tool_use("t6", "mcp__cve_env__docker_build",
-                             {"context_dir": "/tmp/ctx-2", "image_tag": "x:try2"})),
+        _assistant(
+            _tool_use(
+                "t5",
+                "mcp__cve_env__dockerfile_gen",
+                {"product": "p", "version": "v", "copy_ops": []},
+            )
+        ),
+        _user(
+            _tool_result(
+                "t5",
+                {
+                    "ok": True,
+                    "dockerfile_text": "FROM alpine:fixed\n",
+                    "context_dir": "/tmp/ctx-2",
+                },
+            )
+        ),
+        _assistant(
+            _tool_use(
+                "t6",
+                "mcp__cve_env__docker_build",
+                {"context_dir": "/tmp/ctx-2", "image_tag": "x:try2"},
+            )
+        ),
         _user(_tool_result("t6", {"ok": True, "image_ref": "x:try2"})),
-        _assistant(_tool_use("t7", "mcp__cve_env__docker_run",
-                             {"image_ref": "x:try2"})),
-        _user(_tool_result("t7", {"ok": True, "container_id": "c1", "host_port": 8080})),
+        _assistant(
+            _tool_use("t7", "mcp__cve_env__docker_run", {"image_ref": "x:try2"})
+        ),
+        _user(
+            _tool_result("t7", {"ok": True, "container_id": "c1", "host_port": 8080})
+        ),
         _assistant(_tool_use("t8", "mcp__cve_env__verify", {"container_id": "c1"})),
         _user(_tool_result("t8", _verify_passed_payload())),
         _assistant(_text_block("Built after retry.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="e2e-retry", audit_root=tmp_path)
         )
@@ -1124,8 +1372,12 @@ def test_foundation_fixture_provides_all_pipeline_mock_handles(
         {"type": "log_check", "expected_patterns": ["x"]},
         {"type": "exec_check", "command": "id"},
         {"type": "http_check", "path": "/"},
-        {"type": "tcp_probe_check", "host_port": 8080,
-         "send_text": "PING", "expected_response_contains": "+PONG"},
+        {
+            "type": "tcp_probe_check",
+            "host_port": 8080,
+            "send_text": "PING",
+            "expected_response_contains": "+PONG",
+        },
     ]
     verify(container_id="cid", host_ip="127.0.0.1", host_port=8080, plan=plan)
     assert _e2e_io_mocked["subproc"].called, (
@@ -1137,8 +1389,7 @@ def test_foundation_fixture_provides_all_pipeline_mock_handles(
         "http_request_check)"
     )
     assert _e2e_io_mocked["sock"].called, (
-        "verify-stage socket.create_connection mock did NOT fire "
-        "(tcp_probe_check)"
+        "verify-stage socket.create_connection mock did NOT fire (tcp_probe_check)"
     )
     assert _e2e_io_mocked["exec"].called, (
         "verify-stage run_in_container mock did NOT fire (exec_check)"

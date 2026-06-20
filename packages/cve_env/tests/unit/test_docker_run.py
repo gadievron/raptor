@@ -37,7 +37,9 @@ def test_normalize_ports_rejects_empty() -> None:
 
 def test_normalize_ports_picks_first_numeric_key() -> None:
     # Non-numeric keys are skipped.
-    result = _normalize_ports({"not-a-port": {"bind": "127.0.0.1"}, 443: {"bind": "127.0.0.1"}})
+    result = _normalize_ports(
+        {"not-a-port": {"bind": "127.0.0.1"}, 443: {"bind": "127.0.0.1"}}
+    )
     assert result == (443, "127.0.0.1")
 
 
@@ -53,17 +55,22 @@ def test_run_error_carries_reason_and_image_ref() -> None:
 # --pull always so docker run never silently uses a stale cached layer.
 # Locally-built images (source_build output, bare names) skip the flag.
 
+
 def _find_docker_run_cmd(mock_run: Any) -> list[str]:
     """Helper: among all subprocess.run calls, find the `docker run -d ...`
     invocation. docker_run() also shells out for logs/inspect; we want the
     main run command specifically."""
     for call in mock_run.call_args_list:
         cmd = call[0][0]
-        if isinstance(cmd, list) and len(cmd) >= 3 and cmd[0] == "docker" and cmd[1] == "run":
+        if (
+            isinstance(cmd, list)
+            and len(cmd) >= 3
+            and cmd[0] == "docker"
+            and cmd[1] == "run"
+        ):
             return cmd
     raise AssertionError(
-        f"no `docker run ...` call found in mock_run; "
-        f"calls: {mock_run.call_args_list}"
+        f"no `docker run ...` call found in mock_run; calls: {mock_run.call_args_list}"
     )
 
 
@@ -106,7 +113,9 @@ def test_docker_run_blocks_duplicate_failing_attempt(mock_run: Any) -> None:
 
     reset_failed_attempts()
     # First call fails (e.g., arch mismatch).
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="platform mismatch")
+    mock_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="platform mismatch"
+    )
     r1 = docker_run(image="foo@sha256:a", container_port=80, platform="linux/arm64")
     assert r1.ok is False
     assert r1.reason == "docker_run_failed"
@@ -226,9 +235,7 @@ def test_docker_run_failure_payload_includes_next_step_hint(
 
 @patch("cve_env.tools.docker_run.run_with_timeout")
 @patch("cve_env.tools.docker_run.time.sleep")  # don't burn the retry backoff
-def test_docker_run_pull_timeout_surfaces_pivot(
-    mock_sleep: Any, mock_rwt: Any
-) -> None:
+def test_docker_run_pull_timeout_surfaces_pivot(mock_sleep: Any, mock_rwt: Any) -> None:
     from cve_env.tools.docker_run import docker_run, reset_failed_attempts
     from cve_env.utils.run import RunOutcome
 

@@ -23,12 +23,14 @@ checks were APPENDED (caller tags those for audit visibility:
 Per Phase 21.1 / 26.1 / 24B.1 / 32.1 pattern: xfail(strict=True) RED →
 markers removed atomically when 32.4 lands.
 """
+
 from __future__ import annotations
 
 
 def _try_import():
     try:
         from cve_env.tools.verify import _inject_functional_smoke
+
         return _inject_functional_smoke
     except ImportError:
         return None
@@ -86,8 +88,12 @@ def test_inject_smoke_no_op_when_http_with_content_check_present():
     inject = _try_import()
     assert inject is not None
     plan = [
-        {"type": "http_check", "path": "/", "expected_status": 200,
-         "content_check": "<html"},
+        {
+            "type": "http_check",
+            "path": "/",
+            "expected_status": 200,
+            "content_check": "<html",
+        },
     ]
     new_plan, injected = inject(plan, host_ip="127.0.0.1", host_port=8080)
     assert injected == set()

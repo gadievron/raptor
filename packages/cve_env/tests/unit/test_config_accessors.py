@@ -125,7 +125,14 @@ NUMERIC_CASES = [
 
 
 @pytest.mark.parametrize(
-    ("accessor", "env_var", "invalid_value", "valid_input", "valid_expected", "default"),
+    (
+        "accessor",
+        "env_var",
+        "invalid_value",
+        "valid_input",
+        "valid_expected",
+        "default",
+    ),
     NUMERIC_CASES,
 )
 def test_numeric_accessor_malformed_returns_default(
@@ -137,7 +144,14 @@ def test_numeric_accessor_malformed_returns_default(
 
 
 @pytest.mark.parametrize(
-    ("accessor", "env_var", "invalid_value", "valid_input", "valid_expected", "default"),
+    (
+        "accessor",
+        "env_var",
+        "invalid_value",
+        "valid_input",
+        "valid_expected",
+        "default",
+    ),
     NUMERIC_CASES,
 )
 def test_numeric_accessor_invalid_returns_default(
@@ -149,7 +163,14 @@ def test_numeric_accessor_invalid_returns_default(
 
 
 @pytest.mark.parametrize(
-    ("accessor", "env_var", "invalid_value", "valid_input", "valid_expected", "default"),
+    (
+        "accessor",
+        "env_var",
+        "invalid_value",
+        "valid_input",
+        "valid_expected",
+        "default",
+    ),
     NUMERIC_CASES,
 )
 def test_numeric_accessor_valid_override(
@@ -161,7 +182,14 @@ def test_numeric_accessor_valid_override(
 
 
 @pytest.mark.parametrize(
-    ("accessor", "env_var", "invalid_value", "valid_input", "valid_expected", "default"),
+    (
+        "accessor",
+        "env_var",
+        "invalid_value",
+        "valid_input",
+        "valid_expected",
+        "default",
+    ),
     NUMERIC_CASES,
 )
 def test_numeric_accessor_unset_returns_default(

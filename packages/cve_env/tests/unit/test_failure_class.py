@@ -16,7 +16,10 @@ from cve_env.tools._failure_class import classify_docker_stderr, is_retry_eligib
         ("disk full", "disk_full"),
         ("input/output error", "disk_full"),
         # manifest_unknown
-        ("manifest for nonexistent:latest not found: manifest unknown", "manifest_unknown"),
+        (
+            "manifest for nonexistent:latest not found: manifest unknown",
+            "manifest_unknown",
+        ),
         ("repository foo/bar not found", "manifest_unknown"),
         (
             "pull access denied for X, repository does not exist or may require 'docker login'",
@@ -28,14 +31,20 @@ from cve_env.tools._failure_class import classify_docker_stderr, is_retry_eligib
         ("toomanyrequests: You have reached your pull rate limit", "transport"),
         ("connection reset by peer", "transport"),
         ("read tcp 1.2.3.4: i/o timeout", "transport"),
-        ("Error response from daemon: timeout while waiting for connection", "transport"),
+        (
+            "Error response from daemon: timeout while waiting for connection",
+            "transport",
+        ),
         # auth
         ("denied: requested access to the resource is denied", "auth"),
         ("Error response from daemon: 401 Unauthorized", "auth"),
         ("authentication required", "auth"),
         # network
         ("network is unreachable", "network"),
-        ("dial tcp: lookup registry-1.docker.io: temporary failure in name resolution", "network"),
+        (
+            "dial tcp: lookup registry-1.docker.io: temporary failure in name resolution",
+            "network",
+        ),
         ("Could not resolve host: registry-1.docker.io", "network"),
         # unknown / fallback
         ("some bizarre error nobody has ever seen", "unknown"),
@@ -44,7 +53,9 @@ from cve_env.tools._failure_class import classify_docker_stderr, is_retry_eligib
         (None, "transport"),
     ],
 )
-def test_classify_docker_stderr_known_patterns(stderr: str | None, expected: str) -> None:
+def test_classify_docker_stderr_known_patterns(
+    stderr: str | None, expected: str
+) -> None:
     assert classify_docker_stderr(stderr) == expected
 
 
@@ -81,12 +92,12 @@ def test_is_retry_eligible_classes() -> None:
         # cycled compose retries because OCI mount errors looked transient.
         "Error response from daemon: failed to create task for container: "
         "failed to create shim: OCI runtime create failed: cannot create "
-        "subdirectories in \"/var/lib/docker/.../mounts\": no such file or directory",
+        'subdirectories in "/var/lib/docker/.../mounts": no such file or directory',
         "OCI runtime exec failed: exec failed: container_linux.go: starting "
         "container process caused: process_linux.go: ...: cannot create "
         "subdirectories",
         "Bind source path does not exist: /host/missing/dir",
-        "invalid mount config for type \"bind\": bind source path does not exist",
+        'invalid mount config for type "bind": bind source path does not exist',
     ],
 )
 def test_b12_fatal_compose_config_class(stderr: str) -> None:
@@ -209,4 +220,7 @@ def test_daemon_corruption_not_in_run_retry_eligible() -> None:
 def test_plain_disk_full_still_disk_full_not_corruption() -> None:
     """Guard: a genuine no-space error must STILL classify as disk_full (the
     daemon_corruption patterns must not over-capture plain disk exhaustion)."""
-    assert classify_docker_stderr("write /var/lib/docker/x: no space left on device") == "disk_full"
+    assert (
+        classify_docker_stderr("write /var/lib/docker/x: no space left on device")
+        == "disk_full"
+    )

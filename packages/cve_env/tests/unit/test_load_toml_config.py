@@ -13,6 +13,7 @@ Tests cover:
 
 Location: src/cve_env/config.py:33-48.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -23,7 +24,9 @@ import pytest
 import cve_env.config as cve_config
 
 
-def _reload_module_with_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str], cwd: Path) -> None:
+def _reload_module_with_env(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], cwd: Path
+) -> None:
     """Reload cve_env.config under a controlled env + cwd so _load_toml_config
     re-runs at module import. Used to test that the module-level _TOML_CONFIG
     initialization picks up the env var. NOT used for the function tests below
@@ -85,11 +88,7 @@ def test_load_toml_parses_valid_top_level_table(
 ) -> None:
     """Valid TOML with [budget] table → dict with budget key."""
     cfg = tmp_path / "cve-env.toml"
-    cfg.write_text(
-        "[budget]\n"
-        "research = 0.50\n"
-        "verify = 0.30\n"
-    )
+    cfg.write_text("[budget]\nresearch = 0.50\nverify = 0.30\n")
     monkeypatch.setenv("CVE_ENV_CONFIG_FILE", str(cfg))
     result = cve_config._load_toml_config()
     assert result == {"budget": {"research": 0.50, "verify": 0.30}}
@@ -100,11 +99,7 @@ def test_load_toml_parses_nested_tables(
 ) -> None:
     """Nested tables work — needed for _get_toml_value's dotted-path access."""
     cfg = tmp_path / "cve-env.toml"
-    cfg.write_text(
-        "[budget.modes]\n"
-        "research = \"hard\"\n"
-        "verify = \"soft\"\n"
-    )
+    cfg.write_text('[budget.modes]\nresearch = "hard"\nverify = "soft"\n')
     monkeypatch.setenv("CVE_ENV_CONFIG_FILE", str(cfg))
     result = cve_config._load_toml_config()
     assert result == {"budget": {"modes": {"research": "hard", "verify": "soft"}}}
@@ -115,7 +110,7 @@ def test_load_toml_reads_from_cwd_default(
 ) -> None:
     """No CVE_ENV_CONFIG_FILE → reads `cve-env.toml` from CWD."""
     cfg = tmp_path / "cve-env.toml"
-    cfg.write_text("[test]\nkey = \"value\"\n")
+    cfg.write_text('[test]\nkey = "value"\n')
     monkeypatch.delenv("CVE_ENV_CONFIG_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
     result = cve_config._load_toml_config()

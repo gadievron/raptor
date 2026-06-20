@@ -122,7 +122,11 @@ def test_check_http_rejects_list_method(mock_req: Any) -> None:
 
 def test_check_http_request_rejects_list_method_path_field_name() -> None:
     """method/path/field_name as list → clear error before HTTP request."""
-    for field, value in (("method", ["POST"]), ("path", ["/admin"]), ("field_name", ["q"])):
+    for field, value in (
+        ("method", ["POST"]),
+        ("path", ["/admin"]),
+        ("field_name", ["q"]),
+    ):
         kwargs: dict[str, Any] = {
             "host_ip": "127.0.0.1",
             "host_port": 8080,
@@ -231,7 +235,9 @@ def test_dockerfile_gen_rejects_string_install_steps() -> None:
     )
     p = _payload(result)
     assert p.get("ok") is False
-    assert any("install_steps" in issue and "list" in issue for issue in p.get("issues", []))
+    assert any(
+        "install_steps" in issue and "list" in issue for issue in p.get("issues", [])
+    )
 
 
 def test_dockerfile_gen_rejects_string_cmd() -> None:
@@ -264,9 +270,7 @@ def test_dockerfile_gen_rejects_string_copy_ops() -> None:
     )
     p = _payload(result)
     assert p.get("ok") is False
-    assert any(
-        "copy_ops" in issue and "list" in issue for issue in p.get("issues", [])
-    )
+    assert any("copy_ops" in issue and "list" in issue for issue in p.get("issues", []))
 
 
 # ── verify.py: check_logs ────────────────────────────────────────────────
@@ -401,7 +405,9 @@ def test_check_http_none_content_check_allowed(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=200, body=b"hello")
     result = check_http(host_ip="127.0.0.1", host_port=8080, content_check=None)
     assert result["passed"] is True
-    assert result.get("reason") is None or "content_check" not in str(result.get("reason", ""))
+    assert result.get("reason") is None or "content_check" not in str(
+        result.get("reason", "")
+    )
 
 
 @patch("cve_env.tools.verify.requests.request")
@@ -421,7 +427,9 @@ def test_check_http_request_none_headers_allowed(mock_req: Any) -> None:
         headers=None,
     )
     assert result["passed"] is True
-    assert result.get("reason") is None or "headers" not in str(result.get("reason", ""))
+    assert result.get("reason") is None or "headers" not in str(
+        result.get("reason", "")
+    )
 
 
 # ── agent/tools.py: dockerfile_gen — remaining 3 of 6 guarded fields ─────
@@ -442,7 +450,9 @@ def test_dockerfile_gen_rejects_string_apt_packages() -> None:
     )
     p = _payload(result)
     assert p.get("ok") is False
-    assert any("apt_packages" in issue and "list" in issue for issue in p.get("issues", []))
+    assert any(
+        "apt_packages" in issue and "list" in issue for issue in p.get("issues", [])
+    )
 
 
 def test_dockerfile_gen_rejects_string_cve_named_packages() -> None:
@@ -452,7 +462,10 @@ def test_dockerfile_gen_rejects_string_cve_named_packages() -> None:
     )
     p = _payload(result)
     assert p.get("ok") is False
-    assert any("cve_named_packages" in issue and "list" in issue for issue in p.get("issues", []))
+    assert any(
+        "cve_named_packages" in issue and "list" in issue
+        for issue in p.get("issues", [])
+    )
 
 
 # ── verify.py: check_tcp_probe additional guards ────────────────────────
@@ -566,7 +579,11 @@ def test_tcp_probe_check_step_rejects_null_host_port() -> None:
             host_port=8080,
             plan=[
                 {"type": "container_status"},
-                {"type": "tcp_probe_check", "host_port": None, "expected_response_contains": "SSH"},
+                {
+                    "type": "tcp_probe_check",
+                    "host_port": None,
+                    "expected_response_contains": "SSH",
+                },
             ],
         )
     assert result["passed"] is False

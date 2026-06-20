@@ -49,7 +49,10 @@ _RECOVERY_WINDOW: int = 4
 # fires on benign text ("I can't tell you which is faster without measuring")
 # would drown the log in false positives.
 _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bI\s+(can'?t|cannot|will\s+not|won'?t)\s+(help|assist|do|provide|comply)", re.I),
+    re.compile(
+        r"\bI\s+(can'?t|cannot|will\s+not|won'?t)\s+(help|assist|do|provide|comply)",
+        re.I,
+    ),
     re.compile(r"\bI\s+(must|have\s+to)\s+decline\b", re.I),
     re.compile(r"\b(unable|not\s+able)\s+to\s+(help|assist|provide|comply)\b", re.I),
     re.compile(r"\bI\s+(shouldn'?t|should\s+not)\s+(help|do|assist)\b", re.I),
@@ -58,7 +61,10 @@ _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(guidelines|policy|policies|usage\s+policy)\b",
         re.I,
     ),
-    re.compile(r"\b(as\s+an\s+AI|as\s+a\s+language\s+model)\b.*?\b(cannot|can'?t|won'?t)\b", re.I),
+    re.compile(
+        r"\b(as\s+an\s+AI|as\s+a\s+language\s+model)\b.*?\b(cannot|can'?t|won'?t)\b",
+        re.I,
+    ),
     re.compile(r"\bI\s+don'?t\s+feel\s+comfortable\b", re.I),
     # This apology pattern requires a refusal-class keyword
     # (cannot/won't/unable/refuse/decline/must not/shouldn't) within ~100
@@ -159,7 +165,9 @@ class RefusalScanner:
             if m is not None:
                 preceding = [dict(e) for e in self._history]
                 event = RefusalEvent(
-                    timestamp_utc=_dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+                    timestamp_utc=_dt.datetime.now(_dt.UTC).isoformat(
+                        timespec="seconds"
+                    ),
                     project=self.project,
                     cve_id=self.cve_id,
                     run_id=self.run_id,
@@ -186,13 +194,18 @@ class RefusalScanner:
             followups: list[dict[str, Any]] = []
             refusal_idx: int | None = None
             for i, rec in enumerate(self._full_trail):
-                if rec.get("turn") == event.turn and rec.get("kind") == "assistant_text":
+                if (
+                    rec.get("turn") == event.turn
+                    and rec.get("kind") == "assistant_text"
+                ):
                     refusal_idx = i
                     break
             if refusal_idx is not None:
                 followups = [
                     dict(r)
-                    for r in self._full_trail[refusal_idx + 1 : refusal_idx + 1 + _RECOVERY_WINDOW]
+                    for r in self._full_trail[
+                        refusal_idx + 1 : refusal_idx + 1 + _RECOVERY_WINDOW
+                    ]
                 ]
             event.subsequent_turns = followups
             event.retry_pattern = _classify_retry(event, followups)
@@ -200,7 +213,10 @@ class RefusalScanner:
             event.final_outcome_status = final_outcome_status
             if verify_passed and followups:
                 for off, rec in enumerate(followups, start=1):
-                    if rec.get("kind") == "tool_result" and rec.get("tool_name") == "verify":
+                    if (
+                        rec.get("kind") == "tool_result"
+                        and rec.get("tool_name") == "verify"
+                    ):
                         # This is an approximation -- turn offset to the first
                         # verify result after the refusal.
                         event.time_to_recovery_turns = off

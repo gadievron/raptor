@@ -13,6 +13,7 @@ The derivation is conservative: only constraints with HIGH confidence
 of impact get emitted. Slow / transient probes don't trigger a constraint
 (only structural-fail signals like rate-limit / auth-required do).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

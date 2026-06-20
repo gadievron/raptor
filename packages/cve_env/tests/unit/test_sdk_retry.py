@@ -64,7 +64,9 @@ def test_first_attempt_success_no_retry(mock_run_once: Any, mock_sleep: Any) -> 
 
 @patch("cve_env.agent.llm.asyncio.sleep", return_value=None)
 @patch("cve_env.agent.llm._run_query_once")
-def test_bash_tool_timeout_env_injected_phase_b(mock_run_once: Any, mock_sleep: Any) -> None:
+def test_bash_tool_timeout_env_injected_phase_b(
+    mock_run_once: Any, mock_sleep: Any
+) -> None:
     """Phase B (docker-pull hang): run_agent bounds the built-in Bash tool via
     BASH_DEFAULT/MAX_TIMEOUT_MS in the SDK options env, so a hung shell command
     (e.g. a manual ``docker pull``) is SIGTERM'd at the cap instead of running
@@ -79,7 +81,9 @@ def test_bash_tool_timeout_env_injected_phase_b(mock_run_once: Any, mock_sleep: 
 
 @patch("cve_env.agent.llm.asyncio.sleep", return_value=None)
 @patch("cve_env.agent.llm._run_query_once")
-def test_retry_recovers_after_transient_sdk_error(mock_run_once: Any, mock_sleep: Any) -> None:
+def test_retry_recovers_after_transient_sdk_error(
+    mock_run_once: Any, mock_sleep: Any
+) -> None:
     # First call fails (mimics the bench50 flake), second call succeeds.
     mock_run_once.side_effect = [
         ClaudeSDKError("Fatal error in message reader"),
@@ -179,7 +183,9 @@ def test_retry_uses_exponential_backoff(mock_run_once: Any, mock_sleep: Any) -> 
 
 @patch("cve_env.agent.llm.asyncio.sleep", return_value=None)
 @patch("cve_env.agent.llm._run_query_once")
-def test_generic_exception_is_retried_per_fix1(mock_run_once: Any, mock_sleep: Any) -> None:
+def test_generic_exception_is_retried_per_fix1(
+    mock_run_once: Any, mock_sleep: Any
+) -> None:
     """Fix #1 widened the catch from ClaudeSDKError to Exception so Claude
     safety refusals (which don't wrap in ClaudeSDKError) get retried."""
     mock_run_once.side_effect = [
@@ -211,7 +217,9 @@ def test_do_not_retry_sentinel_propagates(mock_run_once: Any, mock_sleep: Any) -
 
 @patch("cve_env.agent.llm.asyncio.sleep", return_value=None)
 @patch("cve_env.agent.llm._run_query_once")
-def test_refusal_triggers_deescalated_retry(mock_run_once: Any, mock_sleep: Any) -> None:
+def test_refusal_triggers_deescalated_retry(
+    mock_run_once: Any, mock_sleep: Any
+) -> None:
     """A refusal exception on attempt 1 should trigger a retry with a
     de-escalation preamble prepended to the user prompt."""
     refusal = RuntimeError(
@@ -332,7 +340,9 @@ def test_refusal_terminal_outcome_not_retried_when_verify_passed(
 
     out = _run(
         run_agent(
-            system_prompt="s", user_prompt="p", tools=[],
+            system_prompt="s",
+            user_prompt="p",
+            tools=[],
             verify_passed_check=lambda: True,
         )
     )

@@ -24,6 +24,7 @@ These tests use ``xfail(strict=True)`` per the established TDD pattern
 (Phase 21.1, 21.3.1) — the markers are removed atomically when 26.3
 wires the detector and the tests turn GREEN.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,6 +45,7 @@ def _try_import_detector():
     """Return the detector callable or None if not yet implemented (RED phase)."""
     try:
         from cve_env.agent.loop import _process_tool_result_for_recovery
+
         return _process_tool_result_for_recovery
     except ImportError:
         return None
@@ -138,27 +140,66 @@ def test_idempotent_only_first_ok_emits():
     assert detect is not None
     state = _make_state()
     # 2 failures
-    assert detect(state, tool_name="docker_build", turn=16, tool_status="tool_ok",
-                  tool_result={"ok": False}) is None
-    assert detect(state, tool_name="docker_build", turn=23, tool_status="tool_ok",
-                  tool_result={"ok": False}) is None
+    assert (
+        detect(
+            state,
+            tool_name="docker_build",
+            turn=16,
+            tool_status="tool_ok",
+            tool_result={"ok": False},
+        )
+        is None
+    )
+    assert (
+        detect(
+            state,
+            tool_name="docker_build",
+            turn=23,
+            tool_status="tool_ok",
+            tool_result={"ok": False},
+        )
+        is None
+    )
     # First success → emits recovery; errors_in_window=2; gap measured to MOST RECENT failure
-    e3 = detect(state, tool_name="docker_build", turn=32, tool_status="tool_ok",
-                tool_result={"ok": True})
+    e3 = detect(
+        state,
+        tool_name="docker_build",
+        turn=32,
+        tool_status="tool_ok",
+        tool_result={"ok": True},
+    )
     assert e3 is not None
     assert e3.tool_result["errors_in_window"] == 2
     assert e3.tool_result["error_turn"] == 23  # most recent failure
     assert e3.tool_result["gap"] == 9  # 32 - 23
     # Second success (state was cleared by the emit) → no emit
-    e4 = detect(state, tool_name="docker_build", turn=35, tool_status="tool_ok",
-                tool_result={"ok": True})
+    e4 = detect(
+        state,
+        tool_name="docker_build",
+        turn=35,
+        tool_status="tool_ok",
+        tool_result={"ok": True},
+    )
     assert e4 is None
     # New failure → re-armed
-    assert detect(state, tool_name="docker_build", turn=40, tool_status="tool_ok",
-                  tool_result={"ok": False}) is None
+    assert (
+        detect(
+            state,
+            tool_name="docker_build",
+            turn=40,
+            tool_status="tool_ok",
+            tool_result={"ok": False},
+        )
+        is None
+    )
     # Recovery again
-    e6 = detect(state, tool_name="docker_build", turn=42, tool_status="tool_ok",
-                tool_result={"ok": True})
+    e6 = detect(
+        state,
+        tool_name="docker_build",
+        turn=42,
+        tool_status="tool_ok",
+        tool_result={"ok": True},
+    )
     assert e6 is not None
     assert e6.tool_result["errors_in_window"] == 1
     assert e6.tool_result["gap"] == 2
@@ -169,12 +210,27 @@ def test_recovery_row_full_shape():
     detect = _try_import_detector()
     assert detect is not None
     state = _make_state()
-    detect(state, tool_name="verify", turn=24, tool_status="tool_ok",
-           tool_result={"passed": False, "reason": "missing-marker"})
-    detect(state, tool_name="verify", turn=37, tool_status="tool_ok",
-           tool_result={"passed": False, "reason": "missing-marker"})
-    entry = detect(state, tool_name="verify", turn=43, tool_status="tool_ok",
-                   tool_result={"passed": True})
+    detect(
+        state,
+        tool_name="verify",
+        turn=24,
+        tool_status="tool_ok",
+        tool_result={"passed": False, "reason": "missing-marker"},
+    )
+    detect(
+        state,
+        tool_name="verify",
+        turn=37,
+        tool_status="tool_ok",
+        tool_result={"passed": False, "reason": "missing-marker"},
+    )
+    entry = detect(
+        state,
+        tool_name="verify",
+        turn=43,
+        tool_status="tool_ok",
+        tool_result={"passed": True},
+    )
     assert entry is not None
     # Required fields
     expected_keys = {"error_turn", "recovery_turn", "gap", "stage", "errors_in_window"}
@@ -190,11 +246,21 @@ def test_per_tool_isolation():
     assert detect is not None
     state = _make_state()
     # docker_build fails
-    detect(state, tool_name="docker_build", turn=16, tool_status="tool_ok",
-           tool_result={"ok": False})
+    detect(
+        state,
+        tool_name="docker_build",
+        turn=16,
+        tool_status="tool_ok",
+        tool_result={"ok": False},
+    )
     # image_resolve succeeds — DIFFERENT tool. No recovery for it.
-    entry = detect(state, tool_name="image_resolve", turn=20, tool_status="tool_ok",
-                   tool_result={"ok": True})
+    entry = detect(
+        state,
+        tool_name="image_resolve",
+        turn=20,
+        tool_status="tool_ok",
+        tool_result={"ok": True},
+    )
     assert entry is None
 
 
@@ -313,6 +379,7 @@ def test_replay_phase33_canonical_distribution():
     ]
 
     from collections import Counter
+
     all_emits: list[AuditEntry] = []
     audit_root = Path(__file__).resolve().parents[2] / "output" / "agentic"
     for bench_id in BENCHES_IN_SCOPE:
@@ -402,6 +469,7 @@ def test_replay_phase36_38_canonical_distribution() -> None:
     ]
 
     from collections import Counter
+
     all_emits: list[AuditEntry] = []
     audit_root = Path(__file__).resolve().parents[2] / "output" / "agentic"
     for bench_id in BENCHES_IN_SCOPE:

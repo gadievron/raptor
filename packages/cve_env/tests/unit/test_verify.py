@@ -92,14 +92,18 @@ def test_http_check_rejects_bad_method() -> None:
 @patch("cve_env.tools.verify.requests.request")
 def test_http_check_content_check_missing(mock_req: Any) -> None:
     mock_req.return_value = _mk_resp(status=200, body=b"hello world")
-    r = check_http(host_ip="127.0.0.1", host_port=8080, content_check=["hello", "admin"])
+    r = check_http(
+        host_ip="127.0.0.1", host_port=8080, content_check=["hello", "admin"]
+    )
     assert r["passed"] is False
     assert "admin" in r["details"]["missing_content"]
 
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_check_logs_passes_when_all_patterns_match(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="Started\nlistening on 80\n", stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="Started\nlistening on 80\n", stderr=""
+    )
     r = check_logs("cid", expected_patterns=[r"Started", r"listening on \d+"])
     assert r["passed"] is True
 
@@ -134,7 +138,9 @@ def test_check_container_status_passes_on_running(mock_run: Any) -> None:
 @patch("cve_env.utils.run.subprocess.run")
 def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
     mock_run.return_value = MagicMock(
-        returncode=0, stdout='{"Status":"exited","Running":false,"ExitCode":0}', stderr=""
+        returncode=0,
+        stdout='{"Status":"exited","Running":false,"ExitCode":0}',
+        stderr="",
     )
     r = check_container_status("cid")
     assert r["passed"] is False
@@ -142,7 +148,9 @@ def test_check_container_status_fails_on_exited(mock_run: Any) -> None:
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_check_container_status_fails_on_inspect_error(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="no such container")
+    mock_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="no such container"
+    )
     r = check_container_status("cid")
     assert r["passed"] is False
 
@@ -155,8 +163,14 @@ def test_stability_wait_rejects_out_of_range() -> None:
 
 @patch("cve_env.tools.verify.time.sleep", return_value=None)
 @patch("cve_env.tools.verify.check_container_status")
-def test_stability_wait_passes_when_still_running(mock_status: Any, mock_sleep: Any) -> None:
-    mock_status.return_value = {"passed": True, "details": {}, "type": "container_status"}
+def test_stability_wait_passes_when_still_running(
+    mock_status: Any, mock_sleep: Any
+) -> None:
+    mock_status.return_value = {
+        "passed": True,
+        "details": {},
+        "type": "container_status",
+    }
     r = stability_wait("cid", wait_seconds=1)
     assert r["passed"] is True
     mock_sleep.assert_called_once_with(1)
@@ -182,7 +196,11 @@ def test_verify_stops_at_first_failure(mock_status: Any) -> None:
 @patch("cve_env.tools.verify.check_container_status")
 @patch("cve_env.tools.verify.requests.request")
 def test_verify_runs_whole_plan_when_all_pass(mock_req: Any, mock_status: Any) -> None:
-    mock_status.return_value = {"passed": True, "details": {}, "type": "container_status"}
+    mock_status.return_value = {
+        "passed": True,
+        "details": {},
+        "type": "container_status",
+    }
     mock_req.return_value = _mk_resp(status=200, body=b"ok")
     # Phase 32 (2026-05-14): use ≥2 distinct http_check paths so the
     # smoke injector short-circuits (else it appends 2 more http_checks
@@ -249,18 +267,14 @@ def test_check_exec_custom_expected_exit(mock_run: Any) -> None:
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
 def test_check_exec_stdout_contains_pass(mock_run: Any) -> None:
     mock_run.return_value = _mk_exec_result(exit_code=0, stdout="uid=0(root)")
-    r = check_exec(
-        "cid", command="id", expected_stdout_contains="uid=0"
-    )
+    r = check_exec("cid", command="id", expected_stdout_contains="uid=0")
     assert r["passed"] is True
 
 
 @patch("cve_env.tools.verify._run_in_container.run_in_container")
 def test_check_exec_stdout_contains_missing(mock_run: Any) -> None:
     mock_run.return_value = _mk_exec_result(exit_code=0, stdout="uid=1000")
-    r = check_exec(
-        "cid", command="id", expected_stdout_contains="uid=0"
-    )
+    r = check_exec("cid", command="id", expected_stdout_contains="uid=0")
     assert r["passed"] is False
     assert "missing required substring" in r["reason"]
 
@@ -286,9 +300,7 @@ def test_check_exec_pass_branch_propagates_expected_stdout_contains_phase37(
     The fix: 1-line symmetry repair at verify.py:1157 — propagate the field
     on PASS exactly as the FAIL branch does.
     """
-    mock_run.return_value = _mk_exec_result(
-        exit_code=0, stdout="2:21.1.3-2ubuntu2\n"
-    )
+    mock_run.return_value = _mk_exec_result(exit_code=0, stdout="2:21.1.3-2ubuntu2\n")
     r = check_exec(
         "cid",
         command="dpkg -l xserver-xorg-core | awk '/^ii/ {print $3}'",
@@ -434,7 +446,9 @@ def test_http_request_check_fails_on_status_mismatch(mock_req: Any) -> None:
 
 
 @patch("cve_env.tools.verify.requests.request")
-def test_http_request_check_hint_for_html_response_without_marker(mock_req: Any) -> None:
+def test_http_request_check_hint_for_html_response_without_marker(
+    mock_req: Any,
+) -> None:
     mock_req.return_value = _mk_payload_resp(
         status=200, body="<html><body>Welcome to the app</body></html>"
     )
@@ -669,9 +683,7 @@ def test_verify_dispatches_http_request_check_with_aliases(
     mock_subproc.return_value.returncode = 0
     mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
     mock_subproc.return_value.stderr = ""
-    mock_req.return_value = _mk_payload_resp(
-        status=200, body="output: uid=0 (proof)"
-    )
+    mock_req.return_value = _mk_payload_resp(status=200, body="output: uid=0 (proof)")
     out = verify(
         container_id="cid",
         host_ip="127.0.0.1",
@@ -729,9 +741,7 @@ def test_verify_canonicalizes_at_dispatch(mock_subproc: Any, mock_run: Any) -> N
     """End-to-end: a stability_wait-first plan runs container_status BEFORE stability_wait."""
     # First call: docker inspect for container_status -> running.
     mock_subproc.return_value.returncode = 0
-    mock_subproc.return_value.stdout = (
-        '{"Status": "running", "Running": true}'
-    )
+    mock_subproc.return_value.stdout = '{"Status": "running", "Running": true}'
     mock_subproc.return_value.stderr = ""
     # Pretend stability_wait succeeds (container still running).
     out = verify(
@@ -1035,9 +1045,9 @@ def test_verify_dispatches_tcp_probe_check_with_host_alias(
             {
                 "type": "tcp_probe_check",
                 "host": "127.0.0.1",  # alias for host_ip (E1.1)
-                "port": 6379,         # alias for host_port (existing)
-                "data": "PING",       # alias for send_text (existing)
-                "marker": "+PONG",    # alias for expected_response_contains (existing)
+                "port": 6379,  # alias for host_port (existing)
+                "data": "PING",  # alias for send_text (existing)
+                "marker": "+PONG",  # alias for expected_response_contains (existing)
             }
         ],
     )
@@ -1608,7 +1618,11 @@ def test_injected_smoke_failure_does_not_fail_passing_verify(
 ) -> None:
     """P8-C-01 regression: a FAILING Phase-32 smoke-injected check must NOT
     short-circuit verify to passed=False when the agent's own checks pass."""
-    mock_status.return_value = {"passed": True, "details": {}, "type": "container_status"}
+    mock_status.return_value = {
+        "passed": True,
+        "details": {},
+        "type": "container_status",
+    }
 
     def fake_http(*, host_ip: str, host_port: int, path: Any = None, **kw: Any) -> dict:
         # agent's own /api check passes; injected smoke probes (/ and the 404
@@ -1637,9 +1651,9 @@ def test_injected_smoke_failure_does_not_fail_passing_verify(
     )
     # the injected smoke checks are still RECORDED (so grading can see them) —
     # they just don't gate the overall pass.
-    assert any(
-        r.get("injected_source") == "phase32_smoke" for r in out["results"]
-    ), "injected smoke results must be present in results for grading"
+    assert any(r.get("injected_source") == "phase32_smoke" for r in out["results"]), (
+        "injected smoke results must be present in results for grading"
+    )
 
 
 @patch("cve_env.tools.verify.check_http")
@@ -1650,7 +1664,11 @@ def test_agent_http_failure_still_fails_verify(
     """Scope guard for P8-C-01: a NON-injected (agent-authored) check failing
     still short-circuits to passed=False — the fix only spares smoke-injected
     indices."""
-    mock_status.return_value = {"passed": True, "details": {}, "type": "container_status"}
+    mock_status.return_value = {
+        "passed": True,
+        "details": {},
+        "type": "container_status",
+    }
     mock_http.return_value = {
         "type": "http_check",
         "passed": False,

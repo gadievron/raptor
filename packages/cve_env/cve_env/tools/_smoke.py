@@ -119,7 +119,9 @@ def _compute_verify_quality_warning(results: list[CheckResult]) -> str:
         if t == "exec_check":
             details = entry.get("details") or {}
             command = details.get("command") if isinstance(details, dict) else None
-            if isinstance(command, str) and VERSION_ASSERTION_CMD_PATTERN.search(command):
+            if isinstance(command, str) and VERSION_ASSERTION_CMD_PATTERN.search(
+                command
+            ):
                 has_version_assertion = True
                 break  # only need one match
     # Functional-smoke predicate lives in has_functional_smoke()

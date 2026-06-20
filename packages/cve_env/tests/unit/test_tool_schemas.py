@@ -88,7 +88,9 @@ def test_every_tool_has_a_description() -> None:
 
 
 @pytest.mark.parametrize(("tool_name", "expected"), sorted(REQUIRED_PARAMS.items()))
-def test_tool_input_schema_has_expected_params(tool_name: str, expected: set[str]) -> None:
+def test_tool_input_schema_has_expected_params(
+    tool_name: str, expected: set[str]
+) -> None:
     t = get_tool_by_name(tool_name)
     assert isinstance(t.input_schema, dict)
     actual = set(t.input_schema.keys())

@@ -20,6 +20,7 @@ variously. Callers handle site-specific cleanup (``shutil.rmtree``,
 ``warnings.append``, ``logger.warning``) on the timeout / transport-error
 branch instead of inside an ``except`` block.
 """
+
 from __future__ import annotations
 
 import subprocess

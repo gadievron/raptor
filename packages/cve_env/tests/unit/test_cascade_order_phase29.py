@@ -21,13 +21,14 @@ path still works.
 Per Phase 21.1 / 26.1 pattern: xfail(strict=True) RED → markers removed
 atomically when 29.2 lands.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 
 def _try_candidate_refs():
     try:
         from cve_env.tools.image_resolve import _candidate_refs
+
         return _candidate_refs
     except ImportError:
         return None

@@ -23,6 +23,7 @@ Why err-toward-external: misclassifying local as external causes `--pull`
 to fail loudly (test suite catches it). Misclassifying external as local
 silently re-uses a stale cache — the bug this guards against. DO NOT relax.
 """
+
 from __future__ import annotations
 
 

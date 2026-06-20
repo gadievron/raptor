@@ -17,6 +17,7 @@ Tests cover:
 
 Location: src/cve_env/agent/tools.py:704-711.
 """
+
 from __future__ import annotations
 
 import pytest

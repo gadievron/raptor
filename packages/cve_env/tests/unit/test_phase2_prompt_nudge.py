@@ -9,6 +9,7 @@ tripped CVE-2024-21626 (refused on exploit-framed reasoning, yet still
 built). These tests lock that coverage so a future prompt edit can't
 silently drop it.
 """
+
 from __future__ import annotations
 
 from cve_env.agent.prompts import SYSTEM_PROMPT
@@ -61,6 +62,7 @@ def test_fix8_continuation_verify_imperative_present() -> None:
     after the gate fired. LOW-CONFIDENCE (prompt-follow-through); drift-locked so a
     future edit can't silently drop it; efficacy measured on the next bench."""
     from cve_env.agent.prompts import CONTINUATION_USER_PROMPT as p
+
     assert "ALREADY running" in p
     assert "ONLY next action is `verify`" in p
     assert "do NOT call Bash/Read to inspect" in p

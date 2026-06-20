@@ -352,7 +352,9 @@ def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
     from cve_env.agent.tools import _maybe_fuse_build
     from cve_env.tools.dockerfile_gen import render_to_payload
 
-    payload = render_to_payload(base_image=_DIGEST, install_steps=["apt-get install -y apache2"])
+    payload = render_to_payload(
+        base_image=_DIGEST, install_steps=["apt-get install -y apache2"]
+    )
     assert payload["ok"] is True
     out = _maybe_fuse_build(payload, {})
     assert "build" in out, "clean FROM+RUN render must auto-build"

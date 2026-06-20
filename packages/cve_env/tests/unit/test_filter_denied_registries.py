@@ -14,6 +14,7 @@ The function is at `src/cve_env/tools/image_resolve.py:191-227`. It's the
 Phase 29 cascade-deny-registry filter — used to test what the engine
 does when a registry is unavailable (e.g., Docker Hub rate-limited).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -66,7 +67,9 @@ def test_docker_io_drops_bare_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CVE_ENV_DENY_REGISTRY", "docker.io")
     candidates = ["redis:7", "mirror.gcr.io/library/redis:7"]
     result = _filter_denied_registries(candidates)
-    assert "redis:7" not in result, "bare-name redis:7 should be dropped (defaults to docker.io)"
+    assert "redis:7" not in result, (
+        "bare-name redis:7 should be dropped (defaults to docker.io)"
+    )
     assert "mirror.gcr.io/library/redis:7" in result
 
 
@@ -146,10 +149,10 @@ def test_phase_29_full_cascade_with_docker_io_denied(
         "quay.io/redis/redis:7",
         "ghcr.io/redis/redis:7",
         "mcr.microsoft.com/redis:7",
-        "redis:7",                    # DH bare-name
-        "library/redis:7",            # DH library
-        "vulhub/redis:7",             # DH vulhub
-        "docker.io/redis:7",          # DH explicit
+        "redis:7",  # DH bare-name
+        "library/redis:7",  # DH library
+        "vulhub/redis:7",  # DH vulhub
+        "docker.io/redis:7",  # DH explicit
         "docker.io/library/redis:7",  # DH explicit library
     ]
     result = _filter_denied_registries(cascade)
@@ -160,6 +163,11 @@ def test_phase_29_full_cascade_with_docker_io_denied(
     assert "quay.io/redis/redis:7" in result
     assert "ghcr.io/redis/redis:7" in result
     assert "mcr.microsoft.com/redis:7" in result
-    for dropped in ("redis:7", "library/redis:7", "vulhub/redis:7",
-                     "docker.io/redis:7", "docker.io/library/redis:7"):
+    for dropped in (
+        "redis:7",
+        "library/redis:7",
+        "vulhub/redis:7",
+        "docker.io/redis:7",
+        "docker.io/library/redis:7",
+    ):
         assert dropped not in result

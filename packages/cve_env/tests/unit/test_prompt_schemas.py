@@ -16,6 +16,7 @@ S28 follow-up tests (test-quality audit):
   check function must be accepted by that function (catches future
   prompt↔runtime drift across all 7 check types).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -68,7 +69,7 @@ def test_tcp_probe_check_has_exact_schema_in_prompt() -> None:
     # Must contain a {"type": "tcp_probe_check", ...} example with
     # at least one canonical kwarg (send_text, host_ip, or host_port).
     assert '"type": "tcp_probe_check"' in text, (
-        'SYSTEM_PROMPT EXACT-SCHEMAS section must contain a literal '
+        "SYSTEM_PROMPT EXACT-SCHEMAS section must contain a literal "
         '`{"type": "tcp_probe_check", ...}` JSON template.'
     )
     # Must advertise at least one of the canonical kwargs (not synonym)
@@ -77,9 +78,9 @@ def test_tcp_probe_check_has_exact_schema_in_prompt() -> None:
         for k in ('"send_text"', '"host_port"', '"expected_response_contains"')
     )
     assert has_canonical_kwarg, (
-        'tcp_probe_check JSON template must reference canonical '
-        'kwargs (send_text / host_port / expected_response_contains), '
-        'not just LLM-synonyms.'
+        "tcp_probe_check JSON template must reference canonical "
+        "kwargs (send_text / host_port / expected_response_contains), "
+        "not just LLM-synonyms."
     )
 
 
@@ -98,7 +99,7 @@ def test_tcp_probe_check_template_in_prompt_is_valid_json() -> None:
     )
     matches = pattern.findall(SYSTEM_PROMPT)
     assert matches, (
-        "could not locate `{\"type\": \"tcp_probe_check\", ...}` "
+        'could not locate `{"type": "tcp_probe_check", ...}` '
         "JSON block in SYSTEM_PROMPT"
     )
     # Try to parse each candidate; at least one must parse cleanly.
@@ -244,6 +245,7 @@ def test_tcp_payload_aliases_in_prompt_match_runtime_dict() -> None:
     prompt narrative + runtime drift apart: if someone removes `host`
     from either side, this test goes RED."""
     from cve_env.tools.verify import _TCP_PROBE_KEY_ALIASES
+
     # The narrative line: "Aliases accepted: `a`→`b`, `c`→`d`, ...."
     m = re.search(r"Aliases accepted:\s*([^.]+)\.", SYSTEM_PROMPT)
     assert m, (
@@ -318,17 +320,13 @@ def _all_check_io_mocked() -> Any:
             '{"Status": "running", "Running": true, "ExitCode": 0}'
         )
         subproc.return_value.stderr = ""
-        stack.enter_context(
-            patch("cve_env.utils.run.subprocess.run", subproc)
-        )
+        stack.enter_context(patch("cve_env.utils.run.subprocess.run", subproc))
         # HTTP (requests.request)
         req_mock = MagicMock()
         req_mock.return_value.status_code = 200
         req_mock.return_value.content = b"hello"
         req_mock.return_value.text = "hello"
-        stack.enter_context(
-            patch("cve_env.tools.verify.requests.request", req_mock)
-        )
+        stack.enter_context(patch("cve_env.tools.verify.requests.request", req_mock))
         # TCP (socket.create_connection)
         sock_factory = MagicMock(return_value=_FakeTCPSocket(response=b"+PONG\r\n"))
         stack.enter_context(
@@ -337,8 +335,13 @@ def _all_check_io_mocked() -> Any:
         # Container exec (run_in_container.run_in_container)
         exec_mock = MagicMock(
             return_value=ExecResult(
-                ok=True, container_id="cid", command="id",
-                exit_code=0, stdout="ok", stderr="", duration_s=0.001,
+                ok=True,
+                container_id="cid",
+                command="id",
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                duration_s=0.001,
             )
         )
         stack.enter_context(
@@ -418,9 +421,7 @@ def test_verify_dispatches_advertised_schemas_without_exception(
     semantics."""
     from cve_env.tools.verify import verify
 
-    out = verify(
-        container_id="cid", host_ip="127.0.0.1", host_port=8080, plan=[step]
-    )
+    out = verify(container_id="cid", host_ip="127.0.0.1", host_port=8080, plan=[step])
     assert out is not None
     assert "passed" in out, f"verify did not return a result dict: {out}"
     assert isinstance(out.get("results"), list), (
@@ -434,19 +435,31 @@ def test_verify_dispatches_advertised_schemas_without_exception(
 # for every step.
 _ROUTING_EXPECTATIONS: dict[str, dict[str, list[str]]] = {
     # container_status uses _inspect_state → subprocess.run
-    "container_status": {"must_call": ["subproc"], "must_not_call": ["req", "sock", "exec"]},
+    "container_status": {
+        "must_call": ["subproc"],
+        "must_not_call": ["req", "sock", "exec"],
+    },
     # http_check → requests.request
     "http_check": {"must_call": ["subproc", "req"], "must_not_call": ["sock", "exec"]},
     # log_check → subprocess.run (docker logs)
     "log_check": {"must_call": ["subproc"], "must_not_call": ["req", "sock", "exec"]},
     # stability_wait → check_container_status → subprocess.run (no separate I/O)
-    "stability_wait": {"must_call": ["subproc"], "must_not_call": ["req", "sock", "exec"]},
+    "stability_wait": {
+        "must_call": ["subproc"],
+        "must_not_call": ["req", "sock", "exec"],
+    },
     # exec_check → _run_in_container.run_in_container
     "exec_check": {"must_call": ["subproc", "exec"], "must_not_call": ["req", "sock"]},
     # http_request_check → requests.request
-    "http_request_check": {"must_call": ["subproc", "req"], "must_not_call": ["sock", "exec"]},
+    "http_request_check": {
+        "must_call": ["subproc", "req"],
+        "must_not_call": ["sock", "exec"],
+    },
     # tcp_probe_check → socket.create_connection
-    "tcp_probe_check": {"must_call": ["subproc", "sock"], "must_not_call": ["req", "exec"]},
+    "tcp_probe_check": {
+        "must_call": ["subproc", "sock"],
+        "must_not_call": ["req", "exec"],
+    },
 }
 
 
@@ -477,9 +490,7 @@ def test_verify_dispatches_advertised_schemas_to_correct_io(
 
     step = _DISPATCH_FIXTURES[step_type]
     mocks = _all_check_io_mocked
-    verify(
-        container_id="cid", host_ip="127.0.0.1", host_port=8080, plan=[step]
-    )
+    verify(container_id="cid", host_ip="127.0.0.1", host_port=8080, plan=[step])
     for name in expectations["must_call"]:
         assert mocks[name].called, (
             f"step {step_type!r} must call {name!r} I/O but it was NOT called"
@@ -591,9 +602,11 @@ def test_prompt_indirect_poc_verification() -> None:
     assert "content-policy" in SYSTEM_PROMPT or "content policy" in SYSTEM_PROMPT, (
         "Prompt must contain A6 indirect PoC rule mentioning content-policy"
     )
-    assert "side effect" in SYSTEM_PROMPT or "side-effect" in SYSTEM_PROMPT or "side effects" in SYSTEM_PROMPT, (
-        "Prompt must mention side-effect verification for A6 rule"
-    )
+    assert (
+        "side effect" in SYSTEM_PROMPT
+        or "side-effect" in SYSTEM_PROMPT
+        or "side effects" in SYSTEM_PROMPT
+    ), "Prompt must mention side-effect verification for A6 rule"
 
 
 def test_prompt_post_docker_run_verify_required() -> None:
@@ -613,7 +626,7 @@ def test_prompt_post_docker_run_verify_required() -> None:
     )
     # Rule must direct agent to verify after docker_run
     idx = SYSTEM_PROMPT.index("Phase 37.6")
-    context = SYSTEM_PROMPT[max(0, idx - 50): idx + 600]
+    context = SYSTEM_PROMPT[max(0, idx - 50) : idx + 600]
     assert "docker_run" in context and "verify" in context, (
         f"F-7 rule must mention docker_run + verify; got: {context!r}"
     )
@@ -673,8 +686,7 @@ def test_prompt_phase41_post_compose_up_and_post_build_chains() -> None:
     # Anchored to Phase 24E #29 shape (so triage knows this is a
     # post-deterministic-trigger rule per past-bench-lessons §0).
     assert "Phase 24E" in context or "73%" in context, (
-        f"Phase 41 rule must reference the Phase 24E shape it follows; "
-        f"got: {context!r}"
+        f"Phase 41 rule must reference the Phase 24E shape it follows; got: {context!r}"
     )
 
 
@@ -696,7 +708,7 @@ def test_prompt_research_only_fast_fail() -> None:
     for phrase in ("no candidates", "0 candidates", "no image candidates"):
         if phrase in SYSTEM_PROMPT:
             idx = SYSTEM_PROMPT.index(phrase)
-            context = SYSTEM_PROMPT[max(0, idx - 100):idx + 300]
+            context = SYSTEM_PROMPT[max(0, idx - 100) : idx + 300]
             assert "give_up" in context, (
                 f"P0-4 rule near '{phrase}' must direct agent to give_up; "
                 f"got context: {context!r}"
@@ -730,10 +742,15 @@ def test_prompt_two_fail_pivot_rule() -> None:
         "P0-5 rule must direct pivot: 'pivot' / 'different base' / 'change strategy'"
     )
     # Must specifically reference docker_build (so the rule applies in the right context)
-    for count_phrase in ("2 consecutive", "two consecutive", "second failure", "after 2 failures"):
+    for count_phrase in (
+        "2 consecutive",
+        "two consecutive",
+        "second failure",
+        "after 2 failures",
+    ):
         if count_phrase in SYSTEM_PROMPT:
             idx = SYSTEM_PROMPT.index(count_phrase)
-            context = SYSTEM_PROMPT[max(0, idx - 100):idx + 400]
+            context = SYSTEM_PROMPT[max(0, idx - 100) : idx + 400]
             assert "docker_build" in context, (
                 f"P0-5 rule near '{count_phrase}' must reference docker_build; "
                 f"got context: {context!r}"
@@ -749,11 +766,15 @@ def test_prompt_p_a8_bash_source_reads_route_through_github_fetch() -> None:
     experiment were both Bash-on-vulnerable-source-file."""
     assert "P-A8" in SYSTEM_PROMPT, "P-A8 marker missing"
     idx = SYSTEM_PROMPT.index("P-A8")
-    block = SYSTEM_PROMPT[idx:idx + 2000]
+    block = SYSTEM_PROMPT[idx : idx + 2000]
     # Must direct toward github_fetch
     assert "github_fetch" in block, "P-A8 must direct agent to github_fetch"
     # Must list at least 3 source file extensions explicitly
-    n_exts = sum(1 for ext in (".php", ".py", ".go", ".java", ".rb", ".js", ".c", ".cpp") if ext in block)
+    n_exts = sum(
+        1
+        for ext in (".php", ".py", ".go", ".java", ".rb", ".js", ".c", ".cpp")
+        if ext in block
+    )
     assert n_exts >= 3, f"P-A8 must list ≥3 source extensions; found {n_exts}"
     # Must reference Bash as the FORBIDDEN path
     assert "Bash" in block, "P-A8 must mention Bash"
@@ -778,17 +799,22 @@ def test_prompt_p0_7_refusal_recovery_marker() -> None:
     # Must mention refusal-recovery reframe + indirect-PoC + give_up after 2x
     assert "refusal" in SYSTEM_PROMPT.lower(), "P0-7 must reference 'refusal'"
     # The reframe instruction must appear
-    assert "environment-construction" in SYSTEM_PROMPT or \
-        "vulnerable Docker environment" in SYSTEM_PROMPT, \
-        "P0-7 must contain reframing language ('environment-construction' " \
+    assert (
+        "environment-construction" in SYSTEM_PROMPT
+        or "vulnerable Docker environment" in SYSTEM_PROMPT
+    ), (
+        "P0-7 must contain reframing language ('environment-construction' "
         "or 'vulnerable Docker environment')"
+    )
     # Must direct to give_up with content_policy reason after 2 refusals
     idx = SYSTEM_PROMPT.index("P0-7")
-    context = SYSTEM_PROMPT[idx:idx + 1500]
-    assert "2 consecutive" in context or "two consecutive" in context, \
+    context = SYSTEM_PROMPT[idx : idx + 1500]
+    assert "2 consecutive" in context or "two consecutive" in context, (
         "P0-7 must specify 2-refusal threshold"
-    assert "content_policy" in context, \
+    )
+    assert "content_policy" in context, (
         "P0-7 must direct give_up(reason='content_policy', ...)"
+    )
 
 
 def test_prompt_phase_52_1_explicit_prepatch_version_marker() -> None:
@@ -797,23 +823,16 @@ def test_prompt_phase_52_1_explicit_prepatch_version_marker() -> None:
     version string (e.g., 'Apache/2.4.49') — not just the package name
     ('Apache'). Without this, a generic version-discovery exec_check passes
     against ANY deployed version, defeating the Phase 52 gate's purpose."""
-    assert "Phase 52.1" in SYSTEM_PROMPT, (
-        "Phase 52.1 marker missing from SYSTEM_PROMPT"
-    )
+    assert "Phase 52.1" in SYSTEM_PROMPT, "Phase 52.1 marker missing from SYSTEM_PROMPT"
     idx = SYSTEM_PROMPT.index("Phase 52.1")
-    block = SYSTEM_PROMPT[idx:idx + 2000]
+    block = SYSTEM_PROMPT[idx : idx + 2000]
     # Must reference expected_stdout_contains (the field being tightened)
     assert "expected_stdout_contains" in block, (
         "Phase 52.1 must reference expected_stdout_contains"
     )
     # Must reference pre-patch / vulnerable version language
-    has_prepatch = (
-        "pre-patch" in block.lower()
-        or "vulnerable version" in block.lower()
-    )
-    assert has_prepatch, (
-        "Phase 52.1 must reference 'pre-patch' / 'vulnerable version'"
-    )
+    has_prepatch = "pre-patch" in block.lower() or "vulnerable version" in block.lower()
+    assert has_prepatch, "Phase 52.1 must reference 'pre-patch' / 'vulnerable version'"
 
 
 def test_prompt_phase_52_1_explicit_prepatch_version_behavioral() -> None:
@@ -823,7 +842,7 @@ def test_prompt_phase_52_1_explicit_prepatch_version_behavioral() -> None:
     versionEndExcluding/version fields (so the agent knows where to source
     the string)."""
     idx = SYSTEM_PROMPT.index("Phase 52.1")
-    block = SYSTEM_PROMPT[idx:idx + 2000]
+    block = SYSTEM_PROMPT[idx : idx + 2000]
     # GOOD/BAD contrast — both labels must appear in the block
     has_good = "GOOD:" in block
     has_bad = "BAD:" in block
@@ -832,9 +851,8 @@ def test_prompt_phase_52_1_explicit_prepatch_version_behavioral() -> None:
         "has a concrete model of loose vs tight assertions"
     )
     # Must point at NVD source for the pre-patch string
-    has_nvd_source = (
-        "nvd_lookup" in block
-        and ("versionEndExcluding" in block or "version" in block)
+    has_nvd_source = "nvd_lookup" in block and (
+        "versionEndExcluding" in block or "version" in block
     )
     assert has_nvd_source, (
         "Phase 52.1 must direct the agent to nvd_lookup's "
@@ -842,8 +860,7 @@ def test_prompt_phase_52_1_explicit_prepatch_version_behavioral() -> None:
     )
     # Must specify failure contract: deployed != pre-patch → exec_check fails
     has_failure_contract = (
-        "FAIL" in block or "must fail" in block.lower()
-        or "differs" in block.lower()
+        "FAIL" in block or "must fail" in block.lower() or "differs" in block.lower()
     )
     assert has_failure_contract, (
         "Phase 52.1 must state the failure contract: if deployed version "
@@ -859,7 +876,7 @@ def test_prompt_p0_x_end_of_run_discipline_marker() -> None:
     the rule TEXT is present."""
     assert "P0-X" in SYSTEM_PROMPT, "P0-X marker missing from SYSTEM_PROMPT"
     idx = SYSTEM_PROMPT.index("P0-X")
-    block = SYSTEM_PROMPT[idx:idx + 1500]
+    block = SYSTEM_PROMPT[idx : idx + 1500]
     assert "verify" in block, "P0-X must reference verify"
     assert "give_up" in block, "P0-X must reference give_up"
     # The (a) / (b) structure or equivalent must direct one of two terminations
@@ -874,17 +891,21 @@ def test_prompt_p0_x_end_of_run_discipline_behavioral() -> None:
     (so the agent reading sequentially knows which reasons are valid). Tests
     structural completeness, not just text presence."""
     idx = SYSTEM_PROMPT.index("P0-X")
-    block = SYSTEM_PROMPT[idx:idx + 1500]
+    block = SYSTEM_PROMPT[idx : idx + 1500]
     # Must have explicit "never silent end" prohibition
-    has_prohibition = (
-        "NEVER" in block and ("silently" in block or "without" in block)
-    )
+    has_prohibition = "NEVER" in block and ("silently" in block or "without" in block)
     # Must enumerate at least 2 valid give_up reasons so the agent knows
     # what to put in the reason field
     enumerated_reasons = sum(
-        1 for keyword in (
-            "rate_limited", "no_image", "source_not_found",
-            "verify-fail", "refusal", "budget", "content_policy",
+        1
+        for keyword in (
+            "rate_limited",
+            "no_image",
+            "source_not_found",
+            "verify-fail",
+            "refusal",
+            "budget",
+            "content_policy",
         )
         if keyword in block
     )
@@ -905,7 +926,7 @@ def test_prompt_p0_7_refusal_recovery_behavioral() -> None:
     three pieces of guidance together. Tests structural coherence, not just
     text presence."""
     idx = SYSTEM_PROMPT.index("P0-7")
-    block = SYSTEM_PROMPT[idx:idx + 1500]
+    block = SYSTEM_PROMPT[idx : idx + 1500]
     # All three semantic pieces must co-occur within the P0-7 section:
     # 1) reframing direction
     has_reframe = (
@@ -914,8 +935,11 @@ def test_prompt_p0_7_refusal_recovery_behavioral() -> None:
     )
     # 2) indirect-PoC substitute (file in /tmp / canary / banner regex)
     has_indirect = (
-        "/tmp" in block or "canary" in block or "banner" in block
-        or "P-A6" in block or "indirect-PoC" in block
+        "/tmp" in block
+        or "canary" in block
+        or "banner" in block
+        or "P-A6" in block
+        or "indirect-PoC" in block
     )
     # 3) give_up escape after 2 refusals
     has_giveup = (
@@ -925,9 +949,7 @@ def test_prompt_p0_7_refusal_recovery_behavioral() -> None:
     )
     assert has_reframe, "P0-7 missing reframe instruction"
     assert has_indirect, "P0-7 missing indirect-PoC substitute guidance"
-    assert has_giveup, (
-        "P0-7 missing give_up(content_policy) escape after 2 refusals"
-    )
+    assert has_giveup, "P0-7 missing give_up(content_policy) escape after 2 refusals"
 
 
 def test_phase_24b_version_assertion_rule_present():
@@ -948,7 +970,9 @@ def test_phase_24b_version_assertion_rule_present():
     assert (
         "version literal" in SYSTEM_PROMPT
         and "expected_stdout_contains" in SYSTEM_PROMPT
-    ), "Phase 24B rule missing the 'version literal in expected_stdout_contains' directive"
+    ), (
+        "Phase 24B rule missing the 'version literal in expected_stdout_contains' directive"
+    )
     # The rule mentions the auto-inject fallback so the agent knows the
     # runtime catches the omission case.
     assert (
@@ -973,8 +997,7 @@ def test_phase_24e_recovery_prompt_bundle_present():
     )
     # #27 Verify-iteration: agent must read reason + iterate, not quit
     assert (
-        "Verify-iteration" in SYSTEM_PROMPT
-        and "MODIFY ONE CHECK" in SYSTEM_PROMPT
+        "Verify-iteration" in SYSTEM_PROMPT and "MODIFY ONE CHECK" in SYSTEM_PROMPT
     ), "Phase 24E #27 verify-iteration rule missing"
     # #29 Source-build pivot to dockerfile_gen
     assert (
@@ -983,10 +1006,9 @@ def test_phase_24e_recovery_prompt_bundle_present():
         and "no_tag_matched" in SYSTEM_PROMPT
     ), "Phase 24E #29 source-build pivot rule missing"
     # #34 Read-the-hint before retrying build-stage tools
-    assert (
-        "Read-the-hint" in SYSTEM_PROMPT
-        and "next_step_hint" in SYSTEM_PROMPT
-    ), "Phase 24E #34 read-the-hint rule missing"
+    assert "Read-the-hint" in SYSTEM_PROMPT and "next_step_hint" in SYSTEM_PROMPT, (
+        "Phase 24E #34 read-the-hint rule missing"
+    )
 
 
 def test_prompt_forbids_raw_bash_docker_pull() -> None:

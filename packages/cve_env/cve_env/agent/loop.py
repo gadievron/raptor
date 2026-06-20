@@ -111,7 +111,11 @@ from cve_env.tools._smoke import has_functional_smoke
 # live monitor (bench_status.sh); this brings the same story to one-off
 # `cve-env build` smokes. Set CVE_ENV_QUIET=1 to suppress (tests do this
 # to keep pytest output clean).
-_LIVE_STDERR_DISABLED: bool = os.environ.get("CVE_ENV_QUIET", "").strip() in ("1", "true", "True")
+_LIVE_STDERR_DISABLED: bool = os.environ.get("CVE_ENV_QUIET", "").strip() in (
+    "1",
+    "true",
+    "True",
+)
 
 # Fix #8 (continuation loop on premature end_turn): the prompt's
 # commitment-enforcement rule alone does NOT close a measured follow-through gap
@@ -133,9 +137,7 @@ _LIVE_STDERR_DISABLED: bool = os.environ.get("CVE_ENV_QUIET", "").strip() in ("1
 _LIFECYCLE_ONLY_CHECK_TYPES = frozenset(
     {"container_status", "http_check", "log_check", "stability_wait"}
 )
-_ACTIVE_CHECK_TYPES = frozenset(
-    {"http_request_check", "exec_check", "tcp_probe_check"}
-)
+_ACTIVE_CHECK_TYPES = frozenset({"http_request_check", "exec_check", "tcp_probe_check"})
 
 # Backwards-compat alias retained briefly during transition.
 _ACTIVE_PROBE_CHECK_TYPES = _ACTIVE_CHECK_TYPES
@@ -197,9 +199,7 @@ def _classify_api_overload(final_text: str) -> str:
     return ""
 
 
-def _check_wall_budget(
-    wall_start_time: float, budget_s: float, turn: int
-) -> None:
+def _check_wall_budget(wall_start_time: float, budget_s: float, turn: int) -> None:
     """Raise WallBudgetExceeded when elapsed wall-clock exceeds budget.
 
     Uses time.time() (NOT time.monotonic()) because monotonic clocks also
@@ -458,9 +458,7 @@ class _StreamState:
     stage_costs: dict[str, float] = field(
         default_factory=lambda: {s: 0.0 for s in STAGES}
     )
-    stage_calls: dict[str, int] = field(
-        default_factory=lambda: {s: 0 for s in STAGES}
-    )
+    stage_calls: dict[str, int] = field(default_factory=lambda: {s: 0 for s in STAGES})
     last_tool_stage: str = "OTHER"
     # Per-segment cost-attribution accounting. A "segment" is the sequence of
     # AssistantMessages culminating in a ResultMessage.
@@ -625,8 +623,7 @@ def _latch_assistant_token_cost(state: _StreamState, msg: Any, model: str) -> No
                 state.stage_costs.get(state.last_tool_stage, 0.0) + cost
             )
             state.am_credited_per_segment[state.current_segment_id] = (
-                state.am_credited_per_segment.get(state.current_segment_id, 0.0)
-                + cost
+                state.am_credited_per_segment.get(state.current_segment_id, 0.0) + cost
             )
 
 
@@ -641,7 +638,14 @@ def _latch_assistant_token_cost(state: _StreamState, msg: Any, model: str) -> No
 # natural end_turn with the SDK's full cost reported — are excluded so the floor
 # never inflates a correctly-reported cost.
 _INTERRUPTED_EXIT_STATUSES = frozenset(
-    {"turn_cap", "budget_exhausted", "error", "interrupted", "incomplete", "rate_limited"}
+    {
+        "turn_cap",
+        "budget_exhausted",
+        "error",
+        "interrupted",
+        "incomplete",
+        "rate_limited",
+    }
 )
 
 
@@ -806,20 +810,14 @@ def _live_progress_hint(tool_name: str, payload: Any) -> str:
     if tool_name == "verify":
         results = payload.get("results") or []
         if isinstance(results, list):
-            ok = sum(
-                1
-                for r in results
-                if isinstance(r, dict) and r.get("passed")
-            )
+            ok = sum(1 for r in results if isinstance(r, dict) and r.get("passed"))
             return f"{ok}/{len(results)} passed"
     if tool_name == "give_up":
         return f"reason={payload.get('reason', '')}"
     return ""
 
 
-def _terminal_status_for_result(
-    state: _StreamState, sr_lower: str
-) -> AuditStatus:
+def _terminal_status_for_result(state: _StreamState, sr_lower: str) -> AuditStatus:
     """Map a ResultMessage to its terminal AuditStatus."""
     # Verify-phase refusal salvage: mirror the _map_status salvage so the audit
     # terminal entry stays consistent with the Outcome — a refused-but-launched,
@@ -913,9 +911,7 @@ def should_extend_turn_cap(
     return int(current_max_turns * (1.0 + extension_pct))
 
 
-def _is_productive_outcome(
-    tool_name: str, payload: Any, docker_built_ok: bool
-) -> bool:
+def _is_productive_outcome(tool_name: str, payload: Any, docker_built_ok: bool) -> bool:
     """Does this tool outcome mark the agent as 'productive'
     (so ``should_extend_turn_cap`` can grant a turn-cap extension)?
 
@@ -1157,11 +1153,7 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
     # end_turn after a single Bash poke at the container's logs without ever
     # calling verify). Surfacing it as its own status lets triage tables count +
     # remediate it separately.
-    if (
-        state.launched_ok
-        and not state.verify_attempted
-        and stop_reason == "end_turn"
-    ):
+    if state.launched_ok and not state.verify_attempted and stop_reason == "end_turn":
         return (
             "launched_no_verify",
             "agent launched (docker_run/compose_up.ok=true) but emitted "
@@ -1191,7 +1183,13 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
         # exercised. tool_uses_seen already tracks all tool calls — consult it
         # instead of adding new state.
         tool_names = {u.get("name", "") for u in state.tool_uses_seen}
-        research_tools = {"nvd_lookup", "github_fetch", "web_fetch", "WebFetch", "WebSearch"}
+        research_tools = {
+            "nvd_lookup",
+            "github_fetch",
+            "web_fetch",
+            "WebFetch",
+            "WebSearch",
+        }
         build_tools = {"docker_build", "dockerfile_gen"}
         # TRIAGE-ENRICHMENT marker for the docker_build-SUCCEEDED-but-no-launch
         # case (parallel to the turn_cap marker stuck_after_launch_after_build).
@@ -1263,7 +1261,13 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
         # Include Bash/Read/Write in the research-or-diag set so that runs which
         # used only diagnostic tools (no build, no verify) classify as
         # research-only rather than the generic "no successful verify" fallback.
-        research_or_diag = research_tools | {"image_resolve", "ToolSearch", "Bash", "Read", "Write"}
+        research_or_diag = research_tools | {
+            "image_resolve",
+            "ToolSearch",
+            "Bash",
+            "Read",
+            "Write",
+        }
         if tool_names and tool_names <= research_or_diag:
             return "verify_failed", "research-only path; no build artifacts produced"
         return "verify_failed", "agent ended without a successful verify"
@@ -1328,11 +1332,13 @@ def _should_continue_for_verify(
 # force-resolve will re-prompt past. proprietary (closed-source, genuinely
 # unbuildable) and arch_incompatible (host-limited) are deliberately EXCLUDED —
 # never burn a continuation forcing a build on the proprietary corpus slice.
-_FORCE_RESOLVE_ELIGIBLE_REASONS: frozenset[str] = frozenset({
-    "skipped_image_lookup",   # no_image emitted without image_resolve (cascade-skip)
-    "no_image",               # incl. resolve-only: image_resolve not_found, no build pivot
-    "unresolvable_metadata",
-})
+_FORCE_RESOLVE_ELIGIBLE_REASONS: frozenset[str] = frozenset(
+    {
+        "skipped_image_lookup",  # no_image emitted without image_resolve (cascade-skip)
+        "no_image",  # incl. resolve-only: image_resolve not_found, no build pivot
+        "unresolvable_metadata",
+    }
+)
 
 
 def _build_attempted(state: _StreamState) -> bool:
@@ -1715,7 +1721,9 @@ async def build(
                             "turn": state.turn,
                             "kind": "assistant_tool_use",
                             "tool_name": short_name,
-                            "input": dict(block.input) if isinstance(block.input, dict) else {},
+                            "input": dict(block.input)
+                            if isinstance(block.input, dict)
+                            else {},
                         }
                     )
                     writer.write(
@@ -1724,7 +1732,9 @@ async def build(
                             turn=state.turn,
                             status="llm_turn",
                             tool_name=short_name,
-                            tool_input=dict(block.input) if isinstance(block.input, dict) else {},
+                            tool_input=dict(block.input)
+                            if isinstance(block.input, dict)
+                            else {},
                         ),
                     )
                 elif isinstance(block, TextBlock):
@@ -1829,7 +1839,9 @@ async def build(
                                 # _has_specific_version_marker still guards
                                 # type==exec_check + a real \d+\.\d+ marker.
                                 if _has_specific_version_marker(entry):
-                                    state.passing_verify_has_specific_version_marker = True
+                                    state.passing_verify_has_specific_version_marker = (
+                                        True
+                                    )
                             # The functional-smoke predicate lives in the shared
                             # helper in verify.py (single source of truth — matches
                             # the same heuristic that drives verify_quality_warning
@@ -2081,7 +2093,9 @@ async def build(
         # Raise after audit so triage sees the give_up event but no spurious tool
         # calls beyond it.
         if state.give_up_reason:
-            raise GiveUpReceived(f"agent issued give_up(reason={state.give_up_reason!r})")
+            raise GiveUpReceived(
+                f"agent issued give_up(reason={state.give_up_reason!r})"
+            )
 
     # Prepend doctor → agent constraints to the system prompt when present (e.g.
     # Docker Hub rate-limited → tell the agent to AVOID vulhub-* methods this run).
@@ -2137,6 +2151,7 @@ async def build(
         # earlier (same pattern as _map_status above). Reuses llm._is_refusal —
         # the canonical refusal-signature matcher.
         from cve_env.agent.llm import InStreamRefusal, _is_refusal
+
         # An InStreamRefusal that survived all run_agent retries (the run kept
         # terminating on a refusal stop_reason) is refusal-class too.
         is_refusal_exc = _is_refusal(exc) or isinstance(exc, InStreamRefusal)
@@ -2541,14 +2556,21 @@ async def build(
         # authoritative engine counter, per on_message, accumulates across
         # continuation runs) is the real turn count; the SDK msg.num_turns
         # underreports it. max() keeps the existing floors.
-        num_turns=max(state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)),
+        num_turns=max(
+            state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)
+        ),
         # Include a token-based estimate as a third floor, then a turns-based
         # floor for interrupted exits with no token usage (session auth). The SDK
         # has been observed reporting total_cost_usd=0 on max_turns_reached even
         # after multiple LLM rounds; the floors recover that data. See _floor_cost.
         total_cost_usd=_floor_cost(
             status,
-            max(state.turn, state.last_num_turns, cont_turns_acc, len(state.tool_uses_seen)),
+            max(
+                state.turn,
+                state.last_num_turns,
+                cont_turns_acc,
+                len(state.tool_uses_seen),
+            ),
             state.last_cost_usd,
             cont_cost_acc,
             state.total_input_tokens,

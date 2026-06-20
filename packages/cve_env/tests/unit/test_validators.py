@@ -30,7 +30,9 @@ def test_validate_image_ref_rejects_latest() -> None:
     assert any("forbidden version tag" in i for i in issues)
 
 
-@pytest.mark.parametrize("tag", ["latest", "stable", "lts", "current", "edge", "nightly"])
+@pytest.mark.parametrize(
+    "tag", ["latest", "stable", "lts", "current", "edge", "nightly"]
+)
 def test_validate_image_ref_rejects_every_forbidden_tag(tag: str) -> None:
     assert validate_image_ref(f"nginx:{tag}")
 
@@ -126,4 +128,3 @@ def test_validate_dockerfile_rejects_latest_tag() -> None:
     bad = 'FROM nginx:latest\nCMD ["nginx", "-g", "daemon off;"]\n'
     issues = validate_dockerfile(bad)
     assert issues
-

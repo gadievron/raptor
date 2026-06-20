@@ -11,6 +11,7 @@ RED until the ``except (WallBudgetExceeded, NoProgressReached)`` clause exists i
 _consume: today they propagate, so _run_query_once raises instead of returning a
 clean early-stop outcome.
 """
+
 from __future__ import annotations
 
 import asyncio

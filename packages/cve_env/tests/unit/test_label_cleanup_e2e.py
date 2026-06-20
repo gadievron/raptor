@@ -9,6 +9,7 @@ Docker daemon is reachable (e.g. Colima down) so the normal suite stays green.
 
 Run explicitly with a live daemon:  uv run pytest refactor/tests/unit/test_label_cleanup_e2e.py -q
 """
+
 from __future__ import annotations
 
 import shutil
@@ -63,17 +64,25 @@ def test_label_lands_on_real_image_and_cleanup_removes_it(tmp_path: Path) -> Non
         # BuildKit loads base-image metadata from the registry even for a cached
         # image; if Docker Hub is unreachable the build can't run. That's an
         # environment outage, not a #6-chain regression — skip, don't fail.
-        if any(sig in st for sig in (
-            "i/o timeout", "dial tcp", "registry-1.docker.io",
-            "failed to do request", "Deadline", "deadline exceeded",
-        )):
+        if any(
+            sig in st
+            for sig in (
+                "i/o timeout",
+                "dial tcp",
+                "registry-1.docker.io",
+                "failed to do request",
+                "Deadline",
+                "deadline exceeded",
+            )
+        ):
             pytest.skip(f"docker registry unreachable, cannot build base: {st[:120]}")
         assert res.ok, f"build failed: reason={res.reason} stderr={st}"
 
     # the label actually landed on the built image
     label_val = subprocess.run(
         ["docker", "inspect", "-f", f'{{{{index .Config.Labels "{CVE_LABEL}"}}}}', tag],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert label_val == cve_id, f"label not on image: got {label_val!r}"
 

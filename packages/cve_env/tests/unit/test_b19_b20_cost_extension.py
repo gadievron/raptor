@@ -239,7 +239,10 @@ class TestRenderSystemPromptWithCaps:
         from cve_env.agent.prompts import render_runtime_caps_block
 
         block = render_runtime_caps_block(
-            max_turns=96, max_cost_usd=1.80, max_extensions=1, extension_pct=0.20,
+            max_turns=96,
+            max_cost_usd=1.80,
+            max_extensions=1,
+            extension_pct=0.20,
         )
         assert "give_up" in block
 
@@ -248,10 +251,17 @@ class TestRenderSystemPromptWithCaps:
         from cve_env.agent.prompts import render_runtime_caps_block
 
         block = render_runtime_caps_block(
-            max_turns=96, max_cost_usd=1.80, max_extensions=0, extension_pct=0.20,
+            max_turns=96,
+            max_cost_usd=1.80,
+            max_extensions=0,
+            extension_pct=0.20,
         )
         # Should NOT promise extensions if disabled.
-        assert "no extension" in block.lower() or "fixed" in block.lower() or "0 extension" in block.lower()
+        assert (
+            "no extension" in block.lower()
+            or "fixed" in block.lower()
+            or "0 extension" in block.lower()
+        )
 
 
 # ============================================================================

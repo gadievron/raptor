@@ -105,7 +105,9 @@ def probe_nvd() -> HealthResult:
         headers=headers,
     )
     if err:
-        return HealthResult("NVD API", ok=False, latency_ms=latency, detail=f"network: {err}")
+        return HealthResult(
+            "NVD API", ok=False, latency_ms=latency, detail=f"network: {err}"
+        )
     if resp is None or resp.status_code != 200:
         code = resp.status_code if resp else "?"
         rl_note = ""
@@ -123,17 +125,23 @@ def probe_nvd() -> HealthResult:
             rate_limit=rl_note,
         )
     rl = "with API key (50 req/30s)" if api_key else "no API key (5 req/30s — slow)"
-    return HealthResult("NVD API", ok=True, latency_ms=latency, detail="ok", rate_limit=rl)
+    return HealthResult(
+        "NVD API", ok=True, latency_ms=latency, detail="ok", rate_limit=rl
+    )
 
 
 def probe_osv() -> HealthResult:
     """OSV.dev: free, no auth, used as fallback when NVD throttles."""
     latency, resp, err = _timed_get("https://api.osv.dev/v1/vulns/CVE-2014-0160")
     if err:
-        return HealthResult("OSV API", ok=False, latency_ms=latency, detail=f"network: {err}")
+        return HealthResult(
+            "OSV API", ok=False, latency_ms=latency, detail=f"network: {err}"
+        )
     if resp is None or resp.status_code != 200:
         code = resp.status_code if resp else "?"
-        return HealthResult("OSV API", ok=False, latency_ms=latency, detail=f"http {code}")
+        return HealthResult(
+            "OSV API", ok=False, latency_ms=latency, detail=f"http {code}"
+        )
     return HealthResult("OSV API", ok=True, latency_ms=latency, detail="ok")
 
 
@@ -161,22 +169,32 @@ def probe_github() -> HealthResult:
     headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    latency, resp, err = _timed_get("https://api.github.com/rate_limit", headers=headers)
+    latency, resp, err = _timed_get(
+        "https://api.github.com/rate_limit", headers=headers
+    )
     if err:
-        return HealthResult("GitHub API", ok=False, latency_ms=latency, detail=f"network: {err}")
+        return HealthResult(
+            "GitHub API", ok=False, latency_ms=latency, detail=f"network: {err}"
+        )
     if resp is None or resp.status_code != 200:
         code = resp.status_code if resp else "?"
-        return HealthResult("GitHub API", ok=False, latency_ms=latency, detail=f"http {code}")
+        return HealthResult(
+            "GitHub API", ok=False, latency_ms=latency, detail=f"http {code}"
+        )
     try:
         data = resp.json()
     except ValueError:
-        return HealthResult("GitHub API", ok=True, latency_ms=latency, detail="ok (non-JSON)")
+        return HealthResult(
+            "GitHub API", ok=True, latency_ms=latency, detail="ok (non-JSON)"
+        )
     core = (data.get("resources") or {}).get("core") or {}
     remaining = core.get("remaining", "?")
     limit = core.get("limit", "?")
     auth_label = "authed" if token else "unauth"
     rl = f"{remaining}/{limit} core ({auth_label})"
-    return HealthResult("GitHub API", ok=True, latency_ms=latency, detail="ok", rate_limit=rl)
+    return HealthResult(
+        "GitHub API", ok=True, latency_ms=latency, detail="ok", rate_limit=rl
+    )
 
 
 def _docker_authed() -> bool:
@@ -232,8 +250,12 @@ def _probe_docker_registry(name: str, ref: str, anon_note: str) -> HealthResult:
         sl = stderr.lower()
         if "toomanyrequests" in sl or "rate limit" in sl:
             rl_note = "rate-limited"
-        return HealthResult(name, ok=False, latency_ms=latency, detail=stderr, rate_limit=rl_note)
-    return HealthResult(name, ok=True, latency_ms=latency, detail="ok", rate_limit=anon_note)
+        return HealthResult(
+            name, ok=False, latency_ms=latency, detail=stderr, rate_limit=rl_note
+        )
+    return HealthResult(
+        name, ok=True, latency_ms=latency, detail="ok", rate_limit=anon_note
+    )
 
 
 def probe_docker_hub() -> HealthResult:
@@ -281,9 +303,7 @@ PROBES = (
 # OSV matters because it's the NVD fallback. Either of NVD/OSV being up is
 # enough for grounding a CVE; but if BOTH fail, the bench will give_up
 # immediately. We track them individually so the doctor can show which is healthy.
-CRITICAL_NAMES = frozenset(
-    {"DNS resolution", "GitHub API", "Docker Hub"}
-)
+CRITICAL_NAMES = frozenset({"DNS resolution", "GitHub API", "Docker Hub"})
 
 
 def run_all() -> list[HealthResult]:
@@ -297,7 +317,9 @@ def render_table(results: list[HealthResult]) -> str:
     for r in results:
         lines.append(r.as_row())
     lines.append("")
-    failing_critical = [r.name for r in results if not r.ok and r.name in CRITICAL_NAMES]
+    failing_critical = [
+        r.name for r in results if not r.ok and r.name in CRITICAL_NAMES
+    ]
     nvd_ok = any(r.ok and r.name == "NVD API" for r in results)
     osv_ok = any(r.ok and r.name == "OSV API" for r in results)
     if failing_critical:

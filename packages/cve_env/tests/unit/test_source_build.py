@@ -101,7 +101,9 @@ def test_normalize_github_url_rejects_attacker_host_with_github_in_path() -> Non
     Caught by raptor CodeQL `py/incomplete-url-substring-sanitization` (2026-05-02).
     """
     assert normalize_github_url("https://attacker.com/github.com/evil/repo") is None
-    assert normalize_github_url("http://attacker.example/path/github.com/foo/bar") is None
+    assert (
+        normalize_github_url("http://attacker.example/path/github.com/foo/bar") is None
+    )
 
 
 def test_normalize_github_url_rejects_subdomain_lookalikes() -> None:
@@ -112,7 +114,9 @@ def test_normalize_github_url_rejects_subdomain_lookalikes() -> None:
     assert normalize_github_url("https://gist.github.com/foo/bar") is None
     assert normalize_github_url("https://github.com.evil.com/foo/bar") is None
     assert normalize_github_url("https://github.io/foo/bar") is None
-    assert normalize_github_url("https://raw.githubusercontent.com/foo/bar/main") is None
+    assert (
+        normalize_github_url("https://raw.githubusercontent.com/foo/bar/main") is None
+    )
 
 
 def test_normalize_github_url_rejects_userinfo_smuggling() -> None:
@@ -361,13 +365,13 @@ def test_find_devcontainer_image_jsonc_tolerant(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / ".devcontainer").mkdir(parents=True)
     (repo / ".devcontainer" / "devcontainer.json").write_text(
-        '{\n'
-        '  // line comment\n'
-        '  /* block\n'
-        '     comment */\n'
+        "{\n"
+        "  // line comment\n"
+        "  /* block\n"
+        "     comment */\n"
         '  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",\n'
         '  "trailing": 1,\n'  # trailing comma inside is stripped by the normalizer
-        '}\n'
+        "}\n"
     )
     builder = SourceBuilder()
     assert (
@@ -421,7 +425,9 @@ def test_payload_for_osdn_url_includes_curl_tar_hint() -> None:
     """Phase 15: source_build_payload returns next_step_hint pointing to
     `Bash + curl + tar` for OSDN/SourceForge release-tarball forges."""
     payload = source_build_payload(
-        source_url="https://osdn.net/projects/xoonips/", product="xoonips", version="3.49"
+        source_url="https://osdn.net/projects/xoonips/",
+        product="xoonips",
+        version="3.49",
     )
     assert payload["ok"] is False
     assert payload["reason"] == "not_github_url"
@@ -448,7 +454,9 @@ def test_is_commit_sha(version: str, expected: bool) -> None:  # noqa: FBT001
     assert _is_commit_sha(version) is expected
 
 
-def test_build_with_commit_sha_clone_failure_returns_clean_error(tmp_path: Path) -> None:
+def test_build_with_commit_sha_clone_failure_returns_clean_error(
+    tmp_path: Path,
+) -> None:
     """Phase 11.2: when full-clone fails on a SHA path, error message is clean."""
     sha = "a" * 40
 
@@ -490,7 +498,9 @@ def test_build_with_commit_sha_checkout_failure(tmp_path: Path) -> None:
         )
     assert not result.ok
     assert result.error is not None
-    assert any("checkout" in w.lower() and "failed" in w.lower() for w in result.warnings)
+    assert any(
+        "checkout" in w.lower() and "failed" in w.lower() for w in result.warnings
+    )
 
 
 def test_build_with_commit_sha_clone_timeout(tmp_path: Path) -> None:
@@ -608,9 +618,7 @@ def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
     with (
         patch("cve_env.utils.run.subprocess.run", side_effect=fake_run),
         # Disable archive fallback for this test to isolate the clone path.
-        patch.object(
-            SourceBuilder, "_archive_fallback", lambda *a, **k: None
-        ),
+        patch.object(SourceBuilder, "_archive_fallback", lambda *a, **k: None),
         # Disable adaptive depth probe so we don't hit urllib.
         patch.object(SourceBuilder, "_deepen_steps", lambda *a, **k: (0,)),
     ):
@@ -699,8 +707,10 @@ def test_payload_failure_path_repo_dir_is_none(tmp_path: Path) -> None:
         warnings=["no tag matched at current depth; deepening to 100"],
         error="no tag matched '3.67'",
     )
-    with patch.object(SourceBuilder, "build", return_value=fake_result), \
-         patch.object(SourceBuilder, "cleanup") as mock_cleanup:  # don't actually rmtree in test
+    with (
+        patch.object(SourceBuilder, "build", return_value=fake_result),
+        patch.object(SourceBuilder, "cleanup") as mock_cleanup,
+    ):  # don't actually rmtree in test
         out = source_build_payload(
             source_url="https://github.com/sitracker/sitracker",
             product="sitracker",
@@ -771,9 +781,11 @@ def test_payload_cloned_no_dockerfile_retains_repo_dir(tmp_path: Path) -> None:
         dockerfile_text=None,
         build_config=None,
     )
-    with patch.object(SourceBuilder, "build", return_value=fake_result), \
-         patch.object(SourceBuilder, "retain") as mock_retain, \
-         patch.object(SourceBuilder, "cleanup") as mock_cleanup:
+    with (
+        patch.object(SourceBuilder, "build", return_value=fake_result),
+        patch.object(SourceBuilder, "retain") as mock_retain,
+        patch.object(SourceBuilder, "cleanup") as mock_cleanup,
+    ):
         out = source_build_payload(
             source_url="https://github.com/yzmcms/yzmcms",
             product="yzmcms",
@@ -787,13 +799,16 @@ def test_payload_cloned_no_dockerfile_retains_repo_dir(tmp_path: Path) -> None:
     mock_cleanup.assert_not_called()
 
 
-def test_source_build_handler_fuses_docker_build_when_dockerfile_present(tmp_path: Path) -> None:
+def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
+    tmp_path: Path,
+) -> None:
     """Fix (2026-05-24): the source_build HANDLER fuses docker_build when the
     payload is ok + has a Dockerfile + clone — closing the source_build→
     docker_build seam (sibling of b1's dockerfile_gen fuse). CVE-2022-1813 quit
     one-call-short here: source_build returned ok=true w/ a Dockerfile + repo_dir
     + 'call docker_build' hint, but the agent did image_resolve+Bash then end_turn
     without building. After the fix the build runs in the same call (under `build`)."""
+    pytest.importorskip("claude_agent_sdk")
     import asyncio
     import json
     from unittest.mock import MagicMock
@@ -812,11 +827,17 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(tmp_pat
         "warnings": [],
         "next_step_hint": "call docker_build(context_dir=repo_dir, dockerfile_text=...)",
     }
-    with patch("cve_env.tools.source_build.source_build_payload", return_value=fake_payload), \
-         patch(
-             "cve_env.utils.run.subprocess.run",
-             return_value=MagicMock(returncode=0, stdout="Successfully built abc123\n", stderr=""),
-         ):
+    with (
+        patch(
+            "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
+        ),
+        patch(
+            "cve_env.utils.run.subprocess.run",
+            return_value=MagicMock(
+                returncode=0, stdout="Successfully built abc123\n", stderr=""
+            ),
+        ),
+    ):
         env = asyncio.run(
             tools.source_build.handler(
                 {
@@ -827,13 +848,18 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(tmp_pat
             )
         )
     out = json.loads(env["content"][0]["text"])
-    assert "build" in out, "source_build with a Dockerfile must fuse docker_build (close the seam)"
-    assert out["build"]["ok"] is True, f"fused build should succeed; got {out.get('build')!r}"
+    assert "build" in out, (
+        "source_build with a Dockerfile must fuse docker_build (close the seam)"
+    )
+    assert out["build"]["ok"] is True, (
+        f"fused build should succeed; got {out.get('build')!r}"
+    )
 
 
 def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None:
     """Guard: a build_config-only payload (no dockerfile_text) must NOT fuse —
     the agent dockerfile_gen's against the clone (then b1 fuses that)."""
+    pytest.importorskip("claude_agent_sdk")
     import asyncio
     import json
     from unittest.mock import MagicMock
@@ -853,16 +879,26 @@ def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None
         "next_step_hint": "no Dockerfile in repo; call dockerfile_gen with build_config=...",
     }
     with (
-        patch("cve_env.tools.source_build.source_build_payload", return_value=fake_payload),
-        patch("cve_env.utils.run.subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        patch(
+            "cve_env.tools.source_build.source_build_payload", return_value=fake_payload
+        ),
+        patch(
+            "cve_env.utils.run.subprocess.run", return_value=MagicMock(returncode=0)
+        ) as mock_run,
     ):
         env = asyncio.run(
             tools.source_build.handler(
-                {"source_url": "https://github.com/o/r", "product": "r", "version": "1.0"}
+                {
+                    "source_url": "https://github.com/o/r",
+                    "product": "r",
+                    "version": "1.0",
+                }
             )
         )
     out = json.loads(env["content"][0]["text"])
-    assert "build" not in out, "build_config-only payload must not auto-build (no Dockerfile)"
+    assert "build" not in out, (
+        "build_config-only payload must not auto-build (no Dockerfile)"
+    )
     mock_run.assert_not_called()
 
 
@@ -932,7 +968,9 @@ def test_payload_unexpected_exception_explicit_repo_dir_none(tmp_path: Path) -> 
         out = source_build_payload(
             source_url="https://github.com/foo/bar", product="bar", version="1.5"
         )
-    assert "repo_dir" in out, "every failure response must carry an explicit repo_dir key"
+    assert "repo_dir" in out, (
+        "every failure response must carry an explicit repo_dir key"
+    )
     assert out["repo_dir"] is None, "crash path: no clone exists; cannot offer a path"
 
 
@@ -1166,24 +1204,28 @@ def test_download_tarball_refuses_oversized_extraction(
 def test_http_get_json_on_404_returns_none() -> None:
     def raise_404(req: Any, **_: Any) -> Any:
         raise urllib.error.HTTPError(
-            url=req.full_url, code=404, msg="Not Found", hdrs=None, fp=None  # type: ignore[arg-type]
+            url=req.full_url,
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=None,  # type: ignore[arg-type]
         )
 
-    with patch(
-        "cve_env.tools.source_build._urlopen", side_effect=raise_404
-    ):
+    with patch("cve_env.tools.source_build._urlopen", side_effect=raise_404):
         assert sb._http_get_json("https://api.github.com/repos/x/y", timeout=5) is None
 
 
 def test_http_get_bytes_on_404_returns_none() -> None:
     def raise_404(req: Any, **_: Any) -> Any:
         raise urllib.error.HTTPError(
-            url=req.full_url, code=404, msg="Not Found", hdrs=None, fp=None  # type: ignore[arg-type]
+            url=req.full_url,
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=None,  # type: ignore[arg-type]
         )
 
-    with patch(
-        "cve_env.tools.source_build._urlopen", side_effect=raise_404
-    ):
+    with patch("cve_env.tools.source_build._urlopen", side_effect=raise_404):
         assert (
             sb._http_get_bytes(
                 "https://codeload.github.com/x/y/tar.gz/refs/tags/v1", timeout=5
@@ -1478,9 +1520,7 @@ def test_archive_fallback_no_matching_tag(tmp_path: Path) -> None:
     """Lines 469-472: tags exist but none match ``version`` → warning + None."""
     builder = SourceBuilder()
     warnings: list[str] = []
-    with patch.object(
-        SourceBuilder, "_list_tags_via_api", return_value=["v9.9.9"]
-    ):
+    with patch.object(SourceBuilder, "_list_tags_via_api", return_value=["v9.9.9"]):
         out = builder._archive_fallback(
             "https://github.com/foo/bar", "1.0", tmp_path / "t", warnings
         )
@@ -1794,9 +1834,7 @@ def test_http_get_json_undecodable_body_returns_none() -> None:
 def test_http_get_bytes_non_200_status_returns_none() -> None:
     """Lines 773-774: a non-200 status → None."""
     with patch.object(sb, "_urlopen", return_value=_FakeResp(b"data", status=403)):
-        assert (
-            sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
-        )
+        assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
 
 def test_http_get_bytes_over_cap_returns_none(monkeypatch: Any) -> None:
@@ -1805,9 +1843,7 @@ def test_http_get_bytes_over_cap_returns_none(monkeypatch: Any) -> None:
     monkeypatch.setattr(sb, "_MAX_TARBALL_BYTES", 4)
     big = b"a much larger than four byte body"
     with patch.object(sb, "_urlopen", return_value=_FakeResp(big)):
-        assert (
-            sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
-        )
+        assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
 
 def test_http_get_bytes_under_cap_returns_body() -> None:
@@ -1831,9 +1867,7 @@ def test_http_get_bytes_urlerror_non_oserror_reason_returns_none() -> None:
     """Line 788: URLError with a non-OSError reason → None."""
     err = urllib.error.URLError("weird")
     with patch.object(sb, "_urlopen", side_effect=err):
-        assert (
-            sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
-        )
+        assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
 
 # -- _classify_failure branches (918-922) ----------------------------------

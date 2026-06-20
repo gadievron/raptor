@@ -16,8 +16,8 @@ Reference: 33.3 reconciled-final artifact-final.md Cat 2 E1 +
             33.2a-RECONCILE Anomaly 4 +
             closeout-corrections-phase33-2026-05-15.md DRIFT #5.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 
 def _try_import_classifier():
@@ -27,6 +27,7 @@ def _try_import_classifier():
     """
     try:
         from cve_env.agent.loop import _classify_api_overload  # type: ignore
+
         return _classify_api_overload
     except ImportError:
         return None
@@ -67,4 +68,6 @@ def test_classify_api_overload_negative_cases() -> None:
     # Other API errors (rate-limit but not 529 overload)
     assert classifier("API Error: rate_limit_exceeded") != "api_overload"
     # Refusal text
-    assert classifier("API Error: Claude Code is unable to respond...") != "api_overload"
+    assert (
+        classifier("API Error: Claude Code is unable to respond...") != "api_overload"
+    )

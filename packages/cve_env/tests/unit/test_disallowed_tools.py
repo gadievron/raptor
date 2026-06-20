@@ -13,6 +13,7 @@ here; it was REVERTED after a 14-day bench audit showed those tools fire in
 119/1868 runs — default-disabling removes real research capability. The default
 is empty again; operators opt in via the env var.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,7 +45,9 @@ def test_web_tools_enabled_by_default() -> None:
 
 
 def test_get_disallowed_tools_parses_csv_and_trims() -> None:
-    with patch.dict(os.environ, {"CVE_ENV_DISALLOWED_TOOLS": "Agent, Task ,, WebSearch"}):
+    with patch.dict(
+        os.environ, {"CVE_ENV_DISALLOWED_TOOLS": "Agent, Task ,, WebSearch"}
+    ):
         assert get_disallowed_tools() == ["Agent", "Task", "WebSearch"]
 
 
@@ -58,15 +61,22 @@ def test_get_disallowed_tools_empty_string_is_empty() -> None:
 
 def _fake_outcome() -> Any:
     return llm.AgentRunOutcome(
-        stop_reason="end_turn", num_turns=1, total_cost_usd=0.0,
-        is_error=False, session_id="s", final_text="", tool_uses=[],
+        stop_reason="end_turn",
+        num_turns=1,
+        total_cost_usd=0.0,
+        is_error=False,
+        session_id="s",
+        final_text="",
+        tool_uses=[],
     )
 
 
 def _capture_options(monkeypatch: Any) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
-    async def _fake_rqo(*, options: Any, user_prompt: str, on_message: Any = None) -> Any:
+    async def _fake_rqo(
+        *, options: Any, user_prompt: str, on_message: Any = None
+    ) -> Any:
         captured["options"] = options
         return _fake_outcome()
 

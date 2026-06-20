@@ -58,6 +58,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     # Released in the finally block before any auto-stop-colima check (so
     # own PID doesn't count itself as "active").
     from cve_env.utils.lifecycle import acquire_lock, release_lock
+
     lock_path = acquire_lock()
 
     try:
@@ -65,12 +66,14 @@ def _cmd_build(args: argparse.Namespace) -> int:
         # to the agent as SYSTEM_PROMPT prefix. Empty in the common case;
         # non-empty when DH rate-limited / etc.
         from cve_env.agent.health_constraints import probe_for_constraints
+
         constraints = probe_for_constraints()
 
         # Use getattr with config defaults so test fixtures that build a
         # minimal Args object don't have to know about every CLI flag.
         # argparse always populates these attrs at real CLI invocation.
         from cve_env.config import MAX_TURN_EXTENSIONS, TURN_EXTENSION_PCT
+
         outcome = asyncio.run(
             build(
                 cve,
@@ -79,8 +82,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 audit_root=audit_root,
                 max_turns=args.max_turns,
                 max_cost_usd=args.max_cost_usd,
-                max_turn_extensions=getattr(args, "max_turn_extensions", MAX_TURN_EXTENSIONS),
-                turn_extension_pct=getattr(args, "turn_extension_pct", TURN_EXTENSION_PCT),
+                max_turn_extensions=getattr(
+                    args, "max_turn_extensions", MAX_TURN_EXTENSIONS
+                ),
+                turn_extension_pct=getattr(
+                    args, "turn_extension_pct", TURN_EXTENSION_PCT
+                ),
                 constraints=constraints,
             )
         )
@@ -143,17 +150,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 prune_images,
                 stop_colima_if_idle,
             )
+
             auto_cleanup = (
                 getattr(args, "auto_cleanup_containers", False)
                 or _config.AUTO_CLEANUP_CONTAINERS
             )
             auto_prune = (
-                getattr(args, "auto_prune_images", False)
-                or _config.AUTO_PRUNE_IMAGES
+                getattr(args, "auto_prune_images", False) or _config.AUTO_PRUNE_IMAGES
             )
             auto_stop = (
-                getattr(args, "auto_stop_colima", False)
-                or _config.AUTO_STOP_COLIMA
+                getattr(args, "auto_stop_colima", False) or _config.AUTO_STOP_COLIMA
             )
             if auto_cleanup:
                 with contextlib.suppress(Exception):
@@ -350,9 +356,7 @@ def _summarize_call(tool: str, ti: dict[str, Any]) -> str:
             except json.JSONDecodeError:
                 plan = []
         if isinstance(plan, list):
-            types = [
-                str(s.get("type", "?")) for s in plan if isinstance(s, dict)
-            ]
+            types = [str(s.get("type", "?")) for s in plan if isinstance(s, dict)]
             shown = ", ".join(types[:5])
             more = "…" if len(types) > 5 else ""
             return f"{len(types)}-check plan ({shown}{more})"
@@ -366,7 +370,9 @@ def _summarize_result(tool: str, tr: dict[str, Any]) -> tuple[str, str]:
         return "", ""
     if tool == "nvd_lookup":
         cpes = tr.get("cpes")
-        return ("✓", f"{len(cpes)} CPEs") if isinstance(cpes, list) else ("✓", "(record)")
+        return (
+            ("✓", f"{len(cpes)} CPEs") if isinstance(cpes, list) else ("✓", "(record)")
+        )
     if tool == "github_fetch":
         if tr.get("ok"):
             return "✓", str(tr.get("kind", ""))
@@ -546,8 +552,7 @@ def _audit_pressure_summary(audit_path: Path | None) -> dict[str, Any]:
                             "reason_class": str(rc) if rc else "?",
                             "image_ref": str(tr.get("image_ref") or ""),
                             "product": str(
-                                (entry.get("tool_input") or {}).get("product")
-                                or "?"
+                                (entry.get("tool_input") or {}).get("product") or "?"
                             ),
                         }
                     )
@@ -604,6 +609,7 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
     # they would be mislabeled "research-only" because the default fires on an
     # empty tool list. Use the shared classifier for consistency.
     from cve_env.agent.loop import _classify_api_overload
+
     if (
         not tools
         and outcome.status == "error"
@@ -629,8 +635,7 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
         if outcome.status == "success":
             icon = "✓ BUILT"
             summary = (
-                "pre-patch environment built and verified "
-                "(version + functional smoke)"
+                "pre-patch environment built and verified (version + functional smoke)"
             )
         elif outcome.status in ("verified_partial", "success_partial"):
             # verified_partial is the canonical name; success_partial remains
@@ -638,7 +643,8 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
             icon = "⊕ PARTIAL"
             summary = (
                 "container ran + verify passed, but build evidence is "
-                "incomplete: " + (outcome.reason or "missing version-assertion or functional smoke")
+                "incomplete: "
+                + (outcome.reason or "missing version-assertion or functional smoke")
             )
     elif outcome.status == "rate_limited":
         # Anthropic API 529/overload throttle. Distinct icon (⏳ wait/retry) so
@@ -648,12 +654,17 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
         # re-runnable on quota recovery; best-of-N will retry it.
         icon = "⏳ rate_limited"
         summary = (
-            outcome.give_up_detail[:200] if outcome.give_up_detail
+            outcome.give_up_detail[:200]
+            if outcome.give_up_detail
             else "Anthropic API rate-limited (529 Overloaded) — re-runnable, not a merit failure"
         )
     elif outcome.give_up_reason:
         icon = f"⊘ {outcome.give_up_reason}"
-        summary = outcome.give_up_detail[:200] if outcome.give_up_detail else outcome.give_up_reason
+        summary = (
+            outcome.give_up_detail[:200]
+            if outcome.give_up_detail
+            else outcome.give_up_reason
+        )
     elif outcome.status in ("verify_failed", "no_verify_pass"):
         # verify_failed is canonical; no_verify_pass back-compat.
         icon = f"⚠ {outcome.status}"
@@ -715,12 +726,12 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
 
     _e("")
     # Verify narrative.
-    if pressure.get("verify_check_types") or pressure.get(
-        "verify_passed_count"
-    ) or pressure.get("verify_failed_count"):
-        types_str = (
-            ", ".join(pressure.get("verify_check_types") or []) or "(none)"
-        )
+    if (
+        pressure.get("verify_check_types")
+        or pressure.get("verify_passed_count")
+        or pressure.get("verify_failed_count")
+    ):
+        types_str = ", ".join(pressure.get("verify_check_types") or []) or "(none)"
         _e(
             f"  verify summary: {pressure.get('verify_passed_count', 0)} pass / "
             f"{pressure.get('verify_failed_count', 0)} fail; types: {types_str}"

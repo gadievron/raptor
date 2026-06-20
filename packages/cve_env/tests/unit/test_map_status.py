@@ -301,8 +301,7 @@ def test_terminal_status_verify_passed_end_turn_stays_final_success() -> None:
         "end_turn",
     )
     assert result == "final_success", (
-        f"verify_passed=True + end_turn must stay 'final_success', "
-        f"got {result!r}"
+        f"verify_passed=True + end_turn must stay 'final_success', got {result!r}"
     )
 
 

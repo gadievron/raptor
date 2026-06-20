@@ -20,6 +20,7 @@ deferred to its own /spec.
 Env var override still works: `CVE_ENV_MAX_IMAGE_RESOLVE_ATTEMPTS=10`
 re-enables permissive behavior if needed.
 """
+
 from __future__ import annotations
 
 import os

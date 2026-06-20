@@ -41,7 +41,7 @@ def test_robust_json_parse_recovers_from_markdown_json_fence() -> None:
 
 
 def test_robust_json_parse_recovers_from_plain_code_fence() -> None:
-    text = "Look at this:\n```\n{\"a\": 1}\n```"
+    text = 'Look at this:\n```\n{"a": 1}\n```'
     assert robust_json_parse(text) == {"a": 1}
 
 
@@ -69,7 +69,7 @@ def test_robust_json_parse_strips_control_chars() -> None:
 
 def test_robust_json_parse_returns_none_for_non_dict_top_level() -> None:
     # Top-level array, not dict → return None per contract
-    assert robust_json_parse('[1, 2, 3]') is None
+    assert robust_json_parse("[1, 2, 3]") is None
 
 
 def test_robust_json_parse_returns_none_for_unrecoverable_garbage() -> None:
@@ -153,9 +153,7 @@ def test_check_from_line_forbidden_latest_tag_returns_p14() -> None:
 def test_check_from_line_digest_pinned_image_no_issues() -> None:
     images: list[str] = []
     # digest-pinned (sha256:...) — the @ sign disables the tag check
-    digest_ref = (
-        "FROM alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    )
+    digest_ref = "FROM alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     issues = _check_from_line(digest_ref, images)
     assert issues == []
 
@@ -240,11 +238,7 @@ def test_validate_dockerfile_semantics_no_from_returns_issue() -> None:
 
 
 def test_validate_dockerfile_semantics_clean_dockerfile_no_issues() -> None:
-    text = (
-        "FROM alpine:3.19\n"
-        "RUN apk add --no-cache curl\n"
-        "COPY app /app\n"
-    )
+    text = "FROM alpine:3.19\nRUN apk add --no-cache curl\nCOPY app /app\n"
     issues = validate_dockerfile_semantics(text)
     assert issues == []
 
@@ -263,10 +257,7 @@ def test_validate_dockerfile_semantics_empty_run_returns_issue() -> None:
 
 def test_validate_dockerfile_semantics_unresolved_label_marker_returns_issue() -> None:
     # Simulates output from sanitize_dockerfile that wasn't fixed by user
-    text = (
-        f"FROM alpine:3.19\n"
-        f"{_EMPTY_LABEL_MARKER}LABEL bad\n"
-    )
+    text = f"FROM alpine:3.19\n{_EMPTY_LABEL_MARKER}LABEL bad\n"
     issues = validate_dockerfile_semantics(text)
     assert any("unresolved malformed LABEL" in i for i in issues)
 

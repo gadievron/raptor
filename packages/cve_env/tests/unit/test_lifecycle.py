@@ -11,6 +11,7 @@ Coverage:
 No real docker / colima / signals are invoked — every external call is
 monkeypatched.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,9 +24,12 @@ from cve_env.utils.run import RunOutcome
 
 
 def _mock_run_factory(
-    captured: list[list[str]], stdout: str = "", returncode: int = 0,
+    captured: list[list[str]],
+    stdout: str = "",
+    returncode: int = 0,
 ):
     """Return a fake run_with_timeout that records calls and returns canned outcome."""
+
     def _fake(cmd, **_kwargs):
         captured.append(list(cmd))
         return RunOutcome(
@@ -34,13 +38,16 @@ def _mock_run_factory(
             stderr="",
             timed_out=False,
         )
+
     return _fake
 
 
 # ─── lock round-trip ─────────────────────────────────────────────────
 
 
-def test_acquire_release_lock_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_acquire_release_lock_roundtrip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """acquire_lock creates a file with own PID; release_lock removes it."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
     path = lf.acquire_lock()
@@ -54,14 +61,17 @@ def test_acquire_release_lock_roundtrip(tmp_path: Path, monkeypatch: pytest.Monk
 # ─── count_other_active_builds ───────────────────────────────────────
 
 
-def test_count_other_active_builds_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_count_other_active_builds_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No lock files → count is 0."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
     assert lf.count_other_active_builds() == 0
 
 
 def test_count_other_active_builds_excludes_own(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Own PID lock present → not counted."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
@@ -71,7 +81,8 @@ def test_count_other_active_builds_excludes_own(
 
 
 def test_count_other_active_builds_stale_lock_cleaned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Lock pointing at a dead PID is removed and not counted."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
@@ -86,7 +97,8 @@ def test_count_other_active_builds_stale_lock_cleaned(
 
 
 def test_count_other_active_builds_with_alive_other(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Lock pointing at an alive PID (parent always alive in test) is counted."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
@@ -124,11 +136,15 @@ def test_cleanup_containers_no_match_noop(monkeypatch: pytest.MonkeyPatch) -> No
     assert any("cve-env.cve-id=CVE-2014-0160" in arg for arg in captured[0])
 
 
-def test_cleanup_containers_removes_matching_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_containers_removes_matching_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Two matching containers → docker rm -f called with both IDs."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf, "run_with_timeout", _mock_run_factory(captured, stdout="abc123\ndef456\n"),
+        lf,
+        "run_with_timeout",
+        _mock_run_factory(captured, stdout="abc123\ndef456\n"),
     )
     removed = lf.cleanup_containers("CVE-2014-0160")
     assert removed == 2
@@ -139,7 +155,9 @@ def test_cleanup_containers_removes_matching_ids(monkeypatch: pytest.MonkeyPatch
     assert "def456" in captured[1]
 
 
-def test_cleanup_containers_filters_by_cve_id_label(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_containers_filters_by_cve_id_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Phase 20A.1 regression: filter argument must be cve-env.cve-id, not run-id.
 
     Pre-Phase-20A the filter was ``cve-env.run-id={cli_run_id}`` but the agent
@@ -174,7 +192,8 @@ def test_prune_images_calls_docker_image_prune(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_stop_colima_if_idle_fires_when_idle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Empty lock dir → colima stop fires, returns True."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
@@ -185,7 +204,8 @@ def test_stop_colima_if_idle_fires_when_idle(
 
 
 def test_stop_colima_if_idle_skipped_when_busy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Other active build present → no colima stop, returns False."""
     monkeypatch.setattr(lf, "LOCK_DIR", tmp_path)
@@ -206,11 +226,14 @@ def test_stop_colima_if_idle_skipped_when_busy(
 # images delete cleanly as their last tag goes.
 
 
-def test_cleanup_result_images_rmi_by_label_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_result_images_rmi_by_label_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Lists this CVE's images by label, then `docker rmi` each tag."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf, "run_with_timeout",
+        lf,
+        "run_with_timeout",
         _mock_run_factory(
             captured,
             stdout="cve-env-local:CVE-2018-7600\ncve-env-local:CVE-2018-7600-v2\n",
@@ -219,17 +242,27 @@ def test_cleanup_result_images_rmi_by_label_tags(monkeypatch: pytest.MonkeyPatch
     n = lf.cleanup_result_images("CVE-2018-7600")
     assert n == 2
     assert captured[0] == [
-        "docker", "images", "--filter", "label=cve-env.cve-id=CVE-2018-7600",
-        "--format", "{{.Repository}}:{{.Tag}}",
+        "docker",
+        "images",
+        "--filter",
+        "label=cve-env.cve-id=CVE-2018-7600",
+        "--format",
+        "{{.Repository}}:{{.Tag}}",
     ], f"images query not label-scoped: {captured[0]}"
     # 2026-06-09: a second cve-id TAG sweep now runs (kill-path orphan fallback).
     assert captured[1] == [
-        "docker", "images", "cve-env-local", "--format", "{{.Repository}}:{{.Tag}}",
+        "docker",
+        "images",
+        "cve-env-local",
+        "--format",
+        "{{.Repository}}:{{.Tag}}",
     ], f"cve-id tag sweep query missing/wrong: {captured[1]}"
     # both queries return the same two (label) tags here; deduped before rmi.
     assert captured[2] == [
-        "docker", "rmi",
-        "cve-env-local:CVE-2018-7600", "cve-env-local:CVE-2018-7600-v2",
+        "docker",
+        "rmi",
+        "cve-env-local:CVE-2018-7600",
+        "cve-env-local:CVE-2018-7600-v2",
     ], f"rmi not by tag: {captured[2]}"
 
 
@@ -258,14 +291,18 @@ def test_cleanup_result_images_sweeps_unlabeled_cve_id_tag(
 
     monkeypatch.setattr(lf, "run_with_timeout", _fake)
     n = lf.cleanup_result_images("CVE-2022-4547")
-    assert n == 1, f"must sweep ONLY the cve-id-tagged orphan, not the other CVE: {captured}"
+    assert n == 1, (
+        f"must sweep ONLY the cve-id-tagged orphan, not the other CVE: {captured}"
+    )
     rmi = [c for c in captured if c[:2] == ["docker", "rmi"]]
     assert rmi and rmi[0] == ["docker", "rmi", "cve-env-local:CVE-2022-4547"], (
         f"rmi must target exactly the cve-id orphan: {rmi}"
     )
 
 
-def test_cleanup_result_images_empty_cve_id_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_result_images_empty_cve_id_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Empty cve_id is a no-op (no docker calls, returns 0)."""
     captured: list[list[str]] = []
     monkeypatch.setattr(lf, "run_with_timeout", _mock_run_factory(captured))
@@ -273,11 +310,14 @@ def test_cleanup_result_images_empty_cve_id_noop(monkeypatch: pytest.MonkeyPatch
     assert captured == []
 
 
-def test_cleanup_result_images_skips_none_and_dedupes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cleanup_result_images_skips_none_and_dedupes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`<none>:<none>` rows are skipped and duplicate tags deduped before rmi."""
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        lf, "run_with_timeout",
+        lf,
+        "run_with_timeout",
         _mock_run_factory(
             captured,
             stdout="cve-env-local:CVE-1\n<none>:<none>\ncve-env-local:CVE-1\n",

@@ -156,10 +156,5 @@ def arch_decide(image_ref: str, *, host: HostArch | None = None) -> ArchDecision
         host_arch=h.arch,
         decision="build_from_source_required",
         supported_platforms=platforms,
-        reason=(
-            f"no matching platform; host={h.docker_platform} "
-            f"image={platforms}"
-        ),
+        reason=(f"no matching platform; host={h.docker_platform} image={platforms}"),
     )
-
-

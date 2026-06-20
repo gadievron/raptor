@@ -14,6 +14,7 @@ Teeth: each asserts the EXACT cve_id kwarg the wiring sets; removing
 `cve_id=_CURRENT_CVE_ID` from either wrapper turns the matching test red
 (verified by mutation at authoring time).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,10 +47,15 @@ def test_cve_label_single_source_of_truth() -> None:
     assert docker_run.CVE_LABEL is config.CVE_LABEL
     # exactly one functional literal of the label survives in src/cve_env
     src = pathlib.Path(config.__file__).parent
-    hits = subprocess.run(
-        ["grep", "-rn", '"cve-env.cve-id"', str(src), "--include=*.py"],
-        capture_output=True, text=True,
-    ).stdout.strip().splitlines()
+    hits = (
+        subprocess.run(
+            ["grep", "-rn", '"cve-env.cve-id"', str(src), "--include=*.py"],
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .splitlines()
+    )
     assert len(hits) == 1, f"stray label literal(s): {hits}"
     assert "config.py" in hits[0], f"label literal not in config.py: {hits}"
 
@@ -67,7 +73,9 @@ def test_async_docker_build_wrapper_threads_cve_id() -> None:
     tools.set_cve_id_context("CVE-2018-7600")
     try:
         with patch.object(
-            tools._docker_build, "docker_build", return_value=_fake_build_result(),
+            tools._docker_build,
+            "docker_build",
+            return_value=_fake_build_result(),
         ) as m:
             # tools.docker_build is an SdkMcpTool; the coroutine is .handler
             asyncio.run(
@@ -87,11 +95,14 @@ def test_fuse_build_wrapper_threads_cve_id() -> None:
     tools.set_cve_id_context("CVE-2021-44228")
     try:
         with patch.object(
-            tools._docker_build, "docker_build", return_value=_fake_build_result(),
+            tools._docker_build,
+            "docker_build",
+            return_value=_fake_build_result(),
         ) as m:
             # ok render + no copy_ops → auto-build fires (the b1 fuse default)
             tools._maybe_fuse_build(
-                {"ok": True, "dockerfile_text": "FROM alpine\nRUN true\n"}, {},
+                {"ok": True, "dockerfile_text": "FROM alpine\nRUN true\n"},
+                {},
             )
         assert m.called, "fuse did not call docker_build"
         assert m.call_args.kwargs.get("cve_id") == "CVE-2021-44228", (

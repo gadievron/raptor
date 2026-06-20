@@ -9,10 +9,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cve_env.tools.image_resolve import (
-        _candidate_refs,
-        image_resolve,
-        reset_rate_limit_budget,
-    )
+    _candidate_refs,
+    image_resolve,
+    reset_rate_limit_budget,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +97,9 @@ def test_candidate_refs_includes_ecr_public_fallback() -> None:
     )
 
 
-def _descriptor_entry(*platforms: str, digest: str | None = None) -> list[dict[str, Any]]:
+def _descriptor_entry(
+    *platforms: str, digest: str | None = None
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in platforms:
         os_name, arch = p.split("/")
@@ -119,20 +121,26 @@ def test_resolve_picks_first_native(mock_run: Any) -> None:
         "linux/arm64",
         digest="sha256:" + "a" * 64,
     )
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert r.ok is True
     assert r.decision == "native"
     # Phase 29 (2026-05-14): mirror.gcr.io is now FIRST in the cascade,
     # so the first-native pick comes from there. The digest_pinned_ref
     # is `<image_ref>@<digest>` for whichever candidate matched.
-    assert "@sha256:" in r.digest_pinned_ref and r.digest_pinned_ref.startswith(r.image_ref.rsplit(":", 1)[0])
+    assert "@sha256:" in r.digest_pinned_ref and r.digest_pinned_ref.startswith(
+        r.image_ref.rsplit(":", 1)[0]
+    )
 
 
 @patch("cve_env.utils.run.subprocess.run")
 def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
     manifest = _descriptor_entry("linux/amd64", digest="sha256:" + "b" * 64)
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(
         product="nginx", version="1.20", host_arch="arm64", rosetta_available=True
     )
@@ -143,7 +151,9 @@ def test_resolve_rosetta_when_arm_host_amd_manifest(mock_run: Any) -> None:
 @patch("cve_env.utils.run.subprocess.run")
 def test_resolve_arch_incompatible_when_no_platform_matches(mock_run: Any) -> None:
     manifest = _descriptor_entry("linux/ppc64le")
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert r.ok is False
     assert r.decision == "arch_incompatible"
@@ -250,9 +260,7 @@ def test_rate_limit_budget_per_product_isolated(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="toomanyrequests"
-    )
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="wordpress", version="5.6", host_arch="arm64")
     image_resolve(product="wordpress", version="5.7", host_arch="arm64")
     # Different product, different counter.
@@ -283,9 +291,7 @@ def test_phase35_cumulative_rate_limit_short_circuits_cross_product(
     )
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="toomanyrequests"
-    )
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
     # Burn cumulative budget across DIFFERENT products (each increments
     # cumulative by 1). After 3 calls we should be at the threshold.
     image_resolve(product="text4shell", version="1.0", host_arch="arm64")
@@ -318,9 +324,7 @@ def test_phase37_2_rate_limit_cooldown_retry_one_shot(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="toomanyrequests"
-    )
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     # Sleep was called (at least once for the cooldown).
     assert mock_sleep.called
@@ -337,6 +341,7 @@ def test_phase37_2_rate_limit_cooldown_retry_one_shot(
     # but we CAN assert the 30s cooldown wasn't invoked.
     # Easier: verify _RATE_LIMIT_COOLDOWN_DONE is True after reset.
     from cve_env.tools import _image_resolve_state as _state
+
     assert _state._RATE_LIMIT_COOLDOWN_DONE is True
 
 
@@ -353,9 +358,7 @@ def test_phase37_2_cooldown_resets_per_cve(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="toomanyrequests"
-    )
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert _state._RATE_LIMIT_COOLDOWN_DONE is True
     reset_rate_limit_budget()
@@ -428,9 +431,7 @@ def test_resolve_rate_limited_persistent_emits_pivot_hint(
     from cve_env.tools.image_resolve import reset_rate_limit_budget
 
     reset_rate_limit_budget()
-    mock_run.return_value = MagicMock(
-        returncode=1, stdout="", stderr="toomanyrequests"
-    )
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="toomanyrequests")
     image_resolve(product="wp-x", version="1", host_arch="arm64")
     image_resolve(product="wp-x", version="2", host_arch="arm64")
     r = image_resolve(product="wp-x", version="3", host_arch="arm64")
@@ -474,7 +475,9 @@ def test_resolve_ignores_unknown_unknown_buildkit_cache(mock_run: Any) -> None:
         _descriptor_entry("linux/amd64", digest="sha256:" + "a" * 64)[0],
         _manifest_entry_unknown(),
     ]
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     # Only linux/amd64 is advertised after filtering -> arm64 host falls through.
     # With rosetta_available=False (default), this must NOT return 'native'.
@@ -489,7 +492,9 @@ def test_resolve_skips_platform_without_arch_digest(mock_run: Any) -> None:
         _manifest_entry_no_digest("linux/arm64"),
         _descriptor_entry("linux/amd64", digest="sha256:" + "b" * 64)[0],
     ]
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     # arm64 is claimed but no digest -> should NOT return native. With rosetta=False,
     # there's no fallback -> arch_incompatible (linux/amd64 has a digest but rosetta
@@ -507,7 +512,9 @@ def test_resolve_picks_arch_matching_digest_not_last(mock_run: Any) -> None:
         _descriptor_entry("linux/arm64", digest=arm64_digest)[0],
         _descriptor_entry("linux/amd64", digest=amd64_digest)[0],
     ]
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(manifest), stderr="")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=json.dumps(manifest), stderr=""
+    )
     r = image_resolve(product="nginx", version="1.20", host_arch="arm64")
     assert r.decision == "native"
     # The returned digest MUST be the arm64 one.
@@ -542,9 +549,7 @@ def test_phase38_4_arch_incompatible_persistent_after_threshold(
     )
     # Burn the threshold across DIFFERENT products.
     for i in range(_ARCH_INCOMPATIBLE_THRESHOLD):
-        r = image_resolve(
-            product=f"product{i}", version="1.0", host_arch="arm64"
-        )
+        r = image_resolve(product=f"product{i}", version="1.0", host_arch="arm64")
         assert r.decision == "arch_incompatible"
     # Next call (3rd product) should short-circuit.
     mock_run.reset_mock()
@@ -678,6 +683,7 @@ def test_phase46_2_transport_cooldown_skipped_after_rate_limit_cooldown(
 
 # ---- Phase 47.2: TDD tests for _attempt_resolve_retry_loop helper ----
 
+
 @patch("cve_env.tools.image_resolve._inspect_ref")
 def test_phase47_2_retry_helper_returns_success_on_match(
     mock_inspect: Any,
@@ -802,6 +808,4 @@ def test_phase67_image_resolve_globals_isolated_per_cve() -> None:
     assert _state._TRANSPORT_COOLDOWN_DONE is False, (
         "_TRANSPORT_COOLDOWN_DONE not reset"
     )
-    assert _state._ARCH_INCOMPATIBLE_TOTAL == 0, (
-        "_ARCH_INCOMPATIBLE_TOTAL not zeroed"
-    )
+    assert _state._ARCH_INCOMPATIBLE_TOTAL == 0, "_ARCH_INCOMPATIBLE_TOTAL not zeroed"

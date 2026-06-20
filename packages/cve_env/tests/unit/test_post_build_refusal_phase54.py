@@ -110,17 +110,17 @@ def test_prompts_contains_verify_plan_composition_rule() -> None:
     # Lower-cased substring match for resilience to formatting tweaks.
     sp_lower = SYSTEM_PROMPT.lower()
     # Must mention build-functional framing
-    assert (
-        "build-functional" in sp_lower or "functional check" in sp_lower
-    ), "verify-plan composition rule missing build-functional framing"
+    assert "build-functional" in sp_lower or "functional check" in sp_lower, (
+        "verify-plan composition rule missing build-functional framing"
+    )
     # Must contain an "OR equivalent" / "or ecosystem-appropriate" open clause
-    assert (
-        "or equivalent" in sp_lower or "or ecosystem-appropriate" in sp_lower
-    ), "verify-plan composition rule missing open-clause language"
+    assert "or equivalent" in sp_lower or "or ecosystem-appropriate" in sp_lower, (
+        "verify-plan composition rule missing open-clause language"
+    )
     # Must explicitly warn against attack-pattern descriptions
-    assert (
-        "attack-pattern" in sp_lower or "attack pattern" in sp_lower
-    ), "verify-plan composition rule missing attack-pattern warning"
+    assert "attack-pattern" in sp_lower or "attack pattern" in sp_lower, (
+        "verify-plan composition rule missing attack-pattern warning"
+    )
 
 
 # ============================================================================
@@ -138,16 +138,19 @@ def test_prompts_contains_verify_plan_composition_rule() -> None:
 
 def _text_block(text: str) -> Any:
     from claude_agent_sdk import TextBlock
+
     return TextBlock(text=text)
 
 
 def _tool_use(tool_id: str, name: str, input_: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolUseBlock
+
     return ToolUseBlock(id=tool_id, name=name, input=input_)
 
 
 def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolResultBlock
+
     return ToolResultBlock(
         tool_use_id=tool_use_id,
         content=[{"type": "text", "text": json.dumps(payload)}],
@@ -156,16 +159,21 @@ def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
 
 def _assistant(*blocks: Any) -> Any:
     from claude_agent_sdk import AssistantMessage
-    return AssistantMessage(content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None)
+
+    return AssistantMessage(
+        content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None
+    )
 
 
 def _user(*blocks: Any) -> Any:
     from claude_agent_sdk import UserMessage
+
     return UserMessage(content=list(blocks), parent_tool_use_id=None)
 
 
 def _cve() -> Any:
     from cve_env.models import CveRecord
+
     return CveRecord(
         cve_id="CVE-TEST-POSTBUILDREFUSAL",
         product="testproduct",
@@ -176,6 +184,7 @@ def _cve() -> Any:
 
 def _host() -> Any:
     from cve_env.models import HostInfo
+
     return HostInfo(arch="arm64", os="darwin", rosetta_available=True)
 
 
@@ -290,9 +299,7 @@ def test_post_build_refusal_NOT_emitted_when_launched_ok_false(
         verify_passed_check: Any = None,
     ) -> Any:
         # No messages → launched_ok stays False
-        raise RuntimeError(
-            "Claude Code is unable to respond to this request."
-        )
+        raise RuntimeError("Claude Code is unable to respond to this request.")
 
     with patch("cve_env.agent.loop.run_agent", fake_run_agent_pre_launch_refusal):
         outcome = asyncio.run(

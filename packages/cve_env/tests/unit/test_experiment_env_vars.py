@@ -7,6 +7,7 @@ deep-explore benches:
 Both are no-ops when unset (default) — production benches keep the
 existing behavior. Set during experimental runs only.
 """
+
 from __future__ import annotations
 
 import os
@@ -104,7 +105,8 @@ class TestExtraPromptPrefixEnv:
             assert os.environ.get("CVE_ENV_EXTRA_PROMPT_PREFIX") == "EXPERIMENTAL_BLOCK"
 
     def test_env_var_default_empty(self) -> None:
-        env = {k: v for k, v in os.environ.items()
-               if k != "CVE_ENV_EXTRA_PROMPT_PREFIX"}
+        env = {
+            k: v for k, v in os.environ.items() if k != "CVE_ENV_EXTRA_PROMPT_PREFIX"
+        }
         with patch.dict(os.environ, env, clear=True):
             assert os.environ.get("CVE_ENV_EXTRA_PROMPT_PREFIX", "") == ""

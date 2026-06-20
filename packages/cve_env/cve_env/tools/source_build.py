@@ -123,7 +123,9 @@ _BUILD_CONFIG_TO_TYPE: dict[str, str] = {
 # SCP-style git URL: ``[user@]host:path``. Matched explicitly because urlparse
 # treats them as relative paths.
 _SCP_GIT_RE = re.compile(r"^(?:[A-Za-z0-9._-]+@)?([A-Za-z0-9.-]+):(.+)$")
-_GITHUB_GIT_SCHEMES = frozenset({"http", "https", "git", "ssh", "git+http", "git+https", "git+ssh"})
+_GITHUB_GIT_SCHEMES = frozenset(
+    {"http", "https", "git", "ssh", "git+http", "git+https", "git+ssh"}
+)
 
 
 def normalize_github_url(url: str | None) -> str | None:
@@ -398,16 +400,16 @@ class SourceBuilder:
             env=safe_subprocess_env(),
         )
 
-    def _progressive_clone(
-        self, url: str, target: Path, version: str
-    ) -> _CloneOutcome:
+    def _progressive_clone(self, url: str, target: Path, version: str) -> _CloneOutcome:
         warnings: list[str] = []
         if not self._clone_shallow(url, target):
             warnings.append(f"initial shallow clone failed: {url}")
             if self.config.archive_fallback:
                 tag = self._archive_fallback(url, version, target, warnings)
                 if tag is not None:
-                    return _CloneOutcome(tag=tag, warnings=warnings, needs_checkout=False)
+                    return _CloneOutcome(
+                        tag=tag, warnings=warnings, needs_checkout=False
+                    )
             return _CloneOutcome(tag=None, warnings=warnings, needs_checkout=True)
 
         self._fetch_tags(target)
@@ -415,18 +417,14 @@ class SourceBuilder:
         if tag is not None:
             return _CloneOutcome(tag=tag, warnings=warnings, needs_checkout=True)
 
-        steps = (
-            self._deepen_steps(url) if self.config.adaptive_depth else _DEEPEN_STEPS
-        )
+        steps = self._deepen_steps(url) if self.config.adaptive_depth else _DEEPEN_STEPS
         for depth in steps:
             warnings.append(
                 f"no tag matched at current depth; deepening to "
                 f"{'full' if depth == 0 else depth}"
             )
             if not self._deepen(target, depth):
-                warnings.append(
-                    f"deepen to {'full' if depth == 0 else depth} failed"
-                )
+                warnings.append(f"deepen to {'full' if depth == 0 else depth} failed")
                 break
             tag = find_version_tag(self._list_tags(target), version)
             if tag is not None:
@@ -491,9 +489,7 @@ class SourceBuilder:
         return tag
 
     def _list_tags_via_api(self, owner: str, repo: str) -> list[str]:
-        api_url = (
-            f"https://api.github.com/repos/{owner}/{repo}/tags?per_page=100"
-        )
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/tags?per_page=100"
         try:
             data = _http_get_json(api_url, timeout=self.config.http_timeout_seconds)
         except OSError:
@@ -509,9 +505,7 @@ class SourceBuilder:
                 out.append(name)
         return out
 
-    def _download_tarball(
-        self, owner: str, repo: str, tag: str, target: Path
-    ) -> bool:
+    def _download_tarball(self, owner: str, repo: str, tag: str, target: Path) -> bool:
         codeload_url = (
             f"https://codeload.github.com/{owner}/{repo}/tar.gz/refs/tags/{tag}"
         )
@@ -573,9 +567,7 @@ class SourceBuilder:
         if not url.startswith(_GITHUB_HTTPS_PREFIX):
             logger.warning("refusing to clone non-GitHub URL: %s", url)
             return False
-        outcome = self._run_git(
-            ["git", "clone", "--depth", "1", url, str(target)]
-        )
+        outcome = self._run_git(["git", "clone", "--depth", "1", url, str(target)])
         if outcome.timed_out:
             logger.warning(
                 "git clone timed out after %ss: %s",
@@ -599,17 +591,13 @@ class SourceBuilder:
         return outcome.returncode == 0
 
     def _fetch_tags(self, repo_dir: Path) -> bool:
-        outcome = self._run_git(
-            ["git", "fetch", "--tags", "--depth=1"], cwd=repo_dir
-        )
+        outcome = self._run_git(["git", "fetch", "--tags", "--depth=1"], cwd=repo_dir)
         if outcome.timed_out:
             return False
         return outcome.returncode == 0
 
     def _list_tags(self, repo_dir: Path) -> list[str]:
-        outcome = self._run_git(
-            ["git", "tag", "--list"], cwd=repo_dir, timeout=15
-        )
+        outcome = self._run_git(["git", "tag", "--list"], cwd=repo_dir, timeout=15)
         if outcome.timed_out or outcome.returncode != 0:
             return []
         return [line.strip() for line in outcome.stdout.splitlines() if line.strip()]
@@ -646,9 +634,7 @@ class SourceBuilder:
         return _CloneOutcome(tag=sha, warnings=warnings, needs_checkout=False)
 
     def _checkout(self, repo_dir: Path, tag: str) -> bool:
-        outcome = self._run_git(
-            ["git", "checkout", tag], cwd=repo_dir, timeout=30
-        )
+        outcome = self._run_git(["git", "checkout", tag], cwd=repo_dir, timeout=30)
         if outcome.timed_out:
             return False
         return outcome.returncode == 0
@@ -661,9 +647,7 @@ class SourceBuilder:
         for name in _DOCKERFILE_GLOB_NAMES:
             for candidate in repo_dir.rglob(name):
                 rel = candidate.relative_to(repo_dir)
-                if not any(
-                    p in str(rel).lower() for p in _SKIP_DOCKERFILE_SUBSTRINGS
-                ):
+                if not any(p in str(rel).lower() for p in _SKIP_DOCKERFILE_SUBSTRINGS):
                     return candidate
         return None
 
@@ -722,6 +706,7 @@ def _github_auth_headers() -> dict[str, str]:
     unauthenticated 60/h GitHub limit even when the user had a token set.
     """
     from cve_env.tools.github_fetch import resolve_github_token  # avoid cycle
+
     headers: dict[str, str] = {}
     token = resolve_github_token()
     if token:
@@ -747,9 +732,11 @@ def _urlopen(req: urllib.request.Request, *, timeout: int) -> Any:
 
 
 def _http_get_json(url: str, *, timeout: int) -> Any:
+    if not url.startswith("https://"):
+        raise ValueError(f"_http_get_json requires https:// URL, got: {url!r}")
     headers = {"Accept": "application/vnd.github+json"}
     headers.update(_github_auth_headers())
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310 — scheme validated above
     try:
         with _urlopen(req, timeout=timeout) as resp:
             status = getattr(resp, "status", 200)
@@ -776,7 +763,9 @@ def _http_get_json(url: str, *, timeout: int) -> Any:
 
 
 def _http_get_bytes(url: str, *, timeout: int) -> bytes | None:
-    req = urllib.request.Request(url, headers=_github_auth_headers())
+    if not url.startswith("https://"):
+        raise ValueError(f"_http_get_bytes requires https:// URL, got: {url!r}")
+    req = urllib.request.Request(url, headers=_github_auth_headers())  # noqa: S310 — scheme validated above
     try:
         with _urlopen(req, timeout=timeout) as resp:
             status = getattr(resp, "status", 200)

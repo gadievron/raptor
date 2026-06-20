@@ -42,7 +42,9 @@ _DOCKER_RETRY_MAX_ATTEMPTS: int = 2  # original + 1 retry
 # fast and the agent can pivot, instead of hanging until the wall-guard
 # SIGKILLs the worker. Large legit-pulls land in ~390s; 600s leaves time to
 # pivot before the wall-guard fires.
-_DOCKER_RUN_TIMEOUT_S: float = float(os.environ.get("CVE_ENV_DOCKER_RUN_TIMEOUT_S", "600"))
+_DOCKER_RUN_TIMEOUT_S: float = float(
+    os.environ.get("CVE_ENV_DOCKER_RUN_TIMEOUT_S", "600")
+)
 
 # Bound the post-launch `docker inspect`/`docker logs` calls so a wedged daemon
 # can't hang a worker to the wall (these run between SDK messages, where no
@@ -59,7 +61,9 @@ class RunError(RuntimeError):
     regex-parsing the message.
     """
 
-    def __init__(self, message: str, *, reason: str = "", image_ref: str | None = None) -> None:
+    def __init__(
+        self, message: str, *, reason: str = "", image_ref: str | None = None
+    ) -> None:
         super().__init__(message)
         self.reason = reason
         self.image_ref = image_ref
@@ -187,7 +191,9 @@ def _normalize_ports(ports_config: dict[Any, Any]) -> tuple[int, str]:
             container_port = int(key)
         except (TypeError, ValueError):
             continue
-        bind = str(spec.get("bind", "127.0.0.1")) if isinstance(spec, dict) else str(spec)
+        bind = (
+            str(spec.get("bind", "127.0.0.1")) if isinstance(spec, dict) else str(spec)
+        )
         if bind != "127.0.0.1":
             msg = (
                 f"run plan binds port {container_port} to {bind!r}; "
@@ -218,7 +224,13 @@ def _read_allocated_host_port(
         # daemon can't hang past the deadline (timed_out → returncode None →
         # this poll is skipped, the deadline loop exits, no_host_port raised).
         outcome = run_with_timeout(
-            ["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container_id],
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .NetworkSettings.Ports}}",
+                container_id,
+            ],
             timeout=_INSPECT_POLL_TIMEOUT_S,
         )
         if outcome.returncode == 0 and outcome.stdout.strip():
@@ -231,7 +243,10 @@ def _read_allocated_host_port(
                 bindings = ports.get(key) or []
                 last_bindings = bindings if isinstance(bindings, list) else []
                 for binding in last_bindings:
-                    if not isinstance(binding, dict) or binding.get("HostIp") != "127.0.0.1":
+                    if (
+                        not isinstance(binding, dict)
+                        or binding.get("HostIp") != "127.0.0.1"
+                    ):
                         continue
                     host_port = binding.get("HostPort")
                     if host_port is None:
@@ -241,7 +256,9 @@ def _read_allocated_host_port(
                     except (TypeError, ValueError):
                         continue
         time.sleep(0.3)
-    msg = f"no 127.0.0.1 host binding for {container_port}/tcp (bindings={last_bindings})"
+    msg = (
+        f"no 127.0.0.1 host binding for {container_port}/tcp (bindings={last_bindings})"
+    )
     raise RunError(msg, reason="no_host_port")
 
 
@@ -348,7 +365,9 @@ def docker_run(
             last_reason_class = "transport"
             break
         last_reason_class = classify_docker_stderr(proc.stderr)
-        if attempt >= _DOCKER_RETRY_MAX_ATTEMPTS or not is_retry_eligible(last_reason_class):
+        if attempt >= _DOCKER_RETRY_MAX_ATTEMPTS or not is_retry_eligible(
+            last_reason_class
+        ):
             break
         # Retry-eligible failure: prune + wait briefly, then retry.
         if last_reason_class == "disk_full":
@@ -425,7 +444,9 @@ def docker_run(
         )
 
     try:
-        host_port = _read_allocated_host_port(container_id, container_port=container_port)
+        host_port = _read_allocated_host_port(
+            container_id, container_port=container_port
+        )
     except RunError as exc:
         _FAILED_ATTEMPTS.add(attempt_key)
         return RunResult(

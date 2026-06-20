@@ -28,7 +28,6 @@ from typing import Any
 from unittest.mock import patch
 
 
-
 def test_loop_exception_handler_wires_classify_api_overload() -> None:
     """Source-inspection: loop.py exception handler must reference
     _classify_api_overload in proximity to setting state.give_up_reason
@@ -60,6 +59,7 @@ def test_loop_exception_handler_wires_classify_api_overload() -> None:
 
 def _cve() -> Any:
     from cve_env.models import CveRecord
+
     return CveRecord(
         cve_id="CVE-TEST-APIOVERLOAD",
         product="testproduct",
@@ -70,6 +70,7 @@ def _cve() -> Any:
 
 def _host() -> Any:
     from cve_env.models import HostInfo
+
     return HostInfo(arch="arm64", os="darwin", rosetta_available=True)
 
 

@@ -90,24 +90,44 @@ def test_has_functional_smoke_ignores_failed_probes() -> None:
     from cve_env.tools.verify import has_functional_smoke
 
     # 2 distinct-path http_checks but BOTH failed -> not evidence.
-    assert has_functional_smoke(
-        [_result("http_check", url="/", passed=False),
-         _result("http_check", url="/nope404", passed=False)]
-    ) is False
+    assert (
+        has_functional_smoke(
+            [
+                _result("http_check", url="/", passed=False),
+                _result("http_check", url="/nope404", passed=False),
+            ]
+        )
+        is False
+    )
     # a failed content-check probe -> not evidence.
-    assert has_functional_smoke(
-        [_result("http_check", content_check_performed=True, url="/x", passed=False)]
-    ) is False
+    assert (
+        has_functional_smoke(
+            [
+                _result(
+                    "http_check", content_check_performed=True, url="/x", passed=False
+                )
+            ]
+        )
+        is False
+    )
     # 3 failed active probes -> not evidence.
-    assert has_functional_smoke(
-        [_result("exec_check", passed=False),
-         _result("http_request_check", passed=False),
-         _result("tcp_probe_check", passed=False)]
-    ) is False
+    assert (
+        has_functional_smoke(
+            [
+                _result("exec_check", passed=False),
+                _result("http_request_check", passed=False),
+                _result("tcp_probe_check", passed=False),
+            ]
+        )
+        is False
+    )
     # sanity: the SAME shapes PASSING still count.
-    assert has_functional_smoke(
-        [_result("http_check", url="/a"), _result("http_check", url="/b")]
-    ) is True
+    assert (
+        has_functional_smoke(
+            [_result("http_check", url="/a"), _result("http_check", url="/b")]
+        )
+        is True
+    )
 
 
 def test_smoke_module_no_circular_imports() -> None:
@@ -117,9 +137,7 @@ def test_smoke_module_no_circular_imports() -> None:
     module is created in Phase 3a.
     """
     pytest.importorskip("cve_env.tools._smoke")
-    smoke_text = (
-        _PKG / "tools" /"_smoke.py"
-    ).read_text()
+    smoke_text = (_PKG / "tools" / "_smoke.py").read_text()
     tree = ast.parse(smoke_text)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
@@ -165,15 +183,13 @@ def test_image_resolve_state_module_self_contained() -> None:
     ``image_resolve``. One-way dep: image_resolve -> _state only.
     """
     pytest.importorskip("cve_env.tools._image_resolve_state")
-    state_text = (
-        _PKG / "tools" /"_image_resolve_state.py"
-    ).read_text()
+    state_text = (_PKG / "tools" / "_image_resolve_state.py").read_text()
     tree = ast.parse(state_text)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            assert "image_resolve" not in node.module.replace("_image_resolve_state", "X"), (
-                f"_image_resolve_state.py imports {node.module!r} — circular dep."
-            )
+            assert "image_resolve" not in node.module.replace(
+                "_image_resolve_state", "X"
+            ), f"_image_resolve_state.py imports {node.module!r} — circular dep."
 
 
 def test_image_resolve_uses_state_via_helpers() -> None:
@@ -183,8 +199,8 @@ def test_image_resolve_uses_state_via_helpers() -> None:
     Mock #2 finding 2: ``global`` keyword leftovers cause silent NameError at
     runtime; G4 doesn't catch them. AST scan is the lock.
     """
-    image_resolve_path = _PKG / "tools" /"image_resolve.py"
-    state_path = _PKG / "tools" /"_image_resolve_state.py"
+    image_resolve_path = _PKG / "tools" / "image_resolve.py"
+    state_path = _PKG / "tools" / "_image_resolve_state.py"
     if not state_path.exists():
         pytest.skip("Phase 4 not yet landed; _image_resolve_state.py missing")
 
@@ -311,10 +327,19 @@ def test_public_api_imports_stable() -> None:
 
     # critical paths: module path → symbol
     critical = {
-        "cve_env.tools.verify": ["check_http", "check_exec", "check_logs",
-                                  "check_http_request", "check_tcp_probe", "verify"],
-        "cve_env.tools._failure_class": ["classify_docker_stderr", "is_retry_eligible",
-                                          "DockerFailureClass"],
+        "cve_env.tools.verify": [
+            "check_http",
+            "check_exec",
+            "check_logs",
+            "check_http_request",
+            "check_tcp_probe",
+            "verify",
+        ],
+        "cve_env.tools._failure_class": [
+            "classify_docker_stderr",
+            "is_retry_eligible",
+            "DockerFailureClass",
+        ],
         "cve_env.tools._smoke": ["has_functional_smoke", "_ACTIVE_PROBE_TYPES"],
         "cve_env.agent.prompts": ["SYSTEM_PROMPT"],
         "cve_env.tools.image_resolve": ["image_resolve", "image_resolve_to_payload"],

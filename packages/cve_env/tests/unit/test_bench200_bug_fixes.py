@@ -132,7 +132,9 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
             return AgentRunOutcome(
                 stop_reason=early_stop_reason,
                 num_turns=result_msg.num_turns if result_msg else 0,
-                total_cost_usd=(result_msg.total_cost_usd or 0.0) if result_msg else 0.0,
+                total_cost_usd=(result_msg.total_cost_usd or 0.0)
+                if result_msg
+                else 0.0,
                 is_error=False,
                 session_id=result_msg.session_id if result_msg else "",
                 final_text="",
@@ -184,9 +186,7 @@ def test_F12_retry_storm_does_not_exceed_cost_cap(tmp_path: Path) -> None:
         _result("end_turn", cost_usd=1.40),
         _result("end_turn", cost_usd=1.10),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -196,10 +196,7 @@ def test_F12_retry_storm_does_not_exceed_cost_cap(tmp_path: Path) -> None:
                 max_cost_usd=1.50,
             )
         )
-    assert (
-        outcome.total_cost_usd <= 1.50
-        or outcome.status == "budget_exhausted"
-    ), (
+    assert outcome.total_cost_usd <= 1.50 or outcome.status == "budget_exhausted", (
         f"F-12 not fixed: total_cost_usd={outcome.total_cost_usd:.2f} "
         f"exceeded cap=$1.50 with status={outcome.status!r} "
         f"(reason={outcome.reason!r})"
@@ -212,14 +209,22 @@ def test_F12_single_oversized_result_capped_or_flagged(tmp_path: Path) -> None:
     """
     messages = [
         _assistant(
-            _tool_use("tu-v", "mcp__cve_env__verify", {"plan": [{"type": "container_status"}]})
+            _tool_use(
+                "tu-v", "mcp__cve_env__verify", {"plan": [{"type": "container_status"}]}
+            )
         ),
-        _user(_tool_result("tu-v", {"passed": True, "results": [{"type": "container_status", "passed": True}]})),
+        _user(
+            _tool_result(
+                "tu-v",
+                {
+                    "passed": True,
+                    "results": [{"type": "container_status", "passed": True}],
+                },
+            )
+        ),
         _result("end_turn", cost_usd=3.90),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -289,9 +294,7 @@ def test_F13_give_up_halts_subsequent_tool_calls(tmp_path: Path) -> None:
         _result("end_turn"),
     ]
     _audit_log_path = tmp_path / "audit-F10.jsonl"
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -362,9 +365,7 @@ def test_F9_runtime_turn_cap_enforced_when_sdk_does_not_emit(tmp_path: Path) -> 
         )
     messages.append(_result("end_turn"))
 
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -425,9 +426,7 @@ def test_F11_build_failure_then_end_turn_classified_distinctly(tmp_path: Path) -
         _assistant(_text_block("Build failed; nothing more I can do here.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -473,7 +472,9 @@ def test_B1_research_only_with_Bash_classifies_as_research(tmp_path: Path) -> No
     fell through to the generic message because Bash wasn't in the
     research-or-diag set. B-1 widens the set to include Bash/Read/Write."""
     messages = [
-        _assistant(_tool_use("tu-nvd", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
+        _assistant(
+            _tool_use("tu-nvd", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu-nvd", {"hit": True, "summary": "x"})),
         # Bash diagnostics — used to ls a hypothetical workdir, not for build.
         _assistant(_tool_use("tu-bash", "Bash", {"command": "ls /tmp"})),
@@ -481,9 +482,7 @@ def test_B1_research_only_with_Bash_classifies_as_research(tmp_path: Path) -> No
         _assistant(_text_block("No buildable artifact found, ending here.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -520,6 +519,7 @@ def test_B2_give_up_branch_ordered_before_runtime_cap_exceptions() -> None:
     re-introduces the race."""
     import inspect
     from cve_env.agent import loop as loop_mod
+
     src = inspect.getsource(loop_mod.build)
     # Find the give_up_reason branch in the except handler
     except_idx = src.index("except Exception as exc")
@@ -571,15 +571,17 @@ def test_F8_research_only_end_turn_classified_distinctly(tmp_path: Path) -> None
         ),
         _user(_tool_result("tu-nvd", {"hit": True, "summary": "Some CVE"})),
         _assistant(
-            _tool_use("tu-fetch", "mcp__cve_env__github_fetch", {"url": "https://github.com/x/y"})
+            _tool_use(
+                "tu-fetch",
+                "mcp__cve_env__github_fetch",
+                {"url": "https://github.com/x/y"},
+            )
         ),
         _user(_tool_result("tu-fetch", {"ok": True, "body": "..."})),
         _assistant(_text_block("No buildable artifact found, ending here.")),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -592,7 +594,10 @@ def test_F8_research_only_end_turn_classified_distinctly(tmp_path: Path) -> None
     # Acceptable: "research_dead_end", or "verify_failed" with reason
     # citing research-only / no build attempted.
     if outcome.status == "verify_failed":
-        assert "research" in (outcome.reason or "").lower() or "no_build" in (outcome.reason or "").lower(), (
+        assert (
+            "research" in (outcome.reason or "").lower()
+            or "no_build" in (outcome.reason or "").lower()
+        ), (
             f"F-8 not fixed: research-only end_turn mapped to plain "
             f"'no_verify_pass' (status={outcome.status!r}, "
             f"reason={outcome.reason!r}) — should signal research-only path"
@@ -641,9 +646,7 @@ def test_F10_source_build_end_turn_classified_distinctly(tmp_path: Path) -> None
         ),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -684,7 +687,9 @@ def test_F10_source_build_end_turn_classified_distinctly(tmp_path: Path) -> None
 # remains in place.
 
 
-def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(tmp_path: Path) -> None:
+def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(
+    tmp_path: Path,
+) -> None:
     """REGRESSION-LOCK (already-passing): docker_run.ok=true → end_turn
     without verify must be classified as 'launched_unverified', NOT plain
     'no_verify_pass'. Phase 57 logic (loop.py:339-348) handles this. We
@@ -695,22 +700,28 @@ def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(tmp_path:
     for this runtime-fix pipeline).
     """
     messages = [
-        _assistant(
-            _tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})
-        ),
+        _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
         _user(
             _tool_result(
                 "tu-run",
-                {"ok": True, "container_id": "abc", "host_port": 80, "host_ip": "127.0.0.1"},
+                {
+                    "ok": True,
+                    "container_id": "abc",
+                    "host_port": 80,
+                    "host_ip": "127.0.0.1",
+                },
             )
         ),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-F7-launched-unverified", audit_root=tmp_path)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-F7-launched-unverified",
+                audit_root=tmp_path,
+            )
         )
     assert outcome.status == "launched_no_verify", (
         f"F-7 regression: docker_run.ok=true + end_turn must classify as "
@@ -732,7 +743,9 @@ def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(tmp_path:
 # "verify_partial_no_retry" or "verify_failed" reason mentioning partial.
 
 
-def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(tmp_path: Path) -> None:
+def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(
+    tmp_path: Path,
+) -> None:
     """RED: verify ran with some passing + some failing checks, agent emits
     end_turn without retry. Status should signal "partial-pass" specifically,
     not be generic "verify_failed" indistinguishable from never-verified.
@@ -741,24 +754,29 @@ def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(tmp_path: Pat
     locks plain "verify_failed" for full failure; partial pass shares that.
     """
     messages = [
-        _assistant(
-            _tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})
-        ),
+        _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
         _user(
             _tool_result(
                 "tu-run",
-                {"ok": True, "container_id": "abc", "host_port": 80, "host_ip": "127.0.0.1"},
+                {
+                    "ok": True,
+                    "container_id": "abc",
+                    "host_port": 80,
+                    "host_ip": "127.0.0.1",
+                },
             )
         ),
         _assistant(
             _tool_use(
                 "tu-verify",
                 "mcp__cve_env__verify",
-                {"plan": [
-                    {"type": "container_status"},
-                    {"type": "exec_check"},
-                    {"type": "http_check"},
-                ]},
+                {
+                    "plan": [
+                        {"type": "container_status"},
+                        {"type": "exec_check"},
+                        {"type": "http_check"},
+                    ]
+                },
             )
         ),
         _user(
@@ -776,9 +794,7 @@ def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(tmp_path: Pat
         ),
         _result("end_turn"),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="run-F14-partial-pass", audit_root=tmp_path)
         )
@@ -786,7 +802,11 @@ def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(tmp_path: Pat
     # or status="verify_failed" with reason citing partial pass + count.
     if outcome.status == "verify_failed":
         reason_lower = (outcome.reason or "").lower()
-        assert "partial" in reason_lower or "/3" in (outcome.reason or "") or "2/3" in (outcome.reason or ""), (
+        assert (
+            "partial" in reason_lower
+            or "/3" in (outcome.reason or "")
+            or "2/3" in (outcome.reason or "")
+        ), (
             f"F-14 not fixed: verify-partial-pass + end_turn mapped to plain "
             f"'no_verify_pass' (status={outcome.status!r}, "
             f"reason={outcome.reason!r}) — should mention partial-pass count"
@@ -797,7 +817,9 @@ def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(tmp_path: Pat
         )
 
 
-def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(tmp_path: Path) -> None:
+def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(
+    tmp_path: Path,
+) -> None:
     """B-10 fix (2026-05-06): when agent runs build-path tools
     (docker_build / dockerfile_gen / source_build) then emits end_turn
     WITHOUT verify-pass and WITHOUT explicit give_up, runtime synthesizes
@@ -809,16 +831,20 @@ def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(tmp_path: P
     messages = [
         _assistant(_tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
         _user(_tool_result("tu1", {"hit": True})),
-        _assistant(_tool_use("tu2", "mcp__cve_env__dockerfile_gen", {"base_image": "ubuntu:22.04"})),
+        _assistant(
+            _tool_use(
+                "tu2", "mcp__cve_env__dockerfile_gen", {"base_image": "ubuntu:22.04"}
+            )
+        ),
         _user(_tool_result("tu2", {"ok": True, "dockerfile": "FROM ubuntu:22.04"})),
-        _assistant(_tool_use("tu3", "mcp__cve_env__docker_build", {"context_path": "/tmp/x"})),
+        _assistant(
+            _tool_use("tu3", "mcp__cve_env__docker_build", {"context_path": "/tmp/x"})
+        ),
         _user(_tool_result("tu3", {"ok": True, "image_tag": "x:1"})),
         _assistant(_text_block("Built; not verifying further.")),
         _result("end_turn"),  # P0-X violation: end_turn without verify or give_up
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -849,7 +875,9 @@ def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(tmp_path: P
     assert outcome.status != "verify_failed"
 
 
-def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(tmp_path: Path) -> None:
+def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(
+    tmp_path: Path,
+) -> None:
     """B-8 fix (2026-05-06): when SDK emits ResultMessage with
     stop_reason='end_turn' and verify wasn't passed and give_up wasn't
     issued, the audit terminal entry must be `final_no_verify` (NOT
@@ -863,9 +891,7 @@ def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(tmp_path: Pa
         _user(_tool_result("tu1", {"hit": True})),
         _result("end_turn"),  # SDK end_turn, no verify, no give_up
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -895,7 +921,9 @@ def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(tmp_path: Pa
     )
 
 
-def test_B9_num_turns_floored_at_tool_uses_seen_when_sdk_reports_zero(tmp_path: Path) -> None:
+def test_B9_num_turns_floored_at_tool_uses_seen_when_sdk_reports_zero(
+    tmp_path: Path,
+) -> None:
     """B-9 fix (2026-05-06): when SDK emits a ResultMessage with num_turns=0
     yet the audit log shows real tool calls happened (CVE-2024-11664
     smoke12 reproduction: 35 tool calls but Outcome reported t=0 cost=$0
@@ -913,9 +941,7 @@ def test_B9_num_turns_floored_at_tool_uses_seen_when_sdk_reports_zero(tmp_path: 
         # SDK reports num_turns=0 even though 3 tool calls happened
         _result("max_turns_reached", turns=0, cost_usd=0.0),
     ]
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),

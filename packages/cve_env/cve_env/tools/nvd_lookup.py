@@ -30,7 +30,9 @@ class NvdRecord:
     last_modified: str = ""
     cvss_base_score: float | None = None
     cvss_severity: str = ""
-    cpes: list[dict[str, Any]] = field(default_factory=list)  # [{vendor, product, version}]
+    cpes: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{vendor, product, version}]
     references: list[str] = field(default_factory=list)
     reason: str = ""
     reason_class: str = "ok"  # ok / rate_limited / transport / auth / not_found
@@ -116,11 +118,7 @@ def _extract_cvss(vulnerabilities: list[dict[str, Any]]) -> tuple[float | None, 
             entry = lst[0]
             data = entry.get("cvssData", {}) or {}
             base = data.get("baseScore")
-            severity = (
-                data.get("baseSeverity")
-                or entry.get("baseSeverity")
-                or ""
-            )
+            severity = data.get("baseSeverity") or entry.get("baseSeverity") or ""
             if isinstance(base, (int, float)):
                 return float(base), str(severity)
     return None, ""
@@ -261,7 +259,9 @@ def nvd_lookup(cve_id: str) -> NvdRecord:
             reason_class="transport",
         )
 
-    vulnerabilities = payload.get("vulnerabilities", []) if isinstance(payload, dict) else []
+    vulnerabilities = (
+        payload.get("vulnerabilities", []) if isinstance(payload, dict) else []
+    )
     if not vulnerabilities:
         # NVD returned no entry → try OSV (which sometimes has CVEs that
         # NVD lacks, especially newly-disclosed ones).

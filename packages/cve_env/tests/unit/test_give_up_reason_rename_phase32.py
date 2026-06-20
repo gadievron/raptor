@@ -15,12 +15,14 @@ Engine emits NEW canonical names. Read-path consumers normalize via
 Per Phase 21.1 / 26.1 / 24B.1 pattern: xfail(strict=True) RED → markers
 removed atomically when Phase 32.2 lands.
 """
+
 from __future__ import annotations
 
 
 def _try_import_alias_map():
     try:
         from cve_env.models import GIVE_UP_REASON_ALIAS_MAP
+
         return GIVE_UP_REASON_ALIAS_MAP
     except ImportError:
         return None
@@ -63,6 +65,7 @@ def test_loop_py_emits_new_names():
     from pathlib import Path
 
     import cve_env
+
     src = (Path(cve_env.__file__).resolve().parent / "agent" / "loop.py").read_text()
     # NEW names must appear in emit sites
     assert 'give_up_reason = "quit_without_verify_or_giveup"' in src

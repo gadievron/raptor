@@ -12,6 +12,7 @@ documented safe-fallback value (rather than propagating the exception).
 Each test is small and atomic — one site × one exception class — to make
 regressions trivially traceable.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -40,7 +41,9 @@ def test_inspect_state_returns_error_on_timeout() -> None:
 def test_inspect_state_returns_error_on_missing_binary() -> None:
     from cve_env.tools.verify import _inspect_state
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")):
+    with patch(
+        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+    ):
         result = _inspect_state("c123")
     assert "_error" in result
 
@@ -75,7 +78,9 @@ def test_container_logs_tail_returns_empty_on_timeout() -> None:
 def test_container_logs_tail_returns_empty_on_missing_binary() -> None:
     from cve_env.tools.verify import _container_logs_tail
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")):
+    with patch(
+        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+    ):
         result = _container_logs_tail("c123")
     assert result == ""
 
@@ -127,7 +132,9 @@ def test_manifest_inspect_returns_none_on_timeout() -> None:
 def test_manifest_inspect_returns_none_on_missing_binary() -> None:
     from cve_env.tools.arch import _manifest_inspect
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")):
+    with patch(
+        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+    ):
         result = _manifest_inspect("alpine:3.19")
     assert result is None
 
@@ -154,7 +161,9 @@ def test_docker_stop_swallows_timeout() -> None:
 def test_docker_stop_swallows_missing_binary() -> None:
     from cve_env.tools.docker_run import docker_stop
 
-    with patch("cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")):
+    with patch(
+        "cve_env.utils.run.subprocess.run", side_effect=FileNotFoundError("docker")
+    ):
         # Must NOT raise.
         docker_stop("c123")
 
@@ -218,7 +227,10 @@ def test_compose_invocation_falls_back_when_probe_times_out() -> None:
     docker_compose_up._compose_invocation.cache_clear()
 
     with (
-        patch("cve_env.tools.docker_compose_up.shutil.which", side_effect=lambda b: f"/usr/bin/{b}"),
+        patch(
+            "cve_env.tools.docker_compose_up.shutil.which",
+            side_effect=lambda b: f"/usr/bin/{b}",
+        ),
         patch(
             "cve_env.utils.run.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=10),

@@ -52,7 +52,8 @@ def _outcome(
         give_up_detail=give_up_detail,
         final_text=final_text,
         audit_path=audit_path,
-        tool_names_called=tool_names_called or ["nvd_lookup", "image_resolve", "verify"],
+        tool_names_called=tool_names_called
+        or ["nvd_lookup", "image_resolve", "verify"],
     )
 
 
@@ -97,7 +98,9 @@ def test_classify_check_http_check_returns_lifecycle_when_no_content_check() -> 
     assert cli._classify_check("http_check", {}) == "L"
 
 
-def test_classify_check_http_check_returns_functional_when_content_match_performed() -> None:
+def test_classify_check_http_check_returns_functional_when_content_match_performed() -> (
+    None
+):
     # Phase 49.2: content_check_performed flag means functional smoke
     assert cli._classify_check("http_check", {"content_check_performed": True}) == "F"
 
@@ -125,20 +128,21 @@ def test_classify_check_unknown_type_returns_question_mark() -> None:
 @pytest.mark.parametrize(
     "bad_id",
     [
-        "NOT-A-CVE-ID",        # not in CVE-YYYY-NNNN format
-        "cve-2018-7600",       # lowercase prefix
-        "CVE-201-7600",        # 3-digit year
-        "CVE-20189-7600",      # 5-digit year
-        "CVE-2018-760",        # 3-digit serial (must be ≥4)
-        "CVE2018-7600",        # missing first dash
-        "CVE-2018_7600",       # underscore instead of dash
-        "",                    # empty
-        " CVE-2018-7600",      # leading space
+        "NOT-A-CVE-ID",  # not in CVE-YYYY-NNNN format
+        "cve-2018-7600",  # lowercase prefix
+        "CVE-201-7600",  # 3-digit year
+        "CVE-20189-7600",  # 5-digit year
+        "CVE-2018-760",  # 3-digit serial (must be ≥4)
+        "CVE2018-7600",  # missing first dash
+        "CVE-2018_7600",  # underscore instead of dash
+        "",  # empty
+        " CVE-2018-7600",  # leading space
     ],
 )
 def test_validate_cve_id_rejects_malformed(bad_id: str) -> None:
     """F-2: malformed CVE-IDs raise argparse.ArgumentTypeError."""
     import argparse
+
     with pytest.raises(argparse.ArgumentTypeError):
         cli._validate_cve_id(bad_id)
 
@@ -149,8 +153,8 @@ def test_validate_cve_id_rejects_malformed(bad_id: str) -> None:
         "CVE-2014-0160",
         "CVE-2018-7600",
         "CVE-2024-1264",
-        "CVE-2024-12478",      # 5-digit serial
-        "CVE-1999-0001",       # earliest legitimate year
+        "CVE-2024-12478",  # 5-digit serial
+        "CVE-1999-0001",  # earliest legitimate year
     ],
 )
 def test_validate_cve_id_accepts_canonical(good_id: str) -> None:
@@ -176,8 +180,12 @@ def test_cmd_build_returns_0_on_success(tmp_path: Path) -> None:
     args.silent = True  # suppress human report
 
     stdout = io.StringIO()
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(stdout):
             rc = cli._cmd_build(args)
 
@@ -207,8 +215,12 @@ def test_cmd_build_returns_1_on_unresolvable(tmp_path: Path) -> None:
     args.audit_root = str(tmp_path)
     args.silent = True
 
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(io.StringIO()):
             rc = cli._cmd_build(args)
 
@@ -230,8 +242,12 @@ def test_cmd_build_silent_suppresses_human_report(tmp_path: Path) -> None:
     args.silent = True
 
     stderr = io.StringIO()
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
             cli._cmd_build(args)
 
@@ -254,8 +270,12 @@ def test_cmd_build_default_emits_human_report(tmp_path: Path) -> None:
     args.silent = False  # DEFAULT — report should print
 
     stderr = io.StringIO()
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
             cli._cmd_build(args)
 
@@ -286,12 +306,16 @@ def test_cmd_build_auto_cleanup_removes_this_cves_result_images(tmp_path: Path) 
     args.auto_prune_images = False
     args.auto_stop_colima = False
 
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]), \
-         patch("cve_env.utils.lifecycle.cleanup_containers") as m_containers, \
-         patch("cve_env.utils.lifecycle.cleanup_result_images") as m_images, \
-         patch("cve_env.utils.lifecycle.prune_images"), \
-         patch("cve_env.utils.lifecycle.stop_colima_if_idle"):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+        patch("cve_env.utils.lifecycle.cleanup_containers") as m_containers,
+        patch("cve_env.utils.lifecycle.cleanup_result_images") as m_images,
+        patch("cve_env.utils.lifecycle.prune_images"),
+        patch("cve_env.utils.lifecycle.stop_colima_if_idle"),
+    ):
         with redirect_stdout(io.StringIO()):
             cli._cmd_build(args)
 
@@ -302,6 +326,7 @@ def test_cmd_build_auto_cleanup_removes_this_cves_result_images(tmp_path: Path) 
 def test_cmd_build_no_cleanup_when_gate_off(tmp_path: Path) -> None:
     """auto_cleanup off (and config default off) → cleanup_result_images NOT called."""
     import cve_env.config as _cfg
+
     fake_outcome = _outcome(status="success", verify_passed=True)
 
     args = type("Args", (), {})()
@@ -317,11 +342,15 @@ def test_cmd_build_no_cleanup_when_gate_off(tmp_path: Path) -> None:
     args.auto_prune_images = False
     args.auto_stop_colima = False
 
-    with patch.object(_cfg, "AUTO_CLEANUP_CONTAINERS", False), \
-         patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]), \
-         patch("cve_env.utils.lifecycle.cleanup_result_images") as m_images, \
-         patch("cve_env.utils.lifecycle.stop_colima_if_idle"):
+    with (
+        patch.object(_cfg, "AUTO_CLEANUP_CONTAINERS", False),
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+        patch("cve_env.utils.lifecycle.cleanup_result_images") as m_images,
+        patch("cve_env.utils.lifecycle.stop_colima_if_idle"),
+    ):
         with redirect_stdout(io.StringIO()):
             cli._cmd_build(args)
 
@@ -342,8 +371,12 @@ def test_cmd_doctor_returns_0_when_no_critical_failure() -> None:
     args.strict = False
 
     with patch("cve_env.infra.service_health.run_all", return_value=[FakeResult()]):
-        with patch("cve_env.infra.service_health.has_critical_failure", return_value=False):
-            with patch("cve_env.infra.service_health.render_table", return_value="OK\n"):
+        with patch(
+            "cve_env.infra.service_health.has_critical_failure", return_value=False
+        ):
+            with patch(
+                "cve_env.infra.service_health.render_table", return_value="OK\n"
+            ):
                 with redirect_stdout(io.StringIO()):
                     rc = cli._cmd_doctor(args)
     assert rc == 0
@@ -360,8 +393,12 @@ def test_cmd_doctor_returns_2_on_critical_failure() -> None:
     args.strict = False
 
     with patch("cve_env.infra.service_health.run_all", return_value=[FakeResult()]):
-        with patch("cve_env.infra.service_health.has_critical_failure", return_value=True):
-            with patch("cve_env.infra.service_health.render_table", return_value="FAIL\n"):
+        with patch(
+            "cve_env.infra.service_health.has_critical_failure", return_value=True
+        ):
+            with patch(
+                "cve_env.infra.service_health.render_table", return_value="FAIL\n"
+            ):
                 with redirect_stdout(io.StringIO()):
                     rc = cli._cmd_doctor(args)
     assert rc == 2
@@ -378,8 +415,12 @@ def test_cmd_doctor_strict_returns_1_on_non_critical_failure() -> None:
     args.strict = True
 
     with patch("cve_env.infra.service_health.run_all", return_value=[FakeResult()]):
-        with patch("cve_env.infra.service_health.has_critical_failure", return_value=False):
-            with patch("cve_env.infra.service_health.render_table", return_value="WARN\n"):
+        with patch(
+            "cve_env.infra.service_health.has_critical_failure", return_value=False
+        ):
+            with patch(
+                "cve_env.infra.service_health.render_table", return_value="WARN\n"
+            ):
                 with redirect_stdout(io.StringIO()):
                     rc = cli._cmd_doctor(args)
     assert rc == 1
@@ -422,7 +463,9 @@ def test_main_build_dispatches_to_cmd_build(tmp_path: Path) -> None:
         return 0
 
     with patch.object(cli, "_cmd_build", fake_cmd_build):
-        rc = cli.main(["build", "CVE-2014-0160", "--silent", "--audit-root", str(tmp_path)])
+        rc = cli.main(
+            ["build", "CVE-2014-0160", "--silent", "--audit-root", str(tmp_path)]
+        )
 
     assert rc == 0
     assert captured["cve_id"] == "CVE-2014-0160"
@@ -465,7 +508,10 @@ def test_main_doctor_strict_passes_flag() -> None:
 
 
 def test_summarize_call_nvd_lookup_returns_cve_id() -> None:
-    assert cli._summarize_call("nvd_lookup", {"cve_id": "CVE-2014-0160"}) == "CVE-2014-0160"
+    assert (
+        cli._summarize_call("nvd_lookup", {"cve_id": "CVE-2014-0160"})
+        == "CVE-2014-0160"
+    )
 
 
 def test_summarize_call_github_fetch_returns_owner_repo_path() -> None:
@@ -562,14 +608,17 @@ def test_summarize_result_image_resolve_native_returns_digest() -> None:
 
 def test_summarize_result_image_resolve_failure_includes_reason_class() -> None:
     g, r = cli._summarize_result(
-        "image_resolve", {"decision": "rate_limited_persistent", "reason_class": "rate_limited"}
+        "image_resolve",
+        {"decision": "rate_limited_persistent", "reason_class": "rate_limited"},
     )
     assert g == "✗"
     assert "rate_limited_persistent" in r
 
 
 def test_summarize_result_docker_build_success_includes_tag() -> None:
-    g, r = cli._summarize_result("docker_build", {"ok": True, "image_tag": "cve-2014-0160:1"})
+    g, r = cli._summarize_result(
+        "docker_build", {"ok": True, "image_tag": "cve-2014-0160:1"}
+    )
     assert g == "✓"
     assert "cve-2014-0160:1" in r
 
@@ -586,14 +635,19 @@ def test_summarize_result_docker_run_success_truncates_container_id() -> None:
 def test_summarize_result_verify_passed_count() -> None:
     g, r = cli._summarize_result(
         "verify",
-        {"passed": True, "results": [{"passed": True}, {"passed": True}, {"passed": False}]},
+        {
+            "passed": True,
+            "results": [{"passed": True}, {"passed": True}, {"passed": False}],
+        },
     )
     assert g == "✓"
     assert "2/3 checks passed" in r
 
 
 def test_summarize_result_verify_failed() -> None:
-    g, r = cli._summarize_result("verify", {"passed": False, "results": [{"passed": False}]})
+    g, r = cli._summarize_result(
+        "verify", {"passed": False, "results": [{"passed": False}]}
+    )
     assert g == "✗"
     assert "0/1 checks passed" in r
 
@@ -636,9 +690,12 @@ def test_audit_pressure_summary_counts_rate_limited_signals(tmp_path: Path) -> N
         "status": "tool_ok",
     }
     audit.write_text(
-        json.dumps(rl_entry) + "\n"
-        + json.dumps(rl_entry) + "\n"
-        + json.dumps(ok_entry) + "\n"
+        json.dumps(rl_entry)
+        + "\n"
+        + json.dumps(rl_entry)
+        + "\n"
+        + json.dumps(ok_entry)
+        + "\n"
     )
     out = cli._audit_pressure_summary(audit)
     # The exact key name may vary; assert the function digested the file.
@@ -730,21 +787,36 @@ def test_stage_grouped_calls_skips_non_pipeline_stages(tmp_path: Path) -> None:
     audit = tmp_path / "audit.jsonl"
     audit.write_text(
         json.dumps(
-            {"status": "llm_turn", "tool_name": "Bash",
-             "tool_input": {"command": "ls"}, "turn": 5}
-        ) + "\n"
+            {
+                "status": "llm_turn",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+                "turn": 5,
+            }
+        )
+        + "\n"
         + json.dumps(
-            {"status": "tool_ok", "tool_name": "Bash",
-             "tool_result": {"exit_code": 0}, "turn": 6}
-        ) + "\n"
+            {
+                "status": "tool_ok",
+                "tool_name": "Bash",
+                "tool_result": {"exit_code": 0},
+                "turn": 6,
+            }
+        )
+        + "\n"
         + json.dumps(
-            {"status": "llm_turn", "tool_name": "verify",
-             "tool_input": {}, "turn": 7}
-        ) + "\n"
+            {"status": "llm_turn", "tool_name": "verify", "tool_input": {}, "turn": 7}
+        )
+        + "\n"
         + json.dumps(
-            {"status": "tool_ok", "tool_name": "verify",
-             "tool_result": {"passed": True}, "turn": 8}
-        ) + "\n"
+            {
+                "status": "tool_ok",
+                "tool_name": "verify",
+                "tool_result": {"passed": True},
+                "turn": 8,
+            }
+        )
+        + "\n"
     )
     grouped = cli._stage_grouped_calls(audit)
     # Only the 5 pipeline stages should appear; Bash gets dropped.
@@ -773,36 +845,78 @@ def test_print_human_report_e2e_success_partial_with_pressure(tmp_path: Path) ->
         audit,
         [
             # RESEARCH
-            {"status": "llm_turn", "turn": 1, "tool_name": "nvd_lookup",
-             "tool_input": {"cve_id": "CVE-2014-0160"}},
-            {"status": "tool_ok", "turn": 2, "tool_name": "nvd_lookup",
-             "tool_result": {"cve_id": "CVE-2014-0160", "blocked": False}},
+            {
+                "status": "llm_turn",
+                "turn": 1,
+                "tool_name": "nvd_lookup",
+                "tool_input": {"cve_id": "CVE-2014-0160"},
+            },
+            {
+                "status": "tool_ok",
+                "turn": 2,
+                "tool_name": "nvd_lookup",
+                "tool_result": {"cve_id": "CVE-2014-0160", "blocked": False},
+            },
             # RESOLVE — also emit a rate_limited reason_class (pressure)
-            {"status": "llm_turn", "turn": 3, "tool_name": "image_resolve",
-             "tool_input": {"product": "openssl", "version": "1.0.1f"}},
-            {"status": "tool_ok", "turn": 4, "tool_name": "image_resolve",
-             "tool_result": {"decision": "ok", "image_ref": "vulhub/openssl:1.0.1f",
-                             "reason_class": "rate_limited"}},
+            {
+                "status": "llm_turn",
+                "turn": 3,
+                "tool_name": "image_resolve",
+                "tool_input": {"product": "openssl", "version": "1.0.1f"},
+            },
+            {
+                "status": "tool_ok",
+                "turn": 4,
+                "tool_name": "image_resolve",
+                "tool_result": {
+                    "decision": "ok",
+                    "image_ref": "vulhub/openssl:1.0.1f",
+                    "reason_class": "rate_limited",
+                },
+            },
             # LAUNCH (vulhub-image pathway: docker_run, no docker_build/compose/source)
-            {"status": "llm_turn", "turn": 5, "tool_name": "docker_run",
-             "tool_input": {"image": "vulhub/openssl:1.0.1f"}},
-            {"status": "tool_ok", "turn": 6, "tool_name": "docker_run",
-             "tool_result": {"ok": True, "container_id": "abc123def456",
-                             "host_port": 8443}},
+            {
+                "status": "llm_turn",
+                "turn": 5,
+                "tool_name": "docker_run",
+                "tool_input": {"image": "vulhub/openssl:1.0.1f"},
+            },
+            {
+                "status": "tool_ok",
+                "turn": 6,
+                "tool_name": "docker_run",
+                "tool_result": {
+                    "ok": True,
+                    "container_id": "abc123def456",
+                    "host_port": 8443,
+                },
+            },
             # VERIFY pass with two check types
-            {"status": "llm_turn", "turn": 7, "tool_name": "verify",
-             "tool_input": {"plan": []}},
-            {"status": "tool_ok", "turn": 8, "tool_name": "verify",
-             "tool_result": {
-                 "passed": True,
-                 "results": [
-                     {"type": "version_check", "passed": True},
-                     {"type": "http_request_check", "passed": True},
-                 ],
-             }},
+            {
+                "status": "llm_turn",
+                "turn": 7,
+                "tool_name": "verify",
+                "tool_input": {"plan": []},
+            },
+            {
+                "status": "tool_ok",
+                "turn": 8,
+                "tool_name": "verify",
+                "tool_result": {
+                    "passed": True,
+                    "results": [
+                        {"type": "version_check", "passed": True},
+                        {"type": "http_request_check", "passed": True},
+                    ],
+                },
+            },
             # disk_full pressure event (separate, not tied to a tool call)
-            {"status": "tool_error", "turn": 9, "tool_name": "docker_build",
-             "tool_result": {"reason_class": "disk_full"}},
+            {
+                "status": "tool_error",
+                "turn": 9,
+                "tool_name": "docker_build",
+                "tool_result": {"reason_class": "disk_full"},
+            },
         ],
     )
     outcome = _outcome(
@@ -881,7 +995,9 @@ def test_cmd_build_writes_sidecar_before_stdout(tmp_path: Path) -> None:
     Locks: regression guard for the wall-time SIGKILL race where the process is
     killed after asyncio.run(build()) returns but before stdout flushes.
     The sidecar file must exist and contain valid JSON with verify_passed=True."""
-    fake_outcome = _outcome(cve_id="CVE-2014-3120", status="success", verify_passed=True)
+    fake_outcome = _outcome(
+        cve_id="CVE-2014-3120", status="success", verify_passed=True
+    )
 
     args = type("Args", (), {})()
     args.cve_id = "CVE-2014-3120"
@@ -894,8 +1010,12 @@ def test_cmd_build_writes_sidecar_before_stdout(tmp_path: Path) -> None:
     args.silent = True
 
     stdout = io.StringIO()
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(stdout):
             cli._cmd_build(args)
 
@@ -925,8 +1045,12 @@ def test_cmd_build_sidecar_written_on_failure_too(tmp_path: Path) -> None:
     args.silent = True
 
     stdout = io.StringIO()
-    with patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)), \
-         patch("cve_env.agent.health_constraints.probe_for_constraints", return_value=[]):
+    with (
+        patch("cve_env.cli.build", AsyncMock(return_value=fake_outcome)),
+        patch(
+            "cve_env.agent.health_constraints.probe_for_constraints", return_value=[]
+        ),
+    ):
         with redirect_stdout(stdout):
             cli._cmd_build(args)
 

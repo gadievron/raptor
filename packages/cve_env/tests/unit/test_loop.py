@@ -45,7 +45,9 @@ def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
 def _assistant(*blocks: Any) -> Any:
     from claude_agent_sdk import AssistantMessage
 
-    return AssistantMessage(content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None)
+    return AssistantMessage(
+        content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None
+    )
 
 
 def _user(*blocks: Any) -> Any:
@@ -126,7 +128,9 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
             return AgentRunOutcome(
                 stop_reason=early_stop_reason,
                 num_turns=result_msg.num_turns if result_msg else 0,
-                total_cost_usd=(result_msg.total_cost_usd or 0.0) if result_msg else 0.0,
+                total_cost_usd=(result_msg.total_cost_usd or 0.0)
+                if result_msg
+                else 0.0,
                 is_error=False,
                 session_id=result_msg.session_id if result_msg else "",
                 final_text="",
@@ -174,14 +178,18 @@ def test_mcp_suffix_strips_prefix() -> None:
     assert _mcp_suffix("plain_name") == "plain_name"
 
 
-def test_build_success_when_version_smoke_and_active_payload_check_present(tmp_path: Path) -> None:
+def test_build_success_when_version_smoke_and_active_payload_check_present(
+    tmp_path: Path,
+) -> None:
     """Phase 52/53: ``success`` requires version-assertion + functional
     smoke (heuristic: >=3 active checks, OR http_check with content, OR
     multi-path http_checks). Active payload checks count toward the
     smoke heuristic but are not separately tracked.
     """
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"hit": True})),
         _assistant(_tool_use("tu2", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(
@@ -214,7 +222,9 @@ def test_build_success_when_version_smoke_and_active_payload_check_present(tmp_p
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-1", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-1", audit_root=tmp_path)
+        )
     assert outcome.status == "success"
     assert outcome.verify_passed is True
     assert outcome.tool_names_called == ["vulhub_lookup", "verify"]
@@ -222,7 +232,9 @@ def test_build_success_when_version_smoke_and_active_payload_check_present(tmp_p
     assert outcome.audit_path.exists()
 
 
-def test_build_calls_set_cve_id_context_for_per_cve_image_cleanup(tmp_path: Path) -> None:
+def test_build_calls_set_cve_id_context_for_per_cve_image_cleanup(
+    tmp_path: Path,
+) -> None:
     """GAP-1 (2026-05-24): build() MUST call set_cve_id_context(cve.cve_id) at
     setup so docker_build labels result images cve-env.cve-id=<id> and
     lifecycle.cleanup_result_images can rmi exactly THIS CVE's images (#6). The
@@ -308,7 +320,9 @@ def test_build_success_partial_when_only_lifecycle_checks(tmp_path: Path) -> Non
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-lc", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-lc", audit_root=tmp_path)
+        )
     assert outcome.status == "verified_partial"
     assert outcome.verify_passed is True
     # Reason should mention the missing pieces (both version + smoke missing here).
@@ -358,14 +372,18 @@ def test_build_success_when_three_active_exec_checks_provide_smoke_and_version(
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-exec", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-exec", audit_root=tmp_path)
+        )
     assert outcome.status == "success"
 
 
 # Phase 52: version-assertion gate (was Phase 29) ---------------------------
 
 
-def test_build_payload_check_without_version_downgrades_to_partial(tmp_path: Path) -> None:
+def test_build_payload_check_without_version_downgrades_to_partial(
+    tmp_path: Path,
+) -> None:
     """Phase 52/53: a passing http_request_check on its own (without a
     version-assertion exec_check) means the build correctness is unproven
     → outcome is ``success_partial``, NOT ``success``.
@@ -431,7 +449,9 @@ def test_build_exec_check_non_version_command_yields_partial(tmp_path: Path) -> 
     assert "version-assertion" in outcome.reason
 
 
-def test_build_tcp_probe_check_with_version_and_smoke_is_success(tmp_path: Path) -> None:
+def test_build_tcp_probe_check_with_version_and_smoke_is_success(
+    tmp_path: Path,
+) -> None:
     """Phase 52/53: tcp_probe_check + version-assertion + 1 more active
     check (3 total) → has_smoke=True via the heuristic, status="success".
     """
@@ -492,7 +512,13 @@ def test_phase_52_1_loose_version_marker_downgrades_to_partial(tmp_path: Path) -
     gate."""
     messages = [
         # Build-path: docker_build call activates state.has_built.
-        _assistant(_tool_use("tu0", "mcp__cve_env__docker_build", {"dockerfile": "FROM apache:2.4.49"})),
+        _assistant(
+            _tool_use(
+                "tu0",
+                "mcp__cve_env__docker_build",
+                {"dockerfile": "FROM apache:2.4.49"},
+            )
+        ),
         _user(_tool_result("tu0", {"ok": True, "image_tag": "x:1"})),
         _assistant(_tool_use("tu1", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(
@@ -513,8 +539,16 @@ def test_phase_52_1_loose_version_marker_downgrades_to_partial(tmp_path: Path) -
                             },
                         },
                         # Functional smoke (3 active checks).
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/", "method": "GET"}},
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/health", "method": "GET"}},
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/", "method": "GET"},
+                        },
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/health", "method": "GET"},
+                        },
                     ],
                     "reason": None,
                 },
@@ -524,7 +558,9 @@ def test_phase_52_1_loose_version_marker_downgrades_to_partial(tmp_path: Path) -
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-52-1-loose", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-52-1-loose", audit_root=tmp_path)
+        )
     assert outcome.status == "verified_partial", (
         f"Phase 52.1 not enforced: bare 'Apache' marker on BUILD path should "
         f"downgrade, got status={outcome.status!r} reason={outcome.reason!r}"
@@ -542,7 +578,13 @@ def test_phase_52_1_specific_version_marker_keeps_success(tmp_path: Path) -> Non
 
     Build-path test (docker_build present)."""
     messages = [
-        _assistant(_tool_use("tu0", "mcp__cve_env__docker_build", {"dockerfile": "FROM apache:2.4.49"})),
+        _assistant(
+            _tool_use(
+                "tu0",
+                "mcp__cve_env__docker_build",
+                {"dockerfile": "FROM apache:2.4.49"},
+            )
+        ),
         _user(_tool_result("tu0", {"ok": True, "image_tag": "x:1"})),
         _assistant(_tool_use("tu1", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(
@@ -561,8 +603,16 @@ def test_phase_52_1_specific_version_marker_keeps_success(tmp_path: Path) -> Non
                                 "expected_stdout_contains": "Apache/2.4.49",
                             },
                         },
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/", "method": "GET"}},
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/health", "method": "GET"}},
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/", "method": "GET"},
+                        },
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/health", "method": "GET"},
+                        },
                     ],
                     "reason": None,
                 },
@@ -572,14 +622,18 @@ def test_phase_52_1_specific_version_marker_keeps_success(tmp_path: Path) -> Non
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-52-1-specific", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-52-1-specific", audit_root=tmp_path)
+        )
     assert outcome.status == "success", (
         f"specific marker '2.4.49' should pass Phase 52.1; got "
         f"status={outcome.status!r} reason={outcome.reason!r}"
     )
 
 
-def test_phase_52_1_specific_marker_credited_regardless_of_command_shape(tmp_path: Path) -> None:
+def test_phase_52_1_specific_marker_credited_regardless_of_command_shape(
+    tmp_path: Path,
+) -> None:
     """Fix #3 (2026-05-24): the specific-version-marker credit must NOT depend on
     the version-discovery COMMAND SHAPE. Reproduces CVE-2022-44542: a whitelisted
     command (`dpkg -l`) set has_version but carried only a LOOSE marker, while the
@@ -589,7 +643,9 @@ def test_phase_52_1_specific_marker_credited_regardless_of_command_shape(tmp_pat
     despite a correctly-pinned version. After the fix the marker is credited
     independent of command shape."""
     messages = [
-        _assistant(_tool_use("tu0", "mcp__cve_env__docker_build", {"dockerfile": "FROM x"})),
+        _assistant(
+            _tool_use("tu0", "mcp__cve_env__docker_build", {"dockerfile": "FROM x"})
+        ),
         _user(_tool_result("tu0", {"ok": True, "image_tag": "x:1"})),
         _assistant(_tool_use("tu1", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(
@@ -617,8 +673,16 @@ def test_phase_52_1_specific_marker_credited_regardless_of_command_shape(tmp_pat
                                 "expected_stdout_contains": "version 2.05",
                             },
                         },
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/", "method": "GET"}},
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/x", "method": "GET"}},
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/", "method": "GET"},
+                        },
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/x", "method": "GET"},
+                        },
                     ],
                     "reason": None,
                 },
@@ -628,7 +692,9 @@ def test_phase_52_1_specific_marker_credited_regardless_of_command_shape(tmp_pat
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-52-1-shape", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-52-1-shape", audit_root=tmp_path)
+        )
     assert outcome.status == "success", (
         f"specific marker 'version 2.05' on a non-whitelisted command shape should "
         f"be credited (fix #3 decouples marker from command shape); got "
@@ -647,9 +713,17 @@ def test_phase_52_1_image_pulled_loose_marker_keeps_success(tmp_path: Path) -> N
     paths would be over-enforced."""
     messages = [
         # Image-pulled path: image_resolve + docker_run, NO build.
-        _assistant(_tool_use("tu0", "mcp__cve_env__image_resolve", {"product": "apache", "version": "2.4.49"})),
+        _assistant(
+            _tool_use(
+                "tu0",
+                "mcp__cve_env__image_resolve",
+                {"product": "apache", "version": "2.4.49"},
+            )
+        ),
         _user(_tool_result("tu0", {"ok": True, "image": "httpd:2.4.49"})),
-        _assistant(_tool_use("tu_run", "mcp__cve_env__docker_run", {"image": "httpd:2.4.49"})),
+        _assistant(
+            _tool_use("tu_run", "mcp__cve_env__docker_run", {"image": "httpd:2.4.49"})
+        ),
         _user(_tool_result("tu_run", {"ok": True, "container_id": "c"})),
         _assistant(_tool_use("tu1", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(
@@ -668,8 +742,16 @@ def test_phase_52_1_image_pulled_loose_marker_keeps_success(tmp_path: Path) -> N
                                 "expected_stdout_contains": "Apache",
                             },
                         },
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/", "method": "GET"}},
-                        {"type": "http_check", "passed": True, "details": {"url": "http://h:p/health", "method": "GET"}},
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/", "method": "GET"},
+                        },
+                        {
+                            "type": "http_check",
+                            "passed": True,
+                            "details": {"url": "http://h:p/health", "method": "GET"},
+                        },
                     ],
                     "reason": None,
                 },
@@ -679,7 +761,9 @@ def test_phase_52_1_image_pulled_loose_marker_keeps_success(tmp_path: Path) -> N
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-52-1-imgpull", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-52-1-imgpull", audit_root=tmp_path)
+        )
     assert outcome.status == "success", (
         f"image-pulled (no build) loose marker should NOT downgrade; got "
         f"status={outcome.status!r} reason={outcome.reason!r}. The registry "
@@ -781,7 +865,9 @@ def test_build_failed_verify_does_not_pollute_check_types(tmp_path: Path) -> Non
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-mix", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-mix", audit_root=tmp_path)
+        )
     # Phase 52/53: failed http_request_check shouldn't pollute the
     # passing verify's check-types union. The PASSING verify is
     # lifecycle-only (no version, no smoke) → success_partial.
@@ -794,7 +880,9 @@ def test_build_unresolvable_when_give_up(tmp_path: Path) -> None:
     # The generic give_up→unresolvable contract is the test's actual concern;
     # specific-reason tests live in test_cf4_* below.
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"hit": False})),
         _assistant(
             _tool_use(
@@ -805,13 +893,16 @@ def test_build_unresolvable_when_give_up(tmp_path: Path) -> None:
         ),
         _user(
             _tool_result(
-                "tu2", {"terminal": True, "reason": "proprietary", "detail": "no upstream"}
+                "tu2",
+                {"terminal": True, "reason": "proprietary", "detail": "no upstream"},
             )
         ),
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-2", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-2", audit_root=tmp_path)
+        )
     assert outcome.status == "unresolvable"
     assert outcome.give_up_reason == "proprietary"
     assert outcome.give_up_detail == "no upstream"
@@ -823,7 +914,9 @@ def test_build_no_verify_pass_when_ended_without_verify(tmp_path: Path) -> None:
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-3", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-3", audit_root=tmp_path)
+        )
     assert outcome.status == "verify_failed"
 
 
@@ -840,9 +933,7 @@ def test_phase57_build_launched_unverified_when_docker_run_ok_then_end_turn(
     Bash 'docker logs' at T17, then end_turn at T19 with no verify.
     """
     messages = [
-        _assistant(
-            _tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})
-        ),
+        _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
         _user(
             _tool_result(
                 "tu-run",
@@ -859,7 +950,9 @@ def test_phase57_build_launched_unverified_when_docker_run_ok_then_end_turn(
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-launched-unverified", audit_root=tmp_path)
+            build(
+                _cve(), _host(), run_id="run-launched-unverified", audit_root=tmp_path
+            )
         )
     assert outcome.status == "launched_no_verify", (
         f"expected launched_unverified, got {outcome.status}: {outcome.reason}"
@@ -901,24 +994,32 @@ def test_phase57_build_no_verify_pass_when_verify_was_attempted_but_failed(
     Post-Phase-57 must STAY classified as 'no_verify_pass' (not
     'launched_unverified'), since verify WAS attempted."""
     messages = [
-        _assistant(
-            _tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})
-        ),
+        _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
         _user(
             _tool_result(
                 "tu-run",
-                {"ok": True, "container_id": "abc", "host_port": 80, "host_ip": "127.0.0.1"},
+                {
+                    "ok": True,
+                    "container_id": "abc",
+                    "host_port": 80,
+                    "host_ip": "127.0.0.1",
+                },
             )
         ),
         _assistant(
             _tool_use(
-                "tu-verify", "mcp__cve_env__verify", {"plan": [{"type": "container_status"}]}
+                "tu-verify",
+                "mcp__cve_env__verify",
+                {"plan": [{"type": "container_status"}]},
             )
         ),
         _user(
             _tool_result(
                 "tu-verify",
-                {"passed": False, "results": [{"type": "container_status", "passed": False}]},
+                {
+                    "passed": False,
+                    "results": [{"type": "container_status", "passed": False}],
+                },
             )
         ),
         _result("end_turn"),
@@ -933,7 +1034,9 @@ def test_phase57_build_no_verify_pass_when_verify_was_attempted_but_failed(
 def test_build_maps_turn_cap(tmp_path: Path) -> None:
     messages = [_result("max_turns_reached")]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-4", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-4", audit_root=tmp_path)
+        )
     assert outcome.status == "turn_cap"
 
 
@@ -949,9 +1052,7 @@ def test_cf1_turn_cap_after_launch_unverified_enriched_reason(
     until T96 — wasted 96 turns with no triage signal beyond 'turn_cap'.
     """
     messages = [
-        _assistant(
-            _tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})
-        ),
+        _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
         _user(
             _tool_result(
                 "tu-run",
@@ -1011,7 +1112,9 @@ def test_cf4_give_up_no_image_without_image_resolve_enriched(
     strengthening.
     """
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"hit": False})),
         _assistant(
             _tool_use(
@@ -1130,12 +1233,10 @@ def test_cf6_give_up_no_image_after_refusal_classifies_refusal_persistent(
         f"preceded no_image give_up; got: {outcome.give_up_reason!r}"
     )
     assert "refusal event" in outcome.give_up_detail, (
-        f"detail must explain the refusal root-cause; "
-        f"got: {outcome.give_up_detail!r}"
+        f"detail must explain the refusal root-cause; got: {outcome.give_up_detail!r}"
     )
     assert outcome.refusals >= 1, (
-        f"refusal count must reflect the latched refusal; "
-        f"got: {outcome.refusals}"
+        f"refusal count must reflect the latched refusal; got: {outcome.refusals}"
     )
 
 
@@ -1166,7 +1267,18 @@ def test_phase_12_1_stage_costs_attributed_to_launch_for_docker_run(
     """Phase 12.1: docker_run tool_use → LAUNCH stage attribution."""
     messages = [
         _assistant(_tool_use("tu-run", "mcp__cve_env__docker_run", {"image_ref": "x"})),
-        _user(_tool_result("tu-run", {"ok": True, "container_id": "c1", "host_port": 32769, "host_ip": "127.0.0.1", "next_step_hint": ""})),
+        _user(
+            _tool_result(
+                "tu-run",
+                {
+                    "ok": True,
+                    "container_id": "c1",
+                    "host_port": 32769,
+                    "host_ip": "127.0.0.1",
+                    "next_step_hint": "",
+                },
+            )
+        ),
         _result("end_turn", cost_usd=0.30),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
@@ -1186,7 +1298,9 @@ def test_phase_12_1_stage_costs_sum_to_total(
         _assistant(_tool_use("tu-r", "mcp__cve_env__nvd_lookup", {"cve_id": "x"})),
         _user(_tool_result("tu-r", {})),
         _result("end_turn", cost_usd=0.20),
-        _assistant(_tool_use("tu-b", "mcp__cve_env__docker_build", {"context_dir": "/tmp/x"})),
+        _assistant(
+            _tool_use("tu-b", "mcp__cve_env__docker_build", {"context_dir": "/tmp/x"})
+        ),
         _user(_tool_result("tu-b", {"ok": True})),
         _result("end_turn", cost_usd=0.40),
     ]
@@ -1337,6 +1451,7 @@ def test_phase_12_4_should_extend_cost_cap_granted_when_productive() -> None:
     """Phase 12.4: pure-function predicate. Granted when productive activity
     is recent + extensions remain + cost not too-far-over."""
     from cve_env.config import should_extend_cost_cap
+
     new_cap = should_extend_cost_cap(
         current_cost_usd=1.85,
         max_cost_usd=1.80,
@@ -1354,6 +1469,7 @@ def test_phase_12_4_should_extend_cost_cap_granted_when_productive() -> None:
 def test_phase_12_4_should_extend_cost_cap_denied_when_unproductive() -> None:
     """Phase 12.4: denied when productivity is too far in the past."""
     from cve_env.config import should_extend_cost_cap
+
     new_cap = should_extend_cost_cap(
         current_cost_usd=1.85,
         max_cost_usd=1.80,
@@ -1370,6 +1486,7 @@ def test_phase_12_4_should_extend_cost_cap_denied_when_unproductive() -> None:
 def test_phase_12_4_should_extend_cost_cap_denied_when_too_far_over() -> None:
     """Phase 12.4: runaway protection — denied if cost > 1.5× cap."""
     from cve_env.config import should_extend_cost_cap
+
     new_cap = should_extend_cost_cap(
         current_cost_usd=3.00,
         max_cost_usd=1.80,  # 3.00 > 1.80 * 1.5 = 2.70
@@ -1386,6 +1503,7 @@ def test_phase_12_4_should_extend_cost_cap_denied_when_too_far_over() -> None:
 def test_phase_12_4_should_extend_cost_cap_disabled_when_max_zero() -> None:
     """Phase 12.4: max_cost_extensions=0 always returns None."""
     from cve_env.config import should_extend_cost_cap
+
     new_cap = should_extend_cost_cap(
         current_cost_usd=1.85,
         max_cost_usd=1.80,
@@ -1403,6 +1521,7 @@ def test_phase_12_4_should_extend_cost_cap_no_history_denies() -> None:
     """Phase 12.4: last_productive_turn=0 means agent never made progress;
     deny extension."""
     from cve_env.config import should_extend_cost_cap
+
     new_cap = should_extend_cost_cap(
         current_cost_usd=1.85,
         max_cost_usd=1.80,
@@ -1458,9 +1577,11 @@ def test_3f_attempts_cap_extends_on_recent_productive_progress(
         _assistant(_tool_use("t2", "mcp__cve_env__nvd_lookup", {"cve_id": "x"})),
         _user(_tool_result("t2", {})),
         # productive build progress → sets last_productive_turn (recent)
-        _assistant(_tool_use(
-            "t3", "mcp__cve_env__image_resolve", {"product": "x", "version": "1"}
-        )),
+        _assistant(
+            _tool_use(
+                "t3", "mcp__cve_env__image_resolve", {"product": "x", "version": "1"}
+            )
+        ),
         _user(_tool_result("t3", {"ok": True, "image_ref": "x:1"})),
         # 3rd nvd_lookup exceeds cap=2, but progress is recent → extend, no give_up
         _assistant(_tool_use("t4", "mcp__cve_env__nvd_lookup", {"cve_id": "x"})),
@@ -1486,11 +1607,17 @@ def test_3f_productive_extension_allowed_gate_boundaries() -> None:
     w = PRODUCTIVE_RECENCY_TURNS
     base = {"last_productive_turn": 10, "extension_count": 0, "max_extensions": 2}
     # disabled (max_extensions<=0) → never allowed (pre-3F flat-cap behavior)
-    assert not productive_extension_allowed(current_turn=11, **{**base, "max_extensions": 0})
+    assert not productive_extension_allowed(
+        current_turn=11, **{**base, "max_extensions": 0}
+    )
     # budget exhausted (extension_count>=max_extensions)
-    assert not productive_extension_allowed(current_turn=11, **{**base, "extension_count": 2})
+    assert not productive_extension_allowed(
+        current_turn=11, **{**base, "extension_count": 2}
+    )
     # no productive progress recorded yet (last_productive_turn<=0)
-    assert not productive_extension_allowed(current_turn=11, **{**base, "last_productive_turn": 0})
+    assert not productive_extension_allowed(
+        current_turn=11, **{**base, "last_productive_turn": 0}
+    )
     # within recency window (diff == window) → allowed (boundary)
     assert productive_extension_allowed(current_turn=10 + w, **base)
     # just past window (diff == window+1) → denied (boundary)
@@ -1529,6 +1656,7 @@ def test_phase_12_6_toml_loader_empty_when_file_absent(
     # Force a re-load by clearing module-level cache (or importing fresh).
     import importlib
     from cve_env import config as _config_mod
+
     importlib.reload(_config_mod)
     assert _config_mod._TOML_CONFIG == {}
 
@@ -1540,11 +1668,12 @@ def test_phase_12_6_toml_stage_budget_overrides_default(
     """Phase 12.6: TOML [budget].research = 0.25 overrides default $0.50
     when no env var is set."""
     toml_path = tmp_path / "test.toml"
-    toml_path.write_text('[budget]\nresearch = 0.25\n')
+    toml_path.write_text("[budget]\nresearch = 0.25\n")
     monkeypatch.setenv("CVE_ENV_CONFIG_FILE", str(toml_path))
     monkeypatch.delenv("CVE_ENV_BUDGET_RESEARCH", raising=False)
     import importlib
     from cve_env import config as _config_mod
+
     importlib.reload(_config_mod)
     assert _config_mod.get_stage_budget("RESEARCH") == 0.25
 
@@ -1555,11 +1684,12 @@ def test_phase_12_6_env_var_overrides_toml(
 ) -> None:
     """Phase 12.6: env var precedence — env wins over TOML."""
     toml_path = tmp_path / "test.toml"
-    toml_path.write_text('[budget]\nresearch = 0.25\n')
+    toml_path.write_text("[budget]\nresearch = 0.25\n")
     monkeypatch.setenv("CVE_ENV_CONFIG_FILE", str(toml_path))
     monkeypatch.setenv("CVE_ENV_BUDGET_RESEARCH", "0.15")
     import importlib
     from cve_env import config as _config_mod
+
     importlib.reload(_config_mod)
     assert _config_mod.get_stage_budget("RESEARCH") == 0.15
 
@@ -1627,7 +1757,9 @@ def test_cf6_give_up_proprietary_after_refusal_passes_through(
 def test_build_maps_budget_exhausted(tmp_path: Path) -> None:
     messages = [_result("budget_exceeded")]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-5", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-5", audit_root=tmp_path)
+        )
     assert outcome.status == "budget_exhausted"
 
 
@@ -1637,7 +1769,9 @@ def test_build_catches_sdk_exception(tmp_path: Path) -> None:
         raise RuntimeError(msg)
 
     with patch("cve_env.agent.loop.run_agent", boom):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-6", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-6", audit_root=tmp_path)
+        )
     assert outcome.status == "error"
     assert "connection reset" in outcome.error
 
@@ -1900,9 +2034,7 @@ def test_build_exception_path_finalizes_refusal_scanner(tmp_path: Path) -> None:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.events: list[dict[str, Any]] = []
 
-        def finalize(
-            self, *, final_outcome_status: str, verify_passed: bool
-        ) -> None:
+        def finalize(self, *, final_outcome_status: str, verify_passed: bool) -> None:
             finalize_calls.append(
                 {
                     "status": final_outcome_status,
@@ -1922,13 +2054,18 @@ def test_build_exception_path_finalizes_refusal_scanner(tmp_path: Path) -> None:
         msg = "transport drop"
         raise RuntimeError(msg)
 
-    with patch("cve_env.agent.loop.RefusalScanner", _FakeScanner), patch(
-        "cve_env.agent.loop.run_agent", boom
+    with (
+        patch("cve_env.agent.loop.RefusalScanner", _FakeScanner),
+        patch("cve_env.agent.loop.run_agent", boom),
     ):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-finalize", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-finalize", audit_root=tmp_path)
+        )
     assert outcome.status == "error"
     # Exact assertion: finalize was called exactly once on the exception path.
-    assert len(finalize_calls) == 1, f"expected 1 finalize call, got {len(finalize_calls)}"
+    assert len(finalize_calls) == 1, (
+        f"expected 1 finalize call, got {len(finalize_calls)}"
+    )
     assert finalize_calls[0]["status"] == "error"
     assert finalize_calls[0]["verify_passed"] is False
 
@@ -1936,7 +2073,9 @@ def test_build_exception_path_finalizes_refusal_scanner(tmp_path: Path) -> None:
 # Fix #7: stream-close-after-give_up grace -----------------------------------
 
 
-def test_build_exception_after_give_up_is_relabeled_unresolvable(tmp_path: Path) -> None:
+def test_build_exception_after_give_up_is_relabeled_unresolvable(
+    tmp_path: Path,
+) -> None:
     """If the agent already invoked give_up (terminal decision) AND a ResultMessage
     arrived, then a late stream-drain exception is cosmetic -- the run reached a
     logical conclusion and the Outcome should reflect that.
@@ -1944,9 +2083,15 @@ def test_build_exception_after_give_up_is_relabeled_unresolvable(tmp_path: Path)
     Phase 11.5: ResultMessage is now required for the relabel; without it the
     run never converged and outcome stays 'error' (CVE-2024-5736 refusal class).
     """
-    give_up_result = {"terminal": True, "reason": "proprietary", "detail": "no upstream"}
+    give_up_result = {
+        "terminal": True,
+        "reason": "proprietary",
+        "detail": "no upstream",
+    }
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__give_up", {"reason": "proprietary"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__give_up", {"reason": "proprietary"})
+        ),
         _user(_tool_result("tu1", give_up_result)),
         _result(stop_reason="end_turn"),
     ]
@@ -1961,7 +2106,9 @@ def test_build_exception_after_give_up_is_relabeled_unresolvable(tmp_path: Path)
         raise RuntimeError("stream closed unexpectedly after give_up")
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-fix7-a", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-fix7-a", audit_root=tmp_path)
+        )
     assert outcome.status == "unresolvable"
     assert outcome.give_up_reason == "proprietary"
     assert outcome.give_up_detail == "no upstream"
@@ -1987,6 +2134,7 @@ def test_build_exception_with_api_overload_is_classified_as_rate_limited(
     RED until the dedicated ``elif state.give_up_reason == "api_overload":``
     branch is added BEFORE the generic give_up branch.
     """
+
     async def fake_run(**kwargs: Any) -> AgentRunOutcome:
         # Canonical 529-overload signature matched by _classify_api_overload.
         raise RuntimeError(
@@ -2056,7 +2204,13 @@ def test_build_exception_path_preserves_num_turns_and_cost(tmp_path: Path) -> No
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-p1-acct", audit_root=tmp_path, max_cost_usd=10.0)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-p1-acct",
+                audit_root=tmp_path,
+                max_cost_usd=10.0,
+            )
         )
     # Status was already correctly relabeled by Phase 31.2 (status == "success").
     # The new contract: cost + turns must propagate from the ResultMessage we saw.
@@ -2121,7 +2275,13 @@ def test_build_exception_path_aggregates_cost_and_turns_across_results(
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-p1-multi", audit_root=tmp_path, max_cost_usd=10.0)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-p1-multi",
+                audit_root=tmp_path,
+                max_cost_usd=10.0,
+            )
         )
     # turns: max (last segment's cumulative count)
     assert outcome.num_turns == 18, f"expected MAX turns=18, got {outcome.num_turns}"
@@ -2162,10 +2322,16 @@ def test_build_recovers_when_verify_passes_after_refusal_stop_reason(
                 {
                     "passed": True,
                     "results": [
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "apache2 -v"}},
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "echo hi"}},
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "apache2 -v"},
+                        },
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "echo hi"},
+                        },
                         {"type": "http_request_check", "passed": True},
                     ],
                     "reason": None,
@@ -2182,15 +2348,28 @@ def test_build_recovers_when_verify_passes_after_refusal_stop_reason(
             for m in messages:
                 on_msg(m)
         from claude_agent_sdk import ResultMessage
+
         return ResultMessage(
-            subtype="success", duration_ms=1000, duration_api_ms=800,
-            is_error=False, num_turns=185, session_id="sess-1",
-            stop_reason="end_turn", total_cost_usd=0.40, usage=None,
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=185,
+            session_id="sess-1",
+            stop_reason="end_turn",
+            total_cost_usd=0.40,
+            usage=None,
         )
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-i3-recovery", audit_root=tmp_path, max_cost_usd=10.0)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-i3-recovery",
+                audit_root=tmp_path,
+                max_cost_usd=10.0,
+            )
         )
     # Recovery: verify passed AFTER the refusal → success-class outcome,
     # NOT 'incomplete'. The exact label (success vs success_partial) is
@@ -2218,10 +2397,16 @@ def test_build_keeps_incomplete_when_verify_passed_before_refusal(
                 {
                     "passed": True,
                     "results": [
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "apache2 -v"}},
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "echo hi"}},
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "apache2 -v"},
+                        },
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "echo hi"},
+                        },
                         {"type": "http_request_check", "passed": True},
                     ],
                     "reason": None,
@@ -2240,15 +2425,28 @@ def test_build_keeps_incomplete_when_verify_passed_before_refusal(
             for m in messages:
                 on_msg(m)
         from claude_agent_sdk import ResultMessage
+
         return ResultMessage(
-            subtype="error", duration_ms=1000, duration_api_ms=800,
-            is_error=True, num_turns=22, session_id="sess-1",
-            stop_reason="refusal", total_cost_usd=0.10, usage=None,
+            subtype="error",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=True,
+            num_turns=22,
+            session_id="sess-1",
+            stop_reason="refusal",
+            total_cost_usd=0.10,
+            usage=None,
         )
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-i3-corruption", audit_root=tmp_path, max_cost_usd=10.0)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-i3-corruption",
+                audit_root=tmp_path,
+                max_cost_usd=10.0,
+            )
         )
     # Refusal AFTER verify → incomplete.
     assert outcome.status == "interrupted", (
@@ -2281,10 +2479,16 @@ def test_build_outcome_sums_cost_across_retry_storm_result_messages(
                 {
                     "passed": True,
                     "results": [
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "apache2 -v"}},
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "echo hi"}},
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "apache2 -v"},
+                        },
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "echo hi"},
+                        },
                         {"type": "http_request_check", "passed": True},
                     ],
                     "reason": None,
@@ -2307,17 +2511,30 @@ def test_build_outcome_sums_cost_across_retry_storm_result_messages(
         # Return value mirroring SDK behaviour: last ResultMessage's
         # cost ($0.60), cumulative turn counter ($30).
         from claude_agent_sdk import ResultMessage
+
         result = ResultMessage(
-            subtype="success", duration_ms=1000, duration_api_ms=800,
-            is_error=False, num_turns=30, session_id="sess-1",
-            stop_reason="end_turn", total_cost_usd=0.60, usage=None,
+            subtype="success",
+            duration_ms=1000,
+            duration_api_ms=800,
+            is_error=False,
+            num_turns=30,
+            session_id="sess-1",
+            stop_reason="end_turn",
+            total_cost_usd=0.60,
+            usage=None,
         )
         captured_run["result"] = result
         return result
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
         outcome = asyncio.run(
-            build(_cve(), _host(), run_id="run-i2-sum", audit_root=tmp_path, max_cost_usd=10.0)
+            build(
+                _cve(),
+                _host(),
+                run_id="run-i2-sum",
+                audit_root=tmp_path,
+                max_cost_usd=10.0,
+            )
         )
     # Cost SUMS across segments: 0.40 + 0.50 + 0.60 = 1.50
     assert outcome.total_cost_usd == pytest.approx(1.50), (
@@ -2348,10 +2565,16 @@ def test_build_exception_path_handles_none_cost_and_turns_in_result_message(
                 {
                     "passed": True,
                     "results": [
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "apache2 -v"}},
-                        {"type": "exec_check", "passed": True,
-                         "details": {"command": "echo hi"}},
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "apache2 -v"},
+                        },
+                        {
+                            "type": "exec_check",
+                            "passed": True,
+                            "details": {"command": "echo hi"},
+                        },
                         {"type": "http_request_check", "passed": True},
                     ],
                     "reason": None,
@@ -2366,10 +2589,10 @@ def test_build_exception_path_handles_none_cost_and_turns_in_result_message(
             duration_ms=1000,
             duration_api_ms=800,
             is_error=False,
-            num_turns=None,           # type: ignore[arg-type]
+            num_turns=None,  # type: ignore[arg-type]
             session_id="sess-1",
             stop_reason="end_turn",
-            total_cost_usd=None,      # type: ignore[arg-type]
+            total_cost_usd=None,  # type: ignore[arg-type]
             usage=None,
         ),
     ]
@@ -2440,7 +2663,9 @@ def test_build_exception_after_full_verify_relabels_to_success(
         raise RuntimeError("stream closed unexpectedly after verify.passed")
 
     with patch("cve_env.agent.loop.run_agent", fake_run):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-fix7-b", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-fix7-b", audit_root=tmp_path)
+        )
     assert outcome.status == "success"
     assert outcome.verify_passed is True
     assert outcome.error == ""
@@ -2609,9 +2834,15 @@ def test_build_exception_after_give_up_without_result_message_is_unresolvable(
     only way to get there was an SDK mid-stream crash. F-13 makes it the
     happy path for unresolvable runs.
     """
-    give_up_result = {"terminal": True, "reason": "proprietary", "detail": "no upstream"}
+    give_up_result = {
+        "terminal": True,
+        "reason": "proprietary",
+        "detail": "no upstream",
+    }
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__give_up", {"reason": "proprietary"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__give_up", {"reason": "proprietary"})
+        ),
         _user(_tool_result("tu1", give_up_result)),
         # NOTE: NO ResultMessage — F-13 halts SDK iteration before this point.
     ]
@@ -2619,6 +2850,7 @@ def test_build_exception_after_give_up_without_result_message_is_unresolvable(
     async def fake_run(**kwargs: Any) -> AgentRunOutcome:
         # Mirror real _run_query_once: catch GiveUpReceived from on_message.
         from cve_env.agent.llm import GiveUpReceived
+
         on_msg = kwargs.get("on_message")
         try:
             if on_msg is not None:
@@ -2652,19 +2884,25 @@ def test_build_exception_without_terminal_state_still_error(tmp_path: Path) -> N
         raise RuntimeError("boom")
 
     with patch("cve_env.agent.loop.run_agent", boom):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-fix7-c", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-fix7-c", audit_root=tmp_path)
+        )
     assert outcome.status == "error"
     assert "boom" in outcome.error
 
 
 def test_build_writes_per_cve_audit_jsonl(tmp_path: Path) -> None:
     messages = [
-        _assistant(_tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})),
+        _assistant(
+            _tool_use("tu1", "mcp__cve_env__vulhub_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"hit": True})),
         _result("end_turn"),
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-7", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-7", audit_root=tmp_path)
+        )
     assert outcome.audit_path is not None
     lines = outcome.audit_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) >= 3  # at minimum: one llm_turn, one tool_ok, one terminal
@@ -2794,7 +3032,9 @@ def test_fix8_does_not_fire_on_verify_pass(tmp_path: Path) -> None:
         outcome = asyncio.run(
             build(_cve(), _host(), run_id="fix8-b", audit_root=tmp_path)
         )
-    assert outcome.verify_passed is True  # CF-3: grade is verified_partial; the point is no continuation
+    assert (
+        outcome.verify_passed is True
+    )  # CF-3: grade is verified_partial; the point is no continuation
     assert len(calls) == 1  # no continuation
 
 
@@ -2824,7 +3064,9 @@ def test_fix8_does_not_fire_when_last_tool_is_not_staging(tmp_path: Path) -> Non
     """Last tool = verify (not a staging tool) means the agent already tried; no loop."""
     batch = [
         _assistant(_tool_use("tu1", "mcp__cve_env__verify", {"container_id": "c"})),
-        _user(_tool_result("tu1", {"passed": False, "results": [], "reason": "timeout"})),
+        _user(
+            _tool_result("tu1", {"passed": False, "results": [], "reason": "timeout"})
+        ),
         _result("end_turn"),
     ]
     fake, calls = _sequenced_run_agent_factory([batch])
@@ -2900,9 +3142,7 @@ def test_fix8_continuation_uses_continuation_prompt(tmp_path: Path) -> None:
     second = [
         _assistant(_tool_use("tu2", "mcp__cve_env__give_up", {"reason": "no_image"})),
         _user(
-            _tool_result(
-                "tu2", {"terminal": True, "reason": "no_image", "detail": ""}
-            )
+            _tool_result("tu2", {"terminal": True, "reason": "no_image", "detail": ""})
         ),
         _result("end_turn", cost_usd=0.01, turns=2),
     ]
@@ -2917,7 +3157,9 @@ def test_fix8_continuation_uses_continuation_prompt(tmp_path: Path) -> None:
     assert calls[1]["user_prompt"] == CONTINUATION_USER_PROMPT
 
 
-def test_fix8_fires_on_source_build_ok_without_verify_and_logs_audit(tmp_path: Path) -> None:
+def test_fix8_fires_on_source_build_ok_without_verify_and_logs_audit(
+    tmp_path: Path,
+) -> None:
     """Data-justified EXTENSION (bench-analysis-2026-05-28.md): source_build
     succeeded then end_turn without verify (10/15 such cases were near-builds).
     The original staging-only trigger missed source_build; the build-ok branch
@@ -3069,6 +3311,7 @@ def test_phase67_build_resets_all_per_cve_state_in_order(tmp_path: Path) -> None
         def recorder(*args: Any, **kwargs: Any) -> Any:
             call_order.append(name)
             return original(*args, **kwargs)
+
         return recorder
 
     # Wrap each registered handler so we record invocation order. The names line
@@ -3199,7 +3442,9 @@ def test_num_turns_reports_authoritative_state_turn(tmp_path: Path) -> None:
         _result("end_turn", turns=2),  # SDK UNDERREPORTS: num_turns=2
     ]
     with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="run-nt", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="run-nt", audit_root=tmp_path)
+        )
     assert outcome.num_turns == len(messages), (
         f"num_turns={outcome.num_turns} underreports the authoritative state.turn "
         f"(={len(messages)}, one per on_message call); the SDK ResultMessage said 2"
@@ -3237,7 +3482,10 @@ def _state_cascade_skip() -> Any:
 def test_force_resolve_predicate_fires_on_cascade_skip() -> None:
     from cve_env.agent.loop import _should_continue_for_resolve
 
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, 0.1, 2.5) is True
+    assert (
+        _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, 0.1, 2.5)
+        is True
+    )
 
 
 def test_force_resolve_predicate_skips_empty_session() -> None:
@@ -3246,7 +3494,9 @@ def test_force_resolve_predicate_skips_empty_session() -> None:
     from cve_env.agent.loop import _should_continue_for_resolve
 
     run = _run_stub(session_id="")
-    assert _should_continue_for_resolve(run, _state_cascade_skip(), 0, 0.1, 2.5) is False
+    assert (
+        _should_continue_for_resolve(run, _state_cascade_skip(), 0, 0.1, 2.5) is False
+    )
 
 
 def test_force_resolve_predicate_fires_on_captured_session() -> None:
@@ -3273,7 +3523,9 @@ def test_force_resolve_predicate_skips_non_cascade_giveup() -> None:
     # give-up that ALREADY attempted a real build (source_build) is a legitimate
     # cascade-exhausted finding → no fire. (no_image WITHOUT a build now FIRES —
     # see test_force_resolve_gate_fires_on_no_image_without_build.)
-    st2 = _state_giveup("no_image", ["nvd_lookup", "image_resolve", "source_build", "give_up"])
+    st2 = _state_giveup(
+        "no_image", ["nvd_lookup", "image_resolve", "source_build", "give_up"]
+    )
     assert _should_continue_for_resolve(_run_stub(), st2, 0, 0.1, 2.5) is False
 
 
@@ -3291,10 +3543,16 @@ def test_force_resolve_predicate_caps_at_max_and_budget() -> None:
 
     assert config.get_force_resolve_max() == 1  # default
     # count at the (default) cap → no fire
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 1, 0.0, 2.5) is False
+    assert (
+        _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 1, 0.0, 2.5)
+        is False
+    )
     # cost at/over the slice → no fire (0.5 * 2.5 = 1.25)
     over = config.get_force_resolve_budget_fraction() * 2.5
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, over, 2.5) is False
+    assert (
+        _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, over, 2.5)
+        is False
+    )
 
 
 def test_force_resolve_config_driven_max_and_budget(monkeypatch: Any) -> None:
@@ -3307,21 +3565,34 @@ def test_force_resolve_config_driven_max_and_budget(monkeypatch: Any) -> None:
     # MAX=0 → disabled even on a fresh cascade-skip (the cost-control dial)
     monkeypatch.setenv("CVE_ENV_FORCE_RESOLVE_MAX", "0")
     assert config.get_force_resolve_max() == 0
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, 0.1, 2.5) is False
+    assert (
+        _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, 0.1, 2.5)
+        is False
+    )
     # MAX=2 → a 2nd attempt (count=1) is now allowed
     monkeypatch.setenv("CVE_ENV_FORCE_RESOLVE_MAX", "2")
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 1, 0.1, 2.5) is True
+    assert (
+        _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 1, 0.1, 2.5)
+        is True
+    )
     # budget fraction raised to 0.9 → a cost that blocked at 0.5 now passes
     monkeypatch.setenv("CVE_ENV_FORCE_RESOLVE_BUDGET_FRACTION", "0.9")
     assert config.get_force_resolve_budget_fraction() == 0.9
-    assert _should_continue_for_resolve(_run_stub(), _state_cascade_skip(), 0, 0.6 * 2.5, 2.5) is True
+    assert (
+        _should_continue_for_resolve(
+            _run_stub(), _state_cascade_skip(), 0, 0.6 * 2.5, 2.5
+        )
+        is True
+    )
 
 
 def test_force_resolve_predicate_skips_non_end_turn() -> None:
     from cve_env.agent.loop import _should_continue_for_resolve
 
     run = _run_stub(stop_reason="max_turns_reached")
-    assert _should_continue_for_resolve(run, _state_cascade_skip(), 0, 0.1, 2.5) is False
+    assert (
+        _should_continue_for_resolve(run, _state_cascade_skip(), 0, 0.1, 2.5) is False
+    )
 
 
 # ── build-engagement gate (2026-05-31, intervention #1) ─────────────────────
@@ -3378,7 +3649,9 @@ def test_force_resolve_gate_skips_proprietary_and_arch() -> None:
 
     for reason in ("proprietary", "arch_incompatible", "budget"):
         st = _state_giveup(reason, ["nvd_lookup", "give_up"])
-        assert _should_continue_for_resolve(_run_stub(), st, 0, 0.1, 2.5) is False, reason
+        assert _should_continue_for_resolve(_run_stub(), st, 0, 0.1, 2.5) is False, (
+            reason
+        )
 
 
 def _sequenced_giveup_aware_factory(message_batches: list[list[Any]]):
@@ -3391,9 +3664,16 @@ def _sequenced_giveup_aware_factory(message_batches: list[list[Any]]):
     iterator = iter(message_batches)
 
     async def fake_run_agent(
-        *, system_prompt: str, user_prompt: str, tools: Any, model: str = "",
-        max_turns: int = 12, max_cost_usd: float = 0.5, on_message: Any = None,
-        mcp_server_name: str = "cve_env", resume: str | None = None,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        tools: Any,
+        model: str = "",
+        max_turns: int = 12,
+        max_cost_usd: float = 0.5,
+        on_message: Any = None,
+        mcp_server_name: str = "cve_env",
+        resume: str | None = None,
         verify_passed_check: Any = None,
     ) -> AgentRunOutcome:
         batch = next(iterator)
@@ -3422,7 +3702,8 @@ def _sequenced_giveup_aware_factory(message_batches: list[list[Any]]):
             total_cost_usd=(result_msg.total_cost_usd or 0.0) if result_msg else 0.0,
             is_error=False,
             session_id=result_msg.session_id if result_msg else "",
-            final_text="", tool_uses=[],
+            final_text="",
+            tool_uses=[],
         )
 
     return fake_run_agent, calls
@@ -3437,7 +3718,10 @@ def _assistant_sid(*blocks: Any, sid: str = "sess-1") -> Any:
     from claude_agent_sdk import AssistantMessage
 
     return AssistantMessage(
-        content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None, session_id=sid
+        content=list(blocks),
+        model="claude-opus-4-7",
+        parent_tool_use_id=None,
+        session_id=sid,
     )
 
 
@@ -3452,14 +3736,30 @@ def test_force_resolve_fires_on_cascade_skip_giveup(tmp_path: Path) -> None:
     from cve_env.agent.prompts import FORCE_RESOLVE_CONTINUATION_PROMPT
 
     first_batch = [
-        _assistant_sid(_tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
+        _assistant_sid(
+            _tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"cpe": "a:b:c"})),  # no proprietary_vendor_hint
-        _assistant_sid(_tool_use("tu2", "mcp__cve_env__give_up", {"reason": "no_image", "detail": "no image"})),
-        _user(_tool_result("tu2", {"terminal": True, "reason": "no_image", "detail": "no image"})),
+        _assistant_sid(
+            _tool_use(
+                "tu2",
+                "mcp__cve_env__give_up",
+                {"reason": "no_image", "detail": "no image"},
+            )
+        ),
+        _user(
+            _tool_result(
+                "tu2", {"terminal": True, "reason": "no_image", "detail": "no image"}
+            )
+        ),
         # NO ResultMessage — give_up raises mid-stream → run.session_id == "".
     ]
     second_batch = [
-        _assistant_sid(_tool_use("ir", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"})),
+        _assistant_sid(
+            _tool_use(
+                "ir", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("ir", {"ok": True, "digest_pinned_ref": "r@sha256:1"})),
         _assistant_sid(_tool_use("vf", "mcp__cve_env__verify", {"container_id": "c"})),
         _user(_tool_result("vf", {"passed": True, "results": [], "reason": None})),
@@ -3467,9 +3767,13 @@ def test_force_resolve_fires_on_cascade_skip_giveup(tmp_path: Path) -> None:
     ]
     fake, calls = _sequenced_giveup_aware_factory([first_batch, second_batch])
     with patch("cve_env.agent.loop.run_agent", fake):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="fr-fire", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="fr-fire", audit_root=tmp_path)
+        )
     assert len(calls) == 2, f"expected a force-resolve continuation; calls={len(calls)}"
-    assert calls[1]["resume"] == "sess-1"  # resumed via the CAPTURED session id, not run.session_id
+    assert (
+        calls[1]["resume"] == "sess-1"
+    )  # resumed via the CAPTURED session id, not run.session_id
     assert calls[1]["user_prompt"] == FORCE_RESOLVE_CONTINUATION_PROMPT
     assert outcome.verify_passed is True
 
@@ -3479,26 +3783,48 @@ def test_force_resolve_restores_giveup_on_no_improvement(tmp_path: Path) -> None
     build, the original give_up must be RESTORED so the status stays an
     unresolvable/give-up class — NOT relabeled verify_failed/research-only."""
     first_batch = [
-        _assistant_sid(_tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
+        _assistant_sid(
+            _tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})
+        ),
         _user(_tool_result("tu1", {"cpe": "a:b:c"})),
-        _assistant_sid(_tool_use("tu2", "mcp__cve_env__give_up", {"reason": "no_image", "detail": "no image"})),
-        _user(_tool_result("tu2", {"terminal": True, "reason": "no_image", "detail": "no image"})),
+        _assistant_sid(
+            _tool_use(
+                "tu2",
+                "mcp__cve_env__give_up",
+                {"reason": "no_image", "detail": "no image"},
+            )
+        ),
+        _user(
+            _tool_result(
+                "tu2", {"terminal": True, "reason": "no_image", "detail": "no image"}
+            )
+        ),
     ]
     # Continuation: agent calls image_resolve (not_found, ok=False) then just end_turns.
     second_batch = [
-        _assistant_sid(_tool_use("ir", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"})),
+        _assistant_sid(
+            _tool_use(
+                "ir", "mcp__cve_env__image_resolve", {"product": "p", "version": "v"}
+            )
+        ),
         _user(_tool_result("ir", {"ok": False, "decision": "not_found"})),
         _assistant_sid(_text_block("No image and no build path.")),
         _result("end_turn", cost_usd=0.03, turns=2),
     ]
     fake, calls = _sequenced_giveup_aware_factory([first_batch, second_batch])
     with patch("cve_env.agent.loop.run_agent", fake):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="fr-restore", audit_root=tmp_path))
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="fr-restore", audit_root=tmp_path)
+        )
     assert len(calls) == 2  # continuation fired
     assert outcome.verify_passed is False
     # give_up was restored → unresolvable-class, NOT verify_failed/research-only.
-    assert outcome.status != "verify_failed", f"give_up_reason not restored; status={outcome.status}"
-    assert outcome.status in ("unresolvable", "incomplete"), f"unexpected status={outcome.status}"
+    assert outcome.status != "verify_failed", (
+        f"give_up_reason not restored; status={outcome.status}"
+    )
+    assert outcome.status in ("unresolvable", "incomplete"), (
+        f"unexpected status={outcome.status}"
+    )
 
 
 def test_force_resolve_does_not_fire_on_proprietary_giveup(tmp_path: Path) -> None:
@@ -3506,15 +3832,40 @@ def test_force_resolve_does_not_fire_on_proprietary_giveup(tmp_path: Path) -> No
     skipped_image_lookup → force-resolve must NOT fire (single run), even though
     a session id was captured."""
     batch = [
-        _assistant_sid(_tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})),
-        _user(_tool_result("tu1", {"cpe": "a:b:c", "proprietary_vendor_hint": "closed-source"})),
-        _assistant_sid(_tool_use("tu2", "mcp__cve_env__give_up", {"reason": "proprietary", "detail": "closed-source vendor"})),
-        _user(_tool_result("tu2", {"terminal": True, "reason": "proprietary", "detail": "closed-source vendor"})),
+        _assistant_sid(
+            _tool_use("tu1", "mcp__cve_env__nvd_lookup", {"cve_id": "CVE-X"})
+        ),
+        _user(
+            _tool_result(
+                "tu1", {"cpe": "a:b:c", "proprietary_vendor_hint": "closed-source"}
+            )
+        ),
+        _assistant_sid(
+            _tool_use(
+                "tu2",
+                "mcp__cve_env__give_up",
+                {"reason": "proprietary", "detail": "closed-source vendor"},
+            )
+        ),
+        _user(
+            _tool_result(
+                "tu2",
+                {
+                    "terminal": True,
+                    "reason": "proprietary",
+                    "detail": "closed-source vendor",
+                },
+            )
+        ),
     ]
     fake, calls = _sequenced_giveup_aware_factory([batch])
     with patch("cve_env.agent.loop.run_agent", fake):
-        outcome = asyncio.run(build(_cve(), _host(), run_id="fr-prop", audit_root=tmp_path))
-    assert len(calls) == 1, f"force-resolve wrongly fired on proprietary; calls={len(calls)}"
+        outcome = asyncio.run(
+            build(_cve(), _host(), run_id="fr-prop", audit_root=tmp_path)
+        )
+    assert len(calls) == 1, (
+        f"force-resolve wrongly fired on proprietary; calls={len(calls)}"
+    )
     assert outcome.status in ("unresolvable", "incomplete")
 
 

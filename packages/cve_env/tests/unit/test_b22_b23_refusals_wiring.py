@@ -151,8 +151,12 @@ class TestB23SdkApiErrorPatterns:
         and appends it to scanner.events. First-match wins so one event is
         created even when multiple B-23 patterns would match."""
         scanner = RefusalScanner(
-            project="test", cve_id="CVE-X", run_id="r", audit_path=None,
-            model="m", host_arch="arm64",
+            project="test",
+            cve_id="CVE-X",
+            run_id="r",
+            audit_path=None,
+            model="m",
+            host_arch="arm64",
         )
         text = (
             "API Error: Claude Code is unable to respond to this request, "

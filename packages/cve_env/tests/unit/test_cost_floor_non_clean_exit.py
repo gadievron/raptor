@@ -14,6 +14,7 @@ Fix: a turns-based cost floor, gated to non-clean exits + absent token usage,
 so correctly-reported ``success`` runs and API-key (token-bearing) runs are
 untouched.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,21 +40,40 @@ from .test_bench200_bug_fixes import (  # type: ignore[import-untyped]
 # Every abnormal-termination status in the OutcomeStatus taxonomy (models.py)
 # whose SDK cost is unreliable mid-run — the turns floor MUST fire for each.
 _INTERRUPTED = [
-    "turn_cap", "budget_exhausted", "error", "interrupted", "incomplete", "rate_limited",
+    "turn_cap",
+    "budget_exhausted",
+    "error",
+    "interrupted",
+    "incomplete",
+    "rate_limited",
 ]
 # Clean end_turn exits with reliable SDK cost — the floor MUST NOT fire (else a
 # correctly-reported cost is inflated, the verified_partial regression).
-_CLEAN = ["success", "verified_partial", "verify_failed", "launched_no_verify", "unresolvable"]
+_CLEAN = [
+    "success",
+    "verified_partial",
+    "verify_failed",
+    "launched_no_verify",
+    "unresolvable",
+]
 
 
 @pytest.mark.parametrize("status", _INTERRUPTED)
-def test_floor_fires_for_every_interrupted_status_with_no_token_usage(status: str) -> None:
+def test_floor_fires_for_every_interrupted_status_with_no_token_usage(
+    status: str,
+) -> None:
     """The gate must cover ALL abnormal terminations, not just turn_cap — the
     exception path's default status is 'interrupted' and a 529 gives 'rate_limited'.
     With a low SDK cost + no token usage, each must be floored up by turns."""
     floored = _floor_cost(
-        status, num_turns=40, last_cost_usd=0.01, cont_cost_usd=0.0,
-        input_tokens=0, output_tokens=0, model=MODEL, effective_max_cost_usd=10.0,
+        status,
+        num_turns=40,
+        last_cost_usd=0.01,
+        cont_cost_usd=0.0,
+        input_tokens=0,
+        output_tokens=0,
+        model=MODEL,
+        effective_max_cost_usd=10.0,
     )
     assert floored > 0.01, f"{status!r} not floored: {floored}"
     assert floored >= estimate_cost_from_tokens(40 * 1000, 0, MODEL)
@@ -65,8 +85,14 @@ def test_floor_does_not_fire_for_clean_exit_statuses(status: str) -> None:
     untouched (it is only a floor for interrupted runs). Guards the verified_partial
     regression and its siblings."""
     floored = _floor_cost(
-        status, num_turns=40, last_cost_usd=0.01, cont_cost_usd=0.0,
-        input_tokens=0, output_tokens=0, model=MODEL, effective_max_cost_usd=10.0,
+        status,
+        num_turns=40,
+        last_cost_usd=0.01,
+        cont_cost_usd=0.0,
+        input_tokens=0,
+        output_tokens=0,
+        model=MODEL,
+        effective_max_cost_usd=10.0,
     )
     assert floored == 0.01, f"{status!r} wrongly floored to {floored}"
 
@@ -78,8 +104,14 @@ def test_floor_fires_with_tiny_nonzero_token_stub() -> None:
     gate is False for 10/2, so the floor was skipped and a 40-turn turn_cap
     collapsed to a ~$0.0003 token estimate (the live CVE-2019-11043 bug)."""
     floored = _floor_cost(
-        "turn_cap", num_turns=40, last_cost_usd=0.0, cont_cost_usd=0.0,
-        input_tokens=10, output_tokens=2, model=MODEL, effective_max_cost_usd=10.0,
+        "turn_cap",
+        num_turns=40,
+        last_cost_usd=0.0,
+        cont_cost_usd=0.0,
+        input_tokens=10,
+        output_tokens=2,
+        model=MODEL,
+        effective_max_cost_usd=10.0,
     )
     tiny = estimate_cost_from_tokens(10, 2, MODEL)
     assert floored > tiny, (
@@ -98,8 +130,13 @@ def test_floor_does_not_inflate_real_high_token_interrupted_run() -> None:
     big_in, big_out = 5_000_000, 500_000
     base = estimate_cost_from_tokens(big_in, big_out, MODEL)
     floored = _floor_cost(
-        "turn_cap", num_turns=5, last_cost_usd=0.0, cont_cost_usd=0.0,
-        input_tokens=big_in, output_tokens=big_out, model=MODEL,
+        "turn_cap",
+        num_turns=5,
+        last_cost_usd=0.0,
+        cont_cost_usd=0.0,
+        input_tokens=big_in,
+        output_tokens=big_out,
+        model=MODEL,
         effective_max_cost_usd=0.0,  # uncapped, so only the comparison decides
     )
     assert floored == base, f"real high-token cost altered: {floored} != {base}"

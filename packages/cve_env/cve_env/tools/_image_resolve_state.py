@@ -40,16 +40,12 @@ _RATE_LIMIT_TOTAL_THRESHOLD: int = 3
 # One-shot cooldown + retry per CVE when ALL candidates in the initial loop
 # returned rate_limited.
 _RATE_LIMIT_COOLDOWN_DONE: bool = False
-_RATE_LIMIT_COOLDOWN_S: int = int(
-    os.environ.get("CVE_ENV_RATE_LIMIT_COOLDOWN_S", "30")
-)
+_RATE_LIMIT_COOLDOWN_S: int = int(os.environ.get("CVE_ENV_RATE_LIMIT_COOLDOWN_S", "30"))
 
 # One-shot cooldown + retry per CVE when ALL candidates returned
 # transport-class (5xx / timeout / connection-reset).
 _TRANSPORT_COOLDOWN_DONE: bool = False
-_TRANSPORT_COOLDOWN_S: int = int(
-    os.environ.get("CVE_ENV_TRANSPORT_COOLDOWN_S", "30")
-)
+_TRANSPORT_COOLDOWN_S: int = int(os.environ.get("CVE_ENV_TRANSPORT_COOLDOWN_S", "30"))
 
 # CVE-level cumulative arch_incompatible counter. After 2 different products
 # fail arch_incompatible, the 3rd image_resolve call returns

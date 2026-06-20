@@ -187,12 +187,14 @@ def _candidate_refs(product: str, version: str) -> list[str]:
     return _filter_denied_registries(out)
 
 
-_DOCKERHUB_ALIASES = frozenset({
-    "docker.io",
-    "dockerhub",
-    "index.docker.io",
-    "registry-1.docker.io",
-})
+_DOCKERHUB_ALIASES = frozenset(
+    {
+        "docker.io",
+        "dockerhub",
+        "index.docker.io",
+        "registry-1.docker.io",
+    }
+)
 
 
 def _normalize_registry_token(raw: str) -> str:
@@ -249,11 +251,11 @@ def _filter_denied_registries(candidates: list[str]) -> list[str]:
     if not denied:
         return candidates
 
-    # ``denied >= {"docker.io"}`` rather than ``"docker.io" in denied`` —                                                                                                                                    
-    # semantically identical (denied is a set of normalized hosts), but the                                                                                                                                  
-    # superset form sidesteps CodeQL's py/incomplete-url-substring-sanitization                                                                                                                              
-    # heuristic which can't see that ``denied`` carries normalized tokens.                                                                                                                                   
-    drop_dockerhub = denied >= {"docker.io"}                                                                                                                                                                 
+    # ``denied >= {"docker.io"}`` rather than ``"docker.io" in denied`` —
+    # semantically identical (denied is a set of normalized hosts), but the
+    # superset form sidesteps CodeQL's py/incomplete-url-substring-sanitization
+    # heuristic which can't see that ``denied`` carries normalized tokens.
+    drop_dockerhub = denied >= {"docker.io"}
     out: list[str] = []
     for c in candidates:
         cl = c.lower()
@@ -267,7 +269,11 @@ def _filter_denied_registries(candidates: list[str]) -> list[str]:
             # library/* and bare-namespace user names also default to docker.io.
             # Treat anything where the first segment is NOT a registry hostname
             # (no '.' / ':' / known special name) as a Docker Hub ref.
-            if "." not in first_seg and ":" not in first_seg and first_seg != "localhost":
+            if (
+                "." not in first_seg
+                and ":" not in first_seg
+                and first_seg != "localhost"
+            ):
                 continue
         out.append(c)
     return out
@@ -277,7 +283,9 @@ _UNKNOWN_PLATFORM = "unknown/unknown"
 
 
 _TRANSIENT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"received unexpected HTTP status:?\s*(?:429|500|502|503|504)", re.IGNORECASE),
+    re.compile(
+        r"received unexpected HTTP status:?\s*(?:429|500|502|503|504)", re.IGNORECASE
+    ),
     re.compile(r"\btoomanyrequests\b", re.IGNORECASE),
     re.compile(r"\bconnection reset\b", re.IGNORECASE),
     re.compile(r"network is unreachable", re.IGNORECASE),
@@ -356,7 +364,11 @@ def _inspect_ref_once(
     if outcome.returncode is None and outcome.stderr.startswith("command_not_found:"):
         return None, "transport", "docker CLI not found on PATH"
     if outcome.returncode != 0:
-        return None, _classify_inspect_failure(outcome.stderr or ""), (outcome.stderr or "")[:400]
+        return (
+            None,
+            _classify_inspect_failure(outcome.stderr or ""),
+            (outcome.stderr or "")[:400],
+        )
     if not outcome.stdout.strip():
         return None, "not_found", "empty stdout"
     try:
@@ -571,7 +583,10 @@ def image_resolve(
     candidates = _candidate_refs(product, version)
     if not candidates:
         return ResolveResult(
-            ok=False, decision="not_found", reason="empty product/version", reason_class="not_found"
+            ok=False,
+            decision="not_found",
+            reason="empty product/version",
+            reason_class="not_found",
         )
 
     # Short-circuit after 2 rate_limited resolves for the same product. The
@@ -646,7 +661,9 @@ def image_resolve(
             ),
         )
 
-    host_platform = f"linux/{host_arch}" if host_arch in {"arm64", "amd64"} else "linux/amd64"
+    host_platform = (
+        f"linux/{host_arch}" if host_arch in {"arm64", "amd64"} else "linux/amd64"
+    )
 
     tried: list[str] = []
     last_platforms: list[str] = []

@@ -15,6 +15,7 @@ These tests ship RED via pytest.mark.xfail(strict=True). The GREEN flip lands
 atomically in Phase 35.5 commit (helper + on_message integration + exception
 handler).
 """
+
 from __future__ import annotations
 
 import time
@@ -29,6 +30,7 @@ def _try_import_helper():
     """
     try:
         from cve_env.agent.loop import _check_wall_budget  # type: ignore
+
         return _check_wall_budget
     except ImportError:
         return None
@@ -41,6 +43,7 @@ def _try_import_exception():
     """
     try:
         from cve_env.agent.llm import WallBudgetExceeded  # type: ignore
+
         return WallBudgetExceeded
     except ImportError:
         return None

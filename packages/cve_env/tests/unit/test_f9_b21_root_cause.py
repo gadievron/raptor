@@ -10,6 +10,7 @@ F-9 actually raises TurnCapReached at the expected message count. If they
 fail, F-9 is wiring-broken (NOT just B-21 ineffective) and the migration
 arc has a deeper bug.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -44,9 +45,7 @@ def test_f9_fires_when_messages_exceed_max_turns(tmp_path: Path) -> None:
     deeper bug than just B-21 ineffectiveness.
     """
     messages = _many_messages(200)
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         outcome = asyncio.run(
             build(
                 _cve(),
@@ -78,9 +77,7 @@ def test_f9_audit_truncates_at_cap_plus_1(tmp_path: Path) -> None:
     the exception itself.
     """
     messages = _many_messages(200)
-    with patch(
-        "cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)
-    ):
+    with patch("cve_env.agent.loop.run_agent", _fake_run_agent_factory(messages)):
         _outcome = asyncio.run(
             build(
                 _cve(),
@@ -95,6 +92,7 @@ def test_f9_audit_truncates_at_cap_plus_1(tmp_path: Path) -> None:
     audit_files = list(tmp_path.rglob("CVE-*.jsonl"))
     assert audit_files, "no audit JSONL written"
     import json
+
     with audit_files[0].open() as fh:
         lines = [json.loads(line) for line in fh if line.strip()]
     turns = [e.get("turn", 0) for e in lines]
