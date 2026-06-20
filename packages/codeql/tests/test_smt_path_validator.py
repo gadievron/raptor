@@ -1779,3 +1779,148 @@ class TestPreferWitness:
         )
         assert r.feasible is True
         assert r.model.get("count") is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — weakest-precondition predicate extraction
+# ---------------------------------------------------------------------------
+class TestWeakestPrecondition:
+    """WP extraction: the minimal sat-preserving subset of path conjuncts.
+
+    The properties below use ``check_path_feasibility`` itself as the
+    oracle — ``PathCondition(text, negated=True)`` asserts ``¬text``, so
+    feasibility of ``W + [¬c]`` decides whether ``W`` implies ``c``.
+    """
+
+    @staticmethod
+    def _conds(texts):
+        return [PathCondition(t, step_index=i) for i, t in enumerate(texts)]
+
+    @_requires_z3
+    def test_feasible_path_carries_wp_fields(self):
+        r = check_path_feasibility(self._conds(["size > 5", "size < 100"]))
+        assert r.feasible is True
+        assert r.wp_predicate is not None
+        assert r.wp_complete is True
+        assert r.wp_ordering == "canonical-text-lexicographic"
+
+    @_requires_z3
+    def test_redundant_conjunct_dropped(self):
+        # ``size > 5`` implies ``size > 0`` — the weaker bound is redundant.
+        r = check_path_feasibility(self._conds(["size > 5", "size > 0"]))
+        assert r.feasible is True
+        assert r.wp_conjuncts == ["size > 5"]
+
+    @_requires_z3
+    def test_independent_conjuncts_all_kept(self):
+        r = check_path_feasibility(self._conds(["size > 5", "offset < 3"]))
+        assert r.feasible is True
+        assert set(r.wp_conjuncts) == {"size > 5", "offset < 3"}
+
+    @_requires_z3
+    def test_unsat_path_has_no_wp(self):
+        r = check_path_feasibility(self._conds(["size > 5", "size < 0"]))
+        assert r.feasible is False
+        assert r.wp_predicate is None
+        assert r.wp_conjuncts == []
+
+    def test_no_z3_has_no_wp(self):
+        with patch("packages.codeql.smt_path_validator._z3_available",
+                   return_value=False):
+            r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
+        assert r.wp_predicate is None
+        assert r.wp_conjuncts == []
+
+    @_requires_z3
+    def test_deterministic_across_runs(self):
+        conds = self._conds(["size > 5", "size > 0", "offset < 3"])
+        a = check_path_feasibility(conds)
+        b = check_path_feasibility(conds)
+        assert a.wp_conjuncts == b.wp_conjuncts
+        assert a.wp_predicate == b.wp_predicate
+
+    @_requires_z3
+    def test_wp_equivalent_to_full_path(self):
+        # Sat-preserving: ⋀W ⟹ ⋀C, i.e. for every original conjunct c,
+        # ``(⋀W ∧ ¬c)`` is unsat. With W ⊆ C this makes W ≡ C.
+        originals = ["size > 5", "size > 0", "size < 100", "offset < 3"]
+        r = check_path_feasibility(self._conds(originals))
+        assert r.feasible is True
+        W = r.wp_conjuncts
+        for c in originals:
+            probe = self._conds(W) + [
+                PathCondition(c, step_index=len(W), negated=True)]
+            assert check_path_feasibility(probe).feasible is False, (
+                f"W does not imply original conjunct {c!r}")
+
+    @_requires_z3
+    def test_wp_is_minimal(self):
+        # Minimality: for each c_i ∈ W, ``(⋀(W∖{c_i}) ∧ ¬c_i)`` is sat —
+        # dropping c_i would admit models violating it, so it is
+        # load-bearing and could not have been removed.
+        originals = ["size > 5", "size > 0", "size < 100", "offset < 3"]
+        r = check_path_feasibility(self._conds(originals))
+        W = r.wp_conjuncts
+        assert len(W) >= 1
+        for i, c_i in enumerate(W):
+            rest = [c for j, c in enumerate(W) if j != i]
+            probe = self._conds(rest) + [
+                PathCondition(c_i, step_index=len(rest), negated=True)]
+            assert check_path_feasibility(probe).feasible is True, (
+                f"kept conjunct {c_i!r} is implied by the rest — not minimal")
+
+    @_requires_z3
+    def test_cap_marks_incomplete(self):
+        from packages.codeql.smt_path_validator import WP_MAX_SOLVER_CALLS
+        # More independent conjuncts than the deletion-pass cap: the pass
+        # can't test them all, so it must report wp_complete=False.
+        n = WP_MAX_SOLVER_CALLS + 5
+        conds = [PathCondition(f"v{i} > {i}", step_index=i) for i in range(n)]
+        r = check_path_feasibility(conds)
+        assert r.feasible is True
+        assert r.wp_predicate is not None
+        assert r.wp_complete is False
+
+    @_requires_z3
+    def test_all_conjuncts_mutually_implied_returns_true(self):
+        """When every conjunct implies every other (all equivalent), the
+        deletion pass drops all but one.  If the input is crafted so that
+        even the last survivor is a tautology, ``_extract_wp`` returns
+        the ``"true"`` degenerate form."""
+        from packages.codeql.smt_path_validator import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        # Two tautologies: x == x and x >= 0 (unsigned — always true)
+        taut1 = x == x
+        taut2 = z3.UGE(x, z3.BitVecVal(0, 32))
+        wp, conj, complete = _extract_wp([("x == x", taut1), ("x >= 0", taut2)])
+        # Both are tautologies so each implies the other — all dropped.
+        assert wp == "true"
+        assert conj == []
+        assert complete is True
+
+    @_requires_z3
+    def test_solver_timeout_keeps_conjunct(self):
+        """When a redundancy check returns ``unknown`` (e.g. solver
+        timeout), the conjunct is conservatively kept."""
+        from packages.codeql.smt_path_validator import _extract_wp
+        import z3
+
+        x = z3.BitVec("x", 32)
+        exprs = [
+            ("x > 5", z3.UGT(x, z3.BitVecVal(5, 32))),
+            ("x > 0", z3.UGT(x, z3.BitVecVal(0, 32))),
+        ]
+        # Patch solver.check to return unknown for the first call,
+        # forcing the conjunct to be kept even though it's redundant.
+        real_extract = _extract_wp
+        with patch("packages.codeql.smt_path_validator._new_solver") as mock_ns:
+            mock_solver = mock_ns.return_value
+            mock_solver.check.return_value = z3.unknown
+            mock_solver.__enter__ = lambda s: s
+            mock_solver.__exit__ = lambda s, *a: None
+            wp, conj, complete = real_extract(exprs)
+        # Both kept because every check returned unknown
+        assert len(conj) == 2
+        assert complete is True

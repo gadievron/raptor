@@ -173,6 +173,28 @@ class PathCondition:
     negated: bool = False
 
 
+# --- Phase 8: weakest-precondition extraction ------------------------------
+# Cap on solver calls in the WP deletion pass.  Each kept-conjunct
+# redundancy test is one ``check()``; real paths carry 1-10 conjuncts and
+# ``_MAX_CONDITIONS_PER_CALL`` caps the input at 64, so 32 covers typical
+# paths fully while bounding worst-case cost on adversarial inputs.
+WP_MAX_SOLVER_CALLS = 32
+
+# Per-check timeout for the WP deletion pass.  Each redundancy test is
+# a simple implication query (conjunction of kept conjuncts vs negation
+# of one candidate) — far cheaper than the initial sat check that
+# evaluates the full path.  2s is generous for these queries; a timeout
+# means "keep the conjunct" (same conservative stance as ``unknown``).
+WP_TIMEOUT_MS = 2000
+
+# The deletion pass visits conjuncts in lexicographic order of their
+# canonicalised text (ties broken by original index).  Recorded on the
+# result so re-runs reproduce the same minimal subset: different visit
+# orders can yield different (equally valid) minimal subsets when
+# conjuncts pairwise imply one another.
+WP_ORDERING = "canonical-text-lexicographic"
+
+
 @dataclass
 class PathSMTResult:
     """Result of SMT feasibility check over a set of path conditions.
@@ -201,6 +223,30 @@ class PathSMTResult:
     reasoning: str
     unknown_reasons: List[Rejection] = field(default_factory=list)
     anon_var_map: Dict[str, str] = field(default_factory=dict)
+
+    # --- Phase 8: weakest-precondition predicate (additive) ---
+    # ``wp_predicate`` is the minimal sat-preserving subset of the pending
+    # path conjuncts, serialised as an SMTLIB s-expression (the conjunction
+    # over the path's symbolic variables).  It is the *weakest predicate
+    # over the current symbolic variables* whose solution set equals the
+    # full path condition's: every kept conjunct is load-bearing (dropping
+    # it would admit inputs that change reachability) and every dropped
+    # conjunct was implied by the kept ones.  ``/exploit`` (Phase 9)
+    # consumes it as a hard constraint on synthesised inputs.  ``None``
+    # when the path is not ``sat``, when there were no pending conjuncts,
+    # or when Z3 is unavailable.  See :func:`_extract_wp`.
+    wp_predicate: Optional[str] = None
+    # The kept (minimal) conjunct texts, in the deterministic extraction
+    # order.  Empty whenever ``wp_predicate`` is ``None``.
+    wp_conjuncts: List[str] = field(default_factory=list)
+    # ``False`` when the deletion pass hit ``WP_MAX_SOLVER_CALLS`` before
+    # every conjunct was tested — ``wp_predicate`` is then a sound
+    # sat-preserving subset but possibly not minimal.
+    wp_complete: bool = True
+    # Names the deterministic conjunct ordering so re-runs reproduce the
+    # same minimal subset.  Always ``WP_ORDERING`` for now; carried
+    # explicitly so a future ordering change is visible to consumers.
+    wp_ordering: str = WP_ORDERING
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +999,90 @@ def _classify_text_condition(
     return None, (display, final_expr), None
 
 
+def _extract_wp(
+    pending: List[Tuple[str, Any]],
+    *,
+    cap: int = WP_MAX_SOLVER_CALLS,
+) -> Tuple[Optional[str], List[str], bool]:
+    """Extract the weakest-precondition predicate for a *sat* path.
+
+    ``pending`` is the list of ``(text, z3_expr)`` path conjuncts whose
+    conjunction has already been shown satisfiable (we are on the ``sat``
+    branch of :func:`_solve_pending`).  Returns
+    ``(wp_predicate, wp_conjuncts, complete)``:
+
+      * ``wp_predicate`` — SMTLIB s-expression of the conjunction of the
+        *minimal sat-preserving subset* ``W ⊆ pending``, or ``None`` when
+        there is nothing to extract (no conjuncts, Z3 unavailable) or the
+        serialisation fails.
+      * ``wp_conjuncts`` — the kept conjunct texts in extraction order.
+      * ``complete`` — ``False`` if the deletion pass hit ``cap`` before
+        testing every conjunct (``W`` is then sat-preserving but possibly
+        not minimal).
+
+    Primitive — *implication-based redundancy*.  A conjunct ``c_i`` is
+    redundant exactly when the other kept conjuncts already imply it:
+    ``(⋀(kept∖{c_i}) ∧ ¬c_i)`` is unsat.  Dropping only implied conjuncts
+    guarantees ``⋀W`` has the *same* solution set as the full path
+    condition, so ``W`` is the weakest predicate over the path's symbolic
+    variables whose every model reaches the sink.  A conjunct whose
+    negation is still consistent with the rest is load-bearing and kept.
+
+    This is not the literal weakest precondition (that needs symbolic
+    back-substitution through the program); it is the weakest predicate
+    over the *current* symbolic variables, which is what ``/exploit`` PoC
+    synthesis needs because those variables are the attacker-controlled
+    inputs.
+
+    Greedy + deterministic.  Conjuncts are visited in lexicographic order
+    of canonicalised text (:data:`WP_ORDERING`); a conjunct dropped
+    earlier is excluded from later tests, so the result is minimal with
+    respect to that order.  Z3 ``unknown`` (timeout / undecidable) on a
+    redundancy test is treated conservatively as "keep" — a conjunct we
+    cannot *prove* redundant is never dropped, keeping ``W`` sound.
+    """
+    n = len(pending)
+    if n == 0 or not _z3_available():
+        return None, [], True
+
+    order = sorted(range(n), key=lambda i: (_canonicalise(pending[i][0]), i))
+    kept = [True] * n
+    calls = 0
+    complete = True
+    solver = _new_solver(WP_TIMEOUT_MS)
+    for idx in order:
+        if calls >= cap:
+            complete = False
+            break
+        with _scoped(solver):
+            for j in range(n):
+                if kept[j] and j != idx:
+                    solver.add(pending[j][1])
+            solver.add(z3.Not(pending[idx][1]))
+            calls += 1
+            verdict = solver.check()
+        if verdict == z3.unsat:
+            kept[idx] = False  # implied by the rest → redundant, drop it
+
+    # Serialise + list the kept conjuncts in the deterministic visit order
+    # so the predicate and the conjunct list line up across re-runs.
+    kept_in_order = [i for i in order if kept[i]]
+    kept_exprs = [pending[i][1] for i in kept_in_order]
+    wp_conjuncts = [pending[i][0] for i in kept_in_order]
+
+    if not kept_exprs:
+        # Degenerate — cannot occur for a sat, tautology-filtered pending
+        # set, but stay total rather than index into an empty list.
+        return "true", wp_conjuncts, complete
+
+    expr = kept_exprs[0] if len(kept_exprs) == 1 else z3.And(*kept_exprs)
+    try:
+        wp_predicate = expr.sexpr()
+    except (z3.Z3Exception, AttributeError):
+        wp_predicate = None
+    return wp_predicate, wp_conjuncts, complete
+
+
 def _solve_pending(
     pending: List[Tuple[str, Any]],
     solver: Any,
@@ -1035,6 +1165,10 @@ def _solve_pending(
 
     if result == z3.sat:
         model_dict = _format_witness(solver.model(), signed=profile.signed)
+        # Phase 8: on sat, extract the weakest predicate over the path's
+        # symbolic variables (minimal sat-preserving conjunct subset). Its
+        # own fresh solver — the verdict above is unaffected.
+        wp_predicate, wp_conjuncts, wp_complete = _extract_wp(pending)
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
@@ -1046,6 +1180,9 @@ def _solve_pending(
                 + (f"; {len(unknown)} unparsed" if unknown else "")
             ),
             anon_var_map=_anon_map,
+            wp_predicate=wp_predicate,
+            wp_conjuncts=wp_conjuncts,
+            wp_complete=wp_complete,
         )
 
     if result == z3.unsat:
