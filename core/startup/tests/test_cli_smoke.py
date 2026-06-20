@@ -184,6 +184,10 @@ def test_fuzz_accepts_autonomous():
     assert _argparse_accepted("fuzz", "--binary", "./bin", "--autonomous")
 
 
+def test_fuzz_accepts_export_seed_corpus_without_binary():
+    assert _argparse_accepted("fuzz", "--export-seed-corpus", "./seeds")
+
+
 # ---------------------------------------------------------------------------
 # Section 3b: `<mode> --help` is side-effect-free
 # ---------------------------------------------------------------------------

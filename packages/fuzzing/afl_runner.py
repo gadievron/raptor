@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from core.logging import get_logger
+from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
 
 logger = get_logger()
 
@@ -50,6 +51,7 @@ class AFLRunner:
         use_laf_intel: bool = True,
         deterministic: bool = False,
         custom_mutator: Optional[Path] = None,
+        seed_profile: str = "default",
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -105,6 +107,7 @@ class AFLRunner:
         self.use_laf_intel = use_laf_intel
         self.deterministic = deterministic
         self.custom_mutator = Path(custom_mutator).resolve() if custom_mutator else None
+        self.seed_profile = seed_profile
         if self.custom_mutator and not self.custom_mutator.exists():
             raise FileNotFoundError(f"Custom mutator not found: {custom_mutator}")
 
@@ -156,19 +159,29 @@ class AFLRunner:
         """
         corpus = self.output_dir / "corpus_default"
         corpus.mkdir(parents=True, exist_ok=True)
+        seed_profile = getattr(self, "seed_profile", "default")
 
-        # Create some basic seed inputs
-        seeds = [
-            b"A" * 10,
-            b"test\n",
-            b"\x00\x01\x02\x03",
-            b"GET / HTTP/1.0\r\n\r\n",
-        ]
-
-        for idx, seed in enumerate(seeds):
-            (corpus / f"seed{idx}").write_bytes(seed)
-
-        logger.info(f"Created default corpus with {len(seeds)} seeds")
+        try:
+            manifest = prepare_builtin_seed_corpus(corpus, profile=seed_profile)
+            logger.info(
+                "Created built-in default corpus with "
+                f"{manifest['seed_count']} seeds (profile={seed_profile})"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Built-in default corpus failed (%s); falling back to emergency "
+                "minimal seeds",
+                exc,
+            )
+            seeds = [
+                b"A" * 10,
+                b"test\n",
+                b"\x00\x01\x02\x03",
+                b"GET / HTTP/1.0\r\n\r\n",
+            ]
+            for idx, seed in enumerate(seeds):
+                (corpus / f"seed{idx}").write_bytes(seed)
+            logger.info(f"Created emergency default corpus with {len(seeds)} seeds")
         return corpus
 
     def check_binary_instrumentation(self) -> bool:

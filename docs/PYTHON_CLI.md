@@ -103,7 +103,14 @@ CodeQL-only for deep dataflow analysis (slower, finds complex vulnerabilities).
 python3 raptor.py fuzz --binary /path/to/binary --duration 3600 --parallel 4
 ```
 
-AFL++ fuzzing with crash analysis and exploit generation.
+AFL++ fuzzing with crash analysis and exploit generation. If no `--corpus` is
+provided, RAPTOR uses autonomous corpus generation when available and otherwise
+falls back to its built-in starter corpus.
+
+```bash
+python3 raptor.py fuzz --export-seed-corpus /tmp/raptor-fuzz-seeds
+python3 raptor.py fuzz --binary /path/to/binary --corpus /tmp/raptor-fuzz-seeds
+```
 
 ### 5. web - Web Testing
 
