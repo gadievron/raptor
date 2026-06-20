@@ -1056,6 +1056,7 @@ def mode_frida(args: list) -> int:
     directly from a /frida skill.
     """
     import subprocess
+    from core.config import RaptorConfig
     script_root = Path(__file__).parent
     wrapper = script_root / "libexec" / "raptor-frida"
     if not wrapper.exists():
