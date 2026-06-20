@@ -1061,7 +1061,7 @@ def mode_frida(args: list) -> int:
     if not wrapper.exists():
         print(f"✗ Frida wrapper not found: {wrapper}")
         return 1
-    env = os.environ.copy()
+    env = RaptorConfig.get_safe_env()
     env.setdefault("_RAPTOR_TRUSTED", "1")
     return subprocess.call([str(wrapper), *args], env=env)
 
