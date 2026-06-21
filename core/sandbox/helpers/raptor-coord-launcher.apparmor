@@ -1,0 +1,56 @@
+# AppArmor profile for the RAPTOR coordinator launcher.
+#
+# When to install this:
+#   On Ubuntu 24.04+ (and other AppArmor distros where
+#   kernel.apparmor_restrict_unprivileged_userns=1 is set), creating an
+#   unprivileged user namespace auto-transitions the creating process to
+#   the global `unprivileged_userns` AppArmor profile, which has
+#   `audit deny capability`. That blocks the launcher from writing
+#   /proc/self/uid_map, so namespace setup fails with EPERM.
+#
+#   This named profile, attached to the launcher's specific binary path,
+#   OVERRIDES the auto-transition. Inside the new user-ns the launcher
+#   gets `allow capability` (mirrors how bwrap works — see
+#   /etc/apparmor.d/bwrap-userns-restrict). The launcher does its three
+#   privileged syscalls + id-map writes, drops every capability, and execs
+#   the coordinator (Python). Children execed by the coordinator stack
+#   against this profile via the `pix` rule but get no capabilities
+#   themselves — they can't abuse the userns to escape.
+#
+# Install (one-time, operator-explicit):
+#   sudo cp raptor-coord-launcher.apparmor \
+#       /etc/apparmor.d/raptor-coord-launcher
+#   sudo apparmor_parser -r /etc/apparmor.d/raptor-coord-launcher
+#
+# Verify:
+#   sudo aa-status | grep raptor-coord-launcher
+#   /path/to/raptor/core/sandbox/helpers/raptor-coord-launcher /usr/bin/true
+#   (no error == profile attaches correctly)
+#
+# IMPORTANT: the path below must match the absolute path of your RAPTOR
+# checkout's raptor-coord-launcher binary. Edit this line if your checkout
+# is somewhere other than /home/raptor/raptor — apparmor profiles match by
+# absolute binary path, not by content hash.
+
+abi <abi/5.0>,
+include <tunables/global>
+
+profile raptor-coord-launcher
+    /**/core/sandbox/helpers/raptor-coord-launcher
+    flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow signal,
+  allow userns,
+
+  # Children stack against this profile when they exec. They keep userns
+  # access (so the coordinator can fork sandbox children that join the
+  # shared netns by inheritance) but their own seccomp + Landlock posture
+  # is applied separately by sandbox.run.
+  allow pix /** -> &raptor-coord-launcher,
+
+  # Site-specific additions and overrides.
+  include if exists <local/raptor-coord-launcher>
+}

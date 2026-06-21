@@ -1,0 +1,72 @@
+# SELinux policy module template for the RAPTOR coordinator launcher.
+#
+# When to install this:
+#   On RHEL-family hosts with custom SELinux policy that blocks
+#   unprivileged user-namespace creation or related operations
+#   (uid_map writes, setcap operations, network configuration in a fresh
+#   netns). RHEL 8+ default policy allows unprivileged userns; corporate
+#   hardened policies often disallow it.
+#
+# UNVALIDATED — this template documents the SHAPE of the policy module.
+# The exact rules required depend on which corporate hardening is in
+# place. Validate on your target host before relying on it. Common
+# adjustments:
+#   - userns_create permission (RHEL 8.4+): allow userns_create for the
+#     launcher's type
+#   - capability { setuid setgid sys_admin net_admin }: required to
+#     write id maps and bring lo up in the new netns
+#   - allow self proc_security_t : file write : for /proc/self/uid_map,
+#     setgroups, gid_map writes
+#
+# Build + install (one-time, operator-explicit, requires policycoreutils):
+#   sudo dnf install -y policycoreutils-devel
+#   # Customise this .te file for your local policy first
+#   make -f /usr/share/selinux/devel/Makefile raptor-coord-launcher.pp
+#   sudo semodule -i raptor-coord-launcher.pp
+#   # Tag the binary with the new type:
+#   sudo restorecon /path/to/core/sandbox/helpers/raptor-coord-launcher
+#   # Or manually:
+#   sudo chcon -t raptor_coord_launcher_exec_t \
+#       /path/to/core/sandbox/helpers/raptor-coord-launcher
+#
+# Verify:
+#   ls -lZ /path/to/raptor-coord-launcher
+#   # Expected SELinux type: raptor_coord_launcher_exec_t
+
+policy_module(raptor-coord-launcher, 0.1.0)
+
+require {
+    type unconfined_t;
+    type proc_t;
+    type proc_security_t;
+    class file { read write open };
+    class process { setcap fork transition };
+    class capability { setuid setgid sys_admin net_admin };
+    # RHEL 8.4+:
+    # class user_namespace { create };
+}
+
+# The launcher's executable type. Apply via restorecon or chcon.
+type raptor_coord_launcher_t;
+type raptor_coord_launcher_exec_t;
+files_type(raptor_coord_launcher_exec_t)
+
+# Domain transition from unconfined into the launcher's domain.
+domain_auto_trans(unconfined_t, raptor_coord_launcher_exec_t, raptor_coord_launcher_t)
+
+# Privileged operations the launcher needs to perform in its brief window.
+allow raptor_coord_launcher_t self : capability { setuid setgid sys_admin net_admin };
+allow raptor_coord_launcher_t self : process { setcap };
+
+# Write /proc/self/{uid_map,gid_map,setgroups}.
+allow raptor_coord_launcher_t proc_security_t : file { read write open };
+
+# RHEL 8.4+ explicit user-namespace creation permission. Uncomment if
+# present in your policy version:
+# allow raptor_coord_launcher_t self : user_namespace { create };
+
+# After dropping caps + capability bits + LSM-confined permissions, the
+# launcher execve's Python. Add transition rules here for how the
+# coordinator's process should be confined post-exec (recommend: leave
+# unconfined within its new user-namespace and rely on sandbox.run's
+# seccomp+Landlock for the actual sandbox children).

@@ -989,7 +989,16 @@ def run_sandboxed(
             # Step 3: create namespaces. Leaves us as "nobody" in the
             # new user-ns until the parent runs newuidmap on us.
             ns_flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC
-            if block_network:
+            if block_network and not inherit_netns:
+                # Only unshare a fresh net-ns when:
+                #  - block_network is set, AND
+                #  - we weren't told to INHERIT the parent's netns
+                #    (inherit_netns=True from the coordinator pattern in
+                #    core/sandbox/netns_coordinator.py: children are
+                #    forked from a process already inside a shared
+                #    isolated netns, so they get there by inheritance;
+                #    a fresh unshare would land them in a new private
+                #    netns instead of the shared one).
                 ns_flags |= CLONE_NEWNET
             if persona is not None:
                 # Fresh UTS namespace so sethostname/setdomainname only
