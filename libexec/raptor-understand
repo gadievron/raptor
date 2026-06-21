@@ -546,6 +546,12 @@ def main() -> int:
         # operator-supplied path. Keep inside try so all errors get
         # the clean-exit treatment.
         out_dir = Path(args.out).resolve()
+        # Opt the hunt/trace dispatch into trajectory persistence —
+        # writes <out>/trajectories/<run_id>/trajectory.json so
+        # operators can see per-turn tool calls after the run. The
+        # dispatch reads this env var via core.trajectories.auto;
+        # unset → no-op.
+        os.environ["RAPTOR_TRAJECTORY_DIR"] = str(out_dir)
         if args.hunt is not None:
             payload = _do_hunt(args)
         else:

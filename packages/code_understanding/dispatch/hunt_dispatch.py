@@ -112,22 +112,45 @@ def default_hunt_dispatch(
         events=events,
     )
 
+    # Trajectory persistence runs on EVERY exit path. Success → full
+    # record; budget / context / generic exception → partial record
+    # built from whatever ``CostBudgetExceeded`` / ``ContextOverflow``
+    # carry on the exception (PR #828 contract). The exception case
+    # is precisely when the trajectory is most useful: "why did this
+    # model burn through its budget without producing variants?"
+    from core.trajectories.auto import (
+        persist_from_loop_result, persist_partial_from_exception,
+    )
+    traj_run_id = f"hunt-{model.model_name}"
+
     try:
         result = loop.run(user_message)
     except CostBudgetExceeded as e:
         logger.warning(f"hunt: model {model.model_name} hit cost cap: {e}")
         if cost_collector is not None:
             cost_collector(max_cost_usd)  # we hit the cap
+        persist_partial_from_exception(
+            e, run_id=traj_run_id, model_name=model.model_name,
+            terminated_by="max_cost_usd",
+        )
         return [{"error": f"cost budget exceeded: {e}"}]
     except Exception as e:  # noqa: BLE001 - dispatch boundary
         logger.warning(
             f"hunt: model {model.model_name} loop failed: {e}",
             exc_info=True,
         )
+        persist_partial_from_exception(
+            e, run_id=traj_run_id, model_name=model.model_name,
+            terminated_by=f"exception:{type(e).__name__}",
+        )
         return [{"error": f"{type(e).__name__}: {e}"}]
 
     if cost_collector is not None:
         cost_collector(float(result.total_cost_usd or 0.0))
+
+    persist_from_loop_result(
+        result, run_id=traj_run_id, model_name=model.model_name,
+    )
 
     if result.terminated_by != "terminal_tool":
         # Loop ended without the model submitting variants.
