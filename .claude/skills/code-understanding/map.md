@@ -313,6 +313,31 @@ context-map's entry points and sinks. Entry points and sinks that frida
 confirmed at runtime get a `runtime_confirmed: true` annotation. Idempotent.
 Skip-silent when no frida evidence is discoverable.
 
+**[MAP-5f] Enrich with mechanically-discovered sinks and framework APIs**
+
+After normalisation, run the sink enricher. Uses the call graph to:
+
+* **Discover direct sinks** — functions that call dangerous targets
+  (`os.execute`, `subprocess.Popen`, `eval`, `loadstring`, `io.popen`,
+  etc.) — merged into `sink_details` with `source: "mechanical"`
+* **Compute reverse reachability** — entry points that can transitively
+  reach a dangerous sink through the call chain get a `reachable_sinks`
+  field listing which dangerous targets are reachable
+* **Discover framework APIs** — high-frequency call targets spanning
+  many files, added to `meta.frameworks_discovered`. Autonomous — works
+  for niche frameworks (LuCI, OpenResty) without a registry
+
+```bash
+libexec/raptor-enrich-context-map-sinks "$WORKDIR"
+```
+
+Language-agnostic: uses call graphs from any language extractor
+(Python, JS, C, C++, Lua, Go, Java). Complements MAP-3 (LLM's sink
+catalog) with mechanical ground truth. Limitation: reverse
+reachability is intra-file only (same-file call edges); cross-file
+call chains are visible to the LLM but not to this enricher.
+Idempotent. Skip if `$WORKDIR/checklist.json` lacks `target_path`.
+
 **[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.
