@@ -806,7 +806,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     # untrusted envelope, not trusted_parts; the renderer already
     # tag-forgery-defangs the values.
     try:
-        from core.verified_outcome import exemplar_block_for_finding
+        from core.labeled_attempts.view import exemplar_block_for_finding
         ve_block = exemplar_block_for_finding(
             {"id": rule_id, "cwe_id": cwe, "file": file_path},
         )

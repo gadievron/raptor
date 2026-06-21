@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from core.verified_outcome import Oracle, OutcomeStatus, VerifiedOutcome
+from core.labeled_attempts.view import Oracle, OutcomeStatus, VerifiedOutcome
 from packages.llm_analysis.prompts.analysis import build_analysis_prompt_bundle
 
 

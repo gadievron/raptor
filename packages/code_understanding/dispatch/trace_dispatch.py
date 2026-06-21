@@ -338,7 +338,7 @@ def _build_strategy_block(traces: List[Dict[str, Any]]) -> str:
     # fields (matched outcomes' file paths), so they go inside an untrusted
     # envelope; the renderer already tag-forgery-defangs the values.
     try:
-        from core.verified_outcome import exemplar_block_for_finding
+        from core.labeled_attempts.view import exemplar_block_for_finding
         ve_block = exemplar_block_for_finding(
             {"cwe_id": candidate_cwes[0] if candidate_cwes else None},
         )

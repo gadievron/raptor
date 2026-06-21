@@ -142,7 +142,7 @@ FILTERS: dict[str, list[str]] = {
         "core/security/**",
         "core/smt_solver/**",
         "core/threat_model/**",
-        "core/verified_outcome/**",
+        "core/labeled_attempts/**",
         "core/witness/**",
         "core/zip/**",
         "requirements*.txt",

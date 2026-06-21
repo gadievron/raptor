@@ -183,7 +183,7 @@ def _materialise_threat_model_phase(
 
     linked_outcomes = 0
     try:
-        from core.verified_outcome import collect_outcomes
+        from core.labeled_attempts.view import collect_outcomes
         project_root = Path(project.output_dir) if project_backed else None
         outcomes = collect_outcomes(out_dir, project_root=project_root)
         linked_outcomes = len(outcomes)
