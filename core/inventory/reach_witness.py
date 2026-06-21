@@ -49,6 +49,7 @@ class WitnessKind(str, Enum):
     REGISTERED_VIA_CALL = "registered_via_call"
     REACHABLE_FROM_ENTRY = "reachable_from_entry"
     BINARY_CALL_EDGE = "binary_call_edge"
+    FRIDA_RUNTIME_TRACE = "frida_runtime_trace"
     # uncertain
     UNCERTAIN = "uncertain"
 
@@ -230,6 +231,16 @@ VERDICTS: Dict[str, VerdictSpec] = {
             "binary-resident symbol. Source-graph extraction may have "
             "missed this edge (header-inline, partial resolution); the "
             "binary provides affirmative reachability evidence."),
+    ),
+    "frida_runtime_trace": VerdictSpec(
+        Reachability.REACHABLE, WitnessKind.FRIDA_RUNTIME_TRACE,
+        Soundness.SOUND, earns_suppression=False,
+        summary="observed at runtime via frida instrumentation",
+        prompt_verdict=(
+            "Verdict: FRIDA_RUNTIME_TRACE — frida dynamic instrumentation "
+            "observed this function executing at runtime. This is empirical "
+            "proof of reachability (sound witness). Does not earn finding "
+            "suppression — a reachable function may still be vulnerable."),
     ),
     "reachable": VerdictSpec(
         Reachability.REACHABLE, WitnessKind.REACHABLE_FROM_ENTRY,

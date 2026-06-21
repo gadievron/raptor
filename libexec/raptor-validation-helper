@@ -644,6 +644,22 @@ def prepare_B(workdir, target=None):
     wdir = Path(workdir)
     save_json(wdir / "hypotheses.json", hypotheses)
     save_json(wdir / "attack-paths.json", attack_paths)
+
+    # Frida runtime-evidence annotation (best-effort).
+    try:
+        from core.orchestration.frida_validation_bridge import (
+            annotate_attack_paths,
+            collect_runtime_evidence,
+        )
+        evidence_map = collect_runtime_evidence(
+            [wdir, wdir.parent], target_path=target)
+        if evidence_map and attack_paths:
+            attack_paths = annotate_attack_paths(attack_paths, evidence_map)
+            save_json(wdir / "attack-paths.json", attack_paths)
+            print(f"  Frida runtime evidence: {len(evidence_map)} functions observed")
+    except Exception:
+        pass
+
     if not (wdir / "attack-surface.json").exists():
         save_json(wdir / "attack-surface.json", {"sources": [], "sinks": [], "trust_boundaries": []})
     if not (wdir / "attack-tree.json").exists():

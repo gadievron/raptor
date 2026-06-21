@@ -48,6 +48,8 @@ _PREFIX_MAP = {
     # Validation (legacy: exploitability-validation)
     "validate": "validate",
     "exploitability-validation": "validate",
+    # Dynamic instrumentation
+    "frida": "frida",
     # Other commands
     "understand": "understand",
     "code-understanding": "understand",

@@ -25,8 +25,8 @@ class TestAvailable:
     def teardown_method(self):
         self._mod._available = None
 
-    def test_no_frida_python(self):
-        """ImportError on frida-python → False."""
+    def test_no_frida_python_no_cli(self):
+        """Neither frida-python nor CLI → False."""
         import builtins
         real_import = builtins.__import__
 
@@ -35,25 +35,26 @@ class TestAvailable:
                 raise ImportError("no frida")
             return real_import(name, *a, **kw)
 
-        with patch("builtins.__import__", side_effect=fake_import):
+        with patch("builtins.__import__", side_effect=fake_import), \
+             patch("shutil.which", return_value=None):
             assert available() is False
         # Cached after first call.
         assert available() is False
 
-    def test_frida_python_but_no_cli(self):
-        """frida importable but CLI missing → False."""
+    def test_cli_only_sufficient(self):
+        """CLI on PATH without frida-python importable → True."""
         import builtins
         real_import = builtins.__import__
 
         def fake_import(name, *a, **kw):
             if name == "frida":
-                return SimpleNamespace(__version__="test")
+                raise ImportError("no frida")
             return real_import(name, *a, **kw)
 
         with patch("builtins.__import__", side_effect=fake_import), \
-             patch("shutil.which", return_value=None):
+             patch("shutil.which", return_value="/usr/bin/frida"):
             self._mod._available = None
-            assert available() is False
+            assert available() is True
 
     def test_both_present(self):
         """frida importable + CLI on PATH → True."""
@@ -129,6 +130,15 @@ class TestParseEvents:
         p = tmp_path / "events.jsonl"
         p.write_text("")
         assert list(parse_events(p)) == []
+
+    def test_binary_garbage_skipped(self, tmp_path: Path):
+        """Invalid UTF-8 bytes must not crash the parser."""
+        p = tmp_path / "events.jsonl"
+        p.write_bytes(b'{"ts": 1}\n\xff\xfe\x00\x01\n{"ts": 2}\n')
+        got = list(parse_events(p))
+        assert len(got) == 2
+        assert got[0] == {"ts": 1}
+        assert got[1] == {"ts": 2}
 
 
 # ── bb-coverage.js template ────────────────────────────────────────────
@@ -302,8 +312,8 @@ class TestSandboxedMain:
             rc = sandboxed.main()
         assert rc == 2
 
-    def test_import_fallback_warns_on_stderr(self):
-        """When core.sandbox is not importable, warn and run bare."""
+    def test_import_failure_hard_fails(self):
+        """When core.sandbox is not importable, hard-fail (never run unsandboxed)."""
         import io
         from unittest.mock import patch as mock_patch
         import packages.frida.sandboxed as sandboxed
@@ -321,9 +331,9 @@ class TestSandboxedMain:
             mock_sys.stderr = stderr_capture
             rc = sandboxed.main()
 
-        assert rc == 0
-        mock_call.assert_called_once_with(["echo", "hello"])
-        assert "unsandboxed" in stderr_capture.getvalue()
+        assert rc == 1
+        mock_call.assert_not_called()
+        assert "FATAL" in stderr_capture.getvalue()
 
 
 class TestLibexecSandboxFlags:

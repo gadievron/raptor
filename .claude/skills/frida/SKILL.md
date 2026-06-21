@@ -93,12 +93,41 @@ raptor frida --target Safari --script ./my-hook.js --duration 30
 
 ## Threat model
 
-Frida-instrumented targets are **untrusted** - that's the whole point. The runner is wrapped in `core.sandbox.run()` with the `debug` profile (ptrace allowed, `skip_pid_ns=True` for `/proc` access):
+Frida-instrumented targets are **untrusted** - that's the whole point. The runner is wrapped in `core.sandbox.run()` with the `frida` profile (ptrace allowed, `skip_pid_ns=True` for `/proc` access, `restrict_reads=True`, `fake_home=True`):
 
 - **Spawn mode** (`--target ./binary`): `block_network=True` — the target can't reach out.
 - **Attach mode** (`--target <pid|name>`): network untouched — the process is already running with whatever connectivity it needs.
 - **`--unsafe-attach`**: sandbox bypassed entirely (system processes, SIP targets). Logged in `metadata.json`.
 
+## Pipeline integration
+
+Frida output is automatically consumed by downstream pipelines when evidence exists in the run directory:
+
+| Consumer | What it reads | What it produces |
+|----------|--------------|-----------------|
+| `/agentic` reachability prepass | `events.jsonl` function names | `metadata.frida_runtime_trace` on inventory items; promotes `FRIDA_RUNTIME_TRACE` witness (SOUND) |
+| `/validate` Stage B | `events.jsonl` function names | `runtime_evidence` annotations on attack path steps; proximity floor at 6 |
+| `/understand --map` context bridge | `events.jsonl` file operations | `ObserveProfile` merged into context map (read/write/stat/connect paths) |
+| Coverage store | `coverage.drcov` (bb-coverage template) | Function-level coverage marks via existing `import_drcov` pipeline |
+
+No flags needed — consumers discover evidence via `packages.frida.evidence.discover_evidence()` and gate on `packages.frida.available()`.
+
+### Programmatic API (for orchestration scripts)
+
+```python
+from packages.frida.active import auto_observe, observe_target, observe_paired
+
+# Single binary spawn — runs under sandbox frida profile
+run_dir = observe_target("/path/to/binary", template="api-trace", duration_sec=30)
+
+# Network service — paired observation via netns coordinator
+run_dir = observe_paired(["./server", "--port", "8080"],
+                         template="api-trace", wait_port=8080)
+
+# Pipeline hook — skips if fresh evidence already exists
+run_dir = auto_observe("/path/to/binary", search_dirs=[out_dir])
+```
+
 ## Status
 
-Alpha. Two templates ship; richer set in progress (collab with @Splinters-io). Integration into `/validate --runtime` and `/crash-analysis` on macOS is planned. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice.
+Alpha. Three templates ship (`api-trace`, `bb-coverage`, `ssl-unpin`); richer set in progress (collab with @Splinters-io). Integration into `/validate` (automatic) and `/crash-analysis` on macOS is planned. The autonomous LLM-guided mode from the abandoned PR #57 is intentionally **not** in this slice.

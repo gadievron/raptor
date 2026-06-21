@@ -458,10 +458,23 @@ def backfill(
     store.set_content_id(checklist)            # git-X ≡ zip-X equivalence id
     inv_paths = _inventory_paths(checklist)
     total = import_checked_by(store, checklist)
-    for run_dir in run_dirs:
+    run_dir_list = list(run_dirs)
+    for run_dir in run_dir_list:
         total += import_run_dir(store, run_dir, checklist)
         total += import_understand(store, run_dir, checklist)   # /understand fold-in
         import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
+    try:
+        from core.coverage.frida_bridge import import_frida_coverage
+        total += import_frida_coverage(
+            store, checklist, [Path(d) for d in run_dir_list],
+        )
+    except ImportError:
+        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("coverage.importer").info(
+            "frida coverage bridge failed: %s: %s", type(exc).__name__, exc,
+        )
     if annotations_base is not None:
         total += import_annotations(store, annotations_base, checklist)
     return total

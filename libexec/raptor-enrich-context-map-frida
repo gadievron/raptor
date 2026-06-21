@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Enrich context-map.json with frida runtime evidence.
+
+Usage:
+    libexec/raptor-enrich-context-map-frida WORKDIR
+
+Discovers frida evidence in WORKDIR, its parent, and sibling run
+directories; merges function-level observations into the context map's
+entry_points and sink_details.  Idempotent; no-ops silently when no
+frida evidence exists.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RAPTOR_DIR))
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print(f"usage: {sys.argv[0]} WORKDIR", file=sys.stderr)
+        return 2
+
+    workdir = Path(sys.argv[1]).resolve()
+    ctx_path = workdir / "context-map.json"
+    if not ctx_path.is_file():
+        return 0
+
+    try:
+        from packages.frida.context_bridge import enrich_context_map_with_frida
+    except ImportError:
+        return 0
+
+    ctx = json.loads(ctx_path.read_text())
+    search_dirs = [workdir, workdir.parent]
+
+    target_path = None
+    checklist_path = workdir / "checklist.json"
+    if checklist_path.is_file():
+        try:
+            cl = json.loads(checklist_path.read_text())
+            target_path = cl.get("target_path")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    result = enrich_context_map_with_frida(
+        ctx, search_dirs, target_path=target_path)
+    if result != ctx:
+        ctx_path.write_text(json.dumps(result, indent=2) + "\n")
+        enriched = sum(
+            1 for ep in result.get("entry_points", [])
+            if ep.get("runtime_confirmed")
+        ) + sum(
+            1 for sd in result.get("sink_details", [])
+            if sd.get("runtime_confirmed")
+        )
+        if enriched:
+            print(f"  Frida: {enriched} entry points/sinks runtime-confirmed")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

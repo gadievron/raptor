@@ -44,6 +44,7 @@ while [ -L "$SCRIPT" ]; do
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
+unset DIR
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
@@ -51,21 +52,26 @@ if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
     exit 1
 fi
 
+if [ ! -f "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh" ]; then
+    echo "raptor-frida: env strip script missing at $RAPTOR_DIR/core/security/_dangerous_env_strip.sh" >&2
+    exit 1
+fi
 . "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
 
 export RAPTOR_DIR
-# Make `python3 -m packages.frida.cli` importable regardless of the
-# caller's cwd. Relying on cwd==RAPTOR_DIR (the caller having cd'd in)
-# silently breaks direct `libexec/raptor-frida` invocations and the
-# `raptor frida` route once it stops cd-ing (so operator-relative
-# --target paths resolve against the operator's cwd, not the repo).
-export PYTHONPATH="$RAPTOR_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# PYTHONPATH: prepend RAPTOR_DIR only — do NOT inherit parent PYTHONPATH
+# to prevent module injection from untrusted parent processes.
+export PYTHONPATH="$RAPTOR_DIR"
 
 # ─── short-circuit query modes (no target / lifecycle needed) ───────
 # --list-templates and -h/--help just print and exit; running them
 # through the lifecycle would create an empty run dir for nothing.
+# Respects -- separator: flags after -- are positional.
 for a in "$@"; do
     case "$a" in
+        --)
+            break
+            ;;
         --list-templates|-h|--help)
             exec python3 -m packages.frida.cli "$@"
             ;;
@@ -98,6 +104,9 @@ while [ $i -lt ${#ARGS[@]} ]; do
         --out=*)
             OUT="${a#--out=}"
             ;;
+        --unsafe-attach)
+            PASS_ARGS+=("$a")
+            ;;
         *)
             PASS_ARGS+=("$a")
             ;;
@@ -123,7 +132,9 @@ for a in "${PASS_ARGS[@]}"; do
     esac
 done
 # Binary-path target implies spawn even without --spawn.
-if [ -f "$TARGET" ]; then
+# Use absolute path check to avoid CWD-relative file collision
+# (e.g., a file named "nginx" in CWD when attaching to the nginx process).
+if [[ "$TARGET" == /* ]] && [ -f "$TARGET" ]; then
     IS_SPAWN=1
 fi
 # Remote targets (--host, --usb) need network to reach frida-server;
@@ -134,17 +145,14 @@ fi
 
 # ─── resolve output dir via run lifecycle if not provided ──────────
 if [ -z "$OUT" ]; then
-    # raptor-run-lifecycle's last line is OUTPUT_DIR=<path>. Capture
-    # all output and pluck it out so any warnings stay visible.
     LIFECYCLE_OUT=$("$RAPTOR_DIR/libexec/raptor-run-lifecycle" \
-        start frida --target "$TARGET")
-    LIFECYCLE_RC=$?
-    echo "$LIFECYCLE_OUT"
-    if [ $LIFECYCLE_RC -ne 0 ]; then
+        start frida --target "$TARGET") || {
         echo "raptor-frida: run lifecycle start failed" >&2
-        exit $LIFECYCLE_RC
-    fi
-    OUT="$(echo "$LIFECYCLE_OUT" | awk -F= '/^OUTPUT_DIR=/ {print $2; exit}')"
+        exit 1
+    }
+    echo "$LIFECYCLE_OUT" >&2
+    # Use sub() to handle paths containing '=' characters
+    OUT="$(echo "$LIFECYCLE_OUT" | awk '/^OUTPUT_DIR=/ {sub(/^OUTPUT_DIR=/, ""); print; exit}')"
     if [ -z "$OUT" ]; then
         echo "raptor-frida: could not parse OUTPUT_DIR from lifecycle" >&2
         exit 1
@@ -156,19 +164,48 @@ fi
 
 PASS_ARGS+=("--out" "$OUT")
 
+# ─── signal trap: clean up lifecycle on interrupt/terminate ────────
+_cleanup() {
+    local sig="${1:-EXIT}"
+    if [ $LIFECYCLE_OWNED -eq 1 ] && [ -n "${OUT:-}" ]; then
+        "$RAPTOR_DIR/libexec/raptor-run-lifecycle" fail "$OUT" \
+            "frida interrupted by signal $sig" 2>/dev/null || true
+    fi
+    # Kill child process group if we started one
+    if [ -n "${CHILD_PID:-}" ]; then
+        kill -- -"$CHILD_PID" 2>/dev/null || true
+    fi
+}
+trap '_cleanup INT'  INT
+trap '_cleanup TERM' TERM
+trap '_cleanup HUP'  HUP
+
 # ─── run the Python CLI ─────────────────────────────────────────────
 set +e
 if [ "$UNSAFE_ATTACH" -eq 1 ]; then
-    python3 -m packages.frida.cli "${PASS_ARGS[@]}"
+    echo "raptor-frida: WARNING --unsafe-attach: running WITHOUT sandbox" >&2
+    # Strip --unsafe-attach from PASS_ARGS before forwarding to CLI
+    FILTERED_ARGS=()
+    for a in "${PASS_ARGS[@]}"; do
+        [ "$a" = "--unsafe-attach" ] || FILTERED_ARGS+=("$a")
+    done
+    python3 -m packages.frida.cli "${FILTERED_ARGS[@]}" &
+    CHILD_PID=$!
+    wait $CHILD_PID
     RC=$?
 else
     SANDBOX_ARGS=("--out" "$OUT")
     [ "$IS_SPAWN" -eq 1 ] && SANDBOX_ARGS+=("--spawn")
     python3 -m packages.frida.sandboxed "${SANDBOX_ARGS[@]}" -- \
-        python3 -m packages.frida.cli "${PASS_ARGS[@]}"
+        python3 -m packages.frida.cli "${PASS_ARGS[@]}" &
+    CHILD_PID=$!
+    wait $CHILD_PID
     RC=$?
 fi
 set -e
+
+# Clear the trap — we're handling lifecycle normally now
+trap - INT TERM HUP
 
 # ─── lifecycle close-out (only if we opened it) ─────────────────────
 if [ $LIFECYCLE_OWNED -eq 1 ]; then

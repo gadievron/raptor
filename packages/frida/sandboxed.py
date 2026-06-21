@@ -2,7 +2,7 @@
 
 Invoked by ``libexec/raptor-frida`` when ``--unsafe-attach`` is NOT
 set.  Wraps the CLI subprocess in ``core.sandbox.run()`` with the
-``debug`` profile (ptrace allowed) and ``skip_pid_ns=True`` (/proc
+``frida`` profile (ptrace allowed) and ``skip_pid_ns=True`` (/proc
 readable for frida's process enumeration).
 
 Network policy depends on target mode:
@@ -22,6 +22,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+_KNOWN_PYTHON_PREFIXES = ("/usr/", "/opt/", "/home/", "/nix/")
 
 
 def _find_frida_site() -> str | None:
@@ -32,9 +35,10 @@ def _find_frida_site() -> str | None:
     directory, or None if frida is not installed.
     """
     import shutil
-    from pathlib import Path
 
     def _probe(python: str) -> str | None:
+        if not python or not os.path.isfile(python):
+            return None
         try:
             r = subprocess.run(
                 [python, "-c",
@@ -58,9 +62,11 @@ def _find_frida_site() -> str | None:
         return None
     try:
         with open(frida_bin, "r", encoding="utf-8") as f:
-            shebang = f.readline().strip()
+            shebang = f.readline(256).strip()
         if shebang.startswith("#!"):
             python = shebang[2:].strip().split()[0]
+            if not any(python.startswith(p) for p in _KNOWN_PYTHON_PREFIXES):
+                return None
             return _probe(python)
     except OSError:
         pass
@@ -97,14 +103,13 @@ def main() -> int:
 
     try:
         from core.sandbox import run as sandbox_run
-    except ImportError:
-        import subprocess
-        print("warning: core.sandbox not available, running unsandboxed",
-              file=sys.stderr)
-        return subprocess.call(cmd)
+    except ImportError as exc:
+        print(f"FATAL: core.sandbox not importable: {exc}", file=sys.stderr)
+        print("Refusing to run frida unsandboxed. Fix the installation "
+              "or use --unsafe-attach explicitly.", file=sys.stderr)
+        return 1
 
     raptor_dir = os.environ.get("RAPTOR_DIR", "")
-    env = dict(os.environ)
     tool_paths = []
     pypath_parts = []
     if raptor_dir:
@@ -116,16 +121,28 @@ def main() -> int:
         pypath_parts.append(frida_site)
         tool_paths.append(frida_site)
 
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "TERM": "dumb",
+        "RAPTOR_DIR": raptor_dir,
+    }
     if pypath_parts:
         env["PYTHONPATH"] = ":".join(pypath_parts)
+
+    if out_dir and not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
 
     result = sandbox_run(
         cmd,
         profile="frida",
         skip_pid_ns=True,
         skip_mount_ns=True,
+        fake_home=True,
         block_network=spawn_mode,
         output=out_dir,
+        restrict_reads=True,
         caller_label="frida",
         env=env,
         tool_paths=tool_paths or None,

@@ -322,7 +322,110 @@ def enrich_with_caller_context(
     return enriched
 
 
+def enrich_with_frida_traces(
+    checklist: Dict[str, Any],
+    target_path: Path,
+    *,
+    search_dirs: Optional[list] = None,
+    inventory: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Annotate checklist items with frida runtime-trace evidence.
+
+    For each function in the checklist that was observed by frida at
+    runtime, sets ``metadata.frida_runtime_trace`` on the item (and on
+    the inventory item, if provided). Returns the count of items
+    annotated.
+
+    Best-effort: any failure returns 0 and the checklist is unchanged.
+    """
+    try:
+        from core.orchestration.frida_validation_bridge import (
+            collect_runtime_evidence,
+        )
+    except ImportError:
+        return 0
+
+    if search_dirs is None:
+        search_dirs = []
+
+    evidence_map = collect_runtime_evidence(
+        [Path(d) for d in search_dirs], target_path=str(target_path))
+    if not evidence_map:
+        return 0
+
+    _NATIVE_SUFFIXES = frozenset({
+        ".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp",
+        ".rs", ".go", ".s", ".S", ".asm",
+    })
+
+    annotated = 0
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return 0
+
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        fpath = file_entry.get("path", "")
+        if not any(fpath.endswith(s) for s in _NATIVE_SUFFIXES):
+            continue
+        items = file_entry.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fn_name = item.get("name", "")
+            if not fn_name:
+                continue
+            ev = evidence_map.get(fn_name)
+            if ev is None:
+                continue
+            meta = item.setdefault("metadata", {})
+            meta["frida_runtime_trace"] = {
+                "observed": True,
+                "call_count": ev.call_count,
+                "trace_id": ev.trace_id,
+            }
+            annotated += 1
+
+    # Also annotate inventory items (dual-write) if provided.
+    if inventory and isinstance(inventory, dict):
+        inv_files = inventory.get("files")
+        if isinstance(inv_files, list):
+            for file_entry in inv_files:
+                if not isinstance(file_entry, dict):
+                    continue
+                fpath = file_entry.get("path", "")
+                if not any(fpath.endswith(s) for s in _NATIVE_SUFFIXES):
+                    continue
+                inv_items = file_entry.get("items")
+                if not isinstance(inv_items, list):
+                    continue
+                for item in inv_items:
+                    if not isinstance(item, dict):
+                        continue
+                    fn_name = item.get("name", "")
+                    ev = evidence_map.get(fn_name)
+                    if ev is None:
+                        continue
+                    meta = item.setdefault("metadata", {})
+                    meta["frida_runtime_trace"] = {
+                        "observed": True,
+                        "call_count": ev.call_count,
+                        "trace_id": ev.trace_id,
+                    }
+
+    if annotated:
+        logger.info(
+            "reachability_enrichment: annotated %d function(s) with "
+            "frida runtime-trace evidence", annotated,
+        )
+    return annotated
+
+
 __all__ = [
     "enrich_with_caller_context",
+    "enrich_with_frida_traces",
     "mark_unreachable_low_priority",
 ]

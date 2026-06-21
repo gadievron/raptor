@@ -231,14 +231,9 @@ class TestProfileSet:
     ``audit-verbose`` are GONE from PROFILES (post-#269 contract)."""
 
     def test_canonical_profiles(self):
-        # target_run was added for harness-spawned target binaries that
-        # need to expose a local listener — named delta on 'full' so
-        # future divergence (loopback access, extra readable paths)
-        # doesn't leak back to the LLM-untrusted profile.
         from core.sandbox.profiles import PROFILES
         assert set(PROFILES) == {
-            "full", "strict", "target_run", "debug", "frida",
-            "network-only", "none",
+            "full", "strict", "debug", "frida", "network-only", "none",
         }
 
     def test_no_audit_mode_field_in_profile_dicts(self):
