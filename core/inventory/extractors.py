@@ -305,14 +305,15 @@ class JavaScriptExtractor:
         """Find the closing ``}`` for a function starting at *start* (0-based).
 
         Tracks brace depth while skipping string literals (``"``, ``'``,
-        backtick), ``//`` line comments, and regex literals (``/pattern/``).
-        Returns a 1-based line number or ``None`` when the end cannot be
-        determined.
+        backtick), ``//`` line comments, ``/* */`` block comments, and
+        regex literals (``/pattern/``).  Returns a 1-based line number
+        or ``None`` when the end cannot be determined.
         """
         depth = 0
         found_open = False
         in_string: Optional[str] = None
         in_regex = False
+        in_block_comment = False
         prev_significant = '='
 
         for i in range(start, len(lines)):
@@ -320,6 +321,14 @@ class JavaScriptExtractor:
             j = 0
             while j < len(line):
                 ch = line[j]
+
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
 
                 if in_regex:
                     if ch == '\\':
@@ -340,6 +349,11 @@ class JavaScriptExtractor:
                     j += 1
                     continue
 
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+
                 if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
                     break
 
@@ -348,7 +362,7 @@ class JavaScriptExtractor:
                     j += 1
                     continue
 
-                if (ch == '/' and j + 1 < len(line) and line[j + 1] != '*'
+                if (ch == '/' and j + 1 < len(line)
                         and prev_significant in JavaScriptExtractor._REGEX_PREFIX):
                     in_regex = True
                     j += 1
@@ -378,12 +392,15 @@ class JavaScriptExtractor:
         for i, line in enumerate(lines, 1):
             if len(line) > self._MAX_JS_LINE:
                 continue
+            stripped = line.lstrip()
+            if stripped.startswith('//') or stripped.startswith('/*'):
+                continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:
                     name = match.group(1)
                     if name not in seen and name not in ('if', 'for', 'while', 'switch', 'catch'):
-                        exported = line.lstrip().startswith('export ')
+                        exported = stripped.startswith('export ')
                         end_line = self._find_end(lines, i - 1)
                         functions.append(FunctionInfo(
                             name=name, line_start=i,
@@ -992,6 +1009,8 @@ class LuaExtractor:
 
         for i, raw_line in enumerate(lines, 1):
             line = raw_line.strip()
+            if line.startswith('--'):
+                continue
             m = self._NAMED_PAT.match(line)
             if m:
                 raw_name = m.group('name')

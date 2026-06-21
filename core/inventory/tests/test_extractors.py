@@ -244,6 +244,34 @@ class TestJSRegexExtractor:
         funcs = JavaScriptExtractor().extract("t.js", code)
         assert funcs[0].metadata.visibility is None
 
+    def test_block_comment_with_braces(self):
+        code = "function f() {\n  /* { } */\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 4
+
+    def test_multiline_block_comment_with_braces(self):
+        code = "function f() {\n  /*\n  {\n  */\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 6
+
+    def test_regex_literal_with_braces(self):
+        code = "function f() {\n  var r = /{[^}]+}/g;\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert funcs[0].line_end == 4
+
+    def test_commented_out_function_skipped(self):
+        code = "// function fake(ev) {\nfunction real() {\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "real"
+
+    def test_block_comment_opener_skipped(self):
+        code = "/* function fake() { */\nfunction real() {\n  return 1;\n}\n"
+        funcs = JavaScriptExtractor().extract("t.js", code)
+        names = [f.name for f in funcs]
+        assert "fake" not in names
+        assert "real" in names
+
 
 # ---------------------------------------------------------------------------
 # Fallback chain
@@ -592,6 +620,12 @@ class TestLuaExtractor:
         )
         funcs = self.ext.extract("test.lua", code)
         assert funcs[0].line_end == 6
+
+    def test_commented_out_function_skipped(self):
+        code = "-- function fake()\nfunction real()\n  return 1\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "real"
 
     def test_keyword_in_string_not_counted(self):
         code = (
