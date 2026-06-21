@@ -12,8 +12,6 @@ import asyncio
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from cve_env.agent.tools import nvd_lookup, reset_nvd_lookup_state
 
 def _call(args: dict[str, Any]) -> dict[str, Any]:

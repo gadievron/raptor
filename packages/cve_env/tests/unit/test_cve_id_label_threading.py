@@ -22,8 +22,6 @@ pytest.importorskip("claude_agent_sdk")
 import asyncio
 from unittest.mock import patch
 
-import pytest
-
 from cve_env.agent import tools
 from cve_env.tools.docker_build import BuildResult
 

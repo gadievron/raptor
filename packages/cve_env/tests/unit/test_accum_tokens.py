@@ -32,8 +32,6 @@ pytest.importorskip("claude_agent_sdk")
 
 from types import SimpleNamespace
 
-import pytest
-
 from cve_env.agent.loop import _accum_tokens, _StreamState
 
 def test_accum_none_usage_is_noop() -> None:

@@ -24,8 +24,6 @@ pytest.importorskip("claude_agent_sdk")
 
 import time
 
-import pytest
-
 def _try_import_helper():
     """Try to import the Phase 35 wall-budget helper.
 

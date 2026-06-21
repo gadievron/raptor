@@ -23,8 +23,6 @@ pytest.importorskip("claude_agent_sdk")
 import os
 from unittest.mock import patch
 
-import pytest
-
 from cve_env.config import (
     MAX_TURN_EXTENSIONS,
     TURN_EXTENSION_PCT,

@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from cve_env.agent.llm import AgentRunOutcome
 from cve_env.agent.loop import build
 from cve_env.models import CveRecord, HostInfo

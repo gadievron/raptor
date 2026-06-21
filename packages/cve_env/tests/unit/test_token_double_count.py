@@ -16,8 +16,6 @@ from __future__ import annotations
 import pytest
 pytest.importorskip("claude_agent_sdk")
 
-import pytest
-
 from cve_env.agent.loop import _accum_tokens, _merge_cumulative_tokens, _StreamState
 
 def test_result_message_usage_does_not_double_count() -> None:

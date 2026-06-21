@@ -12,8 +12,6 @@ from __future__ import annotations
 import pytest
 pytest.importorskip("claude_agent_sdk")
 
-import pytest
-
 from cve_env.agent.health_constraints import (
     ServiceConstraint,
     derive_constraints,

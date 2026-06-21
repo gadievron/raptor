@@ -18,8 +18,6 @@ pytest.importorskip("claude_agent_sdk")
 
 import importlib
 
-import pytest
-
 _has_sdk = importlib.util.find_spec("claude_agent_sdk") is not None
 
 # (module_path, attr_name)
@@ -40,7 +38,6 @@ PUBLIC_API: list[tuple[str, str]] = [
     ("cve_env.agent.loop", "_classify_verify_outcome"),
     ("cve_env.agent.loop", "_map_status"),
 ]
-
 
 @pytest.mark.parametrize(("module_path", "attr_name"), PUBLIC_API)
 def test_public_attr_importable(module_path: str, attr_name: str) -> None:

@@ -15,8 +15,6 @@ pytest.importorskip("claude_agent_sdk")
 import ast
 from pathlib import Path
 
-import pytest
-
 import cve_env
 
 # Package source dir, layout-independent (works for the standalone src/cve_env

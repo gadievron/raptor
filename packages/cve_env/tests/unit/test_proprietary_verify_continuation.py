@@ -29,8 +29,6 @@ pytest.importorskip("claude_agent_sdk")
 
 from typing import Any
 
-import pytest
-
 def _run_stub(stop_reason: str = "end_turn", session_id: str = "sess-1") -> Any:
     import types
 

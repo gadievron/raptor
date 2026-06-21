@@ -20,8 +20,6 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 from cve_env.agent import _activity, llm
 from cve_env.agent.llm import (
     NoProgressReached,

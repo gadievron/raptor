@@ -6,8 +6,6 @@ pytest.importorskip("claude_agent_sdk")
 
 from pathlib import Path
 
-import pytest
-
 from cve_env.agent.audit import AuditEntry, AuditWriter, _sanitize_cve_id
 
 def test_sanitize_cve_id_strips_separators() -> None:
