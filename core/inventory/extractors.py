@@ -298,17 +298,22 @@ class JavaScriptExtractor:
     # 100 MB minified bundle would otherwise sit in this loop).
     _MAX_JS_LINE = 16 * 1024
 
+    _REGEX_PREFIX = frozenset('=(:,;!&|?[~^{>%*/')
+
     @staticmethod
     def _find_end(lines: List[str], start: int) -> Optional[int]:
         """Find the closing ``}`` for a function starting at *start* (0-based).
 
         Tracks brace depth while skipping string literals (``"``, ``'``,
-        backtick) and ``//`` line comments.  Returns a 1-based line number
-        or ``None`` when the end cannot be determined.
+        backtick), ``//`` line comments, and regex literals (``/pattern/``).
+        Returns a 1-based line number or ``None`` when the end cannot be
+        determined.
         """
         depth = 0
         found_open = False
         in_string: Optional[str] = None
+        in_regex = False
+        prev_significant = '='
 
         for i in range(start, len(lines)):
             line = lines[i]
@@ -316,23 +321,36 @@ class JavaScriptExtractor:
             while j < len(line):
                 ch = line[j]
 
-                # Inside a string literal — look for the closing quote.
+                if in_regex:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == '/':
+                        in_regex = False
+                    j += 1
+                    continue
+
                 if in_string is not None:
                     if ch == '\\':
                         j += 2
                         continue
                     if ch == in_string:
                         in_string = None
+                        prev_significant = ch
                     j += 1
                     continue
 
-                # Line comment — skip the rest of the line.
                 if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
                     break
 
-                # String opener.
                 if ch in ('"', "'", '`'):
                     in_string = ch
+                    j += 1
+                    continue
+
+                if (ch == '/' and j + 1 < len(line) and line[j + 1] != '*'
+                        and prev_significant in JavaScriptExtractor._REGEX_PREFIX):
+                    in_regex = True
                     j += 1
                     continue
 
@@ -343,7 +361,10 @@ class JavaScriptExtractor:
                     depth -= 1
 
                 if found_open and depth <= 0:
-                    return i + 1  # 1-based
+                    return i + 1
+
+                if not ch.isspace():
+                    prev_significant = ch
 
                 j += 1
 
