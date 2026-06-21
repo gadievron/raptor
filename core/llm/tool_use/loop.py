@@ -41,6 +41,7 @@ Every termination emits a :class:`LoopTerminated` event and returns a
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -75,6 +76,8 @@ from .types import (
     TurnCompleted,
     TurnStarted,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Cap on stranded daemon threads from timed-out tool handlers.
@@ -116,6 +119,7 @@ class ToolUseLoop:
         events: Callable[[LoopEvent], None] | None = None,
         terminate_on_handler_error: bool = False,
         refuse_on_indicators: Sequence[str] = (),
+        should_continue: Callable[[], bool] | None = None,
         **provider_specific: Any,
     ) -> None:
         """``refuse_on_indicators``: prompt-injection corpus names
@@ -187,6 +191,14 @@ class ToolUseLoop:
         self._events = events
         self._terminate_on_handler_error = terminate_on_handler_error
         self._refuse_on_indicators = frozenset(refuse_on_indicators)
+        # Caller-supplied predicate evaluated at the top of each loop
+        # iteration. Returning False asks the loop to terminate cleanly
+        # with ``terminated_by="give_up"``. Useful for cost-control
+        # signals raised by handlers (e.g. the exploit-engine's
+        # candidate-diversity-collapse detector: when the model has
+        # submitted three byte-identical verify_run candidates, there's
+        # no point letting the budget keep ticking).
+        self._should_continue = should_continue
         self._provider_specific = provider_specific
 
     # ------------------------------------------------------------------
@@ -234,6 +246,42 @@ class ToolUseLoop:
                     known_values |= _extract_values_from_json(block.content)
 
         for iteration in range(self._max_iterations):
+            # ---- pre-flight: caller-supplied give-up predicate ---------
+            # A False return asks the loop to terminate cleanly. Useful
+            # for any consumer that wants to short-circuit on a caller-
+            # side signal (e.g. candidate-diversity collapse, external
+            # abort). A predicate that raises is treated as "keep going"
+            # so a bug in the caller's predicate cannot crash the loop;
+            # the exception is logged at WARNING so the bug is visible.
+            if self._should_continue is not None:
+                try:
+                    keep_going = self._should_continue()
+                except Exception:        # noqa: BLE001
+                    logger.warning(
+                        "should_continue predicate raised; treating as "
+                        "keep-going (iteration=%d)",
+                        iteration,
+                        exc_info=True,
+                    )
+                    keep_going = True
+                if not keep_going:
+                    self._emit(LoopTerminated(
+                        reason="give_up",
+                        iterations=iteration,
+                        total_cost_usd=total_cost_usd,
+                    ))
+                    return ToolLoopResult(
+                        final_text="",
+                        terminal_tool_input=None,
+                        messages=messages,
+                        iterations=iteration,
+                        tool_calls_made=tool_calls_made,
+                        total_input_tokens=total_input_tokens,
+                        total_output_tokens=total_output_tokens,
+                        total_cost_usd=total_cost_usd,
+                        terminated_by="give_up",
+                    )
+
             # ---- pre-flight: cost budget --------------------------------
             if (
                 self._max_cost_usd is not None
@@ -247,7 +295,9 @@ class ToolUseLoop:
                 raise CostBudgetExceeded(
                     f"cost budget ${self._max_cost_usd:.4f} reached "
                     f"(cumulative ${total_cost_usd:.4f}); aborting "
-                    "before next turn"
+                    "before next turn",
+                    messages=messages,
+                    tool_calls_made=tool_calls_made,
                 )
 
             # ---- pre-flight: wall-clock budget --------------------------
@@ -320,12 +370,19 @@ class ToolUseLoop:
                         f"request estimate ~{request_estimate} tokens "
                         f"would exceed model context window {window}; "
                         "set context_policy=TRUNCATE_OLDEST or shorten "
-                        "input"
+                        "input",
+                        messages=messages,
+                        tool_calls_made=tool_calls_made,
                     )
                 # TRUNCATE_OLDEST: drop oldest user/assistant pair until
                 # estimate fits. Pairing-aware so tool_use/tool_result
-                # links can't dangle.
-                messages = self._truncate_oldest(messages, window)
+                # links can't dangle. ``tool_calls_made`` flows through
+                # so a ContextOverflow raised from inside truncation
+                # carries the same partial-state count as the other
+                # raise sites in this loop.
+                messages = self._truncate_oldest(
+                    messages, window, tool_calls_made=tool_calls_made,
+                )
 
             cache_breakpoints = self._count_cache_breakpoints(messages)
             self._emit(TurnStarted(
@@ -816,6 +873,8 @@ class ToolUseLoop:
         self,
         messages: list[Message],
         window: int,
+        *,
+        tool_calls_made: int = 0,
     ) -> list[Message]:
         """Drop oldest user/assistant pairs until estimate fits.
 
@@ -862,7 +921,9 @@ class ToolUseLoop:
                 f"request estimate ~{total} tokens still exceeds window "
                 f"{window} after truncating to {len(messages)} message(s); "
                 "the trailing message itself is too large — shorten the "
-                "prompt or use a model with a bigger context"
+                "prompt or use a model with a bigger context",
+                messages=messages,
+                tool_calls_made=tool_calls_made,
             )
         return messages
 
