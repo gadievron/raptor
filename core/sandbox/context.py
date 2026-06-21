@@ -1421,7 +1421,17 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                            "--user", "--fork", "--ipc"]
             if not _skip_pid_ns:
                 unshare_cmd.append("--pid")
-            if block_network:
+            # inherit_netns=True: caller (typically netns_coordinator) has
+            # already set up the netns this process is in and forks MUST
+            # inherit it rather than creating fresh ones. Skip --net so
+            # the unshare CLI doesn't pull the child into a new private
+            # netns. block_network's "no host network" intent is honoured
+            # by the inherited netns being a private one set up by the
+            # coordinator. Without this gate, the Landlock-only fallback
+            # path (used when mount-ns is unavailable, e.g. an
+            # LSM-confined coordinator) would defeat the coordinator's
+            # shared-netns design.
+            if block_network and not _inherit_netns:
                 unshare_cmd.append("--net")
             # Belt-and-braces orphan teardown: if `unshare` is killed
             # directly (orchestrator still alive), --kill-child SIGKILLs the
