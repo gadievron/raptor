@@ -298,11 +298,63 @@ class JavaScriptExtractor:
     # 100 MB minified bundle would otherwise sit in this loop).
     _MAX_JS_LINE = 16 * 1024
 
+    @staticmethod
+    def _find_end(lines: List[str], start: int) -> Optional[int]:
+        """Find the closing ``}`` for a function starting at *start* (0-based).
+
+        Tracks brace depth while skipping string literals (``"``, ``'``,
+        backtick) and ``//`` line comments.  Returns a 1-based line number
+        or ``None`` when the end cannot be determined.
+        """
+        depth = 0
+        found_open = False
+        in_string: Optional[str] = None
+
+        for i in range(start, len(lines)):
+            line = lines[i]
+            j = 0
+            while j < len(line):
+                ch = line[j]
+
+                # Inside a string literal — look for the closing quote.
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                    j += 1
+                    continue
+
+                # Line comment — skip the rest of the line.
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+
+                # String opener.
+                if ch in ('"', "'", '`'):
+                    in_string = ch
+                    j += 1
+                    continue
+
+                if ch == '{':
+                    depth += 1
+                    found_open = True
+                elif ch == '}':
+                    depth -= 1
+
+                if found_open and depth <= 0:
+                    return i + 1  # 1-based
+
+                j += 1
+
+        return None
+
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
         seen = set()
+        lines = content.split('\n')
 
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(lines, 1):
             if len(line) > self._MAX_JS_LINE:
                 continue
             for pattern in self.PATTERNS:
@@ -311,8 +363,10 @@ class JavaScriptExtractor:
                     name = match.group(1)
                     if name not in seen and name not in ('if', 'for', 'while', 'switch', 'catch'):
                         exported = line.lstrip().startswith('export ')
+                        end_line = self._find_end(lines, i - 1)
                         functions.append(FunctionInfo(
                             name=name, line_start=i,
+                            line_end=end_line,
                             metadata=FunctionMetadata(
                                 visibility="exported" if exported else None,
                             ),
@@ -543,6 +597,7 @@ class CExtractor:
 
             i += 1
 
+        self._fill_line_ends(lines, functions)
         return functions
 
     def _multiline_opener_match(
@@ -650,6 +705,82 @@ class CExtractor:
                     # or `;` — not a clean definition opener.
                     return None
         return None
+
+    @staticmethod
+    def _find_end_brace(lines: List[str], start: int) -> Optional[int]:
+        """Find the closing ``}`` for a C function starting at *start* (0-based).
+
+        Tracks brace depth while skipping string literals (``"``, ``'``),
+        ``//`` line comments, and ``/* */`` block comments.  Returns a
+        1-based line number or ``None`` when the end cannot be determined.
+        """
+        depth = 0
+        found_open = False
+        in_string: Optional[str] = None
+        in_block_comment = False
+
+        for i in range(start, len(lines)):
+            line = lines[i]
+            j = 0
+            while j < len(line):
+                ch = line[j]
+
+                # Inside a block comment — look for closing `*/`.
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+
+                # Inside a string literal — look for the closing quote.
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                    j += 1
+                    continue
+
+                # Block comment opener.
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+
+                # Line comment — skip the rest of the line.
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+
+                # String opener.
+                if ch in ('"', "'"):
+                    in_string = ch
+                    j += 1
+                    continue
+
+                if ch == '{':
+                    depth += 1
+                    found_open = True
+                elif ch == '}':
+                    depth -= 1
+
+                if found_open and depth <= 0:
+                    return i + 1  # 1-based
+
+                j += 1
+
+        return None
+
+    @classmethod
+    def _fill_line_ends(
+        cls, lines: List[str], functions: List[FunctionInfo],
+    ) -> None:
+        """Post-pass: fill ``line_end`` for every function that lacks it."""
+        for func in functions:
+            if func.line_end is None and func.line_start > 0:
+                func.line_end = cls._find_end_brace(lines, func.line_start - 1)
 
 
 class JavaExtractor:
