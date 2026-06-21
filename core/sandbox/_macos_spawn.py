@@ -212,6 +212,11 @@ def run_sandboxed(cmd: List[str], *,
                   # always visible inside the SBPL sandbox), so this
                   # kwarg is accepted + ignored for signature parity.
                   skip_pid_ns=False,  # noqa: ARG001
+                  # skip_mount_ns: Linux-only — skips mount-ns pivot_root
+                  # so the host filesystem stays visible (used by frida
+                  # profile). macOS sandbox-exec doesn't use mount-ns;
+                  # accepted + ignored for signature parity.
+                  skip_mount_ns=False,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.

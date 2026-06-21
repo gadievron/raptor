@@ -65,6 +65,7 @@ class TestConcurrentSandboxesNonceIsolation(unittest.TestCase):
         if not ok:
             self.skipTest(reason)
 
+    @pytest.mark.slow
     def test_two_runs_same_dir_distinct_nonces(self):
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (

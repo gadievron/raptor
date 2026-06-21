@@ -957,7 +957,7 @@ class TestTopLevelRunMapRoot(unittest.TestCase):
     def test_map_root_accepted(self):
         """Previously, run(cmd, map_root=True) crashed via subprocess.run."""
         from core.sandbox import run
-        result = run(["echo", "ok"], map_root=True,
+        result = run(["echo", "ok"], map_root=True, block_network=False,
                      capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0)
         self.assertIn("ok", result.stdout)

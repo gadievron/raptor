@@ -323,6 +323,7 @@ class TestCliDispatch:
     sys.platform != "linux",
     reason="ptrace tracer + seccomp Linux-only — observe shim degrades silently elsewhere",
 )
+@pytest.mark.slow
 class TestE2EShim:
     """Run the libexec shim against /usr/bin/true and verify the
     summary lands on stdout. Only runs on Linux."""

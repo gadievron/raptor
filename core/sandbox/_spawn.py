@@ -451,6 +451,7 @@ def run_sandboxed(
     inherit_netns: bool = False,
     etc_overlay: Optional[dict] = None,
     skip_pid_ns: bool = False,
+    skip_mount_ns: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -998,18 +999,22 @@ def run_sandboxed(
                 ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
-            # Step 4.5 (audit mode): declare PR_SET_PTRACER_ANY so the
-            # tracer subprocess (our sibling, not descendant) can SEIZE
-            # us under Yama scope 1. Must run BEFORE we signal "R" to
-            # the parent — the parent will fork the tracer right after
-            # newuidmap, and the tracer attempts SEIZE while we're
-            # blocked on the go-pipe. Without prctl in place by then,
-            # the SEIZE returns EPERM under default Yama policy.
+            # Step 4.5: declare PR_SET_PTRACER_ANY under Yama scope 1.
+            #
+            # Two cases need this:
+            # - audit mode: the tracer (our sibling) must SEIZE us.
+            # - debug profile: tools like frida/gdb use helper
+            #   processes that ptrace across the ancestry boundary.
+            #   The debug seccomp filter already allows the ptrace
+            #   syscall; this makes Yama consistent with that.
+            #
+            # Must run BEFORE "R" — the parent may fork the tracer
+            # right after newuidmap.
             #
             # The child here is uid 65534 ("nobody") after unshare but
             # before newuidmap — PR_SET_PTRACER doesn't require any
             # capability; it just declares permission to be traced.
-            if _audit_engaged:
+            if _audit_engaged or seccomp_profile == "debug":
                 try:
                     import ctypes as _c
                     import ctypes.util as _cu
@@ -1085,7 +1090,7 @@ def run_sandboxed(
             # their original paths so they exist inside the pivoted
             # root — otherwise Landlock's allowlist would cover a path
             # the child can't reach (ENOENT before EACCES).
-            if target or output:
+            if (target or output) and not skip_mount_ns:
                 _status_step = b"M"
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,

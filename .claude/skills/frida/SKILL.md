@@ -93,7 +93,11 @@ raptor frida --target Safari --script ./my-hook.js --duration 30
 
 ## Threat model
 
-Frida-instrumented targets are **untrusted** - that's the whole point. The current runner does **not** wrap frida in `core/sandbox/`; that's tracked for a follow-up. Treat the host you run frida from accordingly. `--unsafe-attach` is a forward-looking flag (logged into `metadata.json`) for when the sandbox envelope lands; it doesn't change behaviour today.
+Frida-instrumented targets are **untrusted** - that's the whole point. The runner is wrapped in `core.sandbox.run()` with the `debug` profile (ptrace allowed, `skip_pid_ns=True` for `/proc` access):
+
+- **Spawn mode** (`--target ./binary`): `block_network=True` — the target can't reach out.
+- **Attach mode** (`--target <pid|name>`): network untouched — the process is already running with whatever connectivity it needs.
+- **`--unsafe-attach`**: sandbox bypassed entirely (system processes, SIP targets). Logged in `metadata.json`.
 
 ## Status
 

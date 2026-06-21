@@ -233,7 +233,7 @@ class TestProfileSet:
     def test_canonical_profiles(self):
         from core.sandbox.profiles import PROFILES
         assert set(PROFILES) == {
-            "full", "strict", "debug", "network-only", "none",
+            "full", "strict", "debug", "frida", "network-only", "none",
         }
 
     def test_no_audit_mode_field_in_profile_dicts(self):
