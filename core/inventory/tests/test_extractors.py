@@ -5,7 +5,8 @@ import pytest
 from core.inventory.extractors import (
     FunctionInfo, FunctionMetadata,
     PythonExtractor, JavaExtractor, CExtractor, GoExtractor,
-    JavaScriptExtractor, extract_functions, _TS_AVAILABLE, _get_ts_languages,
+    JavaScriptExtractor, LuaExtractor,
+    extract_functions, _TS_AVAILABLE, _get_ts_languages,
 )
 
 
@@ -495,3 +496,118 @@ class TestCGlobalDeclarators:
         assert "h" in names              # the function-pointer variable
         assert "foo" not in names        # NOT the initializer value
         assert "x" in names              # plain scalar still works
+
+
+# ---------------------------------------------------------------------------
+# LuaExtractor tests
+# ---------------------------------------------------------------------------
+
+class TestLuaExtractor:
+    ext = LuaExtractor()
+
+    def test_global_function(self):
+        code = "function greet(name)\n  print(name)\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "greet"
+        assert funcs[0].line_start == 1
+        assert funcs[0].line_end == 3
+        assert funcs[0].metadata.visibility == "public"
+
+    def test_local_function(self):
+        code = "local function helper(x)\n  return x + 1\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "helper"
+        assert funcs[0].metadata.visibility == "private"
+
+    def test_module_dot_syntax(self):
+        code = "function M.init(cfg)\n  M.cfg = cfg\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "M.init"
+
+    def test_method_colon_syntax(self):
+        code = "function Widget:render()\n  return self.html\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "Widget.render"
+
+    def test_assigned_anonymous(self):
+        code = "M.handler = function(req)\n  return 200\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "M.handler"
+
+    def test_local_assigned_anonymous(self):
+        code = "local parse = function(s)\n  return tonumber(s)\nend\n"
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "parse"
+        assert funcs[0].metadata.visibility == "private"
+
+    def test_line_end_nested_blocks(self):
+        code = (
+            "function outer()\n"
+            "  if true then\n"
+            "    for i=1,10 do\n"
+            "      print(i)\n"
+            "    end\n"
+            "  end\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].line_end == 7
+
+    def test_multiple_functions(self):
+        code = (
+            "function a()\n  return 1\nend\n\n"
+            "function b()\n  return 2\nend\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        names = [f.name for f in funcs]
+        assert names == ["a", "b"]
+        assert funcs[0].line_end == 3
+        assert funcs[1].line_end == 7
+
+    def test_comment_not_counted(self):
+        code = (
+            "function f()\n"
+            "  -- if this were parsed it would add depth\n"
+            "  return 1\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert funcs[0].line_end == 4
+
+    def test_repeat_until_not_confused(self):
+        code = (
+            "function poll()\n"
+            "  repeat\n"
+            "    x = read()\n"
+            "  until x ~= nil\n"
+            "  return x\n"
+            "end\n"
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert funcs[0].line_end == 6
+
+    def test_keyword_in_string_not_counted(self):
+        code = (
+            'function call(name)\n'
+            '  return {\n'
+            '    ["function"] = name,\n'
+            '    ["type"] = "call"\n'
+            '  }\n'
+            'end\n'
+        )
+        funcs = self.ext.extract("test.lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].line_end == 6
+
+    def test_extract_functions_lua(self):
+        code = "function dispatch(req)\n  route(req)\nend\n"
+        funcs = extract_functions("controller.lua", "lua", code)
+        assert len(funcs) == 1
+        assert funcs[0].name == "dispatch"

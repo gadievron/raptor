@@ -1970,7 +1970,7 @@ def _path_derived_module(
     base = file_path
     suffix_match = None
     for suffix in (".pyi", ".py", ".tsx", ".jsx", ".mjs", ".cjs",
-                    ".ts", ".js", ".rb"):
+                    ".ts", ".js", ".rb", ".lua"):
         if base.endswith(suffix):
             base = base[: -len(suffix)]
             suffix_match = suffix
@@ -1981,15 +1981,19 @@ def _path_derived_module(
         base = base[: -len("/__init__")]
     elif base.endswith("/index"):
         base = base[: -len("/index")]
+    elif base.endswith("/init"):
+        base = base[: -len("/init")]
     if not base:
         return []
     out: List[str] = [f"{base.replace('/', '.')}.{class_name}.{fn_name}"]
-    if base.startswith("src/"):
-        stripped = base[len("src/"):]
-        if stripped:
-            out.append(
-                f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
-            )
+    for prefix in ("src/", "luasrc/", "lib/"):
+        if base.startswith(prefix):
+            stripped = base[len(prefix):]
+            if stripped:
+                out.append(
+                    f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
+                )
+            break
     return out
 
 

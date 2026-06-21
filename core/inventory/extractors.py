@@ -914,6 +914,160 @@ class GoExtractor:
         return functions
 
 
+class LuaExtractor:
+    """Extract functions from Lua files using regex with ``end``-keyword
+    depth tracking for ``line_end`` computation.
+
+    Lua function patterns:
+      - ``function name(...)`` — global function
+      - ``local function name(...)`` — local function
+      - ``function Module.name(...)`` — module function (dot syntax)
+      - ``function Class:method(...)`` — method (colon syntax, stored as Class.method)
+      - ``M.name = function(...)`` / ``local name = function(...)`` — assigned anonymous
+    """
+
+    # Named function declarations (global, local, module dot, method colon).
+    _NAMED_PAT = re.compile(
+        r'^(?P<local>local\s+)?function\s+'
+        r'(?P<name>[\w.]+(?::[\w]+)?)\s*\(',
+    )
+    # Assigned anonymous: ``M.name = function(...)`` or ``local name = function(...)``.
+    _ASSIGN_PAT = re.compile(
+        r'^(?P<local>local\s+)?(?P<name>[\w.]+)\s*=\s*function\s*\(',
+    )
+
+    # Block-opening keywords that push the ``end`` depth.
+    # ``do`` is intentionally excluded: it appears as part of ``for ... do``
+    # / ``while ... do`` (already counted by ``for`` / ``while``).
+    # Standalone ``do ... end`` blocks are extremely rare and the minor
+    # depth error is acceptable vs double-counting every for/while loop.
+    _BLOCK_OPEN = re.compile(
+        r'\b(?:function|if|for|while)\b',
+    )
+    # ``repeat`` opens a block closed by ``until``, not ``end``.
+    _REPEAT = re.compile(r'\brepeat\b')
+    _UNTIL = re.compile(r'\buntil\b')
+    _END = re.compile(r'\bend\b')
+
+    @staticmethod
+    def _strip_strings_and_comments(line: str) -> str:
+        """Replace string contents and ``--`` line comments with spaces.
+
+        Without this, keywords inside strings (e.g. ``["function"] = name``)
+        confuse the block-depth tracker.
+        """
+        out = list(line)
+        in_str: Optional[str] = None
+        i = 0
+        while i < len(out):
+            ch = out[i]
+            if in_str is not None:
+                if ch == '\\':
+                    out[i] = ' '
+                    if i + 1 < len(out):
+                        out[i + 1] = ' '
+                    i += 2
+                    continue
+                if ch == in_str:
+                    in_str = None
+                else:
+                    out[i] = ' '
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                in_str = ch
+                i += 1
+                continue
+            if ch == '-' and i + 1 < len(out) and out[i + 1] == '-':
+                for j in range(i, len(out)):
+                    out[j] = ' '
+                break
+            i += 1
+        return ''.join(out)
+
+    def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
+        lines = content.split('\n')
+        functions: List[FunctionInfo] = []
+        seen: set = set()
+
+        for i, raw_line in enumerate(lines, 1):
+            line = raw_line.strip()
+            m = self._NAMED_PAT.match(line)
+            if m:
+                raw_name = m.group('name')
+                # Colon syntax ``Class:method`` → store as ``Class.method``.
+                name = raw_name.replace(':', '.')
+                is_local = bool(m.group('local'))
+                if name not in seen:
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=i,
+                        metadata=FunctionMetadata(
+                            visibility="private" if is_local else "public",
+                        ),
+                    ))
+                    seen.add(name)
+                continue
+            m = self._ASSIGN_PAT.match(line)
+            if m:
+                name = m.group('name')
+                is_local = bool(m.group('local'))
+                if name not in seen:
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=i,
+                        metadata=FunctionMetadata(
+                            visibility="private" if is_local else "public",
+                        ),
+                    ))
+                    seen.add(name)
+
+        # Post-pass: compute line_end via end-keyword depth tracking.
+        self._fill_line_ends(lines, functions)
+        return functions
+
+    def _fill_line_ends(
+        self, lines: List[str], functions: List[FunctionInfo],
+    ) -> None:
+        """Compute ``line_end`` for each function by tracking ``end``/``until``
+        depth from its ``line_start``."""
+        for func in functions:
+            if func.line_end is not None:
+                continue
+            func.line_end = self._find_end(lines, func.line_start - 1)
+
+    def _find_end(self, lines: List[str], start_idx: int) -> Optional[int]:
+        """Find the matching ``end`` for a function starting at ``start_idx``
+        (0-based). Returns 1-based line number, or None."""
+        depth = 0
+        repeat_depth = 0
+        found_open = False
+
+        for i in range(start_idx, len(lines)):
+            stripped = self._strip_strings_and_comments(lines[i])
+
+            # Count block openers (function, if, for, while, do).
+            for _ in self._BLOCK_OPEN.finditer(stripped):
+                depth += 1
+                found_open = True
+
+            # ``repeat`` opens a block closed by ``until``.
+            for _ in self._REPEAT.finditer(stripped):
+                repeat_depth += 1
+
+            for _ in self._UNTIL.finditer(stripped):
+                repeat_depth = max(0, repeat_depth - 1)
+
+            # ``end`` closes one block (not repeat blocks).
+            for _ in self._END.finditer(stripped):
+                depth -= 1
+
+            if found_open and depth <= 0:
+                return i + 1  # 1-based
+
+        return None
+
+
 class GenericExtractor:
     """Generic fallback extractor using common patterns."""
 
@@ -1003,6 +1157,8 @@ def _ts_language(lang: str):
         elif lang == "php":
             import tree_sitter_php as ts
             return Language(ts.language_php())
+        elif lang == "lua":
+            import tree_sitter_lua as ts
         else:
             return None
         return Language(ts.language())
@@ -1057,6 +1213,7 @@ class TreeSitterExtractor:
         # methods). Trait method SIGNATURES (no body) are
         # ``function_signature_item`` — intentionally excluded (no code).
         "rust": ("function_item",),
+        "lua": ("function_declaration", "function_definition"),
     }
 
     _CLASS_TYPES = {
@@ -1077,6 +1234,7 @@ class TreeSitterExtractor:
         # no fns). ``impl Trait for Foo`` associates its methods with ``Foo``;
         # ``trait T`` with ``T`` (for default methods).
         "rust": ("impl_item", "trait_item"),
+        "lua": (),
     }
 
     def __init__(self, language: str):
@@ -1494,6 +1652,35 @@ class TreeSitterExtractor:
                         if parts:
                             class_name = parts[-1].lstrip("*")
 
+        # Lua: ``local function foo()`` has a ``local`` keyword child;
+        # ``function foo()`` (no local) is public/global.
+        if self.language == "lua":
+            has_local = any(
+                c.type == "local" for c in node.children
+            )
+            if has_local:
+                visibility = "private"
+            else:
+                # For function_definition (anonymous assigned), check if
+                # the enclosing variable_declaration has a ``local`` child.
+                if node.type == "function_definition":
+                    p = node.parent
+                    # Walk up: expression_list → assignment_statement →
+                    # variable_declaration.
+                    while p is not None and p.type in (
+                        "expression_list", "assignment_statement",
+                    ):
+                        p = p.parent
+                    if p is not None and p.type == "variable_declaration":
+                        if any(c.type == "local" for c in p.children):
+                            visibility = "private"
+                        else:
+                            visibility = "public"
+                    else:
+                        visibility = "public"
+                else:
+                    visibility = "public"
+
         # JS/TS: export statement wrapping
         parent = node.parent
         if parent and parent.type == "export_statement":
@@ -1502,6 +1689,21 @@ class TreeSitterExtractor:
         return visibility, class_name
 
     def _get_name(self, node) -> Optional[str]:
+        # Lua: function_declaration names can be identifier,
+        # dot_index_expression (M.foo), or method_index_expression (C:m).
+        if self.language == "lua" and node.type == "function_declaration":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode()
+                if child.type == "dot_index_expression":
+                    # ``function M.foo()`` → "M.foo"
+                    return child.text.decode()
+                if child.type == "method_index_expression":
+                    # ``function C:method()`` → "C.method" (colon → dot)
+                    return child.text.decode().replace(":", ".")
+        # Lua: function_definition (anonymous) — name from parent assignment.
+        if self.language == "lua" and node.type == "function_definition":
+            return self._lua_assigned_name(node)
         # Rust: an ``impl`` block associates its methods with the TARGET type
         # — ``impl Foo`` / ``impl Trait for Foo`` / ``impl<T> Box<T>``. The
         # target is the last type node before the body (after ``for`` in a
@@ -1655,6 +1857,32 @@ class TreeSitterExtractor:
                     return inner
         return None
 
+    def _lua_assigned_name(self, node) -> Optional[str]:
+        """Resolve the name of a Lua ``function_definition`` (anonymous function)
+        from its enclosing assignment.
+
+        Shapes:
+          ``local parse = function(s) ... end``
+            → variable_declaration > assignment_statement > variable_list > identifier
+          ``M.handler = function(req) ... end``
+            → assignment_statement > variable_list > dot_index_expression
+        """
+        parent = node.parent
+        # function_definition sits inside expression_list inside assignment_statement
+        if parent is not None and parent.type == "expression_list":
+            parent = parent.parent
+        if parent is None or parent.type != "assignment_statement":
+            return None
+        for child in parent.children:
+            if child.type == "variable_list":
+                for v in child.children:
+                    if v.type == "identifier":
+                        return v.text.decode()
+                    if v.type == "dot_index_expression":
+                        return v.text.decode()
+                break
+        return None
+
     def _find_child(self, node, types: tuple):
         for child in node.children:
             if child.type in types:
@@ -1758,7 +1986,7 @@ def _get_ts_languages() -> List[str]:
         _cached_ts_languages = []
         return []
     available = []
-    for lang in ("python", "java", "javascript", "c", "go"):
+    for lang in ("python", "java", "javascript", "c", "go", "lua"):
         if _ts_language(lang):
             available.append(lang)
     _cached_ts_languages = available
@@ -1782,6 +2010,7 @@ _REGEX_EXTRACTORS = {
     'cpp': CExtractor(),
     'java': JavaExtractor(),
     'go': GoExtractor(),
+    'lua': LuaExtractor(),
 }
 
 

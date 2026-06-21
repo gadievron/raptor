@@ -5241,6 +5241,236 @@ class _CppCallGraph(_CCallGraph):
         return None
 
 
+def extract_call_graph_lua(content: str) -> FileCallGraph:
+    """Walk a Lua source string via tree-sitter-lua and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_lua`` isn't installed
+    or the file is unparseable.
+
+    Lua shapes:
+
+      * ``require('luci.model.uci')`` -> import
+      * ``foo(...)`` -> chain ``["foo"]``
+      * ``obj.foo(...)`` -> chain ``["obj", "foo"]`` (dot_index_expression)
+      * ``obj:method(...)`` -> chain ``["obj", "method"]`` (method_index_expression)
+      * ``a.b.c(...)`` -> chain ``["a", "b", "c"]`` (nested dot_index_expression)
+      * ``dofile("x.lua")`` / ``loadfile("x.lua")`` -> import
+      * ``pcall(func, ...)`` / ``xpcall(func, handler, ...)`` ->
+        first/second argument is the real callee
+      * ``loadstring(...)`` / ``load(...)`` -> ``INDIRECTION_EVAL``
+    """
+    try:
+        import tree_sitter_lua as ts_lua
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter Lua grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = _get_ts_parser(ts_lua.language)
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: Lua parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _LuaCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _LuaCallGraph:
+    """Single-pass tree-sitter-lua walk."""
+
+    _FUNC_CALL = "function_call"
+    _FUNC_DECL = "function_declaration"
+    _FUNC_DEF = "function_definition"
+    _IDENT = "identifier"
+    _DOT_INDEX = "dot_index_expression"
+    _METHOD_INDEX = "method_index_expression"
+    _ARGUMENTS = "arguments"
+    _STRING = "string"
+    _STRING_CONTENT = "string_content"
+
+    _REQUIRE_NAMES = {"require", "dofile", "loadfile"}
+    _EVAL_NAMES = {"loadstring", "load"}
+    _PCALL_NAMES = {"pcall", "xpcall"}
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        if node.type == self._FUNC_DECL:
+            name = self._func_decl_name(node)
+            if name:
+                self._enclosing.append(name)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._enclosing.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type == self._FUNC_DEF:
+            # Anonymous function — try to resolve name from assignment.
+            name = self._assigned_name(node) or "<anon>"
+            self._enclosing.append(name)
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._FUNC_CALL:
+            self._handle_call(node)
+            for c in node.children:
+                self.walk(c)
+            return
+
+        for c in node.children:
+            self.walk(c)
+
+    def _func_decl_name(self, node) -> Optional[str]:
+        """Extract the name from a function_declaration node."""
+        for c in node.children:
+            if c.type == self._IDENT:
+                return c.text.decode()
+            if c.type == self._DOT_INDEX:
+                return c.text.decode()
+            if c.type == self._METHOD_INDEX:
+                return c.text.decode().replace(":", ".")
+        return None
+
+    def _assigned_name(self, node) -> Optional[str]:
+        """Resolve the name of an anonymous function from its enclosing
+        assignment (``local parse = function(s) ... end``)."""
+        parent = node.parent
+        if parent is not None and parent.type == "expression_list":
+            parent = parent.parent
+        if parent is None or parent.type != "assignment_statement":
+            return None
+        for child in parent.children:
+            if child.type == "variable_list":
+                for v in child.children:
+                    if v.type == self._IDENT:
+                        return v.text.decode()
+                    if v.type == self._DOT_INDEX:
+                        return v.text.decode()
+                break
+        return None
+
+    def _handle_call(self, node) -> None:
+        """Process a function_call node."""
+        # The callee is the first child before the arguments node.
+        callee = None
+        args_node = None
+        for c in node.children:
+            if c.type == self._ARGUMENTS:
+                args_node = c
+                break
+            if c.is_named:
+                callee = c
+
+        if callee is None:
+            return
+
+        chain = self._chain_from_node(callee)
+        if not chain:
+            return
+
+        bare = chain[0] if len(chain) == 1 else None
+
+        # require / dofile / loadfile → import.
+        if bare in self._REQUIRE_NAMES and args_node is not None:
+            self._extract_import(bare, args_node)
+
+        # loadstring / load → eval indirection.
+        if bare in self._EVAL_NAMES:
+            self.graph.indirection.add(INDIRECTION_EVAL)
+
+        # pcall(func, ...) / xpcall(func, handler, ...) — the first
+        # non-string argument is the real callee.
+        if bare in self._PCALL_NAMES and args_node is not None:
+            self._handle_pcall(bare, args_node)
+
+        self._record(node, chain)
+
+    def _handle_pcall(self, name: str, args_node) -> None:
+        """For pcall/xpcall, record a call to the real callee argument."""
+        real_args = [c for c in args_node.children if c.is_named]
+        if not real_args:
+            return
+        # pcall: first arg is the callee.
+        # xpcall: first arg is the callee, second is the error handler.
+        callee_node = real_args[0]
+        callee_chain = self._chain_from_node(callee_node)
+        if callee_chain:
+            self._record(callee_node, callee_chain)
+
+    def _extract_import(self, func_name: str, args_node) -> None:
+        """Extract import from require/dofile/loadfile arguments."""
+        for c in args_node.children:
+            if c.type == self._STRING:
+                for sc in c.children:
+                    if sc.type == self._STRING_CONTENT:
+                        path = sc.text.decode()
+                        if func_name == "require":
+                            # ``require('luci.model.uci')`` — dot-separated
+                            # module name. Bind the last component.
+                            bound = path.split(".")[-1]
+                        else:
+                            # dofile / loadfile — file path. Bind basename
+                            # sans extension.
+                            bound = path.rsplit("/", 1)[-1]
+                            if bound.endswith(".lua"):
+                                bound = bound[:-4]
+                        self.graph.imports[bound] = path
+                        return
+
+    def _chain_from_node(self, node) -> List[str]:
+        """Build an attribute chain from a node."""
+        if node.type == self._IDENT:
+            return [node.text.decode()]
+        if node.type == self._DOT_INDEX:
+            parts: List[str] = []
+            for c in node.children:
+                if c.type == self._IDENT:
+                    parts.append(c.text.decode())
+                elif c.type == self._DOT_INDEX:
+                    parts = self._chain_from_node(c) + parts
+            return parts
+        if node.type == self._METHOD_INDEX:
+            parts = []
+            for c in node.children:
+                if c.type == self._IDENT:
+                    parts.append(c.text.decode())
+                elif c.type == self._DOT_INDEX:
+                    parts = self._chain_from_node(c) + parts
+            return parts
+        return []
+
+    def _record(self, node, chain: List[str]) -> None:
+        line = node.start_point[0] + 1
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(
+            CallSite(line=line, chain=chain, caller=caller),
+        )
+
+    @staticmethod
+    def _first_child_of_type(node, types: tuple):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+
 __all__ = [
     "CallSite",
     "FileCallGraph",
@@ -5259,6 +5489,7 @@ __all__ = [
     "extract_call_graph_go",
     "extract_call_graph_java",
     "extract_call_graph_javascript",
+    "extract_call_graph_lua",
     "extract_call_graph_php",
     "extract_call_graph_python",
     "extract_call_graph_ruby",
