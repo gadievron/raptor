@@ -946,11 +946,11 @@ class LuaExtractor:
     # Named function declarations (global, local, module dot, method colon).
     _NAMED_PAT = re.compile(
         r'^(?P<local>local\s+)?function\s+'
-        r'(?P<name>[\w.]+(?::[\w]+)?)\s*\(',
+        r'(?P<name>[\w.]+(?::[\w]+)?)\s*\((?P<params>[^)]*)\)',
     )
     # Assigned anonymous: ``M.name = function(...)`` or ``local name = function(...)``.
     _ASSIGN_PAT = re.compile(
-        r'^(?P<local>local\s+)?(?P<name>[\w.]+)\s*=\s*function\s*\(',
+        r'^(?P<local>local\s+)?(?P<name>[\w.]+)\s*=\s*function\s*\((?P<params>[^)]*)\)',
     )
 
     # Block-opening keywords that push the ``end`` depth.
@@ -965,6 +965,18 @@ class LuaExtractor:
     _REPEAT = re.compile(r'\brepeat\b')
     _UNTIL = re.compile(r'\buntil\b')
     _END = re.compile(r'\bend\b')
+
+    @staticmethod
+    def _parse_lua_params(params_str: str) -> List[Tuple[str, Optional[str]]]:
+        """Parse Lua parameter names from a parenthesized param string."""
+        params = []
+        for p in params_str.split(","):
+            name = p.strip()
+            if name and name != "...":
+                params.append((name, None))
+            elif name == "...":
+                params.append(("...", None))
+        return params
 
     @staticmethod
     def _strip_strings_and_comments(line: str) -> str:
@@ -1017,12 +1029,17 @@ class LuaExtractor:
                 # Colon syntax ``Class:method`` → store as ``Class.method``.
                 name = raw_name.replace(':', '.')
                 is_local = bool(m.group('local'))
+                params = self._parse_lua_params(m.group('params'))
                 if name not in seen:
+                    param_strs = [n for n, _ in params]
+                    sig = f"{name}({', '.join(param_strs)})"
                     functions.append(FunctionInfo(
                         name=name,
                         line_start=i,
+                        signature=sig,
                         metadata=FunctionMetadata(
                             visibility="private" if is_local else "public",
+                            parameters=params,
                         ),
                     ))
                     seen.add(name)
@@ -1031,12 +1048,17 @@ class LuaExtractor:
             if m:
                 name = m.group('name')
                 is_local = bool(m.group('local'))
+                params = self._parse_lua_params(m.group('params'))
                 if name not in seen:
+                    param_strs = [n for n, _ in params]
+                    sig = f"{name}({', '.join(param_strs)})"
                     functions.append(FunctionInfo(
                         name=name,
                         line_start=i,
+                        signature=sig,
                         metadata=FunctionMetadata(
                             visibility="private" if is_local else "public",
+                            parameters=params,
                         ),
                     ))
                     seen.add(name)
@@ -1923,6 +1945,8 @@ class TreeSitterExtractor:
 
     def _parse_param(self, node) -> Tuple[Optional[str], Optional[str]]:
         """Extract (name, type) from a parameter node."""
+        if node.type in ("identifier", "name"):
+            return node.text.decode(), None
         name = None
         ptype = None
         for child in node.children:
