@@ -17,7 +17,14 @@ class TestDebuggerNoPathInjection:
         return GDBDebugger(binary)
 
     def _capture_gdb_script(self, debugger, method_name, input_file, **kwargs):
-        """Call a debugger method and capture the GDB script it writes."""
+        """Call a debugger method and capture the GDB script it writes.
+
+        Patches ``_sandbox_run`` (the function the debugger actually
+        calls), not subprocess.run. See test_valid_address_accepted
+        for why this boundary is the right one — patching
+        subprocess.run can land in the sandbox engagement probe and
+        cause the real spawn to fork on hosts that block userns.
+        """
         captured = {}
 
         def fake_run(cmd, **kw):
@@ -36,7 +43,10 @@ class TestDebuggerNoPathInjection:
         input_path.parent.mkdir(parents=True, exist_ok=True)
         input_path.write_text("crash data")
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             method = getattr(debugger, method_name)
             if kwargs:
                 method(input_path, **kwargs)
@@ -222,7 +232,10 @@ class TestDebuggerTempFile:
             r.stdout = "fake"
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             debugger.run_commands(["run", "quit"])
 
         assert script_paths
@@ -242,7 +255,10 @@ class TestDebuggerTempFile:
             r.stdout = "fake"
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        with patch(
+            "packages.binary_analysis.debugger._sandbox_run",
+            side_effect=fake_run,
+        ):
             debugger.run_commands(["run", "quit"])
 
         assert script_paths
