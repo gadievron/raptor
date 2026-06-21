@@ -36,6 +36,9 @@ import types
 #               so ptrace_scope=1 naturally authorises the trace.
 #               Composes with --audit so operators can see what would
 #               have been blocked while still running gdb/rr.
+# frida:        debug + AF_UNIX sockets allowed (frida-helper uses Unix
+#               domain sockets for its internal IPC with the target
+#               process). AF_NETLINK/AF_PACKET/SOCK_RAW stay blocked.
 # network-only: network blocked + rlimits only (no Landlock, no seccomp).
 #               For tools whose correctness requires unrestricted fs or
 #               syscalls within a build — user's last-resort-short-of-none.
@@ -48,6 +51,7 @@ PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
+    "frida":        types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
 })

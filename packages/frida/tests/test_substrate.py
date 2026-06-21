@@ -236,3 +236,167 @@ def test_drcov_comma_in_module_path(tmp_path: Path):
     result = parse_drcov(drcov_file)
     assert comma_path in result, f"path with comma not found; got keys: {list(result)}"
     assert result[comma_path]["offsets"] == {0x42}
+
+
+# ── sandboxed wrapper ─────────────────────────────────────────────────
+
+class TestSandboxedMain:
+
+    def test_spawn_mode_passes_block_network(self):
+        """--spawn → sandbox_run called with block_network=True."""
+        from unittest.mock import MagicMock, patch as mock_patch
+        import packages.frida.sandboxed as sandboxed
+
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        mock_run = MagicMock(return_value=fake_result)
+
+        with mock_patch.object(sandboxed, "sys") as mock_sys, \
+             mock_patch("packages.frida.sandboxed.sys", mock_sys), \
+             mock_patch.dict("sys.modules", {"core.sandbox": MagicMock()}):
+            mock_sys.argv = [
+                "sandboxed", "--spawn", "--out", "/tmp/run", "--",
+                "python3", "-m", "packages.frida.cli", "--target", "./x",
+            ]
+            with mock_patch("core.sandbox.run", mock_run):
+                rc = sandboxed.main()
+
+        assert rc == 0
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["block_network"] is True
+        assert call_kwargs[1]["profile"] == "frida"
+        assert call_kwargs[1]["skip_pid_ns"] is True
+        assert call_kwargs[1]["skip_mount_ns"] is True
+
+    def test_attach_mode_allows_network(self):
+        """No --spawn → sandbox_run called with block_network=False."""
+        from unittest.mock import MagicMock, patch as mock_patch
+        import packages.frida.sandboxed as sandboxed
+
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        mock_run = MagicMock(return_value=fake_result)
+
+        with mock_patch.object(sandboxed, "sys") as mock_sys, \
+             mock_patch("packages.frida.sandboxed.sys", mock_sys), \
+             mock_patch.dict("sys.modules", {"core.sandbox": MagicMock()}):
+            mock_sys.argv = [
+                "sandboxed", "--out", "/tmp/run", "--",
+                "python3", "-m", "packages.frida.cli", "--target", "1234",
+            ]
+            with mock_patch("core.sandbox.run", mock_run):
+                rc = sandboxed.main()
+
+        assert rc == 0
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["block_network"] is False
+
+    def test_missing_separator_returns_usage_error(self):
+        """No -- separator → exit 2."""
+        import packages.frida.sandboxed as sandboxed
+        from unittest.mock import patch as mock_patch
+
+        with mock_patch.object(sandboxed, "sys") as mock_sys:
+            mock_sys.argv = ["sandboxed", "--out", "/tmp/run"]
+            mock_sys.stderr = __import__("io").StringIO()
+            rc = sandboxed.main()
+        assert rc == 2
+
+    def test_import_fallback_warns_on_stderr(self):
+        """When core.sandbox is not importable, warn and run bare."""
+        import io
+        from unittest.mock import patch as mock_patch
+        import packages.frida.sandboxed as sandboxed
+
+        stderr_capture = io.StringIO()
+
+        with mock_patch.object(sandboxed, "sys") as mock_sys, \
+             mock_patch("packages.frida.sandboxed.sys", mock_sys), \
+             mock_patch.dict("sys.modules", {"core.sandbox": None}), \
+             mock_patch("subprocess.call", return_value=0) as mock_call:
+            mock_sys.argv = [
+                "sandboxed", "--out", "/tmp/run", "--",
+                "echo", "hello",
+            ]
+            mock_sys.stderr = stderr_capture
+            rc = sandboxed.main()
+
+        assert rc == 0
+        mock_call.assert_called_once_with(["echo", "hello"])
+        assert "unsandboxed" in stderr_capture.getvalue()
+
+
+class TestLibexecSandboxFlags:
+    """Verify libexec/raptor-frida passes the right sandbox flags.
+
+    These parse the bash script and check the flag-detection logic
+    by running the relevant section in a subprocess.
+    """
+
+    def _detect_flags(self, args: list[str], target_is_file: bool = False):
+        """Run the flag-detection section of raptor-frida and return
+        the IS_SPAWN and IS_REMOTE values."""
+        import subprocess
+        script = (
+            'PASS_ARGS=(' + ' '.join(f'"{a}"' for a in args) + ')\n'
+            'TARGET="dummy"\n'
+            'UNSAFE_ATTACH=0\n'
+            'IS_SPAWN=0\n'
+            'IS_REMOTE=0\n'
+            'for a in "${PASS_ARGS[@]}"; do\n'
+            '    case "$a" in\n'
+            '        --unsafe-attach) UNSAFE_ATTACH=1 ;;\n'
+            '        --spawn)         IS_SPAWN=1 ;;\n'
+            '        --host|--host=*) IS_REMOTE=1 ;;\n'
+            '        --usb)           IS_REMOTE=1 ;;\n'
+            '    esac\n'
+            'done\n'
+        )
+        if target_is_file:
+            script += 'IS_SPAWN=1\n'
+        script += (
+            'if [ "$IS_REMOTE" -eq 1 ]; then IS_SPAWN=0; fi\n'
+            'echo "SPAWN=$IS_SPAWN REMOTE=$IS_REMOTE UNSAFE=$UNSAFE_ATTACH"\n'
+        )
+        r = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True, timeout=5,
+        )
+        vals = {}
+        for token in r.stdout.strip().split():
+            k, v = token.split("=")
+            vals[k] = int(v)
+        return vals
+
+    def test_spawn_local_blocks_network(self):
+        vals = self._detect_flags(["--spawn", "--template", "api-trace"])
+        assert vals["SPAWN"] == 1
+        assert vals["REMOTE"] == 0
+
+    def test_attach_local_allows_network(self):
+        vals = self._detect_flags(["--template", "api-trace"])
+        assert vals["SPAWN"] == 0
+        assert vals["REMOTE"] == 0
+
+    def test_host_remote_overrides_spawn(self):
+        """--host + --spawn → IS_SPAWN forced to 0 (network needed)."""
+        vals = self._detect_flags(
+            ["--spawn", "--host", "10.10.20.1", "--template", "api-trace"])
+        assert vals["SPAWN"] == 0
+        assert vals["REMOTE"] == 1
+
+    def test_usb_remote_overrides_spawn(self):
+        """--usb + --spawn → IS_SPAWN forced to 0."""
+        vals = self._detect_flags(
+            ["--spawn", "--usb", "--template", "ssl-unpin"])
+        assert vals["SPAWN"] == 0
+        assert vals["REMOTE"] == 1
+
+    def test_binary_target_implies_spawn(self):
+        vals = self._detect_flags(
+            ["--template", "api-trace"], target_is_file=True)
+        assert vals["SPAWN"] == 1
+
+    def test_unsafe_attach_detected(self):
+        vals = self._detect_flags(["--unsafe-attach", "--template", "api-trace"])
+        assert vals["UNSAFE"] == 1

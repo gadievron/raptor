@@ -110,6 +110,28 @@ if [ -z "$TARGET" ]; then
     exit 2
 fi
 
+# ─── detect sandbox-relevant flags ────────────────────────────────
+UNSAFE_ATTACH=0
+IS_SPAWN=0
+IS_REMOTE=0
+for a in "${PASS_ARGS[@]}"; do
+    case "$a" in
+        --unsafe-attach) UNSAFE_ATTACH=1 ;;
+        --spawn)         IS_SPAWN=1 ;;
+        --host|--host=*) IS_REMOTE=1 ;;
+        --usb)           IS_REMOTE=1 ;;
+    esac
+done
+# Binary-path target implies spawn even without --spawn.
+if [ -f "$TARGET" ]; then
+    IS_SPAWN=1
+fi
+# Remote targets (--host, --usb) need network to reach frida-server;
+# never block_network regardless of spawn/attach mode.
+if [ "$IS_REMOTE" -eq 1 ]; then
+    IS_SPAWN=0
+fi
+
 # ─── resolve output dir via run lifecycle if not provided ──────────
 if [ -z "$OUT" ]; then
     # raptor-run-lifecycle's last line is OUTPUT_DIR=<path>. Capture
@@ -136,8 +158,16 @@ PASS_ARGS+=("--out" "$OUT")
 
 # ─── run the Python CLI ─────────────────────────────────────────────
 set +e
-python3 -m packages.frida.cli "${PASS_ARGS[@]}"
-RC=$?
+if [ "$UNSAFE_ATTACH" -eq 1 ]; then
+    python3 -m packages.frida.cli "${PASS_ARGS[@]}"
+    RC=$?
+else
+    SANDBOX_ARGS=("--out" "$OUT")
+    [ "$IS_SPAWN" -eq 1 ] && SANDBOX_ARGS+=("--spawn")
+    python3 -m packages.frida.sandboxed "${SANDBOX_ARGS[@]}" -- \
+        python3 -m packages.frida.cli "${PASS_ARGS[@]}"
+    RC=$?
+fi
 set -e
 
 # ─── lifecycle close-out (only if we opened it) ─────────────────────
