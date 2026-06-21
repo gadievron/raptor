@@ -868,6 +868,36 @@ class TestDebugProfile(unittest.TestCase):
         self.assertEqual(mod_state._cli_sandbox_profile, "debug")
 
 
+class TestTargetRunProfile(unittest.TestCase):
+    """The target_run profile is the documented posture for spawning a
+    harness-authored target binary that needs a local listener
+    (loopback TCP / UDS) reachable to the spawning harness. Same
+    Landlock + seccomp posture as ``full`` but ``block_network=False``.
+
+    Pinned here because the profile was silently dropped from main
+    once before — losing it breaks every subprocess-target consumer
+    (the engine's TCP/argv/stdin adapter tests fail with
+    ``ValueError: Unknown sandbox profile 'target_run'``).
+    """
+
+    def test_profile_is_registered(self):
+        from core.sandbox import PROFILES
+        self.assertIn("target_run", PROFILES)
+        self.assertFalse(PROFILES["target_run"]["block_network"])
+        self.assertTrue(PROFILES["target_run"]["use_landlock"])
+        self.assertEqual(PROFILES["target_run"]["seccomp"], "full")
+
+    def test_cli_target_run_profile_accepted(self):
+        """`--sandbox target_run` parses and applies."""
+        import argparse
+        from core.sandbox import add_cli_args, apply_cli_args, state as mod_state
+        parser = argparse.ArgumentParser()
+        add_cli_args(parser)
+        args = parser.parse_args(["--sandbox", "target_run"])
+        apply_cli_args(args)
+        self.assertEqual(mod_state._cli_sandbox_profile, "target_run")
+
+
 class TestProfilesImmutable(unittest.TestCase):
     """PROFILES is exposed via __all__ — it must be immutable so callers
     can't corrupt the module for all subsequent sandbox() invocations."""

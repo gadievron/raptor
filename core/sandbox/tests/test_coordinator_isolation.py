@@ -48,19 +48,31 @@ COORDINATOR = REPO / "core" / "sandbox" / "netns_coordinator.py"
 
 
 def _coordinator_works() -> bool:
-    """Run a trivial echo probe through the coordinator. If we get a
-    well-formed response, the substrate is operational on this host.
-    Caches the result so we don't re-probe per test."""
+    """Probe the coordinator end-to-end. Returns True only when:
+
+      1. The coordinator binary exists.
+      2. A trivial spawn request returns a well-formed response with
+         ``target.returncode == 0``.
+      3. The two children end up in the SAME netns — the substrate's
+         core promise. A host whose userns/apparmor posture lets the
+         coordinator spawn but blocks netns inheritance would pass
+         the spawn check while every downstream sharing assertion in
+         this module would fail; gate that here instead of failing
+         them noisily.
+
+    Caches the result so we don't re-probe per test.
+    """
     if not COORDINATOR.is_file():
         return False
+    probe = "import os; print(os.readlink('/proc/self/ns/net'))"
     request = {
         "target": {
-            "cmd": [sys.executable, "-c", "print('ok')"],
+            "cmd": [sys.executable, "-c", probe],
             "env": {}, "timeout_s": 5.0, "profile": "target_run",
             "block_network": True, "allowed_tcp_ports": [],
         },
         "exploit": {
-            "cmd": [sys.executable, "-c", "pass"],
+            "cmd": [sys.executable, "-c", probe],
             "env": {}, "timeout_s": 5.0, "profile": "target_run",
             "block_network": True, "allowed_tcp_ports": [],
         },
@@ -82,7 +94,18 @@ def _coordinator_works() -> bool:
         resp = json.loads(out.decode())
         if resp.get("error"):
             return False
-        return resp.get("target", {}).get("returncode") == 0
+        if resp.get("target", {}).get("returncode") != 0:
+            return False
+        try:
+            target_ns = base64.b64decode(
+                resp["target"]["stdout_b64"],
+            ).decode().strip()
+            exploit_ns = base64.b64decode(
+                resp["exploit"]["stdout_b64"],
+            ).decode().strip()
+        except Exception:
+            return False
+        return bool(target_ns) and target_ns == exploit_ns
     except Exception:
         return False
 

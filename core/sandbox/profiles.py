@@ -32,6 +32,19 @@ FRIDA_PROFILE = "frida"
 # strict:       same policy intent as full, but fail-closed if the host cannot
 #               provide the platform isolation backend. On Linux target/output
 #               isolation also requires mount namespaces.
+# target_run:   posture for spawning a harness-authored target binary
+#               that needs to expose a local listener (loopback TCP, UDS,
+#               etc.). Same Landlock + seccomp posture as ``full`` but
+#               ``block_network=False`` so the listener is reachable to
+#               the spawning harness. Callers that want isolation FROM
+#               the host's loopback (not just FROM the wider network)
+#               pair this profile with ``core/sandbox/
+#               netns_coordinator.py`` to put the listener in a shared
+#               isolated net-ns; the coordinator overrides
+#               ``block_network=True`` + ``inherit_netns=True`` per call,
+#               so the profile's loopback setting is irrelevant on that
+#               path. Defence-in-depth still comes from Landlock (caller
+#               passes ``allowed_tcp_ports=[port]`` per call) and seccomp.
 # debug:        full, but seccomp permits ptrace so gdb/rr can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
@@ -52,6 +65,7 @@ FRIDA_PROFILE = "frida"
 PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
+    "target_run":   types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
     FRIDA_PROFILE:  types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
