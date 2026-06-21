@@ -49,6 +49,8 @@ _SECRET_TOKEN_RE = re.compile(
     r"|[Bb]earer\s+[A-Za-z0-9._-]{12,}"  # Authorization: Bearer <token>
     r"|dckr_pat_[A-Za-z0-9_-]{20,}"  # Docker Hub PAT
     r"|glpat-[A-Za-z0-9_-]{20,}"  # GitLab PAT
+    r"|apiKey\s*[:=]\s*[A-Za-z0-9_-]{8,}"  # NVD API key header value
+    r"|ya29\.[A-Za-z0-9_-]{20,}"  # GCP OAuth access token
 )
 # Credentials embedded in a URL userinfo (``https://user:pass@host``), e.g. a
 # git-over-https token URL — drop the userinfo, keep scheme + host.

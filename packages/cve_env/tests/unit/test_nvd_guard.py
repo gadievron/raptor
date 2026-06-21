@@ -5,29 +5,27 @@ loop at the start of each CVE via :func:`reset_nvd_lookup_state`.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.tools import nvd_lookup, reset_nvd_lookup_state
-
 
 def _call(args: dict[str, Any]) -> dict[str, Any]:
     """Synchronous wrapper for the async tool. Tools are SdkMcpTool
     instances; the actual async function is exposed on .handler."""
     return asyncio.run(nvd_lookup.handler(args))
 
-
 # --- Blacklist removal (2026-06-08) contract tests ---------------------------
 # The static proprietary-vendor blacklist (data file + _detect_proprietary_vendor
 # pre-screen + proprietary_vendor_hint) is removed. Proprietary detection is now
 # agent-reasoned (give_up after probing finds nothing) + the default-OFF
 # proprietary-verify gate. These two tests lock that the machinery is gone.
-
 
 def test_blacklist_symbols_removed() -> None:
     """The static-blacklist machinery must no longer exist on cve_env.agent.tools."""
@@ -41,7 +39,6 @@ def test_blacklist_symbols_removed() -> None:
         "_PROPRIETARY_VENDORS_CACHE",
     ):
         assert not hasattr(t, sym), f"{sym} should be removed (blacklist abandoned)"
-
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_nvd_lookup_never_emits_proprietary_vendor_hint(mock_payload: Any) -> None:
@@ -59,7 +56,6 @@ def test_nvd_lookup_never_emits_proprietary_vendor_hint(mock_payload: Any) -> No
     parsed = json.loads(result["content"][0]["text"])
     assert "proprietary_vendor_hint" not in parsed
 
-
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_first_call_proxies_to_payload(mock_payload: Any) -> None:
     """Phase 35.4: the FIRST nvd_lookup call passes through normally."""
@@ -70,7 +66,6 @@ def test_first_call_proxies_to_payload(mock_payload: Any) -> None:
     # so we just check that the underlying payload was called.
     mock_payload.assert_called_once_with("CVE-2018-7600")
     assert "content" in result
-
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_second_call_allowed_for_recovery(mock_payload: Any) -> None:
@@ -87,7 +82,6 @@ def test_second_call_allowed_for_recovery(mock_payload: Any) -> None:
     # 2nd call should ALSO go through (not blocked).
     _call({"cve_id": "CVE-2018-7600"})
     mock_payload.assert_called_once_with("CVE-2018-7600")
-
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_third_call_blocked(mock_payload: Any) -> None:
@@ -110,7 +104,6 @@ def test_third_call_blocked(mock_payload: Any) -> None:
     assert "already" in parsed["reason"]
     assert "next_step_hint" in parsed
 
-
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_reset_unblocks_for_next_cve(mock_payload: Any) -> None:
     """Phase 35.4: reset_nvd_lookup_state() (called at each CVE start by
@@ -125,7 +118,6 @@ def test_reset_unblocks_for_next_cve(mock_payload: Any) -> None:
     mock_payload.reset_mock()
     _call({"cve_id": "CVE-2021-44228"})  # 1st call for new CVE: OK
     mock_payload.assert_called_once_with("CVE-2021-44228")
-
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_block_message_steers_agent_to_alternatives(
@@ -151,9 +143,7 @@ def test_block_message_steers_agent_to_alternatives(
     assert "verify" in hint
     assert "give_up" in hint
 
-
 # Kernel quick-fail pre-screen tests ----------------------------------
-
 
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_kernel_hint_fires_on_linux_kernel_only_cve(mock_payload: Any) -> None:
@@ -185,7 +175,6 @@ def test_kernel_hint_fires_on_linux_kernel_only_cve(mock_payload: Any) -> None:
     assert "arch_incompatible" in hint
     assert "kernel" in hint.lower()
 
-
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_kernel_hint_not_fired_when_other_component_present(mock_payload: Any) -> None:
     """Guard: a userspace CVE that merely lists the kernel as a platform CPE
@@ -206,7 +195,6 @@ def test_kernel_hint_not_fired_when_other_component_present(mock_payload: Any) -
     parsed = json.loads(result["content"][0]["text"])
     assert "kernel_unsupported_hint" not in parsed
 
-
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_kernel_hint_not_fired_for_non_kernel_cve(mock_payload: Any) -> None:
     """Guard: a normal application CVE gets no kernel hint."""
@@ -222,9 +210,7 @@ def test_kernel_hint_not_fired_for_non_kernel_cve(mock_payload: Any) -> None:
     parsed = json.loads(result["content"][0]["text"])
     assert "kernel_unsupported_hint" not in parsed
 
-
 # Phase 43.S3A: OSS-reference override tests --------------------------
-
 
 # =============================================================================
 # #4 (2026-05-24): no_image → source_build structural assist. nvd_lookup stashes
@@ -232,7 +218,6 @@ def test_kernel_hint_not_fired_for_non_kernel_cve(mock_payload: Any) -> None:
 # agent as a source_build_candidate (the give_up(no_image)-without-source_build
 # class, e.g. CVE-2022-1813).
 # =============================================================================
-
 
 def test_extract_github_repo_canonical() -> None:
     from cve_env.agent.tools import _extract_github_repo
@@ -258,7 +243,6 @@ def test_extract_github_repo_canonical() -> None:
         _extract_github_repo({"references": [{"url": "https://example.com/x"}]}) == ""
     )
 
-
 @patch("cve_env.agent.tools._nvd_lookup.nvd_lookup_payload")
 def test_nvd_lookup_stashes_github_repo(mock_payload: Any) -> None:
     import cve_env.agent.tools as tools
@@ -273,7 +257,6 @@ def test_nvd_lookup_stashes_github_repo(mock_payload: Any) -> None:
     assert tools._LAST_CVE_GITHUB_REPO == "https://github.com/owner/proj"
     reset_nvd_lookup_state()
     assert tools._LAST_CVE_GITHUB_REPO == ""
-
 
 def test_extract_github_repo_references_urls_alt_schema() -> None:
     """Golden: lock the shared URL-extraction branches before Pass C extracts
@@ -296,7 +279,6 @@ def test_extract_github_repo_references_urls_alt_schema() -> None:
         == ""
     )
 
-
 @patch("cve_env.agent.tools._image_resolve.image_resolve_to_payload")
 def test_image_resolve_no_image_with_repo_yields_source_build_candidate(
     mock_ir: Any,
@@ -317,7 +299,6 @@ def test_image_resolve_no_image_with_repo_yields_source_build_candidate(
     assert "source_build" in out.get("next_step_hint", "")
     reset_nvd_lookup_state()
 
-
 @patch("cve_env.agent.tools._image_resolve.image_resolve_to_payload")
 def test_image_resolve_no_image_no_repo_no_candidate(mock_ir: Any) -> None:
     import asyncio
@@ -332,7 +313,6 @@ def test_image_resolve_no_image_no_repo_no_candidate(mock_ir: Any) -> None:
     )
     out = json.loads(env["content"][0]["text"])
     assert "source_build_candidate" not in out
-
 
 @patch("cve_env.agent.tools._image_resolve.image_resolve_to_payload")
 def test_image_resolve_found_image_no_candidate(mock_ir: Any) -> None:

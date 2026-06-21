@@ -16,21 +16,20 @@ Teeth: each asserts the EXACT cve_id kwarg the wiring sets; removing
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 from unittest.mock import patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent import tools
 from cve_env.tools.docker_build import BuildResult
 
-
 def _fake_build_result() -> BuildResult:
     # Real BuildResult → JSON-serializable (the async wrapper serializes its return).
     return BuildResult(ok=True, image_tag="cve-env-local:t")
-
 
 def test_cve_label_single_source_of_truth() -> None:
     """GAP-3 (2026-05-24): the ``cve-env.cve-id`` label is defined ONCE in
@@ -62,14 +61,12 @@ def test_cve_label_single_source_of_truth() -> None:
     assert len(hits) == 1, f"stray label literal(s): {hits}"
     assert "config.py" in hits[0], f"label literal not in config.py: {hits}"
 
-
 def test_set_cve_id_context_sets_and_clears_global() -> None:
     """The setter stores the id; empty/None clears it (no spurious label)."""
     tools.set_cve_id_context("CVE-2018-7600")
     assert tools._CURRENT_CVE_ID == "CVE-2018-7600"
     tools.set_cve_id_context("")
     assert tools._CURRENT_CVE_ID == ""
-
 
 def test_async_docker_build_wrapper_threads_cve_id() -> None:
     """The async docker_build tool wrapper passes _CURRENT_CVE_ID → docker_build.cve_id."""
@@ -91,7 +88,6 @@ def test_async_docker_build_wrapper_threads_cve_id() -> None:
         )
     finally:
         tools.set_cve_id_context("")
-
 
 def test_fuse_build_wrapper_threads_cve_id() -> None:
     """The render→build fuse (_maybe_fuse_build) also threads _CURRENT_CVE_ID."""

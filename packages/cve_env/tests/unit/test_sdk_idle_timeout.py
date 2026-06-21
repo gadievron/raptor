@@ -168,12 +168,13 @@ def test_idle_timeout_aborts_a_stalled_sdk_stream(monkeypatch: Any) -> None:
     # Replace the SDK query() with a stream that yields once then stalls.
     monkeypatch.setattr(llm, "query", lambda **_kwargs: _yield_then_hang())
 
-    async def _drive() -> float:
+    async def _drive() -> tuple[float, BaseException | None]:
         start = time.monotonic()
+        raised: BaseException | None = None
         # Outer safety bound so the test itself can never hang the suite. Both
         # the RED TimeoutError and the GREEN SdkIdleTimeout are acceptable here;
         # the discriminator is the ELAPSED time, asserted below.
-        with contextlib.suppress(Exception):
+        try:
             await asyncio.wait_for(
                 llm._run_query_once(
                     options=MagicMock(),
@@ -182,13 +183,20 @@ def test_idle_timeout_aborts_a_stalled_sdk_stream(monkeypatch: Any) -> None:
                 ),
                 timeout=6.0,
             )
-        return time.monotonic() - start
+        except BaseException as exc:  # noqa: BLE001 -- capture either outcome
+            raised = exc
+        return time.monotonic() - start, raised
 
-    elapsed = asyncio.run(_drive())
+    elapsed, raised = asyncio.run(_drive())
     assert elapsed < 3.0, (
         f"_run_query_once hung {elapsed:.1f}s on a stalled stream — the "
         f"inter-message idle-timeout (CVE_ENV_SDK_IDLE_TIMEOUT_S=1) did not fire "
         f"(expected abort near 1s). This is the 115-zombie circuit-breaker gap."
+    )
+    # Verify the exception was the expected idle timeout, not an unrelated fast failure
+    assert raised is not None, "expected an exception from the stalled stream"
+    assert "idle" in str(raised).lower() or isinstance(raised, llm.SdkIdleTimeout), (
+        f"expected SdkIdleTimeout or idle-related exception, got {type(raised).__name__}: {raised}"
     )
 
 

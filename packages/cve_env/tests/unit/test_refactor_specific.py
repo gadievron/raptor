@@ -23,9 +23,7 @@ import cve_env
 # tree and the packages/cve_env/cve_env home under raptor).
 _PKG = Path(cve_env.__file__).resolve().parent
 
-
 # ----- Phase 3 contracts ------------------------------------------------------
-
 
 def _result(
     type_: str,
@@ -40,7 +38,6 @@ def _result(
     if url is not None:
         details["url"] = url
     return {"type": type_, "passed": passed, "details": details}
-
 
 @pytest.mark.parametrize(
     ("a_active_ge3", "b_http_content_ge1", "c_paths_ge2", "expected"),
@@ -81,7 +78,6 @@ def test_has_functional_smoke_truth_table(
         results.append(_result("http_check", url="/p2"))
 
     assert has_functional_smoke(results) is expected  # type: ignore[arg-type]
-
 
 def test_has_functional_smoke_ignores_failed_probes() -> None:
     """P8-C-01 follow-on (independent-review finding, 2026-06-02): a FAILED smoke
@@ -133,7 +129,6 @@ def test_has_functional_smoke_ignores_failed_probes() -> None:
         is True
     )
 
-
 def test_smoke_module_no_circular_imports() -> None:
     """Post-Phase-3, ``_smoke.py`` must NOT import from ``verify``.
 
@@ -153,7 +148,6 @@ def test_smoke_module_no_circular_imports() -> None:
                 assert "verify" not in alias.name.split("."), (
                     f"_smoke.py imports {alias.name!r} — circular dep risk."
                 )
-
 
 def test_verify_retry_self_heal_contract() -> None:
     """F3 finding: 10/16 May 4 successes used Pattern A verify-retry.
@@ -178,9 +172,7 @@ def test_verify_retry_self_heal_contract() -> None:
         "If this regresses, retry-self-heal pattern A breaks."
     )
 
-
 # ----- Phase 4 contracts ------------------------------------------------------
-
 
 def test_image_resolve_state_module_self_contained() -> None:
     """Post-Phase-4, ``_image_resolve_state.py`` must NOT import from
@@ -194,7 +186,6 @@ def test_image_resolve_state_module_self_contained() -> None:
             assert "image_resolve" not in node.module.replace(
                 "_image_resolve_state", "X"
             ), f"_image_resolve_state.py imports {node.module!r} — circular dep."
-
 
 def test_image_resolve_uses_state_via_helpers() -> None:
     """Post-Phase-4, ``image_resolve.py`` must NOT contain ``global _RATE_LIMIT_*``
@@ -227,9 +218,7 @@ def test_image_resolve_uses_state_via_helpers() -> None:
         f"Mock #2 finding 2 — these will silently NameError at runtime."
     )
 
-
 # ----- Phase 2 contract -------------------------------------------------------
-
 
 # 30+ representative exec_check commands from real CVE benches; expected v-tag
 # AGAINST THE CURRENT (cli.py) regex. Phase 2 MERGE must preserve the same
@@ -270,7 +259,6 @@ _V_TAG_CASES: list[tuple[str, str]] = [
     ("date", "A"),
 ]
 
-
 def test_connection_reset_pattern_consistent_across_modules() -> None:
     """Phase 6.1 fix: both image_resolve._TRANSIENT_PATTERNS and
     _failure_class._TRANSPORT_PATTERNS must match canonical 'connection reset'
@@ -296,7 +284,6 @@ def test_connection_reset_pattern_consistent_across_modules() -> None:
             f"_failure_class._TRANSPORT_PATTERNS missed: {text!r}"
         )
 
-
 def test_v_tag_behavioral_equivalence_pre_post_merge() -> None:
     """Phase 2 MERGE must preserve [V]/[A] classification for ≥30 commands.
 
@@ -320,9 +307,7 @@ def test_v_tag_behavioral_equivalence_pre_post_merge() -> None:
     )
     assert len(_V_TAG_CASES) >= 30, "Need >=30 cases per Phase 2 plan"
 
-
 # ----- 1.D infrastructure tests -----------------------------------------------
-
 
 def test_public_api_imports_stable() -> None:
     """1.D: the 6 critical import paths that other code and tests depend on

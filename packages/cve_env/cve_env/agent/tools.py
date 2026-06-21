@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import json
+import shutil
 import tempfile
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -69,6 +70,9 @@ def _ok(payload: dict[str, Any]) -> dict[str, Any]:
 # -- nvd_lookup -----------------------------------------------------------
 
 
+# Module-level per-CVE state. Thread-unsafe by design: single-process-per-CVE model (see _activity.py).
+# Must call reset_all_tool_state() between CVEs.
+#
 # Guard against re-calling nvd_lookup mid-CVE. The agent can re-research
 # after a verify failure (calling nvd_lookup repeatedly) instead of
 # iterating on build/run/verify. The prompt's anti-thrash rule is passive
@@ -87,13 +91,6 @@ _NVD_LOOKUP_THRESHOLD: int = 2
 # any), stashed so image_resolve's no_image path can hand the agent a
 # concrete source_build candidate. Per-CVE; reset below.
 _LAST_CVE_GITHUB_REPO: str = ""
-
-# Per-CVE state registry. See note in docker_run.py for the contract.
-_RESET_GLOBALS: tuple[str, ...] = (
-    "_NVD_LOOKUP_COUNT_THIS_CVE",
-    "_LAST_CVE_GITHUB_REPO",
-)
-
 
 def reset_nvd_lookup_state() -> None:
     """Clear the per-CVE nvd_lookup count + stashed repo. The agent loop
@@ -360,14 +357,18 @@ def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str
     if not do_build:
         return payload
     ctx = str(args.get("context_dir") or "").strip()
+    auto_tmpdir = False
     if not ctx:
         ctx = tempfile.mkdtemp(prefix="cve-env-dfgbuild-")
+        auto_tmpdir = True
     result = _docker_build.docker_build(
         context_dir=ctx,
         image_tag=str(args.get("image_tag") or ""),
         dockerfile_text=str(payload.get("dockerfile_text") or ""),
         cve_id=_CURRENT_CVE_ID,  # label image for per-CVE cleanup
     )
+    if auto_tmpdir and not result.ok:
+        shutil.rmtree(ctx, ignore_errors=True)
     fused = dict(payload)
     fused["context_dir"] = ctx
     fused["build"] = {
@@ -459,6 +460,7 @@ def _maybe_fuse_build(payload: dict[str, Any], args: dict[str, Any]) -> dict[str
     },
 )
 async def dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
+    # apt_packages not in tool schema but validated defensively — LLM may send it as an undocumented field.
     for _field in (
         "install_steps",
         "cmd",

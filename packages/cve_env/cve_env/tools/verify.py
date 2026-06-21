@@ -64,8 +64,12 @@ def _inspect_state(container_id: str) -> dict[str, Any]:
     return state if isinstance(state, dict) else {"_error": "State is not a dict"}
 
 
-def _container_logs_tail(container_id: str, tail_bytes: int = 1024) -> str:
-    """Fetch the last ``tail_bytes`` of ``docker logs``.
+def _container_logs_tail(container_id: str, max_output_bytes: int = 1024) -> str:
+    """Fetch the last ``max_output_bytes`` of ``docker logs``.
+
+    ``max_output_bytes`` is a post-fetch truncation limit applied to the
+    combined stdout+stderr output, NOT a docker ``--tail`` byte count
+    (docker ``--tail`` counts lines, not bytes).
 
     Returns "" on any error (docker not running, container removed, etc.).
     Used to enrich a failed container_status check with diagnostic context
@@ -82,7 +86,7 @@ def _container_logs_tail(container_id: str, tail_bytes: int = 1024) -> str:
     if outcome.timed_out or outcome.returncode is None:
         return ""
     combined = (outcome.stdout or "") + (outcome.stderr or "")
-    return combined[-tail_bytes:] if combined else ""
+    return combined[-max_output_bytes:] if combined else ""
 
 
 def _container_status_failure_hint(state: dict[str, Any], logs_tail: str) -> str:
@@ -123,10 +127,9 @@ def _container_status_failure_hint(state: dict[str, Any], logs_tail: str) -> str
             "modulenotfounderror",
             "no module named",
             "cannot find module",
-            "package.*not.installed",
             "command not found",
         )
-    ):
+    ) or ("package" in sl and "not installed" in sl):
         return (
             "missing language deps. Add to install_steps "
             "(pip install / npm install / apt-get install) and rebuild."
@@ -137,19 +140,19 @@ def _container_status_failure_hint(state: dict[str, Any], logs_tail: str) -> str
             "COPY it via dockerfile_gen(copy_ops=...) or generate it via "
             "an install_step."
         )
-    if (
-        any(
-            p in sl
-            for p in (
-                "database connection",
-                "connection refused",
-                "could not connect",
-                "mysql",
-                "postgres",
-                "redis",
-            )
+    if any(
+        p in sl
+        for p in (
+            "database connection",
+            "connection refused",
+            "could not connect",
+            "mysql",
+            "postgres",
+            "redis",
         )
-        and "refused" in sl
+    ) and any(
+        w in sl
+        for w in ("refused", "timed out", "timeout", "connection failed", "could not connect")
     ):
         return (
             "DB-connection failure. Single-container CVEs usually need "
@@ -370,7 +373,8 @@ def check_http(
         if isinstance(expected_status, list)
         else [int(expected_status)]
     )
-    url = f"http://{host_ip}:{host_port}{path}"
+    host = f"[{host_ip}]" if ":" in host_ip else host_ip
+    url = f"http://{host}:{host_port}{path}"
     start = time.monotonic()
     try:
         resp = requests.request(
@@ -487,10 +491,18 @@ def check_logs(
         }
     combined = (outcome.stdout or "") + "\n" + (outcome.stderr or "")
 
+    # ReDoS guard: reject patterns with nested quantifiers or excessive length
+    # that could cause catastrophic backtracking on large log output.
+    _dangerous_re = re.compile(r"[+*]{2,}|\(\?[^)]*\+")
     missing: list[str] = []
     for pattern in expected_patterns:
         try:
-            if not re.search(pattern, combined):
+            if _dangerous_re.search(pattern) or len(pattern) > 500:
+                # Literal fallback for risky or excessively long patterns.
+                matched = pattern in combined
+            else:
+                matched = bool(re.search(pattern, combined))
+            if not matched:
                 missing.append(pattern)
         except re.error as exc:
             return {
@@ -641,7 +653,8 @@ def check_http_request(
         if isinstance(expected_status, list)
         else [int(expected_status)]
     )
-    url = f"http://{host_ip}:{host_port}{path}"
+    host = f"[{host_ip}]" if ":" in host_ip else host_ip
+    url = f"http://{host}:{host_port}{path}"
     req_headers: dict[str, str] = {"User-Agent": "cve-env-verify/0.1"}
     if headers:
         req_headers.update(headers)
@@ -868,6 +881,8 @@ def check_tcp_probe(
         }
     has_marker_text = bool(expected_response_contains)
     has_marker_hex = bool(expected_response_hex)
+    # Both-empty rejected: a pure banner-grab requires at least one marker.
+    # Use expected_response_contains=' ' for minimal assertion.
     if has_marker_text == has_marker_hex:
         return {
             "type": "tcp_probe_check",
@@ -1034,7 +1049,20 @@ def check_tcp_probe(
         }
 
     if has_marker_hex:
-        marker_bytes = bytes.fromhex(expected_response_hex)
+        try:
+            marker_bytes = bytes.fromhex(expected_response_hex)
+        except ValueError as exc:
+            return {
+                "type": "tcp_probe_check",
+                "passed": False,
+                "reason": f"expected_response_hex is not valid hex: {exc}",
+                "details": {
+                    **details,
+                    "duration_s": duration_s,
+                    "response_size_bytes": response_size,
+                    "expected_response_hex": expected_response_hex[:80],
+                },
+            }
         marker_found = marker_bytes in response
     else:
         try:
@@ -1312,10 +1340,20 @@ _TCP_PROBE_KEY_ALIASES: dict[str, str] = {
 def _normalize_kwargs(
     kwargs: dict[str, Any], aliases: dict[str, str]
 ) -> dict[str, Any]:
-    """Remap common LLM-synonym keys to our canonical names."""
+    """Remap common LLM-synonym keys to our canonical names.
+
+    When both an alias and its canonical key are present (e.g. ``timeout``
+    AND ``timeout_seconds``), the canonical key takes precedence and the
+    alias is silently dropped.
+    """
     out: dict[str, Any] = {}
     for k, v in kwargs.items():
-        out[aliases.get(k, k)] = v
+        canonical = aliases.get(k, k)
+        # If this key maps to a canonical name that already exists in
+        # kwargs directly (not via alias), skip the alias value.
+        if canonical != k and canonical in kwargs:
+            continue
+        out[canonical] = v
     return out
 
 
@@ -1542,10 +1580,13 @@ def verify(
         if ctype == "container_status":
             out = check_container_status(container_id)
         elif ctype == "http_check":
+            http_kwargs = _normalize_kwargs(step_kwargs, _HTTP_KEY_ALIASES)
+            http_kwargs.pop("host_ip", None)
+            http_kwargs.pop("host_port", None)
             out = check_http(
                 host_ip=host_ip,
                 host_port=host_port,
-                **_normalize_kwargs(step_kwargs, _HTTP_KEY_ALIASES),
+                **http_kwargs,
             )
         elif ctype == "log_check":
             out = check_logs(
@@ -1571,6 +1612,8 @@ def verify(
             out = check_exec(container_id, **exec_kwargs)
         elif ctype == "http_request_check":
             payload_kwargs = _normalize_kwargs(step_kwargs, _HTTP_REQUEST_KEY_ALIASES)
+            payload_kwargs.pop("host_ip", None)
+            payload_kwargs.pop("host_port", None)
             out = check_http_request(
                 host_ip=host_ip, host_port=host_port, **payload_kwargs
             )

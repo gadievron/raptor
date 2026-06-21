@@ -318,6 +318,7 @@ async def _run_query_once(
     last_message_at = [time.monotonic()]  # 1-elem cell so the watchdog sees writes
     _activity.reset()
 
+    # Concrete type is async-generator (PEP 525); aclose() guaranteed. Suppress catches if SDK changes.
     it: AsyncIterator[Any] = query(prompt=user_prompt, options=options)
 
     async def _consume() -> None:
@@ -412,7 +413,7 @@ async def _run_query_once(
                 # reason-specific message.
                 reason = watch_task.result()
                 consume_task.cancel()
-                with contextlib.suppress(BaseException):
+                with contextlib.suppress(Exception, asyncio.CancelledError):
                     await consume_task
                 if reason == "wedged_tool":
                     raise SdkIdleTimeout(
@@ -432,6 +433,7 @@ async def _run_query_once(
         # its own try/finally (_internal/client.py) but explicit aclose is
         # deterministic. AsyncIterator is the annotated type; the concrete
         # async-generator exposes aclose() per PEP 525.
+        # Concrete type is async-generator (PEP 525); aclose() guaranteed. Suppress catches if SDK changes.
         with contextlib.suppress(Exception):
             await it.aclose()  # type: ignore[attr-defined]
 
@@ -543,6 +545,7 @@ async def run_agent(
         if _disallowed := get_disallowed_tools():
             options_kwargs["disallowed_tools"] = _disallowed
         if resume:
+            # resume reused across retries; a corrupted session may fail identically on all attempts.
             options_kwargs["resume"] = resume
         options = ClaudeAgentOptions(**options_kwargs)
         try:
@@ -595,6 +598,7 @@ async def run_agent(
             if attempt < max_sdk_attempts:
                 # Exponential backoff (2s, 4s). A 4th retry with long backoff
                 # was removed — quota handling lives at the bench-loop layer.
+                # Delay = 2^(attempt-1) * base. Currently: 2s, 4s. If max_sdk_attempts grows, review cap.
                 delay = SDK_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
                 category = "safety-refusal" if is_refusal else "transient"
                 logger.warning(

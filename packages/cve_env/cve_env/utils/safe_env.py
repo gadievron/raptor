@@ -55,6 +55,14 @@ _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
         "GIT_EXEC_PATH",
         "GIT_PROXY_COMMAND",
         "GIT_TRACE",
+        # Git config / path overrides — let attacker-controlled env rewrite
+        # git's behaviour entirely.
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_SSH",
+        "GIT_TEMPLATE_DIR",
+        "GIT_WORK_TREE",
+        "GIT_DIR",
         # Network proxy redirects (uppercase).
         "HTTPS_PROXY",
         "HTTP_PROXY",
@@ -64,16 +72,28 @@ _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
         "https_proxy",
         "http_proxy",
         "all_proxy",
-        # Docker daemon redirection.
-        "DOCKER_HOST",
-        "DOCKER_CONFIG",
-        "DOCKER_CERT_PATH",
-        "DOCKER_TLS_VERIFY",
-        # Shell auto-exec hooks.
+        # Proxy bypass — attacker excludes their MITM from NO_PROXY so
+        # legitimate traffic routes to them.
+        "NO_PROXY",
+        "no_proxy",
+        # Shell startup injection: BASH_ENV / ENV are sourced by
+        # non-interactive shells (our subprocess children).
         "BASH_ENV",
         "ENV",
         "PROMPT_COMMAND",
         "CDPATH",
+        # Node.js: NODE_OPTIONS injects flags (--require=evil.js);
+        # NODE_EXTRA_CA_CERTS pins a rogue CA.
+        "NODE_OPTIONS",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_PATH",
+        # Java: tool agents / startup options inject code via JVMTI.
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JAVA_OPTIONS",
+        # OpenSSL: rogue config or engine .so hijacks TLS globally.
+        "OPENSSL_CONF",
+        "OPENSSL_ENGINES",
         # Editor / pager (can shell-evaluate).
         "TERMINAL",
         "BROWSER",
@@ -86,21 +106,73 @@ _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "SSLKEYLOGFILE",
-        "NODE_EXTRA_CA_CERTS",
-        # Config-eval: tools that eval config files from env-pointed paths.
-        "OPENSSL_CONF",
-        "KUBECONFIG",
-        "JAVA_TOOL_OPTIONS",
-        "_JAVA_OPTIONS",
-        "NODE_OPTIONS",
-        "NODE_PATH",
-        "RUBYOPT",
-        "PERL5OPT",
-        "PERL5LIB",
-        # Allocator / gconv hijacks.
+        # Allocator hijacks.
         "MALLOC_CONF",
+        # Docker client: DOCKER_HOST redirects to attacker daemon;
+        # DOCKER_CONFIG / DOCKER_CERT_PATH / DOCKER_TLS_VERIFY alter
+        # credential resolution / TLS trust.
+        "DOCKER_HOST",
+        "DOCKER_CONFIG",
+        "DOCKER_CERT_PATH",
+        "DOCKER_TLS_VERIFY",
+        # Docker Compose: override compose file or project scope.
+        "COMPOSE_FILE",
+        "COMPOSE_PROJECT_NAME",
+        # SSH: agent / askpass hijacks.
+        "SSH_ASKPASS",
+        "SSH_AUTH_SOCK",
+        # Kubernetes: KUBECONFIG redirects kubectl to attacker cluster.
+        "KUBECONFIG",
+        # glibc locale / iconv: GCONV_PATH loads arbitrary .so via
+        # iconv_open; LOCPATH / NLSPATH load attacker locale data.
         "GCONV_PATH",
+        "LOCPATH",
+        "NLSPATH",
+        # DNS override: HOSTALIASES rewrites name resolution.
+        "HOSTALIASES",
+        # Temp dir hijacks: attacker-controlled TMPDIR can intercept
+        # predictable temp paths used by build tools.
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        # Rust toolchain: CARGO_HOME / RUSTUP_HOME redirect binary lookups.
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        # Ruby: GEM_HOME / GEM_PATH / BUNDLE_PATH hijack gem resolution;
+        # RUBYLIB / RUBYOPT inject code.
+        "GEM_HOME",
+        "GEM_PATH",
+        "BUNDLE_PATH",
+        "RUBYLIB",
+        "RUBYOPT",
+        # PHP: PHPRC / PHP_INI_SCAN_DIR load attacker php.ini.
+        "PHPRC",
+        "PHP_INI_SCAN_DIR",
+        # Java build: CLASSPATH / MAVEN_OPTS / GRADLE_USER_HOME.
+        "CLASSPATH",
+        "MAVEN_OPTS",
+        "GRADLE_USER_HOME",
+        # Python venvs: VIRTUAL_ENV / CONDA_PREFIX alter sys.prefix
+        # resolution in child python processes.
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "CONDA_DEFAULT_ENV",
+        # Perl: PERL5LIB / PERL5OPT / PERLLIB inject code.
+        "PERL5LIB",
+        "PERL5OPT",
+        "PERLLIB",
+        # Go: GOPATH / GOROOT redirect module / toolchain resolution.
+        "GOPATH",
+        "GOROOT",
     }
+)
+
+# Prefix patterns: env vars matching any of these prefixes are stripped
+# even if not in the exact-match set above.  BASH_FUNC_* exports
+# serialised shell functions that bash auto-imports — attacker can
+# override coreutils (e.g. BASH_FUNC_ls%% ).
+_DANGEROUS_ENV_PREFIXES: tuple[str, ...] = (
+    "BASH_FUNC_",
 )
 
 
@@ -124,4 +196,10 @@ def safe_subprocess_env(*, keep: frozenset[str] = frozenset()) -> dict[str, str]
     env = os.environ.copy()
     for k in _DANGEROUS_ENV_VARS - keep:
         env.pop(k, None)
+    # Strip prefix-matched vars (e.g. BASH_FUNC_*) unless explicitly kept.
+    for k in list(env):
+        if k in keep:
+            continue
+        if any(k.startswith(p) for p in _DANGEROUS_ENV_PREFIXES):
+            del env[k]
     return env

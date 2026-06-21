@@ -26,6 +26,8 @@ from cve_env.tools import image_resolve as ir
 
 def _slow_miss(_cand: str) -> tuple[None, str]:
     """A probe that takes real wall-time and always misses (rate-limited)."""
+    # Real time.sleep -- test relies on wall-clock. May be flaky under heavy
+    # CI load. The 1.5s assertion has ~10x headroom over the 0.15s sleep.
     time.sleep(0.15)
     return (None, "rate_limited")
 

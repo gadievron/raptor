@@ -33,7 +33,11 @@ class DockerfileRenderResult:
 
 
 def _format_cmd(cmd: list[str]) -> str:
-    parts = ", ".join(f'"{c}"' for c in cmd)
+    escaped = []
+    for c in cmd:
+        safe = c.replace("\\", "\\\\").replace('"', '\\"')
+        escaped.append(f'"{safe}"')
+    parts = ", ".join(escaped)
     return f"CMD [{parts}]"
 
 
@@ -256,6 +260,11 @@ def render_dockerfile(
         if apt_unsafe
         else ""
     )
+    # Validate apt package names: strip embedded newlines and reject
+    # names that don't match the expected pattern.
+    _apt_name_re = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9.+\-]+$')
+    clean_apt = [p.strip().replace('\n', '').replace('\r', '') for p in clean_apt]
+    clean_apt = [p for p in clean_apt if _apt_name_re.match(p)]
     if clean_apt:
         apt_line = " ".join(clean_apt)
         lines.append(
@@ -266,7 +275,7 @@ def render_dockerfile(
     for op in clean_copy_ops:
         lines.append(f"COPY {op['src']} {op['dst']}")
     for step in install_steps:
-        step_stripped = step.strip()
+        step_stripped = step.strip().replace('\n', ' ').replace('\r', '')
         if not step_stripped:
             continue
         lines.append(f"RUN {step_stripped}")

@@ -6,6 +6,7 @@ the shape.
 
 from __future__ import annotations
 
+import platform
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -106,7 +107,7 @@ class HostInfo:
     """Observed host facts relevant to arch/emulation decisions."""
 
     arch: str
-    os: str = "darwin"
+    os: str = field(default_factory=lambda: platform.system().lower())
     docker_backend: str = ""
     rosetta_available: bool = False
 

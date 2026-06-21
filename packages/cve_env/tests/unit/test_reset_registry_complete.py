@@ -27,7 +27,8 @@ MODULES: list[tuple[str, str, bool]] = [
     ("cve_env.tools.docker_run", "reset_failed_attempts", True),
     ("cve_env.tools.docker_compose_up", "reset_active_stacks", True),
     ("cve_env.tools.docker_build", "reset_docker_build_state", True),
-    ("cve_env.agent.tools", "reset_nvd_lookup_state", True),
+    # agent.tools uses _PER_CVE_RESET_HANDLERS + reset_all_tool_state() instead
+    # of the _RESET_GLOBALS pattern — the old tuple was dead code (removed).
 ]
 
 

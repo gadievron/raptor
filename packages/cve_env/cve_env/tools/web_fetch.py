@@ -131,11 +131,14 @@ def _resolve_hostname_safe(hostname: str) -> str | None:
     try:
         infos = socket.getaddrinfo(hostname, None)
     except (OSError, UnicodeError) as exc:
-        # Resolution failure: surface as a request-time issue (transport class
-        # at the call site). We return None here so the existing requests.get
-        # path handles it uniformly with timeout/connection errors.
+        # Resolution failure: fail closed — block the request rather than
+        # allowing it through to requests.get which would resolve
+        # independently and could succeed where getaddrinfo failed.
         logger.debug("getaddrinfo(%s) failed: %s", hostname, exc)
-        return None
+        return (
+            f"hostname {hostname!r} DNS resolution failed: {exc} "
+            f"(SSRF guard: fail closed on resolution failure)"
+        )
     for info in infos:
         sockaddr = info[4]
         if not sockaddr:
@@ -185,6 +188,9 @@ def _fetch_once(
     # private IP and not in our hardcoded name set, the agent could still pass
     # an attacker-controlled hostname whose A record points at 127.0.0.1 or
     # 169.254.169.254. Resolve once up-front and check ALL returned addresses.
+    # TOCTOU: getaddrinfo and requests.get resolve independently. DNS rebinding
+    # possible with short-TTL records. Post-redirect check (below) partially
+    # mitigates.
     rebind_reason = _resolve_hostname_safe(parsed.hostname)
     if rebind_reason is not None:
         return FetchResult(

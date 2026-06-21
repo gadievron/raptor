@@ -20,6 +20,8 @@ import importlib
 
 import pytest
 
+_has_sdk = importlib.util.find_spec("claude_agent_sdk") is not None
+
 # (module_path, attr_name)
 PUBLIC_API: list[tuple[str, str]] = [
     # Phase 3 surface — must remain importable from verify.py post-extraction
@@ -43,6 +45,8 @@ PUBLIC_API: list[tuple[str, str]] = [
 @pytest.mark.parametrize(("module_path", "attr_name"), PUBLIC_API)
 def test_public_attr_importable(module_path: str, attr_name: str) -> None:
     """Each (module, attr) tuple must be importable end-to-end."""
+    if "agent.loop" in module_path and not _has_sdk:
+        pytest.skip("claude_agent_sdk not installed")
     mod = importlib.import_module(module_path)
     assert hasattr(mod, attr_name), (
         f"{module_path}.{attr_name} is not importable. "

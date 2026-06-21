@@ -317,9 +317,9 @@ def docker_run(
         "-d",
         "--name",
         name,
-        "--cap-drop",
-        ",".join(DEFAULT_CAP_DROP),
     ]
+    for cap in DEFAULT_CAP_DROP:
+        cmd.extend(["--cap-drop", cap])
     for cap in DEFAULT_CAP_ADD:
         cmd.extend(["--cap-add", cap])
     for opt in DEFAULT_SECURITY_OPT:
@@ -352,6 +352,8 @@ def docker_run(
                 ),
             )
     for k, v in (env or {}).items():
+        if k.startswith("-"):
+            continue  # reject flag-shaped keys
         cmd.extend(["-e", f"{k}={v}"])
     # Force fresh pull for registry-pulled images. Bypasses the local Docker
     # layer cache, which can silently re-use cached layers even when Docker

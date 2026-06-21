@@ -13,6 +13,8 @@ Anthropic endpoint).
 
 Single-process, single-agent-per-CVE model → a plain module global is correct
 (each ``cve-env build`` is its own subprocess; reset() is called per query).
+
+WARNING: All globals are thread-unsafe. Do not call from concurrent tasks sharing this import.
 """
 
 from __future__ import annotations

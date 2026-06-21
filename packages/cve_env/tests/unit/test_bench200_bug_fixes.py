@@ -9,6 +9,8 @@ and never touch the running runtime.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 import json
@@ -16,29 +18,25 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.llm import AgentRunOutcome
 from cve_env.agent.loop import build
 from cve_env.models import CveRecord, HostInfo
 
-
 # ----- shared helpers (copied from test_loop.py to keep this file self-contained) -----
-
+# SDK message helpers -- intentionally duplicated per FORBIDDEN-K. Keep
+# defaults aligned with test_loop.py canonical copy.
 
 def _text_block(text: str) -> Any:
     from claude_agent_sdk import TextBlock
 
     return TextBlock(text=text)
 
-
 def _tool_use(tool_id: str, name: str, input_: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolUseBlock
 
     return ToolUseBlock(id=tool_id, name=name, input=input_)
-
 
 def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolResultBlock
@@ -48,7 +46,6 @@ def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
         content=[{"type": "text", "text": json.dumps(payload)}],
     )
 
-
 def _assistant(*blocks: Any) -> Any:
     from claude_agent_sdk import AssistantMessage
 
@@ -56,12 +53,10 @@ def _assistant(*blocks: Any) -> Any:
         content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None
     )
 
-
 def _user(*blocks: Any) -> Any:
     from claude_agent_sdk import UserMessage
 
     return UserMessage(content=list(blocks), parent_tool_use_id=None)
-
 
 def _result(stop_reason: str, *, cost_usd: float = 0.03, turns: int = 3) -> Any:
     from claude_agent_sdk import ResultMessage
@@ -80,7 +75,6 @@ def _result(stop_reason: str, *, cost_usd: float = 0.03, turns: int = 3) -> Any:
         structured_output=None,
     )
 
-
 def _cve() -> CveRecord:
     return CveRecord(
         cve_id="CVE-2018-7600",
@@ -89,10 +83,8 @@ def _cve() -> CveRecord:
         description="Drupalgeddon",
     )
 
-
 def _host() -> HostInfo:
     return HostInfo(arch="arm64", os="darwin", rosetta_available=True)
-
 
 def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
     """Return a coroutine function that drives on_message with canned messages.
@@ -141,6 +133,7 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
                 is_error=False,
                 session_id=result_msg.session_id if result_msg else "",
                 final_text="",
+                tool_uses=[],
             )
         if result_msg is None:
             result_msg = _result(stop_reason)
@@ -153,10 +146,10 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
             is_error=result_msg.is_error,
             session_id=result_msg.session_id,
             final_text="",
+            tool_uses=[],
         )
 
     return fake_run_agent
-
 
 # =============================================================================
 # F-12 — SDK retry storm consumes cost past max_cost_usd cap
@@ -168,7 +161,6 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
 # cost. Evidence: CVE-2022-32101 (bench200 26866) — total_cost_usd=$3.90
 # vs cap=$1.50. Fix landed: accumulated cost-cap check at loop.py:958 +
 # budget_exhausted mapping at loop.py:1068 (no Budget class needed).
-
 
 def test_F12_retry_storm_does_not_exceed_cost_cap(tmp_path: Path) -> None:
     """RED: when SDK emits multiple ResultMessages whose costs sum past the
@@ -204,7 +196,6 @@ def test_F12_retry_storm_does_not_exceed_cost_cap(tmp_path: Path) -> None:
         f"exceeded cap=$1.50 with status={outcome.status!r} "
         f"(reason={outcome.reason!r})"
     )
-
 
 def test_F12_single_oversized_result_capped_or_flagged(tmp_path: Path) -> None:
     """RED: edge case where a single ResultMessage reports cost > cap.
@@ -246,7 +237,6 @@ def test_F12_single_oversized_result_capped_or_flagged(tmp_path: Path) -> None:
             f"(cost={outcome.total_cost_usd:.2f}, cap=$1.50)"
         )
 
-
 # =============================================================================
 # F-13 — give_up tool called but agent doesn't terminate
 # (renamed from "F-10" 09:13Z per canonical catalog reconciliation;
@@ -260,7 +250,6 @@ def test_F12_single_oversized_result_capped_or_flagged(tmp_path: Path) -> None:
 # Fix: raise a custom GiveUpReceived exception inside on_message after
 # state.give_up_reason is set; catch in run_agent's outer scope; treat as
 # clean termination.
-
 
 def test_F13_give_up_halts_subsequent_tool_calls(tmp_path: Path) -> None:
     """RED: when the agent calls give_up.terminal=True, subsequent tool calls
@@ -330,7 +319,6 @@ def test_F13_give_up_halts_subsequent_tool_calls(tmp_path: Path) -> None:
         f"halted at give_up turn but processed all subsequent messages."
     )
 
-
 # =============================================================================
 # F-9 — agent loops past max_turns; SIGALRM kills at 1200s
 # =============================================================================
@@ -344,7 +332,6 @@ def test_F13_give_up_halts_subsequent_tool_calls(tmp_path: Path) -> None:
 # Fix: defensive runtime turn-cap check inside on_message: if state.turn >=
 # max_turns, raise TurnCapReached; catch in run_agent's outer scope; map to
 # status="turn_cap".
-
 
 def test_F9_runtime_turn_cap_enforced_when_sdk_does_not_emit(tmp_path: Path) -> None:
     """RED: when the SDK emits assistant messages past max_turns without ever
@@ -385,7 +372,6 @@ def test_F9_runtime_turn_cap_enforced_when_sdk_does_not_emit(tmp_path: Path) -> 
         f"max_turns=10), got {outcome.status!r} after processing 30 tool calls"
     )
 
-
 # =============================================================================
 # F-11 — docker_build failure → end_turn classified as generic "verify_failed"
 # =============================================================================
@@ -397,7 +383,6 @@ def test_F9_runtime_turn_cap_enforced_when_sdk_does_not_emit(tmp_path: Path) -> 
 # with this pattern; previously misclassified as F-7.
 # Fix: track tool categories in state; if docker_build was attempted AND no
 # verify, emit distinct status like "build_failed_no_verify".
-
 
 def test_F11_build_failure_then_end_turn_classified_distinctly(tmp_path: Path) -> None:
     """RED: when agent calls docker_build (fails with reason=transport) then
@@ -451,7 +436,6 @@ def test_F11_build_failure_then_end_turn_classified_distinctly(tmp_path: Path) -
         f"(synthesized); got give_up_reason={outcome.give_up_reason!r}"
     )
 
-
 # =============================================================================
 # F-8 — research-only path ends without verify or give_up
 # =============================================================================
@@ -461,7 +445,6 @@ def test_F11_build_failure_then_end_turn_classified_distinctly(tmp_path: Path) -
 # currently shares the same status.
 # Evidence: 7+ instances in 26866's bench200 with path=research-only.
 # Fix: distinguish "research_dead_end" via tool_categories tracking.
-
 
 def test_B1_research_only_with_Bash_classifies_as_research(tmp_path: Path) -> None:
     """B-1 fix (2026-05-06): when the agent uses ONLY research/diagnostic
@@ -502,7 +485,6 @@ def test_B1_research_only_with_Bash_classifies_as_research(tmp_path: Path) -> No
         f"reason '{outcome.reason}', should cite 'research-only path'. "
         f"Bash should be in the research-or-diag classification set."
     )
-
 
 def test_B2_give_up_branch_ordered_before_runtime_cap_exceptions() -> None:
     """B-2 fix (2026-05-06): in build()'s except handler, the
@@ -555,7 +537,6 @@ def test_B2_give_up_branch_ordered_before_runtime_cap_exceptions() -> None:
         f"{give_branch_header!r}. The fix should classify on give_up_reason "
         f"alone, since CVE-2022-1813 had give_up but no result_received."
     )
-
 
 def test_F8_research_only_end_turn_classified_distinctly(tmp_path: Path) -> None:
     """RED: when agent uses ONLY research tools (nvd_lookup, web_fetch,
@@ -610,7 +591,6 @@ def test_F8_research_only_end_turn_classified_distinctly(tmp_path: Path) -> None
             f"F-8 unexpected status: {outcome.status!r}"
         )
 
-
 # =============================================================================
 # F-10 — source-build path ends without verify
 # (26866's term per canonical catalog reconciliation 09:13Z; this is distinct
@@ -623,7 +603,6 @@ def test_F8_research_only_end_turn_classified_distinctly(tmp_path: Path) -> None
 # Fix: tool_categories tracking → if source_build was attempted (success or
 # failure) AND no verify, emit "source_build_no_verify" or "verify_failed"
 # with reason citing source-build.
-
 
 def test_F10_source_build_end_turn_classified_distinctly(tmp_path: Path) -> None:
     """RED: when agent attempts source_build (with or without success) then
@@ -675,7 +654,6 @@ def test_F10_source_build_end_turn_classified_distinctly(tmp_path: Path) -> None
         f"got give_up_detail={outcome.give_up_detail!r}"
     )
 
-
 # =============================================================================
 # F-7 — docker_run.ok=true → end_turn without verify (Phase 37.6 prompt rule
 # enforcement check)
@@ -688,7 +666,6 @@ def test_F10_source_build_end_turn_classified_distinctly(tmp_path: Path) -> None
 # Evidence: 1 instance — CVE-2019-3396 V1 smoke (per 26866's bug-log entry).
 # This RED test pins the classification behaviour so the runtime guard
 # remains in place.
-
 
 def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(
     tmp_path: Path,
@@ -731,7 +708,6 @@ def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(
         f"'launched_unverified' (Phase 57), got {outcome.status!r}"
     )
 
-
 # =============================================================================
 # F-14 — verify ran with partial pass (e.g. 2/3 checks passed), agent
 # end_turn without retry
@@ -744,7 +720,6 @@ def test_F7_docker_run_then_end_turn_classified_as_launched_unverified(
 # verify=2/3 passed.
 # Fix: surface partial-pass as actionable signal — either distinct status
 # "verify_partial_no_retry" or "verify_failed" reason mentioning partial.
-
 
 def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(
     tmp_path: Path,
@@ -819,7 +794,6 @@ def test_F14_verify_partial_pass_then_end_turn_surfaces_distinctly(
             f"F-14 unexpected status: {outcome.status!r}"
         )
 
-
 def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(
     tmp_path: Path,
 ) -> None:
@@ -877,7 +851,6 @@ def test_B10_runtime_synthesizes_give_up_when_build_path_ends_silent(
     # Should NOT be no_verify_pass anymore — that was the pre-fix shape
     assert outcome.status != "verify_failed"
 
-
 def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(
     tmp_path: Path,
 ) -> None:
@@ -922,7 +895,6 @@ def test_B8_audit_writes_final_no_verify_when_sdk_ends_via_end_turn(
     assert "final_turn_cap" not in terminal_statuses, (
         "B-8 not fixed: audit wrote final_turn_cap when no turn cap fired"
     )
-
 
 def test_B9_num_turns_floored_at_tool_uses_seen_when_sdk_reports_zero(
     tmp_path: Path,

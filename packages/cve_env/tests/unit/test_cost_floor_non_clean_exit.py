@@ -27,8 +27,9 @@ pytest.importorskip("claude_agent_sdk")
 from cve_env.agent.loop import _floor_cost, build
 from cve_env.config import MODEL, estimate_cost_from_tokens, estimate_cost_from_turns
 
-# Reuse the canned-stream helpers (same dir). _result() emits usage=None,
-# matching the session-auth case under test.
+# Cross-file imports from test_bench200_bug_fixes -- inherits its fixture
+# shape including the tool_uses field. _result() emits usage=None, matching
+# the session-auth case under test.
 from .test_bench200_bug_fixes import (  # type: ignore[import-untyped]
     _assistant,
     _cve,

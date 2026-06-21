@@ -427,31 +427,34 @@ def test_is_loopback_or_private_empty_hostname_is_false() -> None:
     assert _is_loopback_or_private("") is False
 
 
-def test_resolve_hostname_safe_resolution_failure_returns_none(
+def test_resolve_hostname_safe_resolution_failure_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lines 133-138: getaddrinfo raising OSError/UnicodeError is swallowed and
-    returns None (resolution failure is handled by the requests path, not the
-    SSRF guard)."""
+    """Lines 133-138: getaddrinfo raising OSError blocks the request (fail
+    closed) — returns a reason string, not None."""
 
     def _boom(*_a: Any, **_k: Any) -> list[Any]:
         raise OSError("DNS down")
 
     monkeypatch.setattr("cve_env.tools.web_fetch.socket.getaddrinfo", _boom)
-    assert _resolve_hostname_safe("nope.example.com") is None
+    result = _resolve_hostname_safe("nope.example.com")
+    assert result is not None
+    assert "fail closed" in result.lower() or "resolution failed" in result.lower()
 
 
-def test_resolve_hostname_safe_unicode_error_returns_none(
+def test_resolve_hostname_safe_unicode_error_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lines 133-138: a UnicodeError from getaddrinfo (IDNA encoding failure) is
-    swallowed and returns None."""
+    """Lines 133-138: a UnicodeError from getaddrinfo (IDNA encoding failure)
+    blocks the request (fail closed)."""
 
     def _boom(*_a: Any, **_k: Any) -> list[Any]:
         raise UnicodeError("bad idna")
 
     monkeypatch.setattr("cve_env.tools.web_fetch.socket.getaddrinfo", _boom)
-    assert _resolve_hostname_safe("xn--bad.example.com") is None
+    result = _resolve_hostname_safe("xn--bad.example.com")
+    assert result is not None
+    assert "fail closed" in result.lower() or "resolution failed" in result.lower()
 
 
 def test_resolve_hostname_safe_empty_sockaddr_skipped(

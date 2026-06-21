@@ -16,10 +16,10 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import pytest
-
-pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 import json
@@ -27,9 +27,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-
 from cve_env.agent.audit import AuditEntry, AuditStatus, AuditWriter
-
 
 def test_audit_status_includes_post_build_refusal() -> None:
     """The AuditStatus Literal must include "post_build_refusal" so the writer
@@ -40,7 +38,6 @@ def test_audit_status_includes_post_build_refusal() -> None:
     assert "post_build_refusal" in args, (
         f"AuditStatus = {args}; missing post_build_refusal"
     )
-
 
 def test_audit_writer_round_trips_post_build_refusal(tmp_path: Path) -> None:
     """AuditWriter.write must accept entries with status='post_build_refusal'
@@ -63,7 +60,6 @@ def test_audit_writer_round_trips_post_build_refusal(tmp_path: Path) -> None:
     assert entries[0]["status"] == "post_build_refusal"
     assert entries[0]["turn"] == 42
     assert "launched_ok=True" in entries[0]["reason"]
-
 
 def test_loop_exception_handler_wires_post_build_refusal() -> None:
     """The loop.py refusal-exception branch (around the existing
@@ -98,7 +94,6 @@ def test_loop_exception_handler_wires_post_build_refusal() -> None:
         "post_build_refusal emission not co-located with refusal classification (1500 char window)"
     )
 
-
 def test_prompts_contains_verify_plan_composition_rule() -> None:
     """prompts.py SYSTEM_PROMPT must contain an open-clause rule (post-Phase-41
     chain) directing the agent to compose verify-plan in build-functional
@@ -126,7 +121,6 @@ def test_prompts_contains_verify_plan_composition_rule() -> None:
         "verify-plan composition rule missing attack-pattern warning"
     )
 
-
 # ============================================================================
 # Behavioral end-to-end test (Phase 54-deep.S.A.2 F-03 fix)
 #
@@ -139,18 +133,18 @@ def test_prompts_contains_verify_plan_composition_rule() -> None:
 # written.
 # ============================================================================
 
+# SDK message helpers -- intentionally duplicated per FORBIDDEN-K. Keep
+# defaults aligned with test_loop.py canonical copy.
 
 def _text_block(text: str) -> Any:
     from claude_agent_sdk import TextBlock
 
     return TextBlock(text=text)
 
-
 def _tool_use(tool_id: str, name: str, input_: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolUseBlock
 
     return ToolUseBlock(id=tool_id, name=name, input=input_)
-
 
 def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolResultBlock
@@ -160,7 +154,6 @@ def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
         content=[{"type": "text", "text": json.dumps(payload)}],
     )
 
-
 def _assistant(*blocks: Any) -> Any:
     from claude_agent_sdk import AssistantMessage
 
@@ -168,12 +161,10 @@ def _assistant(*blocks: Any) -> Any:
         content=list(blocks), model="claude-opus-4-7", parent_tool_use_id=None
     )
 
-
 def _user(*blocks: Any) -> Any:
     from claude_agent_sdk import UserMessage
 
     return UserMessage(content=list(blocks), parent_tool_use_id=None)
-
 
 def _cve() -> Any:
     from cve_env.models import CveRecord
@@ -185,12 +176,10 @@ def _cve() -> Any:
         description="Test fixture for Phase 54-deep.1 behavioral assertion",
     )
 
-
 def _host() -> Any:
     from cve_env.models import HostInfo
 
     return HostInfo(arch="arm64", os="darwin", rosetta_available=True)
-
 
 def test_post_build_refusal_audit_entry_emitted_when_launched_ok_then_refusal(
     tmp_path: Path,
@@ -279,7 +268,6 @@ def test_post_build_refusal_audit_entry_emitted_when_launched_ok_then_refusal(
         f"post_build_refusal audit entry NOT found in {audit_files[0]}. "
         f"Phase 54-deep.1 exception-handler wiring is broken."
     )
-
 
 def test_post_build_refusal_NOT_emitted_when_launched_ok_false(
     tmp_path: Path,

@@ -98,7 +98,7 @@ _DOCKERFILE_GLOB_NAMES: tuple[str, ...] = ("Dockerfile", "Containerfile")
 _SKIP_DOCKERFILE_SUBSTRINGS: tuple[str, ...] = ("test", "example", "sample", "demo")
 _DEVCONTAINER_JSON = ".devcontainer/devcontainer.json"
 _DEVCONTAINER_ROOT_JSON = ".devcontainer.json"
-_JSONC_LINE_COMMENT = re.compile(r"//[^\n]*")
+_JSONC_LINE_COMMENT = re.compile(r"^\s*//[^\n]*", re.MULTILINE)
 _JSONC_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _JSONC_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
@@ -196,11 +196,12 @@ def find_version_tag(tags: list[str], version: str) -> str | None:
     for t, n in pairs:
         if n.startswith(f"{norm}.") or n.startswith(f"{norm}-"):
             return t
+    # Tier 3: tag is a prefix of version. May match too broadly for single-digit tags like '1'.
     for t, n in pairs:
         if norm.startswith(f"{n}."):
             return t
     for t, _ in pairs:
-        if norm in t:
+        if re.search(r"(?:^|[.\-_])" + re.escape(norm) + r"(?:$|[.\-_])", t):
             return t
     return None
 
@@ -503,7 +504,7 @@ class SourceBuilder:
                 )
             except OSError:
                 break
-            if not isinstance(data, list):
+            if not isinstance(data, list) or not data:
                 break
             for entry in data:
                 if not isinstance(entry, dict):
@@ -567,7 +568,11 @@ class SourceBuilder:
                     # destination, absolute paths, setuid/sgid bits, and special
                     # device files. Required by Python 3.12; 3.14 makes it the
                     # default but the supported floor is 3.12.
-                    tf.extract(m, target, set_attrs=False, filter="data")
+                    try:
+                        tf.extract(m, target, set_attrs=False, filter="data")
+                    except TypeError:
+                        # Python <3.12 does not support the filter parameter.
+                        tf.extract(m, target, set_attrs=False)
         except (tarfile.TarError, OSError):
             return False
         return True
@@ -697,11 +702,11 @@ class SourceBuilder:
             try:
                 data = json.loads(stripped)
             except json.JSONDecodeError:
-                return None
+                continue
             image = data.get("image") if isinstance(data, dict) else None
             if isinstance(image, str) and image.strip():
                 return image.strip()
-            return None
+            continue
         return None
 
 
@@ -843,7 +848,7 @@ def _http_get_bytes(url: str, *, timeout: int) -> bytes | None:
         if isinstance(exc.reason, OSError):
             raise exc.reason from exc
         return None
-    return bytes(body)
+    return body
 
 
 # -- tool payload builder --------------------------------------------------
@@ -862,7 +867,11 @@ _RETAINED_DIRS: list[Path] = []
 
 
 def _cleanup_retained_dirs() -> None:
-    """Remove every directory the per-CVE process retained for source_build."""
+    """Remove every directory the per-CVE process retained for source_build.
+
+    atexit cleanup is best-effort; not called on SIGKILL. In long bench
+    runs, monitor /tmp for orphaned cve-env- dirs.
+    """
     while _RETAINED_DIRS:
         d = _RETAINED_DIRS.pop()
         if d.exists():

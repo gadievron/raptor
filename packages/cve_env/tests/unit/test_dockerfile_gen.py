@@ -1,14 +1,17 @@
 """Tests for :mod:`cve_env.tools.dockerfile_gen`."""
 
 from __future__ import annotations
-import pytest
 
+import importlib
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cve_env.tools.dockerfile_gen import render_dockerfile
 
-_DIGEST = "docker.io/library/nginx@sha256:" + "a" * 64
+_has_sdk = importlib.util.find_spec("claude_agent_sdk") is not None
 
+_DIGEST = "docker.io/library/nginx@sha256:" + "a" * 64
 
 def test_render_minimal_valid() -> None:
     r = render_dockerfile(
@@ -25,7 +28,6 @@ def test_render_minimal_valid() -> None:
     assert "EXPOSE 80" in r.dockerfile_text
     assert 'CMD ["nginx", "-g", "daemon off;"]' in r.dockerfile_text
 
-
 def test_render_rejects_non_digest_base() -> None:
     r = render_dockerfile(
         base_image="nginx:1.20",
@@ -34,12 +36,10 @@ def test_render_rejects_non_digest_base() -> None:
     assert r.ok is False
     assert any("digest-pinned" in i for i in r.issues)
 
-
 def test_render_rejects_latest_base() -> None:
     r = render_dockerfile(base_image="nginx:latest", install_steps=[])
     assert r.ok is False
     assert any("forbidden version tag" in i for i in r.issues)
-
 
 def test_render_injects_apt_packages_before_other_steps() -> None:
     r = render_dockerfile(
@@ -57,7 +57,6 @@ def test_render_injects_apt_packages_before_other_steps() -> None:
     assert "libssl-dev" in apt_line
     assert "libpcre3-dev" in apt_line
 
-
 def test_render_skips_empty_install_steps() -> None:
     r = render_dockerfile(
         base_image=_DIGEST,
@@ -68,12 +67,10 @@ def test_render_skips_empty_install_steps() -> None:
     # One RUN line for "echo hi"; empty entries are skipped.
     assert len(run_lines) == 1
 
-
 def test_render_rejects_relative_workdir() -> None:
     r = render_dockerfile(base_image=_DIGEST, install_steps=[], workdir="app")
     assert r.ok is False
     assert any("absolute path" in i for i in r.issues)
-
 
 def test_render_rejects_bad_port_type() -> None:
     r = render_dockerfile(
@@ -83,7 +80,6 @@ def test_render_rejects_bad_port_type() -> None:
     )
     assert r.ok is False
     assert any("not an integer" in i for i in r.issues)
-
 
 def test_render_result_dockerfile_text_still_set_on_semantic_reject() -> None:
     # Force a semantic failure: non-absolute workdir fails the arg check.
@@ -95,9 +91,7 @@ def test_render_result_dockerfile_text_still_set_on_semantic_reject() -> None:
     )
     assert r.ok is True  # all checks satisfied
 
-
 # -- Phase 11.1: copy_ops (plugin/extension overlay) ---------------------------
-
 
 def test_render_emits_single_copy_op() -> None:
     r = render_dockerfile(
@@ -107,7 +101,6 @@ def test_render_emits_single_copy_op() -> None:
     )
     assert r.ok is True
     assert "COPY plugin/ /var/www/html/wp-content/plugins/foo/" in r.dockerfile_text
-
 
 def test_render_emits_multiple_copy_ops_in_order_after_apt_before_run() -> None:
     r = render_dockerfile(
@@ -127,7 +120,6 @@ def test_render_emits_multiple_copy_ops_in_order_after_apt_before_run() -> None:
     run_idx = next(i for i, ln in enumerate(lines) if ln.startswith("RUN wp plugin"))
     assert apt_idx < copy1_idx < copy2_idx < run_idx
 
-
 def test_render_rejects_copy_op_with_dotdot_in_src() -> None:
     r = render_dockerfile(
         base_image=_DIGEST,
@@ -136,7 +128,6 @@ def test_render_rejects_copy_op_with_dotdot_in_src() -> None:
     )
     assert r.ok is False
     assert any("'..'" in i for i in r.issues)
-
 
 def test_render_rejects_copy_op_with_relative_dst() -> None:
     r = render_dockerfile(
@@ -147,7 +138,6 @@ def test_render_rejects_copy_op_with_relative_dst() -> None:
     assert r.ok is False
     assert any("absolute path" in i for i in r.issues)
 
-
 def test_render_rejects_copy_op_with_absolute_src() -> None:
     r = render_dockerfile(
         base_image=_DIGEST,
@@ -156,7 +146,6 @@ def test_render_rejects_copy_op_with_absolute_src() -> None:
     )
     assert r.ok is False
     assert any("context-relative" in i for i in r.issues)
-
 
 def test_render_rejects_copy_op_when_op_is_not_a_dict() -> None:
     """LLM-supplied copy_ops can be malformed (None, list, string)."""
@@ -167,7 +156,6 @@ def test_render_rejects_copy_op_when_op_is_not_a_dict() -> None:
     )
     assert r.ok is False
     assert any("must be a dict" in i for i in r.issues)
-
 
 def test_render_rejects_copy_op_with_empty_src_or_dst() -> None:
     r1 = render_dockerfile(
@@ -186,7 +174,6 @@ def test_render_rejects_copy_op_with_empty_src_or_dst() -> None:
     assert r2.ok is False
     assert any("dst must be a non-empty string" in i for i in r2.issues)
 
-
 def test_render_rejects_copy_op_with_non_string_src() -> None:
     r = render_dockerfile(
         base_image=_DIGEST,
@@ -196,9 +183,7 @@ def test_render_rejects_copy_op_with_non_string_src() -> None:
     assert r.ok is False
     assert any("src must be a non-empty string" in i for i in r.issues)
 
-
 # Phase 20.2: soft warnings for dep-version-drift -----------------------
-
 
 def test_render_warns_on_bare_apt_install() -> None:
     """Phase 20.2: bare `apt install pkg` (no version pin) → SOFT warning
@@ -211,7 +196,6 @@ def test_render_warns_on_bare_apt_install() -> None:
     assert r.ok is True  # render still succeeds
     assert any("bare `apt install" in w for w in r.warnings)
 
-
 def test_render_no_warning_when_apt_install_has_version_pin() -> None:
     """Pinned version → no warning."""
     r = render_dockerfile(
@@ -220,7 +204,6 @@ def test_render_no_warning_when_apt_install_has_version_pin() -> None:
     )
     assert r.ok is True
     assert not any("bare `apt install" in w for w in r.warnings)
-
 
 def test_render_rejects_apt_get_update_without_pin() -> None:
     """Phase 32.2 / P21: `apt-get update` without immediate version-pinned
@@ -234,7 +217,6 @@ def test_render_rejects_apt_get_update_without_pin() -> None:
     assert any("P21" in i for i in r.issues)
     assert any("apt-get update" in i for i in r.issues)
 
-
 def test_render_no_warning_apt_update_with_versioned_install() -> None:
     """`apt-get update && apt install pkg=X.Y.Z` is defensible: same RUN has
     a `=` token, so P21 doesn't fire."""
@@ -244,7 +226,6 @@ def test_render_no_warning_apt_update_with_versioned_install() -> None:
     )
     assert r.ok is True
     assert not any("apt-get update" in i for i in r.issues)
-
 
 def test_render_warnings_multiple_steps() -> None:
     """Multiple install_steps each evaluated independently. With apt-get update
@@ -262,7 +243,6 @@ def test_render_warnings_multiple_steps() -> None:
     # Bare apt install at index 0 → at least 1 warning.
     assert any("bare `apt install" in w for w in r.warnings)
 
-
 def test_render_rejects_bare_apt_install_of_cve_named_package() -> None:
     """Phase 32.1 / P20: bare `apt install <cve-pkg>` is a HARD reject when
     cve_named_packages includes that package."""
@@ -275,7 +255,6 @@ def test_render_rejects_bare_apt_install_of_cve_named_package() -> None:
     assert any("P20" in i for i in r.issues)
     assert any("openssl" in i for i in r.issues)
 
-
 def test_render_accepts_pinned_install_of_cve_named_package() -> None:
     """Phase 32.1: pinned install of CVE-named package is fine — that's
     exactly what the gate is encouraging."""
@@ -287,7 +266,6 @@ def test_render_accepts_pinned_install_of_cve_named_package() -> None:
     assert r.ok is True
     assert not any("P20" in i for i in r.issues)
 
-
 def test_render_cve_named_check_is_case_insensitive() -> None:
     """Phase 32.1: case-insensitive match — agent might pass `OpenSSL` or
     `openssl` from nvd_lookup."""
@@ -298,7 +276,6 @@ def test_render_cve_named_check_is_case_insensitive() -> None:
     )
     assert r.ok is False
     assert any("P20" in i for i in r.issues)
-
 
 def test_render_cve_named_empty_list_is_back_compat() -> None:
     """Phase 32.1: cve_named_packages=[] (or missing) → only Phase 20.2
@@ -312,7 +289,6 @@ def test_render_cve_named_empty_list_is_back_compat() -> None:
     # Still gets the soft warning.
     assert any("bare `apt install" in w for w in r.warnings)
 
-
 def test_render_payload_includes_warnings() -> None:
     """The render_to_payload wrapper exposes warnings to the agent."""
     from cve_env.tools.dockerfile_gen import render_to_payload
@@ -324,7 +300,6 @@ def test_render_payload_includes_warnings() -> None:
     assert payload["ok"] is True
     assert "warnings" in payload
     assert any("bare `apt install" in w for w in payload["warnings"])
-
 
 def test_render_payload_includes_p20_issues_for_cve_named_pkg() -> None:
     """Phase 32.1: render_to_payload surfaces P20 in the issues field."""
@@ -338,10 +313,9 @@ def test_render_payload_includes_p20_issues_for_cve_named_pkg() -> None:
     assert payload["ok"] is False
     assert any("P20" in i for i in payload["issues"])
 
-
 # b1 (2026-05-23): fuse dockerfile_gen → docker_build -----------------------
 
-
+@pytest.mark.skipif(not _has_sdk, reason="claude_agent_sdk not installed")
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
     pytest.importorskip("claude_agent_sdk")
@@ -363,10 +337,9 @@ def test_b1_fuse_autobuilds_when_no_copy_ops(mock_run: object) -> None:
     assert out["build"]["ok"] is True
     assert "docker_run" in out["next_step_hint"]
 
-
+@pytest.mark.skipif(not _has_sdk, reason="claude_agent_sdk not installed")
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
-    pytest.importorskip("claude_agent_sdk")
     """copy_ops present → no auto-build (the agent must stage the COPY context
     first); stays render-only unless build=True is explicit."""
     from cve_env.agent.tools import _maybe_fuse_build
@@ -380,10 +353,9 @@ def test_b1_fuse_skips_when_copy_ops(mock_run: object) -> None:
     assert "build" not in out
     mock_run.assert_not_called()  # type: ignore[attr-defined]
 
-
+@pytest.mark.skipif(not _has_sdk, reason="claude_agent_sdk not installed")
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
-    pytest.importorskip("claude_agent_sdk")
     """build=False is an explicit opt-out even without copy_ops."""
     from cve_env.agent.tools import _maybe_fuse_build
     from cve_env.tools.dockerfile_gen import render_to_payload
@@ -393,10 +365,9 @@ def test_b1_fuse_opt_out_build_false(mock_run: object) -> None:
     assert "build" not in out
     mock_run.assert_not_called()  # type: ignore[attr-defined]
 
-
+@pytest.mark.skipif(not _has_sdk, reason="claude_agent_sdk not installed")
 @patch("cve_env.utils.run.subprocess.run")
 def test_b1_fuse_surfaces_build_failure(mock_run: object) -> None:
-    pytest.importorskip("claude_agent_sdk")
     """A failed fused build is SURFACED (agent sees it + retries), not hidden."""
     mock_run.return_value = MagicMock(  # type: ignore[attr-defined]
         returncode=1, stdout="", stderr="E: build broke"
@@ -409,9 +380,7 @@ def test_b1_fuse_surfaces_build_failure(mock_run: object) -> None:
     assert "build" in out
     assert out["build"]["ok"] is False
 
-
 # Phase 37.4: apt_unsafe flag tests ---------------------------------------
-
 
 def test_phase37_4_apt_unsafe_default_off() -> None:
     """Phase 37.4: by default, apt-get update/install commands have NO
@@ -424,7 +393,6 @@ def test_phase37_4_apt_unsafe_default_off() -> None:
     assert r.ok is True
     assert "Acquire::AllowInsecureRepositories" not in r.dockerfile_text
     assert "Acquire::Check-Valid-Until" not in r.dockerfile_text
-
 
 def test_phase37_4_apt_unsafe_injects_bypass_flags() -> None:
     """Phase 37.4: apt_unsafe=True wraps apt-get with flags that bypass
@@ -439,7 +407,6 @@ def test_phase37_4_apt_unsafe_injects_bypass_flags() -> None:
     assert r.ok is True
     assert "Acquire::AllowInsecureRepositories=true" in r.dockerfile_text
     assert "Acquire::Check-Valid-Until=false" in r.dockerfile_text
-
 
 def test_phase37_4_apt_unsafe_no_apt_no_change() -> None:
     """Phase 37.4: apt_unsafe is a no-op when there are no apt_packages."""

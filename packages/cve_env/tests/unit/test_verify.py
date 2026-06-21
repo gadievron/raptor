@@ -115,12 +115,12 @@ def test_check_logs_fails_on_missing_pattern(mock_run: Any) -> None:
     assert r["passed"] is False
 
 
-@patch("cve_env.utils.run.subprocess.run")
-def test_check_logs_fails_on_invalid_regex(mock_run: Any) -> None:
-    mock_run.return_value = MagicMock(returncode=0, stdout="some logs\n", stderr="")
-    r = check_logs("cid", expected_patterns=["("])
+def test_check_logs_fails_on_invalid_regex() -> None:
+    fake_outcome = MagicMock(timed_out=False, returncode=0, stdout="some log output", stderr="")
+    with patch("cve_env.utils.run.run_with_timeout", return_value=fake_outcome):
+        r = check_logs("cid", expected_patterns=["("])
     assert r["passed"] is False
-    assert "invalid regex" in r["reason"]
+    assert "invalid regex" in r.get("reason", "")
 
 
 def test_check_logs_empty_patterns_passes() -> None:

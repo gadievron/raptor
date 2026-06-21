@@ -31,12 +31,10 @@ from typing import Any
 
 import pytest
 
-
 def _run_stub(stop_reason: str = "end_turn", session_id: str = "sess-1") -> Any:
     import types
 
     return types.SimpleNamespace(stop_reason=stop_reason, session_id=session_id)
-
 
 def _state(reason: str, tool_names: list[str]) -> Any:
     from cve_env.agent.loop import _StreamState
@@ -46,11 +44,9 @@ def _state(reason: str, tool_names: list[str]) -> Any:
     st.tool_uses_seen = [{"name": n} for n in tool_names]
     return st
 
-
 @pytest.fixture
 def _on(monkeypatch: Any) -> None:
     monkeypatch.setenv("CVE_ENV_ENABLE_PROPRIETARY_VERIFY_CONTINUATION", "1")
-
 
 def test_gate_on_by_default(monkeypatch: Any) -> None:
     """Default-ON (2026-06-09): post-blacklist-removal the gate is the SOLE runtime
@@ -69,7 +65,6 @@ def test_gate_on_by_default(monkeypatch: Any) -> None:
         _should_continue_for_proprietary_verify(_run_stub(), st2, 0, 0.1, 2.5) is False
     )
 
-
 def test_gate_fires_on_blacklist_trusted_proprietary(_on: None) -> None:
     """The 39/51 no-probe class: give_up(proprietary) with NO image_resolve →
     fire ONE verify probe."""
@@ -77,7 +72,6 @@ def test_gate_fires_on_blacklist_trusted_proprietary(_on: None) -> None:
 
     st = _state("proprietary", ["nvd_lookup", "github_fetch", "give_up"])
     assert _should_continue_for_proprietary_verify(_run_stub(), st, 0, 0.1, 2.5) is True
-
 
 def test_gate_skips_already_probed_proprietary(_on: None) -> None:
     """The 12/51 probed class: image_resolve already ran (confirmed negative) →
@@ -88,7 +82,6 @@ def test_gate_skips_already_probed_proprietary(_on: None) -> None:
     assert (
         _should_continue_for_proprietary_verify(_run_stub(), st, 0, 0.1, 2.5) is False
     )
-
 
 def test_gate_skips_non_proprietary(_on: None) -> None:
     """Only proprietary give-ups are in scope; no_image/arch/etc. are handled by
@@ -102,7 +95,6 @@ def test_gate_skips_non_proprietary(_on: None) -> None:
             is False
         ), reason
 
-
 def test_gate_is_one_shot(_on: None) -> None:
     """Once attempted, never again this CVE."""
     from cve_env.agent.loop import _should_continue_for_proprietary_verify
@@ -112,7 +104,6 @@ def test_gate_is_one_shot(_on: None) -> None:
     assert (
         _should_continue_for_proprietary_verify(_run_stub(), st, 0, 0.1, 2.5) is False
     )
-
 
 def test_gate_requires_resumable_session(_on: None) -> None:
     """No session id (last_session_id empty AND run.session_id empty) → cannot
@@ -127,7 +118,6 @@ def test_gate_requires_resumable_session(_on: None) -> None:
         is False
     )
 
-
 def test_gate_respects_max(_on: None) -> None:
     """count >= max disables (default max = 1)."""
     from cve_env.agent.loop import _should_continue_for_proprietary_verify
@@ -136,7 +126,6 @@ def test_gate_respects_max(_on: None) -> None:
     assert (
         _should_continue_for_proprietary_verify(_run_stub(), st, 1, 0.1, 2.5) is False
     )
-
 
 def test_gate_respects_budget_fraction(_on: None) -> None:
     """Accumulated cost over the force-resolve budget fraction (0.50) of the cap
@@ -148,7 +137,6 @@ def test_gate_respects_budget_fraction(_on: None) -> None:
     assert (
         _should_continue_for_proprietary_verify(_run_stub(), st, 0, 2.0, 2.5) is False
     )
-
 
 # --- known-case experiment: the 2026-06-04 proprietary classes -------------
 # 39/51 gave up with ZERO image_resolve (blacklist-trusted) → gate SHOULD fire.
@@ -182,7 +170,6 @@ def test_known_proprietary_classes(
         is expect_fire
     )
 
-
 # --- observability-companion guards: the emit surface (loop.py) must be wired to
 # the AuditStatus Literal, else the status is a type-unregistered string (the exact
 # latent omission force_resolve_continuation hit — see audit.py docstring). ---
@@ -191,7 +178,6 @@ def test_proprietary_verify_status_registered_in_audit_status() -> None:
     from cve_env.agent.audit import AuditStatus
 
     assert "proprietary_verify_continuation" in get_args(AuditStatus)
-
 
 def test_audit_status_registers_all_continuation_statuses() -> None:
     """Parity guard: every *_continuation status the loop can emit MUST be in the

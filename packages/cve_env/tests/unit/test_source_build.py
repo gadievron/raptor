@@ -34,13 +34,11 @@ from cve_env.tools.source_build import (
 
 # -- normalize_github_url --------------------------------------------------
 
-
 def test_normalize_github_url_passthrough() -> None:
     assert (
         normalize_github_url("https://github.com/vulhub/vulhub")
         == "https://github.com/vulhub/vulhub"
     )
-
 
 def test_normalize_github_url_strips_dot_git() -> None:
     assert (
@@ -48,13 +46,11 @@ def test_normalize_github_url_strips_dot_git() -> None:
         == "https://github.com/foo/bar"
     )
 
-
 def test_normalize_github_url_git_protocol() -> None:
     assert (
         normalize_github_url("git://github.com/foo/bar.git")
         == "https://github.com/foo/bar"
     )
-
 
 def test_normalize_github_url_git_plus_https() -> None:
     assert (
@@ -62,13 +58,11 @@ def test_normalize_github_url_git_plus_https() -> None:
         == "https://github.com/foo/bar"
     )
 
-
 def test_normalize_github_url_git_plus_ssh() -> None:
     assert (
         normalize_github_url("git+ssh://git@github.com/foo/bar.git")
         == "https://github.com/foo/bar"
     )
-
 
 def test_normalize_github_url_scp_form() -> None:
     assert (
@@ -76,21 +70,17 @@ def test_normalize_github_url_scp_form() -> None:
         == "https://github.com/foo/bar"
     )
 
-
 def test_normalize_github_url_rejects_non_github() -> None:
     assert normalize_github_url("https://gitlab.com/foo/bar") is None
     assert normalize_github_url("https://bitbucket.org/foo/bar") is None
-
 
 def test_normalize_github_url_rejects_empty() -> None:
     assert normalize_github_url(None) is None
     assert normalize_github_url("") is None
 
-
 def test_normalize_github_url_rejects_malformed_github() -> None:
     # Missing owner/repo segment.
     assert normalize_github_url("https://github.com/") is None
-
 
 def test_normalize_github_url_rejects_attacker_host_with_github_in_path() -> None:
     """An attacker-controlled host with `github.com/<owner>/<repo>` in
@@ -105,7 +95,6 @@ def test_normalize_github_url_rejects_attacker_host_with_github_in_path() -> Non
         normalize_github_url("http://attacker.example/path/github.com/foo/bar") is None
     )
 
-
 def test_normalize_github_url_rejects_subdomain_lookalikes() -> None:
     """Hosts that contain `github.com` as a substring or are confusable
     with github.com must be rejected. urlparse + exact-netloc match
@@ -118,14 +107,12 @@ def test_normalize_github_url_rejects_subdomain_lookalikes() -> None:
         normalize_github_url("https://raw.githubusercontent.com/foo/bar/main") is None
     )
 
-
 def test_normalize_github_url_rejects_userinfo_smuggling() -> None:
     """A URL with userinfo of `github.com` followed by an attacker host
     (`https://github.com@evil.com/foo/bar`) parses as netloc=`github.com@evil.com`,
     which the substring filter would have accepted but exact-host equality
     rejects."""
     assert normalize_github_url("https://github.com@evil.com/foo/bar") is None
-
 
 def test_normalize_github_url_rejects_metachar_in_owner_repo() -> None:
     """Even though all subprocess calls in cve_env are list-form (no shell=True),
@@ -137,43 +124,33 @@ def test_normalize_github_url_rejects_metachar_in_owner_repo() -> None:
     assert normalize_github_url("https://github.com/foo bar/baz") is None
     assert normalize_github_url("https://github.com/foo/bar`baz") is None
 
-
 # -- find_version_tag ------------------------------------------------------
-
 
 def test_find_version_tag_exact_v_prefix() -> None:
     assert find_version_tag(["v1.2.3", "v1.2.4"], "1.2.3") == "v1.2.3"
 
-
 def test_find_version_tag_exact_no_v_prefix() -> None:
     assert find_version_tag(["1.2.3"], "v1.2.3") == "1.2.3"
-
 
 def test_find_version_tag_prefix_dot_separator() -> None:
     # version=1.5 should match tag 1.5.0
     assert find_version_tag(["1.5.0", "1.6.0"], "1.5") == "1.5.0"
 
-
 def test_find_version_tag_prefix_dash_separator() -> None:
     assert find_version_tag(["1.5-final"], "1.5") == "1.5-final"
-
 
 def test_find_version_tag_version_prefixes_tag() -> None:
     # version=1.5.0.1 and tag=1.5 -> tag is a proper prefix of version (stripped)
     assert find_version_tag(["1.5"], "1.5.0.1") == "1.5"
 
-
 def test_find_version_tag_fuzzy_contains() -> None:
     assert find_version_tag(["some-1.5-tag"], "1.5") == "some-1.5-tag"
-
 
 def test_find_version_tag_no_match() -> None:
     assert find_version_tag(["2.0.0", "3.0.0"], "1.0") is None
 
-
 def test_find_version_tag_empty_tags() -> None:
     assert find_version_tag([], "1.5") is None
-
 
 def test_find_version_tag_priority_order() -> None:
     # Exact wins over prefix; prefix wins over fuzzy.
@@ -181,31 +158,24 @@ def test_find_version_tag_priority_order() -> None:
     assert find_version_tag(tags, "1.5") == "1.5"  # exact
     assert find_version_tag(tags, "1.5.0") == "1.5.0"  # exact (over fuzzy)
 
-
 # -- _pick_deepen_steps ----------------------------------------------------
-
 
 def test_pick_deepen_steps_none_falls_back_to_fixed() -> None:
     # When API is unreachable, use the default cascade.
     steps = _pick_deepen_steps(None)
     assert 0 in steps  # Full-depth fetch is in the cascade somewhere.
 
-
 def test_pick_deepen_steps_tiny_repo() -> None:
     # <5 MB → single full-depth fetch.
     assert _pick_deepen_steps(1_000) == (0,)
 
-
 def test_pick_deepen_steps_medium_repo() -> None:
     assert _pick_deepen_steps(20_000) == (100, 0)
-
 
 def test_pick_deepen_steps_large_repo() -> None:
     assert _pick_deepen_steps(100_000) == (500, 5000, 0)
 
-
 # -- SourceBuildResult.ok --------------------------------------------------
-
 
 def test_result_ok_true_when_dockerfile_path_and_tag(tmp_path: Path) -> None:
     df = tmp_path / "Dockerfile"
@@ -219,7 +189,6 @@ def test_result_ok_true_when_dockerfile_path_and_tag(tmp_path: Path) -> None:
     )
     assert r.ok is True
 
-
 def test_result_ok_true_when_build_config_alone(tmp_path: Path) -> None:
     # No Dockerfile but has a build_config hint -> still OK
     # (agent will dockerfile_gen + docker_build).
@@ -232,7 +201,6 @@ def test_result_ok_true_when_build_config_alone(tmp_path: Path) -> None:
     )
     assert r.ok is True
 
-
 def test_result_ok_false_when_no_tag() -> None:
     r = SourceBuildResult(
         repo_dir=Path("/tmp/x"),
@@ -242,7 +210,6 @@ def test_result_ok_false_when_no_tag() -> None:
         build_config=None,
     )
     assert r.ok is False
-
 
 def test_result_ok_false_when_no_dockerfile_and_no_config(tmp_path: Path) -> None:
     r = SourceBuildResult(
@@ -254,9 +221,7 @@ def test_result_ok_false_when_no_dockerfile_and_no_config(tmp_path: Path) -> Non
     )
     assert r.ok is False
 
-
 # -- Dockerfile discovery (integration with tempfile) ---------------------
-
 
 def _make_repo(root: Path, files: dict[str, str]) -> Path:
     for rel, content in files.items():
@@ -265,18 +230,15 @@ def _make_repo(root: Path, files: dict[str, str]) -> Path:
         path.write_text(content)
     return root
 
-
 def test_find_dockerfile_at_root(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"Dockerfile": "FROM alpine"})
     builder = SourceBuilder()
     assert builder._find_dockerfile(repo) == repo / "Dockerfile"
 
-
 def test_find_dockerfile_in_docker_subdir(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"docker/Dockerfile": "FROM alpine"})
     builder = SourceBuilder()
     assert builder._find_dockerfile(repo) == repo / "docker" / "Dockerfile"
-
 
 def test_find_dockerfile_skips_test_paths(tmp_path: Path) -> None:
     # Root Dockerfile wins even if a test/ variant also exists.
@@ -290,14 +252,12 @@ def test_find_dockerfile_skips_test_paths(tmp_path: Path) -> None:
     builder = SourceBuilder()
     assert builder._find_dockerfile(repo) == repo / "Dockerfile"
 
-
 def test_find_dockerfile_rglob_when_no_common_location(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"nested/deep/Dockerfile": "FROM alpine"})
     builder = SourceBuilder()
     result = builder._find_dockerfile(repo)
     assert result is not None
     assert result.name == "Dockerfile"
-
 
 def test_find_dockerfile_rglob_avoids_test_dir(tmp_path: Path) -> None:
     repo = _make_repo(
@@ -316,36 +276,30 @@ def test_find_dockerfile_rglob_avoids_test_dir(tmp_path: Path) -> None:
     assert "test" not in rel
     assert "example" not in rel
 
-
 def test_find_dockerfile_none_when_absent(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"README.md": "no dockerfile here"})
     builder = SourceBuilder()
     assert builder._find_dockerfile(repo) is None
-
 
 def test_find_build_config_pom_xml(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"pom.xml": "<project/>"})
     builder = SourceBuilder()
     assert builder._find_build_config(repo) == "maven"
 
-
 def test_find_build_config_package_json(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"package.json": "{}"})
     builder = SourceBuilder()
     assert builder._find_build_config(repo) == "npm"
-
 
 def test_find_build_config_go_mod(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"go.mod": "module foo"})
     builder = SourceBuilder()
     assert builder._find_build_config(repo) == "go"
 
-
 def test_find_build_config_none_when_no_marker(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"README.md": ""})
     builder = SourceBuilder()
     assert builder._find_build_config(repo) is None
-
 
 def test_read_dockerfile_caps_at_64kib(tmp_path: Path) -> None:
     huge = tmp_path / "Dockerfile"
@@ -355,11 +309,9 @@ def test_read_dockerfile_caps_at_64kib(tmp_path: Path) -> None:
     assert text is not None
     assert len(text) == 64 * 1024
 
-
 def test_read_dockerfile_none_when_path_none() -> None:
     builder = SourceBuilder()
     assert builder._read_dockerfile(None) is None
-
 
 def test_find_devcontainer_image_jsonc_tolerant(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
@@ -379,15 +331,12 @@ def test_find_devcontainer_image_jsonc_tolerant(tmp_path: Path) -> None:
         == "mcr.microsoft.com/devcontainers/base:ubuntu"
     )
 
-
 def test_find_devcontainer_image_none_when_absent(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path / "repo", {"README.md": ""})
     builder = SourceBuilder()
     assert builder._find_devcontainer_image(repo) is None
 
-
 # -- SourceBuilder.build() with subprocess mocks ---------------------------
-
 
 def _fake_completed(
     returncode: int = 0, stdout: str = "", stderr: str = ""
@@ -395,7 +344,6 @@ def _fake_completed(
     return subprocess.CompletedProcess(
         args=["git"], returncode=returncode, stdout=stdout, stderr=stderr
     )
-
 
 def test_build_rejects_non_github_url(tmp_path: Path) -> None:
     builder = SourceBuilder(SourceBuildConfig(work_dir=tmp_path))
@@ -405,7 +353,6 @@ def test_build_rejects_non_github_url(tmp_path: Path) -> None:
     assert not result.ok
     assert result.error is not None
     assert "not a GitHub URL" in result.error
-
 
 def test_payload_for_gitlab_url_includes_git_clone_hint() -> None:
     """Phase 15: source_build_payload returns next_step_hint pointing to
@@ -419,7 +366,6 @@ def test_payload_for_gitlab_url_includes_git_clone_hint() -> None:
     assert "Bash" in hint
     assert "git clone" in hint
     assert "GitLab" in hint or "Bitbucket" in hint or "Codeberg" in hint
-
 
 def test_payload_for_osdn_url_includes_curl_tar_hint() -> None:
     """Phase 15: source_build_payload returns next_step_hint pointing to
@@ -436,7 +382,6 @@ def test_payload_for_osdn_url_includes_curl_tar_hint() -> None:
     assert "tar" in hint
     assert "OSDN" in hint or "SourceForge" in hint or "tarball" in hint
 
-
 @pytest.mark.parametrize(
     ("version", "expected"),
     [
@@ -452,7 +397,6 @@ def test_payload_for_osdn_url_includes_curl_tar_hint() -> None:
 )
 def test_is_commit_sha(version: str, expected: bool) -> None:  # noqa: FBT001
     assert _is_commit_sha(version) is expected
-
 
 def test_build_with_commit_sha_clone_failure_returns_clean_error(
     tmp_path: Path,
@@ -475,7 +419,6 @@ def test_build_with_commit_sha_clone_failure_returns_clean_error(
     assert result.error is not None
     assert "no tag matched" in result.error  # Falls through to standard error path
     assert any("git clone failed" in w.lower() for w in result.warnings)
-
 
 def test_build_with_commit_sha_checkout_failure(tmp_path: Path) -> None:
     """Phase 11.2: clone succeeds but checkout SHA fails (e.g., SHA not in repo)."""
@@ -502,7 +445,6 @@ def test_build_with_commit_sha_checkout_failure(tmp_path: Path) -> None:
         "checkout" in w.lower() and "failed" in w.lower() for w in result.warnings
     )
 
-
 def test_build_with_commit_sha_clone_timeout(tmp_path: Path) -> None:
     """Phase 11.2: clone subprocess timeout is reported in warnings."""
     sha = "c" * 40
@@ -520,7 +462,6 @@ def test_build_with_commit_sha_clone_timeout(tmp_path: Path) -> None:
         )
     assert not result.ok
     assert any("timed out" in w.lower() for w in result.warnings)
-
 
 def test_build_with_commit_sha_skips_tag_listing(tmp_path: Path) -> None:
     """Phase 11.2: a 40-hex SHA `version` triggers full-clone + checkout SHA.
@@ -563,7 +504,6 @@ def test_build_with_commit_sha_skips_tag_listing(tmp_path: Path) -> None:
     assert not any(a[:3] == ["git", "tag", "--list"] for a in seen_args)
     assert not any("--tags" in a for a in seen_args)
 
-
 def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
     """Happy path: shallow clone finds the tag on first try."""
 
@@ -598,7 +538,6 @@ def test_build_shallow_clone_succeeds_tag_matches(tmp_path: Path) -> None:
     assert result.dockerfile_text == "FROM alpine"
     assert result.build_config == "maven"
 
-
 def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
     def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["git", "clone"]:
@@ -632,7 +571,6 @@ def test_build_no_tag_matches_returns_error(tmp_path: Path) -> None:
     assert not result.ok
     assert result.error is not None
     assert "no tag matched" in result.error
-
 
 def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
     """When shallow clone fails, the codeload tarball rescue must fire."""
@@ -678,9 +616,7 @@ def test_build_clone_failure_triggers_archive_fallback(tmp_path: Path) -> None:
     assert result.dockerfile_text == "FROM alpine"
     assert result.build_config == "go"
 
-
 # -- source_build_payload --------------------------------------------------
-
 
 def test_payload_not_a_github_url() -> None:
     out = source_build_payload(
@@ -688,7 +624,6 @@ def test_payload_not_a_github_url() -> None:
     )
     assert out["ok"] is False
     assert out["reason"] == "not_github_url"
-
 
 def test_payload_failure_path_repo_dir_is_none(tmp_path: Path) -> None:
     """B9 fix (2026-05-02): on not-ok results, source_build_payload calls
@@ -729,7 +664,6 @@ def test_payload_failure_path_repo_dir_is_none(tmp_path: Path) -> None:
     # the agent gets the right shape but a temp tree leaks on disk.
     mock_cleanup.assert_called_once()
 
-
 def test_next_step_hint_cloned_no_dockerfile_points_to_clone(tmp_path: Path) -> None:
     """R2 (2026-05-23): when a tag matched + tree cloned but the repo has no
     Dockerfile/build-config, the hint must point the agent at dockerfile_gen
@@ -752,7 +686,6 @@ def test_next_step_hint_cloned_no_dockerfile_points_to_clone(tmp_path: Path) -> 
     # fused auto-build targets the clone, not an empty temp context.
     assert "context_dir=repo_dir" in hint
 
-
 def test_next_step_hint_genuine_no_tag_unchanged(tmp_path: Path) -> None:
     """R2 guard: a genuine no-tag (no checkout) keeps the existing hint."""
     from cve_env.tools.source_build import _next_step_hint
@@ -765,7 +698,6 @@ def test_next_step_hint_genuine_no_tag_unchanged(tmp_path: Path) -> None:
         build_config=None,
     )
     assert "no tag matched" in _next_step_hint(r)
-
 
 def test_payload_cloned_no_dockerfile_retains_repo_dir(tmp_path: Path) -> None:
     """R2: tag matched + tree cloned but no Dockerfile is RECOVERABLE — retain
@@ -797,7 +729,6 @@ def test_payload_cloned_no_dockerfile_retains_repo_dir(tmp_path: Path) -> None:
     assert "no tag matched" not in out["next_step_hint"]
     mock_retain.assert_called_once()
     mock_cleanup.assert_not_called()
-
 
 def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
     tmp_path: Path,
@@ -855,7 +786,6 @@ def test_source_build_handler_fuses_docker_build_when_dockerfile_present(
         f"fused build should succeed; got {out.get('build')!r}"
     )
 
-
 def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None:
     """Guard: a build_config-only payload (no dockerfile_text) must NOT fuse —
     the agent dockerfile_gen's against the clone (then b1 fuses that)."""
@@ -901,7 +831,6 @@ def test_source_build_handler_no_fuse_when_no_dockerfile(tmp_path: Path) -> None
     )
     mock_run.assert_not_called()
 
-
 def test_payload_success_path_has_next_step_hint(tmp_path: Path) -> None:
     """Integration: mocked build() success path produces a complete payload."""
 
@@ -925,7 +854,6 @@ def test_payload_success_path_has_next_step_hint(tmp_path: Path) -> None:
     assert out["dockerfile_text"] == "FROM alpine"
     assert "docker_build" in out["next_step_hint"]
 
-
 def test_payload_no_dockerfile_points_at_dockerfile_gen(tmp_path: Path) -> None:
     fake_result = SourceBuildResult(
         repo_dir=tmp_path / "bar",
@@ -945,7 +873,6 @@ def test_payload_no_dockerfile_points_at_dockerfile_gen(tmp_path: Path) -> None:
     assert "dockerfile_gen" in out["next_step_hint"]
     assert "maven" in out["next_step_hint"]
 
-
 def test_payload_catches_unexpected_exception(tmp_path: Path) -> None:
     with patch.object(SourceBuilder, "build", side_effect=RuntimeError("boom")):
         out = source_build_payload(
@@ -954,7 +881,6 @@ def test_payload_catches_unexpected_exception(tmp_path: Path) -> None:
     assert out["ok"] is False
     assert out["reason"] == "unexpected_error"
     assert "boom" in out["error"]
-
 
 def test_payload_unexpected_exception_explicit_repo_dir_none(tmp_path: Path) -> None:
     """B9 followup (2026-05-02 persona review): the unexpected_error branch
@@ -973,9 +899,7 @@ def test_payload_unexpected_exception_explicit_repo_dir_none(tmp_path: Path) -> 
     )
     assert out["repo_dir"] is None, "crash path: no clone exists; cannot offer a path"
 
-
 # -- HTTP helpers / archive helpers ---------------------------------------
-
 
 def _make_fake_tarball(files: dict[str, str]) -> bytes:
     """Build an in-memory tar.gz with a top-level dir like GitHub's codeload."""
@@ -990,7 +914,6 @@ def _make_fake_tarball(files: dict[str, str]) -> bytes:
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
     return buf.getvalue()
-
 
 def _make_malicious_tarball_with_symlink(symlink_target: str) -> bytes:
     """Build a tarball with a SYMTYPE member pointing at ``symlink_target``.
@@ -1015,9 +938,7 @@ def _make_malicious_tarball_with_symlink(symlink_target: str) -> bytes:
         tf.addfile(link)
     return buf.getvalue()
 
-
 # Phase 61.2 — tarball symlink/traversal guard ----------------------------
-
 
 def test_phase61_tarball_filter_blocks_absolute_symlink(tmp_path: Path) -> None:
     """A tarball whose member is a symlink to /etc/passwd must not extract.
@@ -1071,7 +992,6 @@ def test_phase61_tarball_filter_blocks_absolute_symlink(tmp_path: Path) -> None:
     if result.repo_dir is not None:
         assert not (result.repo_dir / "escape").exists()
 
-
 def test_phase61_tarball_filter_blocks_relative_escape_symlink(
     tmp_path: Path,
 ) -> None:
@@ -1112,7 +1032,6 @@ def test_phase61_tarball_filter_blocks_relative_escape_symlink(
     for p in tmp_path.rglob("escape"):
         assert not p.is_symlink(), f"symlink leaked to disk at {p}"
 
-
 class _FakeHeaders:
     """Minimal stand-in for http.client.HTTPMessage."""
 
@@ -1121,7 +1040,6 @@ class _FakeHeaders:
 
     def get(self, name: str, default: str = "") -> str:
         return self._headers.get(name, default)
-
 
 class _FakeResp:
     """Tiny stand-in for urllib.request's context-manager response."""
@@ -1147,9 +1065,7 @@ class _FakeResp:
         # tiny (well under any cap), so the size hint is ignored.
         return self._body
 
-
 # -- Security hardening: PT-1 product path-traversal + DOS-1 tarball caps ------
-
 
 def test_build_rejects_dotdot_product() -> None:
     """``product`` is LLM tool input → a ``..`` value must be rejected, never
@@ -1160,7 +1076,6 @@ def test_build_rejects_dotdot_product() -> None:
     )
     assert result.repo_dir is None
     assert result.error is not None and "unsafe product" in result.error
-
 
 def test_build_product_cannot_rmtree_outside_workdir(tmp_path: Path) -> None:
     """A traversal ``product`` must not let the pre-clone rmtree escape work_dir.
@@ -1196,7 +1111,6 @@ def test_build_product_cannot_rmtree_outside_workdir(tmp_path: Path) -> None:
         "rmtree must not escape work_dir via a traversal product"
     )
 
-
 def test_download_tarball_refuses_oversized_extraction(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -1216,7 +1130,6 @@ def test_download_tarball_refuses_oversized_extraction(
     assert ok is False, "over-cap extraction must be refused"
     assert not (target / "Dockerfile").exists(), "nothing should be extracted"
 
-
 def test_http_get_json_on_404_returns_none() -> None:
     def raise_404(req: Any, **_: Any) -> Any:
         raise urllib.error.HTTPError(
@@ -1229,7 +1142,6 @@ def test_http_get_json_on_404_returns_none() -> None:
 
     with patch("cve_env.tools.source_build._urlopen", side_effect=raise_404):
         assert sb._http_get_json("https://api.github.com/repos/x/y", timeout=5) is None
-
 
 def test_http_get_bytes_on_404_returns_none() -> None:
     def raise_404(req: Any, **_: Any) -> Any:
@@ -1249,9 +1161,7 @@ def test_http_get_bytes_on_404_returns_none() -> None:
             is None
         )
 
-
 # -- context manager + cleanup -------------------------------------------
-
 
 def test_context_manager_cleans_up_on_exit(tmp_path: Path) -> None:
     # Builder-created temp dir should get removed on __exit__ when not retained.
@@ -1264,7 +1174,6 @@ def test_context_manager_cleans_up_on_exit(tmp_path: Path) -> None:
     # After context manager exits, temp dirs should be gone.
     for d in created:
         assert not d.exists()
-
 
 def test_atexit_cleanup_removes_retained_dirs(tmp_path: Path) -> None:
     """The atexit hook must remove retained clones registered by
@@ -1284,7 +1193,6 @@ def test_atexit_cleanup_removes_retained_dirs(tmp_path: Path) -> None:
     sb._cleanup_retained_dirs()
     assert not fake_dir.exists()
     assert sb._RETAINED_DIRS == []
-
 
 def test_payload_registers_retained_dir_for_atexit(tmp_path: Path) -> None:
     """source_build_payload must add the builder's temp_dirs to _RETAINED_DIRS
@@ -1318,7 +1226,6 @@ def test_payload_registers_retained_dir_for_atexit(tmp_path: Path) -> None:
         # Reset module-level registry so this test doesn't pollute later tests.
         sb._RETAINED_DIRS[:] = initial
 
-
 def test_retain_prevents_cleanup() -> None:
     with SourceBuilder() as b:
         # Simulate a tempdir that build() would have registered.
@@ -1333,9 +1240,7 @@ def test_retain_prevents_cleanup() -> None:
 
     _sh.rmtree(d, ignore_errors=True)
 
-
 # A2: _next_step_hint no_tag_matched fallback (CVE-2020-15014 forensic)
-
 
 def test_no_tag_matched_hint_suggests_dockerfile_gen() -> None:
     """A2 fix: when no tag matched, hint must mention dockerfile_gen so the
@@ -1360,9 +1265,7 @@ def test_no_tag_matched_hint_suggests_dockerfile_gen() -> None:
         f"Hint must not say give_up when only no_tag_matched: {hint!r}"
     )
 
-
 # ─── B-1: urllib env-based proxy injection defense ─────────────────────────
-
 
 def test_BUG004b_urllib_disables_env_proxy() -> None:
     """B-1 (companion to BUG-004b for requests): source_build's _urlopen
@@ -1407,7 +1310,6 @@ def test_BUG004b_urllib_disables_env_proxy() -> None:
         f"got {proxy_handlers[0].proxies}"
     )
 
-
 # ─── Pure-logic coverage gaps (no network / git / docker) ──────────────────
 #
 # Every test below exercises a pure-logic branch by calling the helper method
@@ -1417,25 +1319,20 @@ def test_BUG004b_urllib_disables_env_proxy() -> None:
 # to the existing integration-style tests above; over-mocking them here would
 # be brittle.
 
-
 # -- _env_int --------------------------------------------------------------
-
 
 def test_env_int_uses_default_when_unset(monkeypatch: Any) -> None:
     monkeypatch.delenv("CVE_ENV_TEST_INT", raising=False)
     assert sb._env_int("CVE_ENV_TEST_INT", 42) == 42
 
-
 def test_env_int_parses_valid_value(monkeypatch: Any) -> None:
     monkeypatch.setenv("CVE_ENV_TEST_INT", "123")
     assert sb._env_int("CVE_ENV_TEST_INT", 42) == 123
-
 
 def test_env_int_falls_back_on_malformed_value(monkeypatch: Any) -> None:
     """Lines 73-74: a non-int env value must NOT raise; falls back to default."""
     monkeypatch.setenv("CVE_ENV_TEST_INT", "not-a-number")
     assert sb._env_int("CVE_ENV_TEST_INT", 42) == 42
-
 
 def test_env_int_empty_string_uses_default(monkeypatch: Any) -> None:
     """An empty env value is falsy → `os.environ.get(...) or default` yields the
@@ -1443,9 +1340,7 @@ def test_env_int_empty_string_uses_default(monkeypatch: Any) -> None:
     monkeypatch.setenv("CVE_ENV_TEST_INT", "")
     assert sb._env_int("CVE_ENV_TEST_INT", 7) == 7
 
-
 # -- normalize_github_url: non-http(s) scheme ------------------------------
-
 
 def test_normalize_github_url_rejects_non_http_scheme() -> None:
     """Line 146: a URL whose scheme survives the rewrites but isn't http/https
@@ -1453,9 +1348,7 @@ def test_normalize_github_url_rejects_non_http_scheme() -> None:
     assert normalize_github_url("ftp://github.com/foo/bar") is None
     assert normalize_github_url("file:///github.com/foo/bar") is None
 
-
 # -- _fetch_repo_size_kb (436-452) -----------------------------------------
-
 
 def test_fetch_repo_size_kb_no_owner_repo_match() -> None:
     """Line 463-equivalent guard (437-438): a URL with no owner/repo returns None
@@ -1463,18 +1356,15 @@ def test_fetch_repo_size_kb_no_owner_repo_match() -> None:
     builder = SourceBuilder()
     assert builder._fetch_repo_size_kb("https://github.com/") is None
 
-
 def test_fetch_repo_size_kb_parses_size() -> None:
     builder = SourceBuilder()
     with patch.object(sb, "_http_get_json", return_value={"size": 1234}):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") == 1234
 
-
 def test_fetch_repo_size_kb_float_size_coerced_to_int() -> None:
     builder = SourceBuilder()
     with patch.object(sb, "_http_get_json", return_value={"size": 99.7}):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") == 99
-
 
 def test_fetch_repo_size_kb_non_dict_response() -> None:
     """Lines 445-446: a non-dict JSON body (e.g. a list) returns None."""
@@ -1482,14 +1372,12 @@ def test_fetch_repo_size_kb_non_dict_response() -> None:
     with patch.object(sb, "_http_get_json", return_value=["not", "a", "dict"]):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") is None
 
-
 def test_fetch_repo_size_kb_bool_size_rejected() -> None:
     """Lines 448-449: a JSON ``size`` of bool True/False must NOT be treated as
     an int (bool is an int subclass) — returns None."""
     builder = SourceBuilder()
     with patch.object(sb, "_http_get_json", return_value={"size": True}):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") is None
-
 
 def test_fetch_repo_size_kb_missing_size_key() -> None:
     """Line 452: ``size`` absent (or non-numeric) → None."""
@@ -1499,16 +1387,13 @@ def test_fetch_repo_size_kb_missing_size_key() -> None:
     with patch.object(sb, "_http_get_json", return_value={"size": "big"}):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") is None
 
-
 def test_fetch_repo_size_kb_oserror_returns_none() -> None:
     """Lines 443-444: an OSError from the HTTP helper is swallowed → None."""
     builder = SourceBuilder()
     with patch.object(sb, "_http_get_json", side_effect=OSError("boom")):
         assert builder._fetch_repo_size_kb("https://github.com/foo/bar") is None
 
-
 # -- _archive_fallback (463, 471-474) --------------------------------------
-
 
 def test_archive_fallback_no_owner_repo_match() -> None:
     """Line 463: a URL with no owner/repo group returns None immediately."""
@@ -1518,7 +1403,6 @@ def test_archive_fallback_no_owner_repo_match() -> None:
         "https://github.com/", "1.0", Path("/nonexistent"), warnings
     )
     assert out is None
-
 
 def test_archive_fallback_no_tags_available() -> None:
     """Lines 466-468: empty tag list from the API → warning + None."""
@@ -1531,7 +1415,6 @@ def test_archive_fallback_no_tags_available() -> None:
     assert out is None
     assert any("no tags available" in w for w in warnings)
 
-
 def test_archive_fallback_no_matching_tag(tmp_path: Path) -> None:
     """Lines 469-472: tags exist but none match ``version`` → warning + None."""
     builder = SourceBuilder()
@@ -1542,7 +1425,6 @@ def test_archive_fallback_no_matching_tag(tmp_path: Path) -> None:
         )
     assert out is None
     assert any("no tag matched" in w for w in warnings)
-
 
 def test_archive_fallback_rmtrees_existing_target_then_downloads(
     tmp_path: Path,
@@ -1573,7 +1455,6 @@ def test_archive_fallback_rmtrees_existing_target_then_downloads(
     assert captured["existed_at_download"] is False, "stale target not removed"
     assert any("codeload" in w for w in warnings)
 
-
 def test_archive_fallback_download_failure_warns(tmp_path: Path) -> None:
     """A matched tag but a failed download → warning + None."""
     builder = SourceBuilder()
@@ -1588,16 +1469,13 @@ def test_archive_fallback_download_failure_warns(tmp_path: Path) -> None:
     assert out is None
     assert any("download or extract failed" in w for w in warnings)
 
-
 # -- _list_tags_via_api (489-490, 496) -------------------------------------
-
 
 def test_list_tags_via_api_oserror_returns_empty() -> None:
     """An OSError from the HTTP helper → empty list."""
     builder = SourceBuilder()
     with patch.object(sb, "_http_get_json_paginated", side_effect=OSError("boom")):
         assert builder._list_tags_via_api("foo", "bar") == []
-
 
 def test_list_tags_via_api_non_list_response() -> None:
     """A non-list JSON body → empty list."""
@@ -1608,7 +1486,6 @@ def test_list_tags_via_api_non_list_response() -> None:
         return_value=({"message": "rate limited"}, None),
     ):
         assert builder._list_tags_via_api("foo", "bar") == []
-
 
 def test_list_tags_via_api_skips_non_dict_and_nameless_entries() -> None:
     """Non-dict entries and entries without a usable ``name`` are skipped;
@@ -1624,7 +1501,6 @@ def test_list_tags_via_api_skips_non_dict_and_nameless_entries() -> None:
     ]
     with patch.object(sb, "_http_get_json_paginated", return_value=(payload, None)):
         assert builder._list_tags_via_api("foo", "bar") == ["v1.0", "v1.1"]
-
 
 def test_list_tags_via_api_follows_pagination() -> None:
     """_list_tags_via_api follows Link: rel=next headers to fetch all pages."""
@@ -1646,9 +1522,7 @@ def test_list_tags_via_api_follows_pagination() -> None:
     assert tags[100] == "v2.0"
     assert call_count["n"] == 2
 
-
 # -- _download_tarball pure branches (512-515, 520, 525-530, 541, 548, 551) -
-
 
 def test_download_tarball_payload_none_returns_false(tmp_path: Path) -> None:
     """Lines 514-515: when the HTTP helper returns None (no bytes), refuse."""
@@ -1658,7 +1532,6 @@ def test_download_tarball_payload_none_returns_false(tmp_path: Path) -> None:
             builder._download_tarball("foo", "bar", "v1.0", tmp_path / "out") is False
         )
 
-
 def test_download_tarball_http_oserror_returns_false(tmp_path: Path) -> None:
     """Lines 512-513: an OSError fetching the tarball → refuse (False)."""
     builder = SourceBuilder()
@@ -1666,7 +1539,6 @@ def test_download_tarball_http_oserror_returns_false(tmp_path: Path) -> None:
         assert (
             builder._download_tarball("foo", "bar", "v1.0", tmp_path / "out") is False
         )
-
 
 def _make_many_member_tarball(n_members: int) -> bytes:
     """A tar.gz with a top dir + ``n_members`` tiny regular files."""
@@ -1682,7 +1554,6 @@ def _make_many_member_tarball(n_members: int) -> bytes:
             tf.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
-
 def test_download_tarball_refuses_over_member_cap(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -1697,7 +1568,6 @@ def test_download_tarball_refuses_over_member_cap(
     assert ok is False
     assert not target.exists() or not any(target.iterdir())
 
-
 def test_download_tarball_empty_member_list_returns_false(
     tmp_path: Path,
 ) -> None:
@@ -1711,7 +1581,6 @@ def test_download_tarball_empty_member_list_returns_false(
         assert (
             builder._download_tarball("foo", "bar", "v1.5", tmp_path / "out") is False
         )
-
 
 def test_download_tarball_blank_top_segment_returns_false(
     tmp_path: Path,
@@ -1730,7 +1599,6 @@ def test_download_tarball_blank_top_segment_returns_false(
         assert (
             builder._download_tarball("foo", "bar", "v1.5", tmp_path / "out") is False
         )
-
 
 def test_download_tarball_skips_topdir_dotdot_and_foreign_members(
     tmp_path: Path,
@@ -1768,9 +1636,7 @@ def test_download_tarball_skips_topdir_dotdot_and_foreign_members(
     assert not (target / "evil.txt").exists()
     assert not list(target.rglob("escape.txt"))
 
-
 # -- _read_dockerfile OSError (665-666) ------------------------------------
-
 
 def test_read_dockerfile_oserror_returns_none(tmp_path: Path) -> None:
     """Lines 665-666: a read that raises OSError (e.g. a directory, or perms) →
@@ -1780,9 +1646,7 @@ def test_read_dockerfile_oserror_returns_none(tmp_path: Path) -> None:
     a_dir.mkdir()  # reading a directory as text raises OSError
     assert builder._read_dockerfile(a_dir) is None
 
-
 # -- _find_devcontainer_image branches (687-688, 694-695, 699) -------------
-
 
 def test_find_devcontainer_image_read_oserror_continues(tmp_path: Path) -> None:
     """Lines 687-688: an OSError reading the first devcontainer location is
@@ -1809,7 +1673,6 @@ def test_find_devcontainer_image_read_oserror_continues(tmp_path: Path) -> None:
         # Only one candidate is readable-but-raises → loop continues → returns None.
         assert builder._find_devcontainer_image(repo) is None
 
-
 def test_find_devcontainer_image_invalid_json_returns_none(tmp_path: Path) -> None:
     """Lines 694-695: malformed JSON (even after JSONC stripping) → None."""
     repo = tmp_path / "repo"
@@ -1817,7 +1680,6 @@ def test_find_devcontainer_image_invalid_json_returns_none(tmp_path: Path) -> No
     (repo / ".devcontainer" / "devcontainer.json").write_text("{ not valid json ]")
     builder = SourceBuilder()
     assert builder._find_devcontainer_image(repo) is None
-
 
 def test_find_devcontainer_image_no_image_key_returns_none(tmp_path: Path) -> None:
     """Line 699: valid JSON with no usable ``image`` → None."""
@@ -1829,15 +1691,12 @@ def test_find_devcontainer_image_no_image_key_returns_none(tmp_path: Path) -> No
     builder = SourceBuilder()
     assert builder._find_devcontainer_image(repo) is None
 
-
 # -- _http_get_json branches (747, 750-755, 760, 764-765) ------------------
-
 
 def test_http_get_json_non_200_status_returns_none() -> None:
     """Line 746-747: a non-200 status (e.g. 500) → None."""
     with patch.object(sb, "_urlopen", return_value=_FakeResp(b"{}", status=500)):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
-
 
 def test_http_get_json_over_cap_returns_none(monkeypatch: Any) -> None:
     """Lines 748-755 (DOS-1): a JSON body over the cap is ignored → None."""
@@ -1845,7 +1704,6 @@ def test_http_get_json_over_cap_returns_none(monkeypatch: Any) -> None:
     big = b'{"size": 1234567}'  # well over 4 bytes
     with patch.object(sb, "_urlopen", return_value=_FakeResp(big)):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
-
 
 def test_http_get_json_urlerror_with_oserror_reason_reraises() -> None:
     """Lines 758-760: a URLError whose ``reason`` is an OSError is re-raised as
@@ -1855,28 +1713,23 @@ def test_http_get_json_urlerror_with_oserror_reason_reraises() -> None:
         with pytest.raises(OSError, match="network down"):
             sb._http_get_json("https://api.github.com/x", timeout=5)
 
-
 def test_http_get_json_urlerror_non_oserror_reason_returns_none() -> None:
     """Line 761: a URLError with a non-OSError reason (a bare string) → None."""
     err = urllib.error.URLError("dns weirdness")
     with patch.object(sb, "_urlopen", side_effect=err):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
 
-
 def test_http_get_json_undecodable_body_returns_none() -> None:
     """Lines 764-765: a body that isn't valid UTF-8 JSON → None (no raise)."""
     with patch.object(sb, "_urlopen", return_value=_FakeResp(b"\xff\xfe not json")):
         assert sb._http_get_json("https://api.github.com/x", timeout=5) is None
 
-
 # -- _http_get_bytes branches (774, 777-782, 785-788) ----------------------
-
 
 def test_http_get_bytes_non_200_status_returns_none() -> None:
     """Lines 773-774: a non-200 status → None."""
     with patch.object(sb, "_urlopen", return_value=_FakeResp(b"data", status=403)):
         assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
-
 
 def test_http_get_bytes_over_cap_returns_none(monkeypatch: Any) -> None:
     """Lines 775-782 (DOS-1): a tarball body over the cap → None (cascade falls
@@ -1886,7 +1739,6 @@ def test_http_get_bytes_over_cap_returns_none(monkeypatch: Any) -> None:
     with patch.object(sb, "_urlopen", return_value=_FakeResp(big)):
         assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
-
 def test_http_get_bytes_under_cap_returns_body() -> None:
     """Happy path: a small body is returned verbatim as bytes."""
     with patch.object(sb, "_urlopen", return_value=_FakeResp(b"tarbytes")):
@@ -1895,7 +1747,6 @@ def test_http_get_bytes_under_cap_returns_body() -> None:
             == b"tarbytes"
         )
 
-
 def test_http_get_bytes_urlerror_with_oserror_reason_reraises() -> None:
     """Lines 785-787: URLError wrapping an OSError → re-raised as that OSError."""
     err = urllib.error.URLError(OSError("reset"))
@@ -1903,16 +1754,13 @@ def test_http_get_bytes_urlerror_with_oserror_reason_reraises() -> None:
         with pytest.raises(OSError, match="reset"):
             sb._http_get_bytes("https://codeload.github.com/x", timeout=5)
 
-
 def test_http_get_bytes_urlerror_non_oserror_reason_returns_none() -> None:
     """Line 788: URLError with a non-OSError reason → None."""
     err = urllib.error.URLError("weird")
     with patch.object(sb, "_urlopen", side_effect=err):
         assert sb._http_get_bytes("https://codeload.github.com/x", timeout=5) is None
 
-
 # -- _classify_failure branches (918-922) ----------------------------------
-
 
 def test_classify_failure_unknown_when_no_error() -> None:
     r = SourceBuildResult(
@@ -1924,7 +1772,6 @@ def test_classify_failure_unknown_when_no_error() -> None:
         error=None,
     )
     assert sb._classify_failure(r) == "unknown"
-
 
 def test_classify_failure_checkout_failed() -> None:
     """Lines 918-919: an error mentioning 'checkout' → 'checkout_failed'."""
@@ -1938,7 +1785,6 @@ def test_classify_failure_checkout_failed() -> None:
     )
     assert sb._classify_failure(r) == "checkout_failed"
 
-
 def test_classify_failure_clone_failed_when_repo_dir_none() -> None:
     """Lines 920-921: a generic error with repo_dir=None → 'clone_failed'."""
     r = SourceBuildResult(
@@ -1951,7 +1797,6 @@ def test_classify_failure_clone_failed_when_repo_dir_none() -> None:
     )
     assert sb._classify_failure(r) == "clone_failed"
 
-
 def test_classify_failure_no_dockerfile_when_repo_dir_present(tmp_path: Path) -> None:
     """Line 922: a generic error WITH a repo_dir → 'no_dockerfile_or_build_config'."""
     r = SourceBuildResult(
@@ -1963,7 +1808,6 @@ def test_classify_failure_no_dockerfile_when_repo_dir_present(tmp_path: Path) ->
         error="repo cloned but nothing to build",
     )
     assert sb._classify_failure(r) == "no_dockerfile_or_build_config"
-
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

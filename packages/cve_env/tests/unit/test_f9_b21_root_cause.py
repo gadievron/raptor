@@ -12,6 +12,8 @@ arc has a deeper bug.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 from pathlib import Path
@@ -19,7 +21,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.loop import build
 
@@ -32,11 +33,9 @@ from .test_loop import (  # type: ignore[import-untyped]
     _text_block,
 )
 
-
 def _many_messages(n: int) -> list[Any]:
     """Generate n simple AssistantMessage(text) — each fires on_message once."""
     return [_assistant(_text_block(f"turn {i}")) for i in range(n)]
-
 
 def test_f9_fires_when_messages_exceed_max_turns(tmp_path: Path) -> None:
     """RED guard for F-9: with max_turns=10 and 200 messages, F-9 must
@@ -67,7 +66,6 @@ def test_f9_fires_when_messages_exceed_max_turns(tmp_path: Path) -> None:
         f"This means state.turn > effective_max_turns isn't actually "
         f"halting the SDK iteration."
     )
-
 
 def test_f9_audit_truncates_at_cap_plus_1(tmp_path: Path) -> None:
     """When F-9 fires, the audit JSONL should NOT contain entries past

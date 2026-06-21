@@ -16,6 +16,8 @@ breaking the suite.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 import json
@@ -24,7 +26,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.loop import build
 from cve_env.models import CveRecord, HostInfo
@@ -35,18 +36,18 @@ from cve_env.models import CveRecord, HostInfo
 # impl. The RED→GREEN→remove pattern with strict=True caught the moment
 # each fix landed (XPASS flags markers that should be removed).
 
+# SDK message helpers -- intentionally duplicated per FORBIDDEN-K. Keep
+# defaults aligned with test_loop.py canonical copy.
 
 def _text_block(text: str) -> Any:
     from claude_agent_sdk import TextBlock
 
     return TextBlock(text=text)
 
-
 def _tool_use(tool_id: str, name: str, input_: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolUseBlock
 
     return ToolUseBlock(id=tool_id, name=name, input=input_)
-
 
 def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
     from claude_agent_sdk import ToolResultBlock
@@ -55,7 +56,6 @@ def _tool_result(tool_use_id: str, payload: dict[str, Any]) -> Any:
         tool_use_id=tool_use_id,
         content=[{"type": "text", "text": json.dumps(payload)}],
     )
-
 
 def _assistant_with_usage(*blocks: Any, usage: dict[str, int] | None) -> Any:
     """AssistantMessage with explicit ``usage`` dict.
@@ -73,14 +73,12 @@ def _assistant_with_usage(*blocks: Any, usage: dict[str, int] | None) -> Any:
         usage=usage,
     )
 
-
 def _user(*blocks: Any) -> Any:
     from claude_agent_sdk import UserMessage
 
     return UserMessage(content=list(blocks), parent_tool_use_id=None)
 
-
-def _result(stop_reason: str, *, cost_usd: float = 0.0, turns: int = 3) -> Any:
+def _result(stop_reason: str, *, cost_usd: float = 0.03, turns: int = 3) -> Any:
     from claude_agent_sdk import ResultMessage
 
     return ResultMessage(
@@ -95,7 +93,6 @@ def _result(stop_reason: str, *, cost_usd: float = 0.0, turns: int = 3) -> Any:
         usage=None,
     )
 
-
 def _cve() -> CveRecord:
     return CveRecord(
         cve_id="CVE-2014-0160",
@@ -104,10 +101,8 @@ def _cve() -> CveRecord:
         description="Heartbleed",
     )
 
-
 def _host() -> HostInfo:
     return HostInfo(arch="aarch64", os="darwin", docker_backend="colima")
-
 
 def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
     """Drive on_message with canned messages. Lifted verbatim from
@@ -177,9 +172,7 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn"):
 
     return fake_run_agent
 
-
 # ─── Contract tests: token-derived attribution (Phase 21 behaviour) ─
-
 
 def test_phase_21_token_attribution_when_resultmessage_cost_zero(
     tmp_path: Path,
@@ -220,7 +213,6 @@ def test_phase_21_token_attribution_when_resultmessage_cost_zero(
         f"RESEARCH should have token cost; got: {outcome.stage_costs}"
     )
 
-
 def test_phase_21_token_attribution_credits_previous_turn_stage(tmp_path: Path) -> None:
     """Multi-turn: AssistantMessage cost credits the stage of the
     PREVIOUS turn's tool (whose result motivated this LLM call), NOT
@@ -259,7 +251,6 @@ def test_phase_21_token_attribution_credits_previous_turn_stage(tmp_path: Path) 
         f"LAUNCH should not be primary recipient; research={research}, launch={launch}"
     )
 
-
 def test_phase_21_first_assistantmessage_attributes_to_other(tmp_path: Path) -> None:
     """First AssistantMessage has no prior tool → state.last_tool_stage
     is the default 'OTHER'. Cost attributes there.
@@ -278,7 +269,6 @@ def test_phase_21_first_assistantmessage_attributes_to_other(tmp_path: Path) -> 
     assert outcome.stage_costs.get("OTHER", 0.0) > 0, (
         f"First AssistantMessage cost should attribute to OTHER; got: {outcome.stage_costs}"
     )
-
 
 def test_phase_21_assistantmessage_no_usage_no_attribution(tmp_path: Path) -> None:
     """AssistantMessage with usage=None → no token-derived attribution.
@@ -300,7 +290,6 @@ def test_phase_21_assistantmessage_no_usage_no_attribution(tmp_path: Path) -> No
     assert summed == 0.0, (
         f"usage=None should produce zero token-derived attribution; got: {outcome.stage_costs}"
     )
-
 
 def test_phase_21_resultmessage_only_path_still_works(tmp_path: Path) -> None:
     """Backward compatibility: AssistantMessage(usage=None) +
@@ -327,7 +316,6 @@ def test_phase_21_resultmessage_only_path_still_works(tmp_path: Path) -> None:
     # Sum should approximate $0.50 (ResultMessage path is exact).
     summed = sum(outcome.stage_costs.values())
     assert abs(summed - 0.50) < 0.05, f"sum {summed} should approximate $0.50"
-
 
 def test_phase_21_stage_costs_sum_approximates_total_cost_usd(tmp_path: Path) -> None:
     """Sanity: post-fix, sum(stage_costs) approximates total_cost_usd.
@@ -359,7 +347,6 @@ def test_phase_21_stage_costs_sum_approximates_total_cost_usd(tmp_path: Path) ->
         f"sum {summed:.6f} should approximate total_cost_usd "
         f"{outcome.total_cost_usd:.6f}; stage_costs={outcome.stage_costs}"
     )
-
 
 def test_phase_21_dedup_avoids_doublecount_when_both_paths_fire(tmp_path: Path) -> None:
     """Path 1: SDK reports tokens on AssistantMessage AND cost on
@@ -393,7 +380,6 @@ def test_phase_21_dedup_avoids_doublecount_when_both_paths_fire(tmp_path: Path) 
         f"stage_costs={outcome.stage_costs}"
     )
 
-
 # ─── Phase 21.3 RED tests: divergent AM/RM magnitudes (BUG #23 fix) ──
 #
 # Phase 22 (16-CVE bench) found that Phase 21.2's dedup logic is
@@ -407,7 +393,6 @@ def test_phase_21_dedup_avoids_doublecount_when_both_paths_fire(tmp_path: Path) 
 # Phase 21.3 replaces the boolean dedup with per-segment residual:
 # RM tops up AM's contribution so the final per-segment credit is
 # max(AM_estimate, RM_reported_cost). These 3 tests pin the behavior.
-
 
 def test_phase_21_3_rm_cost_dominates_when_larger_than_am_estimate(
     tmp_path: Path,
@@ -440,7 +425,6 @@ def test_phase_21_3_rm_cost_dominates_when_larger_than_am_estimate(
         f"sum {summed:.6f} expected ≈ $0.50; stage_costs={outcome.stage_costs}"
     )
 
-
 def test_phase_21_3_am_estimate_used_when_no_rm_cost(tmp_path: Path) -> None:
     """Heartbleed pattern (Phase 21.4 smoke): RM reports cost=0 but AM
     has token usage. AM's estimate must remain the credited value.
@@ -467,7 +451,6 @@ def test_phase_21_3_am_estimate_used_when_no_rm_cost(tmp_path: Path) -> None:
         f"AM-only sum should still ≈ total when RM cost=0; "
         f"sum={summed:.6f} total={outcome.total_cost_usd:.6f}"
     )
-
 
 def test_phase_21_3_per_segment_max_in_multisegment_run(tmp_path: Path) -> None:
     """Multi-segment: each segment's stage_cost is max(AM_estimate,

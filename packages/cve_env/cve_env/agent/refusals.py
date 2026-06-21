@@ -289,11 +289,13 @@ def _escape_terminal_codes(s: str) -> str:
     Other ``event.*`` string fields use ``!r`` (Python ``repr()`` already
     escapes); only ``refusal_text`` needs explicit treatment.
     """
+    # Unicode bidi overrides that can reorder displayed text in terminals/editors.
+    _BIDI_OVERRIDES = frozenset("‪‫‬‭‮⁦⁧⁨⁩")
     out: list[str] = []
     for ch in s:
         if ch in ("\n", "\t"):
             out.append(ch)
-        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F or 0x80 <= ord(ch) <= 0x9F or ch in _BIDI_OVERRIDES:
             out.append(f"\\x{ord(ch):02x}")
         else:
             out.append(ch)
@@ -305,7 +307,7 @@ def _render_event(event: RefusalEvent, recovery: str | None = None) -> str:
     safe_refusal_text = _escape_terminal_codes(event.refusal_text)
     label = f"{event.cve_id}@{event.run_id}:turn{event.turn}"
     tool_block = (
-        f"\n**Tool call in scope:** `{event.tool_call['name']}` "
+        f"\n**Tool call in scope:** `{event.tool_call.get('name', '<unknown>')}` "
         f"input={event.tool_call.get('input')!r}\n"
         if event.tool_call
         else "\n"

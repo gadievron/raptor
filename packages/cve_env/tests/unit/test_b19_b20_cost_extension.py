@@ -32,11 +32,9 @@ from cve_env.config import (
     get_token_rates,
 )
 
-
 # ============================================================================
 # B-19: token-based cost fallback
 # ============================================================================
-
 
 class TestGetTokenRates:
     def test_known_model_returns_known_rates(self) -> None:
@@ -61,7 +59,6 @@ class TestGetTokenRates:
             os.environ.pop("CVE_ENV_OUTPUT_RATE_PER_M", None)
             rates = get_token_rates("claude-opus-4-7")
             assert rates == (15.0, 75.0)
-
 
 class TestEstimateCostFromTokens:
     def test_zero_tokens_zero_cost(self) -> None:
@@ -92,16 +89,13 @@ class TestEstimateCostFromTokens:
         assert cost < 20.0  # sanity ceiling
         assert cost == pytest.approx(10.80, rel=1e-3)
 
-
 # ============================================================================
 # B-20: productive-extension predicate
 # ============================================================================
 
-
 # We test the predicate logic directly, not the full loop. The predicate
 # is implemented in cve_env.agent.loop.should_extend_turn_cap as a pure
 # function for easy testing.
-
 
 class TestShouldExtendTurnCap:
     def setup_method(self) -> None:
@@ -217,11 +211,9 @@ class TestShouldExtendTurnCap:
         )
         assert result == int(96 * 1.50)
 
-
 # ============================================================================
 # B-20: cap announcement in system prompt
 # ============================================================================
-
 
 class TestRenderSystemPromptWithCaps:
     def test_runtime_caps_block_includes_max_turns(self) -> None:
@@ -267,11 +259,9 @@ class TestRenderSystemPromptWithCaps:
             or "0 extension" in block.lower()
         )
 
-
 # ============================================================================
 # B-20: CLI accepts new args
 # ============================================================================
-
 
 class TestAssistantMessageTokenAccumulation:
     """B-19 enhancement (2026-05-07b): tokens are reported on every
@@ -313,7 +303,6 @@ class TestAssistantMessageTokenAccumulation:
         assert state.total_input_tokens == 3500
         assert state.total_output_tokens == 350
 
-
 class TestSdkMaxTurnsPreallocation:
     """B-20 architectural fix (2026-05-07b) + B-21 safety multiplier (2026-05-07c).
 
@@ -354,7 +343,6 @@ class TestSdkMaxTurnsPreallocation:
         # 10×50% = 5.0 + 1 = 6.0 (greater than safety 4) → ext factor wins → 576
         assert self._compute(96, 0.50, 10) == 576
 
-
 class TestCliExtensionArgs:
     def test_argparse_accepts_extension_args(self) -> None:
         from cve_env.cli import _build_argparser
@@ -382,12 +370,10 @@ class TestCliExtensionArgs:
         assert args.max_turn_extensions == 2
         assert args.turn_extension_pct == pytest.approx(0.30)
 
-
 # =============================================================================
 # #1 (2026-05-24) — _is_productive_outcome: verify/run_in_container count as
 # productive ONLY after a build succeeded (gated turn-extension eligibility).
 # =============================================================================
-
 
 def test_is_productive_outcome_build_tools_ok() -> None:
     from cve_env.agent.loop import _is_productive_outcome
@@ -396,12 +382,10 @@ def test_is_productive_outcome_build_tools_ok() -> None:
     assert _is_productive_outcome("source_build", {"ok": True}, False) is True
     assert _is_productive_outcome("docker_compose_up", {"ok": True}, False) is True
 
-
 def test_is_productive_outcome_build_tool_not_ok() -> None:
     from cve_env.agent.loop import _is_productive_outcome
 
     assert _is_productive_outcome("docker_build", {"ok": False}, False) is False
-
 
 def test_is_productive_outcome_verify_after_build() -> None:
     """#1: verify / run_in_container ARE productive once docker_built_ok — the
@@ -414,7 +398,6 @@ def test_is_productive_outcome_verify_after_build() -> None:
     assert _is_productive_outcome("run_in_container", {"ok": True}, True) is True
     assert _is_productive_outcome("verify", {"ok": False}, True) is True
 
-
 def test_is_productive_outcome_verify_before_build_not_productive() -> None:
     """#1 guard: verify / run_in_container BEFORE any build is NOT productive —
     keeps research-only / thrashing loops from extending the turn cap."""
@@ -422,7 +405,6 @@ def test_is_productive_outcome_verify_before_build_not_productive() -> None:
 
     assert _is_productive_outcome("verify", {"results": []}, False) is False
     assert _is_productive_outcome("run_in_container", {"ok": True}, False) is False
-
 
 def test_is_productive_outcome_research_tool_not_productive() -> None:
     from cve_env.agent.loop import _is_productive_outcome

@@ -319,6 +319,8 @@ def _has_specific_version_marker(check_entry: dict[str, Any]) -> bool:
 class _StreamState:
     """Mutable state threaded through the message stream."""
 
+    # Grows monotonically across continuations; bounded by turn caps.
+    # No trim needed for current deployment.
     tool_name_by_id: dict[str, str] = field(default_factory=dict)
     # Parallel map for tool inputs, captured at the llm_turn handler (mirroring
     # tool_name_by_id) and retrieved at the tool_result writer so AuditEntry rows
@@ -587,6 +589,9 @@ def _accumulate_result_cost_and_turns(state: _StreamState, msg: Any) -> None:
     start a fresh segment. ``last_cost_usd`` is accumulated unconditionally — it
     drives the cap check, not stage telemetry.
     """
+    # Assumption: SDK cost_usd is per-segment, not session-cumulative.
+    # Verified for claude_agent_sdk 0.x. If SDK changes to cumulative,
+    # this will double-count.
     cost_delta = msg.total_cost_usd or 0.0
     if cost_delta > 0:
         am_credited = state.am_credited_per_segment.get(state.current_segment_id, 0.0)
@@ -908,6 +913,7 @@ def should_extend_turn_cap(
         return None
     if current_cost_usd >= max_cost_usd * 0.85:
         return None
+    # Multiplicative: 96->115->138 with 20%. Bounded by max_extensions (typically 1-2).
     return int(current_max_turns * (1.0 + extension_pct))
 
 
@@ -1153,7 +1159,7 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
     # end_turn after a single Bash poke at the container's logs without ever
     # calling verify). Surfacing it as its own status lets triage tables count +
     # remediate it separately.
-    if state.launched_ok and not state.verify_attempted and stop_reason == "end_turn":
+    if state.launched_ok and not state.verify_attempted and sr_lower.startswith("end_turn"):
         return (
             "launched_no_verify",
             "agent launched (docker_run/compose_up.ok=true) but emitted "
@@ -1274,7 +1280,7 @@ def _map_status(stop_reason: str, state: _StreamState) -> tuple[OutcomeStatus, s
     # SDK-side cap hits surface via stop_reason strings we pass through.
     if "budget" in sr_lower:
         return "budget_exhausted", stop_reason
-    if "turn" in sr_lower or "max" in sr_lower:
+    if sr_lower in ("max_turns", "max_turns_reached", "turn_limit"):
         return "turn_cap", stop_reason
     return "error", stop_reason or "unknown"
 
@@ -1580,6 +1586,8 @@ async def build(
 
     def on_message(msg: Any) -> None:
         nonlocal pending_tool_use
+        # Counts every SDK message (Assistant+User+Result), not LLM turns;
+        # effective_max_turns compensated via _SDK_MAX_TURNS_SAFETY_MULTIPLIER
         state.turn += 1
         # Capture the live session id from any message that carries it
         # (AssistantMessage does). The terminal ResultMessage arrives only at
@@ -1800,8 +1808,9 @@ async def build(
                     ):
                         state.last_productive_turn = state.turn
                     # Track "did we BUILD?" — used by the strict version-marker
-                    # gate. Set on tool_use even if the build later fails; the
-                    # question is "did the agent take the build path at all?"
+                    # gate. Set on result (not use) -- if SDK crashes between
+                    # use/result, the lenient marker check applies. Acceptable:
+                    # crashed builds shouldn't get strict checking.
                     if tool_name in _BUILD_TOOLS:
                         state.has_built = True
                     if tool_name == "verify":
@@ -2087,6 +2096,8 @@ async def build(
                     f"stop_reason={sr!r}); halting before over-run"
                 )
 
+        # Intentional: once give_up_reason is set, every subsequent on_message
+        # re-raises to halt the SDK. Caught by _run_query_once._consume().
         # If give_up.terminal=True was processed in this on_message call (or any
         # prior), halt the SDK iteration. on_message's audit write for the give_up
         # tool result has already happened above by the time we reach this point
@@ -2230,7 +2241,7 @@ async def build(
             # "give_up > cap" precedence is preserved.
             terminal_status_on_err = "unresolvable"
             terminal_reason = state.give_up_reason
-        elif exc.__class__.__name__ == "TurnCapReached":
+        elif isinstance(exc, TurnCapReached):
             # Defensive turn-cap raised; map to turn_cap status. HOISTED above the
             # verify-pass branch: cap signals win over mid-run verify-pass,
             # mirroring the priority in _map_status. This path is reached only if
@@ -2239,19 +2250,19 @@ async def build(
             # The give_up branch staying above preserves "give_up > cap".
             terminal_status_on_err = "turn_cap"
             terminal_reason = f"runtime turn-cap fired ({exc})"
-        elif exc.__class__.__name__ == "BudgetCapExceeded":
+        elif isinstance(exc, BudgetCapExceeded):
             # Accumulated cost overran cap; map to budget_exhausted. HOISTED above
             # the verify-pass branch (see TurnCapReached comment above).
             terminal_status_on_err = "budget_exhausted"
             terminal_reason = f"runtime budget cap fired ({exc})"
-        elif exc.__class__.__name__ == "WallBudgetExceeded":
+        elif isinstance(exc, WallBudgetExceeded):
             # Internal wall-budget fired. Reuses budget_exhausted status (cost vs
             # wall both denote "ran out of the named budget"); the descriptive
             # reason field carries the wall-vs-cost distinction. HOISTED above the
             # verify-pass branch to preserve the "cap > verify-pass" invariant.
             terminal_status_on_err = "budget_exhausted"
             terminal_reason = f"internal wall budget exhausted ({exc})"
-        elif exc.__class__.__name__ == "NoProgressReached":
+        elif isinstance(exc, NoProgressReached):
             # Anti-thrash: prolonged no-progress churn give-up. Reuses turn_cap
             # status (the CVE was heading to the turn cap anyway — we reclaim the
             # wasted tail early); the distinct ``no_progress`` reason makes it
@@ -2337,7 +2348,7 @@ async def build(
     # finish via resume + CONTINUATION_USER_PROMPT, bounded to 2 attempts + a
     # 70%-cost gate. Cost/turns accumulate across runs; on a clean success/give_up
     # the loop stops and _map_status classifies as usual.
-    cont_cost_acc = run.total_cost_usd or 0.0
+    cont_cost_acc = state.last_cost_usd or run.total_cost_usd or 0.0
     cont_turns_acc = run.num_turns or 0
     continuation_count = 0
 
@@ -2357,8 +2368,10 @@ async def build(
         state.proprietary_verify_attempted = True
         saved_give_up_reason = state.give_up_reason
         saved_give_up_detail = state.give_up_detail
+        saved_verify_attempted = state.verify_attempted
         state.give_up_reason = ""
         state.give_up_detail = ""
+        state.verify_attempted = False
         resume_sid = state.last_session_id or run.session_id
         writer.write(
             cve_id=cve.cve_id,
@@ -2387,8 +2400,9 @@ async def build(
         except Exception:  # noqa: BLE001 -- a continuation that raises just stops; restore the give_up
             state.give_up_reason = saved_give_up_reason
             state.give_up_detail = saved_give_up_detail
+            state.verify_attempted = saved_verify_attempted
             break
-        cont_cost_acc += run.total_cost_usd or 0.0
+        cont_cost_acc += state.last_cost_usd or run.total_cost_usd or 0.0
         cont_turns_acc += run.num_turns or 0
         # Restore the proprietary give_up UNLESS the probe improved things: a
         # successful build/launch, verify_passed, or a fresh terminal give_up the
@@ -2401,6 +2415,7 @@ async def build(
         ):
             state.give_up_reason = saved_give_up_reason
             state.give_up_detail = saved_give_up_detail
+            state.verify_attempted = saved_verify_attempted
 
     # build-engagement gate: a NON-proprietary pre-build give-up
     # (skipped_image_lookup / no_image / unresolvable_metadata) emitted WITHOUT
@@ -2419,8 +2434,10 @@ async def build(
         # restored below unless the continuation actually improves.
         saved_give_up_reason = state.give_up_reason
         saved_give_up_detail = state.give_up_detail
+        saved_verify_attempted = state.verify_attempted
         state.give_up_reason = ""
         state.give_up_detail = ""
+        state.verify_attempted = False
         # Prefer the streamed session id (run.session_id is empty for give_up
         # runs — the terminal ResultMessage never arrived).
         resume_sid = state.last_session_id or run.session_id
@@ -2451,8 +2468,9 @@ async def build(
         except Exception:  # noqa: BLE001 -- a continuation that raises just stops; restore the give_up
             state.give_up_reason = saved_give_up_reason
             state.give_up_detail = saved_give_up_detail
+            state.verify_attempted = saved_verify_attempted
             break
-        cont_cost_acc += run.total_cost_usd or 0.0
+        cont_cost_acc += state.last_cost_usd or run.total_cost_usd or 0.0
         cont_turns_acc += run.num_turns or 0
         # Restore the original give_up UNLESS the continuation improved —
         # reached verify_passed, a successful build/launch, or a fresh terminal
@@ -2465,6 +2483,7 @@ async def build(
         ):
             state.give_up_reason = saved_give_up_reason
             state.give_up_detail = saved_give_up_detail
+            state.verify_attempted = saved_verify_attempted
 
     while _should_continue_for_verify(
         run, state, continuation_count, cont_cost_acc, max_cost_usd
@@ -2497,7 +2516,7 @@ async def build(
             )
         except Exception:  # noqa: BLE001 -- a continuation that raises just stops the loop
             break
-        cont_cost_acc += run.total_cost_usd or 0.0
+        cont_cost_acc += state.last_cost_usd or run.total_cost_usd or 0.0
         cont_turns_acc += run.num_turns or 0
 
     # benign-verify continuation (agentic, env-gated default-off): a POST-LAUNCH
@@ -2540,7 +2559,7 @@ async def build(
             )
         except Exception:  # noqa: BLE001 -- a continuation that raises just stops the loop
             break
-        cont_cost_acc += run.total_cost_usd or 0.0
+        cont_cost_acc += state.last_cost_usd or run.total_cost_usd or 0.0
         cont_turns_acc += run.num_turns or 0
 
     status, reason = _map_status(run.stop_reason, state)

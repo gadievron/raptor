@@ -14,26 +14,11 @@ Tests cover:
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pytest
 
 import cve_env.config as cve_config
-
-
-def _reload_module_with_env(
-    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], cwd: Path
-) -> None:
-    """Reload cve_env.config under a controlled env + cwd so _load_toml_config
-    re-runs at module import. Used to test that the module-level _TOML_CONFIG
-    initialization picks up the env var. NOT used for the function tests below
-    (which can call _load_toml_config directly).
-    """
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    monkeypatch.chdir(cwd)
-    importlib.reload(cve_config)
 
 
 def test_load_toml_returns_empty_when_file_missing(

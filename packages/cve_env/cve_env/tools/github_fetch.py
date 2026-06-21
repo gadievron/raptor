@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -318,9 +319,10 @@ def github_fetch(
             reason_class="poc_repo_blocked",
         )
     clean_path = path.strip("/")
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{clean_path}"
+    encoded_path = urllib.parse.quote(clean_path, safe="/")
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{encoded_path}"
     if ref:
-        url += f"?ref={ref}"
+        url += f"?ref={urllib.parse.quote(ref, safe='')}"
     headers = {"Accept": "application/vnd.github+json", **_auth_header()}
     r = web_fetch(url=url, headers=headers, max_bytes=1024 * 1024)
     if not r.ok:

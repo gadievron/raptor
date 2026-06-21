@@ -28,6 +28,9 @@ def _extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
     Dockerfiles return the FIRST FROM (the base for stage 0); subsequent
     stages may FROM previous stages (local refs) but the gate is whether
     the BASE chain reaches an external registry.
+
+    Returns first FROM only. Multi-stage with external later stages may
+    miss --pull benefit. Acceptable: Docker caches are typically warm.
     """
     text = dockerfile_text
     if text is None:
@@ -103,6 +106,8 @@ _LIB_NOT_FOUND_RE = re.compile(
 )
 
 
+# Keyword-to-error correlation is global (not line-scoped). May
+# false-positive when keywords appear in unrelated lines.
 def classify_build_error(stderr: str) -> list[str]:
     """Return apt packages implied by build stderr, or ``[]``."""
     if not stderr:
@@ -373,6 +378,8 @@ def docker_build(
                 ),
             )
 
+    if image_tag and not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$', image_tag):
+        image_tag = None  # fall back to auto-generated
     if image_tag:
         tag = image_tag
     elif cve_id:
@@ -464,9 +471,9 @@ def docker_build(
         if dockerfile_text is not None:
             with tempfile.NamedTemporaryFile(  # noqa: SIM115 -- delete=False intentional
                 mode="w",
+                prefix="cve-env-df-",
                 suffix=".Dockerfile",
                 delete=False,
-                dir=str(ctx),
             ) as fd:
                 fd.write(dockerfile_text)
                 tmpfile = Path(fd.name)
@@ -489,12 +496,12 @@ def docker_build(
             return BuildResult(
                 ok=False,
                 reason="timeout",
-                reason_class="transport",
+                reason_class="timeout",
                 image_tag=tag,
                 stderr_tail=f"timeout after {timeout_seconds}s",
                 logs_tail=outcome.stdout[-4000:] if outcome.stdout else "",
                 next_step_hint=_docker_build_next_step_hint(
-                    "timeout", "transport", None, ""
+                    "timeout", "timeout", None, ""
                 ),
             )
 

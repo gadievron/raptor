@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import re
 import sys
 import time
@@ -51,7 +52,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         os=host_arch.os,
         rosetta_available=host_arch.rosetta_available,
     )
-    run_id = f"manual-{int(time.time())}"
+    run_id = f"manual-{int(time.time())}-{os.getpid()}"
     audit_root = Path(args.audit_root) if args.audit_root else AGENTIC_AUDIT_ROOT
 
     # Acquire lockfile so concurrent cve-env builds can detect each other.
@@ -60,7 +61,6 @@ def _cmd_build(args: argparse.Namespace) -> int:
     from cve_env.utils.lifecycle import acquire_lock, release_lock
 
     lock_path = acquire_lock()
-    lock_released = False
 
     try:
         # Probe service health pre-run; pass any CRITICAL-service constraints
@@ -92,6 +92,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 constraints=constraints,
             )
         )
+        # Manual whitelist — must be updated when Outcome fields change.
+        # Consider dataclasses.asdict() with exclusions.
         outcome_dict = {
             "cve_id": outcome.cve_id,
             "status": outcome.status,
@@ -176,15 +178,14 @@ def _cmd_build(args: argparse.Namespace) -> int:
                     prune_images()
             # Release own lock BEFORE colima-stop so idle-check excludes us.
             release_lock(lock_path)
-            lock_released = True
+            lock_path = None  # prevent redundant release in the finally below
             if auto_stop:
                 with contextlib.suppress(Exception):
                     stop_colima_if_idle()
         finally:
             # Defensive: even if the lifecycle import/dispatch raised,
-            # the lock must be released. Guarded so a second release_lock
-            # cannot delete a different process's lock.
-            if not lock_released:
+            # the lock must be released.
+            if lock_path is not None:
                 release_lock(lock_path)
 
 
@@ -211,6 +212,7 @@ _STAGE_BY_TOOL: dict[str, str] = {
     "WebFetch": "research",
     "WebSearch": "research",
     "image_resolve": "resolve",
+    "vulhub_lookup": "resolve",
     "source_build": "acquire",
     "dockerfile_gen": "acquire",
     "docker_build": "acquire",
@@ -218,6 +220,7 @@ _STAGE_BY_TOOL: dict[str, str] = {
     "docker_run": "launch",
     "run_in_container": "launch",
     "verify": "verify",
+    "log_check": "verify",
     # Non-pipeline tools — kept here so the sibling tables in
     # scripts/cve_evidence.py and scripts/heartbeat_status.sh stay in sync
     # (test_stage_table_sync.py enforces this). _STAGE_ORDER below limits
@@ -612,6 +615,8 @@ def _print_human_report(outcome: Any) -> None:  # noqa: ANN401
     # AND final_text matches the 529 Overloaded pattern. Without this branch
     # they would be mislabeled "research-only" because the default fires on an
     # empty tool list. Use the shared classifier for consistency.
+    # TODO: _classify_api_overload should be public (no underscore) or
+    # extracted to a shared module.
     from cve_env.agent.loop import _classify_api_overload
 
     if (

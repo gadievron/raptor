@@ -27,13 +27,12 @@ in 51.B.2 (runtime) + 51.B.3 (prompt).
 """
 
 from __future__ import annotations
-
-
 import pytest
 pytest.importorskip("claude_agent_sdk")
 
-from cve_env.agent.loop import _map_status, _StreamState
+import pytest
 
+from cve_env.agent.loop import _map_status, _StreamState
 
 def _make_state(**kw) -> _StreamState:
     """Construct fresh _StreamState with kw overrides for end_turn branch."""
@@ -42,12 +41,10 @@ def _make_state(**kw) -> _StreamState:
         setattr(s, k, v)
     return s
 
-
 def _seed_tool_uses(state: _StreamState, names: list[str]) -> None:
     """Seed state.tool_uses_seen with the given tool names (in order)."""
     for n in names:
         state.tool_uses_seen.append({"name": n, "input": {}})
-
 
 def test_docker_built_ok_no_launch_end_turn_emits_new_marker() -> None:
     """Phase 51B primary RED: docker_build succeeded but agent emitted
@@ -71,7 +68,6 @@ def test_docker_built_ok_no_launch_end_turn_emits_new_marker() -> None:
         f"expected give_up_reason='quit_without_verify_after_build'; "
         f"got: {state.give_up_reason!r}"
     )
-
 
 def test_build_failed_end_turn_keeps_existing_marker() -> None:
     """Phase 51B regression-guard: the 6 Phase 49 CVE pattern.
@@ -99,7 +95,6 @@ def test_build_failed_end_turn_keeps_existing_marker() -> None:
     # Phase 51B new marker should NOT fire here
     assert state.give_up_reason != "quit_without_verify_after_build"
 
-
 def test_launched_no_verify_branch_takes_precedence_over_new_marker() -> None:
     """Phase 51B regression-guard: Phase 57 `launched_no_verify` precedence.
 
@@ -124,7 +119,6 @@ def test_launched_no_verify_branch_takes_precedence_over_new_marker() -> None:
         f"new marker should not fire when Phase 57 already classified; "
         f"got: {state.give_up_reason!r}"
     )
-
 
 def test_phase_51b_build_failure_commitment_rule_present_in_prompt() -> None:
     """Phase 51B prompt-presence RED: assert prompts.py contains the new
@@ -158,7 +152,6 @@ def test_phase_51b_build_failure_commitment_rule_present_in_prompt() -> None:
         f"{sentinels}. Add the new commitment rule with one of these "
         "sentinel phrases to mark Phase 51B's landing."
     )
-
 
 def test_phase_47c_marker_unchanged_in_turn_cap_branch() -> None:
     """Phase 51B regression-guard: Phase 47.C turn_cap marker stays.

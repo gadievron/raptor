@@ -15,6 +15,8 @@ is empty again; operators opt in via the env var.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 import os
@@ -22,30 +24,23 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent import llm
 from cve_env.config import get_disallowed_tools
 
-
 # ── config getter ───────────────────────────────────────────────────────────
 
+def test_get_disallowed_tools_default_empty(monkeypatch: Any) -> None:
+    monkeypatch.delenv("CVE_ENV_DISALLOWED_TOOLS", raising=False)
+    assert get_disallowed_tools() == []
 
-def test_get_disallowed_tools_default_empty() -> None:
-    with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("CVE_ENV_DISALLOWED_TOOLS", None)
-        assert get_disallowed_tools() == []
-
-
-def test_web_tools_enabled_by_default() -> None:
+def test_web_tools_enabled_by_default(monkeypatch: Any) -> None:
     """Regression guard for the 2026-06-11 revert: built-in WebFetch/WebSearch
     must NOT be disabled by default (the agent uses them for research)."""
-    with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("CVE_ENV_DISALLOWED_TOOLS", None)
-        disallowed = get_disallowed_tools()
-        assert "WebFetch" not in disallowed
-        assert "WebSearch" not in disallowed
-
+    monkeypatch.delenv("CVE_ENV_DISALLOWED_TOOLS", raising=False)
+    disallowed = get_disallowed_tools()
+    assert "WebFetch" not in disallowed
+    assert "WebSearch" not in disallowed
 
 def test_get_disallowed_tools_parses_csv_and_trims() -> None:
     with patch.dict(
@@ -53,14 +48,11 @@ def test_get_disallowed_tools_parses_csv_and_trims() -> None:
     ):
         assert get_disallowed_tools() == ["Agent", "Task", "WebSearch"]
 
-
 def test_get_disallowed_tools_empty_string_is_empty() -> None:
     with patch.dict(os.environ, {"CVE_ENV_DISALLOWED_TOOLS": "   "}):
         assert get_disallowed_tools() == []
 
-
 # ── llm wiring (the load-bearing part: it reaches ClaudeAgentOptions) ─────────
-
 
 def _fake_outcome() -> Any:
     return llm.AgentRunOutcome(
@@ -72,7 +64,6 @@ def _fake_outcome() -> Any:
         final_text="",
         tool_uses=[],
     )
-
 
 def _capture_options(monkeypatch: Any) -> dict[str, Any]:
     captured: dict[str, Any] = {}
@@ -86,13 +77,11 @@ def _capture_options(monkeypatch: Any) -> dict[str, Any]:
     monkeypatch.setattr(llm, "_run_query_once", _fake_rqo)
     return captured
 
-
 def test_run_agent_wires_disallowed_tools_from_env(monkeypatch: Any) -> None:
     captured = _capture_options(monkeypatch)
     monkeypatch.setenv("CVE_ENV_DISALLOWED_TOOLS", "Agent")
     asyncio.run(llm.run_agent(system_prompt="x", user_prompt="y", tools=[]))
     assert captured["options"].disallowed_tools == ["Agent"]
-
 
 def test_run_agent_no_disallowed_tools_by_default(monkeypatch: Any) -> None:
     """Default-safe: env unset → no disallowed_tools restriction (current behavior)."""

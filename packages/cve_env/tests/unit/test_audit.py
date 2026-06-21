@@ -1,14 +1,14 @@
 """Audit writer round-trip + filesystem layout."""
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 from pathlib import Path
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.audit import AuditEntry, AuditWriter, _sanitize_cve_id
-
 
 def test_sanitize_cve_id_strips_separators() -> None:
     assert _sanitize_cve_id("CVE-2018-7600") == "CVE-2018-7600"
@@ -17,7 +17,6 @@ def test_sanitize_cve_id_strips_separators() -> None:
     assert _sanitize_cve_id("CVE:../x") == "CVE_.._x"
     assert _sanitize_cve_id("") == "UNKNOWN"
     assert _sanitize_cve_id("$$$") == "___"
-
 
 def test_writer_appends_and_reads_back(tmp_path: Path) -> None:
     writer = AuditWriter(run_id="run-001", root=tmp_path)
@@ -48,7 +47,6 @@ def test_writer_appends_and_reads_back(tmp_path: Path) -> None:
     assert entries[0]["status"] == "llm_turn"
     assert entries[1]["tool_name"] == "vulhub_lookup"
 
-
 def test_writer_separate_file_per_cve(tmp_path: Path) -> None:
     writer = AuditWriter(run_id="run-002", root=tmp_path)
     writer.write(cve_id="CVE-A", entry=AuditEntry(turn=1, status="tool_ok"))
@@ -57,14 +55,12 @@ def test_writer_separate_file_per_cve(tmp_path: Path) -> None:
     assert (tmp_path / "run-002" / "CVE-B.jsonl").exists()
     assert writer.read(cve_id="CVE-C") == ()
 
-
 # -- Phase 67.0 TDD safety net ------------------------------------------------
 # Phase 67 audit issue #4 (severity 9): two-write split (json.dumps then "\n")
 # with no flush/fsync. A crash between the two writes leaves a partial line.
 # The reader uses splitlines + json.loads which crashes on malformed lines
 # instead of skipping them. 67.2 ships a single atomic write + a tolerant
 # reader that skips malformed lines.
-
 
 def test_phase67_audit_write_atomic_or_partial_recovery(tmp_path: Path) -> None:
     """Phase 67.2 contract: a partial line left by a crash between
@@ -101,7 +97,6 @@ def test_phase67_audit_write_atomic_or_partial_recovery(tmp_path: Path) -> None:
     assert 1 in turns, "first complete entry must be returned"
     assert 3 in turns, "recovery entry must be returned"
 
-
 # -- Phase 53-impl.1 (Cand 3) tool_input_by_id state threading -----------------
 # Phase 52 + 53-inv finding: tool_input is captured at llm_turn site (loop.py
 # :1193-1201) but NOT at tool_result writer site (:1370-1378), because no
@@ -113,9 +108,7 @@ def test_phase67_audit_write_atomic_or_partial_recovery(tmp_path: Path) -> None:
 # CVE-2024-45302 audit JSONL = 10/10 tool_ok entries empty. Fix: parallel
 # state dict.
 
-
-from cve_env.agent.loop import _StreamState
-
+from cve_env.agent.loop import _StreamState  # noqa: E402
 
 def test_phase53_impl1_stream_state_has_tool_input_by_id_field() -> None:
     """Cand 3 state-threading contract: `_StreamState` MUST expose a
@@ -131,7 +124,6 @@ def test_phase53_impl1_stream_state_has_tool_input_by_id_field() -> None:
     )
     assert isinstance(state.tool_input_by_id, dict)
     assert state.tool_input_by_id == {}, "field must default to empty dict"
-
 
 def test_phase53_impl1_tool_input_round_trips_via_state() -> None:
     """Cand 3 round-trip contract: setting `state.tool_input_by_id[id] = {...}`
@@ -157,7 +149,6 @@ def test_phase53_impl1_tool_input_round_trips_via_state() -> None:
     assert retrieved_1 == {"command": "ls /tmp", "description": "list /tmp"}
     assert retrieved_2 == {"image": "nginx:1.0", "container_port": 8080}
     assert retrieved_missing == {}, "missing IDs return empty dict (safe default)"
-
 
 def test_phase53_impl1_tool_input_by_id_parallels_tool_name_by_id() -> None:
     """Cand 3 structural contract: `tool_input_by_id` MUST be a parallel
@@ -185,7 +176,6 @@ def test_phase53_impl1_tool_input_by_id_parallels_tool_name_by_id() -> None:
         "context_dir": "/tmp/cve-X",
         "dockerfile_text": "FROM nginx",
     }
-
 
 def test_phase53_impl1_audit_writer_serializes_tool_input_on_tool_result(
     tmp_path: Path,
@@ -224,13 +214,11 @@ def test_phase53_impl1_audit_writer_serializes_tool_input_on_tool_result(
         "image_tag": "test:1.0",
     }, "tool_input must round-trip; cannot be empty {} on tool_ok entries"
 
-
 # -- Security hardening: secret redaction + owner-only file mode ---------------
 # The agent has a built-in host Bash, so a command line could carry a token; the
 # audit JSONL is append-only and may be shared for debugging. Redact secrets and
 # restrict the files to the owner. Redaction must be a no-op for benign build
 # text (image tags, paths, reasons).
-
 
 def test_audit_redacts_github_token_in_tool_io(tmp_path: Path) -> None:
     writer = AuditWriter(run_id="sec-redact", root=tmp_path)
@@ -257,7 +245,6 @@ def test_audit_redacts_github_token_in_tool_io(tmp_path: Path) -> None:
     assert "command" in entry["tool_input"]
     assert "github.com/o/r" in entry["tool_result"]["stdout"]
 
-
 def test_audit_does_not_redact_benign_build_text(tmp_path: Path) -> None:
     writer = AuditWriter(run_id="sec-benign", root=tmp_path)
     writer.write(
@@ -277,7 +264,6 @@ def test_audit_does_not_redact_benign_build_text(tmp_path: Path) -> None:
     }
     raw = (tmp_path / "sec-benign" / "CVE-SEC-2.jsonl").read_text()
     assert "[REDACTED]" not in raw, "benign build text must not trip redaction"
-
 
 def test_audit_files_are_owner_only(tmp_path: Path) -> None:
     import stat

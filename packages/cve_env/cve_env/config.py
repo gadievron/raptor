@@ -59,7 +59,7 @@ def _load_toml_config() -> dict[str, Any]:
     path_str = os.environ.get("CVE_ENV_CONFIG_FILE", "")
     if not path_str:
         return {}
-    path = Path(path_str)
+    path = Path(path_str).resolve()
     if not path.is_file():
         return {}
     try:
@@ -69,6 +69,8 @@ def _load_toml_config() -> dict[str, Any]:
         return {}
 
 
+# Loaded once at import. Not reloadable — CWD/env changes after import
+# are invisible. Tests that need different TOML must mock _TOML_CONFIG directly.
 _TOML_CONFIG: dict[str, Any] = _load_toml_config()
 
 
@@ -85,6 +87,19 @@ def _get_toml_value(toml_path: list[str], default: Any = None) -> Any:
             return default
         d = d[key]
     return d
+
+
+def _env_parse(key: str, parser: type, default: Any) -> Any:
+    """Parse an env var with ``parser`` (e.g. ``float``, ``int``), falling
+    back to ``default`` on missing or malformed values with a warning."""
+    raw = os.environ.get(key)
+    if raw is None:
+        return default
+    try:
+        return parser(raw)
+    except (ValueError, TypeError):
+        logger.warning("Malformed env var %s=%r, using default %r", key, raw, default)
+        return default
 
 
 DEFAULT_MODEL: str = "claude-opus-4-7"
@@ -234,7 +249,7 @@ def get_recovery_gap_turns() -> int:
             if v > 0:
                 return v
         except ValueError:
-            pass  # malformed env override -> fall back to the default below
+            logger.warning("Malformed env var CVE_ENV_RECOVERY_GAP_TURNS=%r, using default %d", env_val, _DEFAULT_RECOVERY_GAP_TURNS)
     return _DEFAULT_RECOVERY_GAP_TURNS
 
 
@@ -259,12 +274,12 @@ def get_internal_wall_budget_s() -> float:
             if v >= 0:
                 return v
         except ValueError:
-            pass  # malformed env override -> fall back to the default below
+            logger.warning("Malformed env var CVE_ENV_INTERNAL_WALL_S=%r, using default %.1f", env_val, _DEFAULT_INTERNAL_WALL_BUDGET_S)
     return _DEFAULT_INTERNAL_WALL_BUDGET_S
 
 
-# Module-level constant resolved once at import time. on_message reads this
-# to keep the per-message check branch-free when disabled.
+# Resolved once at import for branch-free hot path. Tests must reassign
+# this constant, not env vars.
 INTERNAL_WALL_BUDGET_S: float = get_internal_wall_budget_s()
 
 
@@ -296,7 +311,7 @@ def get_no_progress_giveup_turns() -> int:
             if v >= 0:
                 return v
         except ValueError:
-            pass  # malformed env override -> fall back to the default below
+            logger.warning("Malformed env var CVE_ENV_NO_PROGRESS_GIVEUP_TURNS=%r, using default %d", env_val, _DEFAULT_NO_PROGRESS_GIVEUP_TURNS)
     return _DEFAULT_NO_PROGRESS_GIVEUP_TURNS
 
 
@@ -324,7 +339,7 @@ def get_sdk_idle_timeout_s() -> float:
             if v >= 0:
                 return v
         except ValueError:
-            pass  # malformed env override -> fall back to the default below
+            logger.warning("Malformed env var CVE_ENV_SDK_IDLE_TIMEOUT_S=%r, using default %.1f", env_val, _DEFAULT_SDK_IDLE_TIMEOUT_S)
     return _DEFAULT_SDK_IDLE_TIMEOUT_S
 
 
@@ -589,13 +604,19 @@ def get_stage_budget(stage: str) -> float:
     env_val = os.environ.get(env_key)
     if env_val is not None:
         try:
-            return float(env_val)
+            val = float(env_val)
+            if val < 0:
+                val = 0.0  # negative treated as unbounded
+            return val
         except ValueError:
             return _DEFAULT_STAGE_BUDGETS.get(stage, 0.0)
     toml_val = _get_toml_value(["budget", stage.lower()])
     if toml_val is not None:
         try:
-            return float(toml_val)
+            val = float(toml_val)
+            if val < 0:
+                val = 0.0  # negative treated as unbounded
+            return val
         except (TypeError, ValueError):
             pass
     return _DEFAULT_STAGE_BUDGETS.get(stage, 0.0)
@@ -656,12 +677,12 @@ def stage_hard_budget_breach(stage_costs: dict[str, float]) -> str | None:
 # Adaptive cost extension constants. Mirrors the productive-extension for the
 # cost dimension. Defaults are deliberately conservative (1 × 10% by default);
 # users opt in to more aggressive behavior via env vars.
-COST_EXTENSION_PCT: float = _safe_float("CVE_ENV_COST_EXTENSION_PCT", 0.10)
+COST_EXTENSION_PCT: float = _env_parse("CVE_ENV_COST_EXTENSION_PCT", float, 0.10)
 """Multiplier applied to ``max_cost_usd`` on each granted extension.
 Default 0.10 (10% more budget). Override via env var
 ``CVE_ENV_COST_EXTENSION_PCT``."""
 
-MAX_COST_EXTENSIONS: int = _safe_int("CVE_ENV_MAX_COST_EXTENSIONS", 1)
+MAX_COST_EXTENSIONS: int = _env_parse("CVE_ENV_MAX_COST_EXTENSIONS", int, 1)
 """Maximum number of cost-cap extensions per CVE. Default 1 (single
 extension); set to 0 to fully disable adaptive extension. Override via env var
 ``CVE_ENV_MAX_COST_EXTENSIONS``."""
@@ -734,7 +755,9 @@ def get_disallowed_tools() -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
-MAX_TOOL_ATTEMPT_EXTENSIONS: int = _safe_int("CVE_ENV_MAX_TOOL_ATTEMPT_EXTENSIONS", 2)
+MAX_TOOL_ATTEMPT_EXTENSIONS: int = _env_parse(
+    "CVE_ENV_MAX_TOOL_ATTEMPT_EXTENSIONS", int, 2
+)
 """Max progress-aware extensions of a per-tool attempt cap.
 When a per-tool cap is exceeded BUT the agent made recent productive progress,
 the cap is extended (by ×base each time) up to this many times before firing.
@@ -840,6 +863,8 @@ def get_token_rates(model: str = MODEL) -> tuple[float, float]:
             return float(env_in), float(env_out)
         except ValueError:
             pass  # malformed env override -> fall back to the default below
+    if model not in MODEL_TOKEN_RATES_PER_M_USD:
+        logger.warning("No token rates for model %r, falling back to Sonnet rates", model)
     return MODEL_TOKEN_RATES_PER_M_USD.get(model, (3.0, 15.0))
 
 
@@ -890,10 +915,12 @@ def estimate_cost_from_turns(num_turns: int, model: str = MODEL) -> float:
 def _env_bool(name: str, default: bool = False) -> bool:
     """Parse a boolean env var. Truthy: 'true', '1', 'yes', 'on' (case-insensitive).
     Falsy: 'false', '0', 'no', 'off'. Unset or unknown values return ``default``."""
-    val = os.environ.get(name, "").strip().lower()
-    if val in ("true", "1", "yes", "on"):
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("true", "1", "yes", "on"):
         return True
-    if val in ("false", "0", "no", "off"):
+    if raw in ("false", "0", "no", "off"):
         return False
     return default
 

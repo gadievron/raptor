@@ -49,6 +49,7 @@ class ComposeError(RuntimeError):
         self.stderr = stderr
 
 
+# Cached for process lifetime. If Docker restarts mid-bench, stale path will cause errors.
 @lru_cache(maxsize=1)
 def _compose_invocation() -> tuple[str, ...]:
     """Return the argv prefix for compose -- V2 plugin if available,
@@ -198,11 +199,16 @@ def _mounts_docker_socket(volume: Any) -> bool:
     else:
         return False
     source = source.strip()
-    return (
+    if (
         source == "/var/run/docker.sock"
         or source == "docker.sock"
         or source.endswith("/docker.sock")
-    )
+    ):
+        return True
+    # Parent directory mounts that would expose the docker socket.
+    if source in ('/var/run', '/run', '/var/run/'):
+        return True
+    return False
 
 
 def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
@@ -224,8 +230,10 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
     try:
         data = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        msg = f"cannot parse compose file {compose_file} for security rewrite: {exc}"
-        raise ComposeError(msg)
+        raise ComposeError(
+            f"cannot parse compose file {compose_file} for security rewrite: {exc}",
+            stderr=str(exc),
+        ) from exc
     if not isinstance(data, dict):
         msg = f"compose file {compose_file} did not parse as a YAML mapping"
         raise ComposeError(msg)
@@ -239,6 +247,9 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
         "NET_ADMIN",
         "SYS_MODULE",
         "SYS_RAWIO",
+        "DAC_READ_SEARCH",
+        "NET_RAW",
+        "SYS_CHROOT",
         "ALL",
     }
     for spec in services.values():
@@ -247,10 +258,15 @@ def _rewrite_ports_in_place(compose_file: Path, cve_id: str = "") -> None:
         container_ports = _extract_container_ports(spec)
         if container_ports:
             spec["ports"] = [f"127.0.0.1:0:{port}" for port in container_ports]
+        elif spec.get('ports'):
+            # All port entries failed parsing but original ports list was
+            # non-empty. Explicitly clear to prevent original (potentially
+            # non-localhost) bindings from surviving the rewrite.
+            spec['ports'] = []
         # Strip P18-bypass network_mode (any host-* form).
         net_mode = spec.get("network_mode")
         if isinstance(net_mode, str) and (
-            net_mode == "host" or net_mode.startswith("container:")
+            net_mode == "host" or net_mode.startswith("container:") or net_mode.startswith("service:")
         ):
             spec.pop("network_mode", None)
         # Security hardening: strip P17-bypass privileged (bool ``True`` OR
@@ -400,8 +416,13 @@ def up_stack(
     # locally-built compose stacks are extremely rare (vulhub-compose method's
     # images are all vulhub/X). If a service does FROM a local-only image,
     # --pull always fails loudly + the agent sees the error and pivots.
+    # --pull missing: pull images only when not locally available. Using
+    # "always" breaks locally-built services (compose stacks that `build:`
+    # their own images have no upstream to pull from). Trade-off: a stale
+    # cached registry image won't be refreshed automatically; operator can
+    # `docker compose pull` explicitly when needed.
     _run_compose(
-        ["-p", project_name, "-f", str(compose_file), "up", "-d", "--pull", "always"],
+        ["-p", project_name, "-f", str(compose_file), "up", "-d", "--pull", "missing"],
         timeout=up_timeout_seconds,
         platform=platform,
     )

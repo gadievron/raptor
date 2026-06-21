@@ -9,10 +9,10 @@ for SYSTEM_PROMPT prefix. Empty input → empty output (no spurious section).
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import pytest
-
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.health_constraints import (
     ServiceConstraint,
@@ -21,7 +21,6 @@ from cve_env.agent.health_constraints import (
 )
 from cve_env.infra.service_health import HealthResult
 
-
 def test_derive_empty_when_all_probes_ok() -> None:
     results = [
         HealthResult("DNS resolution", ok=True, latency_ms=50, detail="ok"),
@@ -29,7 +28,6 @@ def test_derive_empty_when_all_probes_ok() -> None:
         HealthResult("GitHub API", ok=True, latency_ms=100, detail="ok"),
     ]
     assert derive_constraints(results) == []
-
 
 def test_derive_dh_rate_limit_emits_constraint() -> None:
     results = [
@@ -49,7 +47,6 @@ def test_derive_dh_rate_limit_emits_constraint() -> None:
     assert "vulhub-image" in c.avoid_methods
     assert "source-build" in c.prefer_methods
 
-
 def test_derive_only_dh_constraint_at_v1() -> None:
     """v1 of B1 only emits the DH constraint. Other CRITICAL services
     not yet mapped (deferred to a follow-up). NVD/GitHub down would
@@ -61,12 +58,10 @@ def test_derive_only_dh_constraint_at_v1() -> None:
     ]
     assert derive_constraints(results) == []
 
-
 def test_format_empty_returns_empty_string() -> None:
     """No spurious '## Service health constraints' section when no
     constraints (most runs)."""
     assert format_constraints_for_prompt([]) == ""
-
 
 def test_format_dh_constraint_renders_avoid_prefer() -> None:
     c = ServiceConstraint(
@@ -85,7 +80,6 @@ def test_format_dh_constraint_renders_avoid_prefer() -> None:
     assert "PREFER" in out
     assert "source-build" in out
     assert "give_up" in out  # guidance about give_up if no PREFER works
-
 
 def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """End-to-end: when build() receives constraints, the SYSTEM_PROMPT
@@ -144,7 +138,6 @@ def test_build_injects_constraints_into_system_prompt(tmp_path) -> None:  # type
     assert "AVOID" in captured["system_prompt"]
     # Original SYSTEM_PROMPT also appears (constraint is a PREFIX, not replace)
     assert SYSTEM_PROMPT in captured["system_prompt"]
-
 
 def test_format_multiple_constraints_separated() -> None:
     c1 = ServiceConstraint(

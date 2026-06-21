@@ -25,13 +25,12 @@ Per past-bench-lessons §1 — TDD with RED test first.
 """
 
 from __future__ import annotations
-
-
 import pytest
 pytest.importorskip("claude_agent_sdk")
 
-from cve_env.agent.loop import _map_status, _StreamState
+import pytest
 
+from cve_env.agent.loop import _map_status, _StreamState
 
 def _make_state(**kw) -> _StreamState:
     """Construct fresh _StreamState with kw overrides."""
@@ -39,7 +38,6 @@ def _make_state(**kw) -> _StreamState:
     for k, v in kw.items():
         setattr(s, k, v)
     return s
-
 
 def test_docker_built_ok_no_run_no_verify_emits_post_build_marker() -> None:
     """Phase 47.C primary RED: turn_cap with docker_build but no docker_run
@@ -58,7 +56,6 @@ def test_docker_built_ok_no_run_no_verify_emits_post_build_marker() -> None:
     assert "stuck_after_launch_after_build" in reason, (
         f"expected 'stuck_after_launch_after_build' in reason; got: {reason!r}"
     )
-
 
 def test_launched_ok_takes_precedence_over_docker_built_ok() -> None:
     """When BOTH flags are set (agent reached docker_run after docker_build),
@@ -79,7 +76,6 @@ def test_launched_ok_takes_precedence_over_docker_built_ok() -> None:
     # Specifically: the docker_build-only suffix must NOT appear
     assert "stuck_after_launch_after_build" not in reason, reason
 
-
 def test_docker_built_ok_but_verify_attempted_no_marker() -> None:
     """If verify was attempted (regardless of pass), the docker-built-only
     marker should NOT fire. Verify-attempted means agent reached the
@@ -92,7 +88,6 @@ def test_docker_built_ok_but_verify_attempted_no_marker() -> None:
     status, reason = _map_status("max_turns_reached", state)
     assert status == "turn_cap"
     assert "stuck_after_launch_after_build" not in reason
-
 
 def test_neither_flag_set_returns_plain_turn_cap() -> None:
     """Regression-lock: agents that never reached build OR run get plain

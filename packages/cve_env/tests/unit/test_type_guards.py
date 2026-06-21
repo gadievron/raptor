@@ -13,6 +13,8 @@ check_logs(), check_exec(), dockerfile_gen().
 from __future__ import annotations
 import pytest
 
+pytest.importorskip("claude_agent_sdk")
+
 import asyncio
 import json
 from typing import Any
@@ -27,7 +29,6 @@ from cve_env.tools.verify import (
     verify,
 )
 
-
 def _mk_resp(*, status: int, body: bytes) -> MagicMock:
     r = MagicMock()
     r.status_code = status
@@ -35,9 +36,7 @@ def _mk_resp(*, status: int, body: bytes) -> MagicMock:
     r.text = body.decode("utf-8", errors="replace")
     return r
 
-
 # ── verify.py: check_http ────────────────────────────────────────────────
-
 
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_normalizes_single_str_content_check(mock_req: Any) -> None:
@@ -53,7 +52,6 @@ def test_check_http_normalizes_single_str_content_check(mock_req: Any) -> None:
         content_check="nginx",  # type: ignore[arg-type]
     )
     assert result["passed"] is True
-
 
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_json_string_no_false_positive(mock_req: Any) -> None:
@@ -73,7 +71,6 @@ def test_check_http_json_string_no_false_positive(mock_req: Any) -> None:
     )
     assert result["passed"] is False
 
-
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_rejects_nonlist_nonstr_content_check(mock_req: Any) -> None:
     """content_check of a completely wrong type (int, dict) → type error."""
@@ -86,7 +83,6 @@ def test_check_http_rejects_nonlist_nonstr_content_check(mock_req: Any) -> None:
     assert result["passed"] is False
     assert "content_check" in result["reason"]
     assert "list" in result["reason"]
-
 
 def test_check_http_rejects_string_expected_status() -> None:
     """expected_status as string → clear error, not ValueError from int().
@@ -103,9 +99,7 @@ def test_check_http_rejects_string_expected_status() -> None:
     assert "expected_status" in result["reason"]
     assert "int" in result["reason"]
 
-
 # ── verify.py: check_http_request ────────────────────────────────────────
-
 
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_rejects_list_method(mock_req: Any) -> None:
@@ -119,7 +113,6 @@ def test_check_http_rejects_list_method(mock_req: Any) -> None:
     assert result["passed"] is False
     assert "method" in result["reason"]
     assert "str" in result["reason"]
-
 
 def test_check_http_request_rejects_list_method_path_field_name() -> None:
     """method/path/field_name as list → clear error before HTTP request."""
@@ -140,7 +133,6 @@ def test_check_http_request_rejects_list_method_path_field_name() -> None:
         assert field in result["reason"], f"{field} not in reason: {result['reason']}"
         assert "str" in result["reason"]
 
-
 def test_check_http_request_rejects_string_headers() -> None:
     """headers passed as JSON string → clear error, not TypeError from dict.update.
 
@@ -158,7 +150,6 @@ def test_check_http_request_rejects_string_headers() -> None:
     assert "headers" in result["reason"]
     assert "dict" in result["reason"]
 
-
 def test_check_http_request_rejects_list_payload() -> None:
     """payload as list → clear error, not AttributeError on .encode().
 
@@ -175,7 +166,6 @@ def test_check_http_request_rejects_list_payload() -> None:
     assert "request_body" in result["reason"]
     assert "str" in result["reason"]
 
-
 def test_check_http_request_rejects_list_expected_response_contains() -> None:
     """expected_response_contains as list → clear error, not TypeError.
 
@@ -191,7 +181,6 @@ def test_check_http_request_rejects_list_expected_response_contains() -> None:
     assert result["passed"] is False
     assert "expected_response_contains" in result["reason"]
     assert "str" in result["reason"]
-
 
 def test_check_http_request_rejects_string_expected_status() -> None:
     """expected_status as string → clear error, not ValueError from int().
@@ -210,20 +199,15 @@ def test_check_http_request_rejects_string_expected_status() -> None:
     assert "expected_status" in result["reason"]
     assert "int" in result["reason"]
 
-
 # ── agent/tools.py: dockerfile_gen ───────────────────────────────────────
 
-
 def _call_dockerfile_gen(args: dict[str, Any]) -> dict[str, Any]:
-    pytest.importorskip("claude_agent_sdk")
     from cve_env.agent.tools import dockerfile_gen
 
     return asyncio.run(dockerfile_gen.handler(args))
 
-
 def _payload(result: dict[str, Any]) -> dict[str, Any]:
     return json.loads(result["content"][0]["text"])
-
 
 def test_dockerfile_gen_rejects_string_install_steps() -> None:
     """install_steps as JSON string → clear error, not garbage Dockerfile.
@@ -241,7 +225,6 @@ def test_dockerfile_gen_rejects_string_install_steps() -> None:
         "install_steps" in issue and "list" in issue for issue in p.get("issues", [])
     )
 
-
 def test_dockerfile_gen_rejects_string_cmd() -> None:
     """cmd as JSON string → clear error, not garbage CMD instruction.
 
@@ -255,7 +238,6 @@ def test_dockerfile_gen_rejects_string_cmd() -> None:
     p = _payload(result)
     assert p.get("ok") is False
     assert any("cmd" in issue and "list" in issue for issue in p.get("issues", []))
-
 
 def test_dockerfile_gen_rejects_string_copy_ops() -> None:
     """copy_ops as JSON string → clear top-level error, not per-char dict errors.
@@ -274,9 +256,7 @@ def test_dockerfile_gen_rejects_string_copy_ops() -> None:
     assert p.get("ok") is False
     assert any("copy_ops" in issue and "list" in issue for issue in p.get("issues", []))
 
-
 # ── verify.py: check_logs ────────────────────────────────────────────────
-
 
 def test_check_logs_rejects_string_expected_patterns() -> None:
     """expected_patterns as JSON string → clear error, not silent char-regex search.
@@ -294,9 +274,7 @@ def test_check_logs_rejects_string_expected_patterns() -> None:
     assert "expected_patterns" in result["reason"]
     assert "list" in result["reason"]
 
-
 # ── verify.py: check_exec ────────────────────────────────────────────────
-
 
 def test_check_exec_rejects_list_command() -> None:
     """command as list → clear error, not TypeError in subprocess.
@@ -311,7 +289,6 @@ def test_check_exec_rejects_list_command() -> None:
     assert result["passed"] is False
     assert "command" in result["reason"]
     assert "str" in result["reason"]
-
 
 def test_check_exec_rejects_list_expected_stdout_contains() -> None:
     """expected_stdout_contains as list → clear error, not TypeError.
@@ -329,9 +306,7 @@ def test_check_exec_rejects_list_expected_stdout_contains() -> None:
     assert "expected_stdout_contains" in result["reason"]
     assert "str" in result["reason"]
 
-
 # ── verify.py: verify dispatcher ─────────────────────────────────────────
-
 
 def test_verify_rejects_non_dict_plan_step() -> None:
     """plan with a non-dict step → clear error, not AttributeError on step.get().
@@ -353,9 +328,7 @@ def test_verify_rejects_non_dict_plan_step() -> None:
     assert result["passed"] is False
     assert "dict" in result["reason"]
 
-
 # ── verify.py: check_tcp_probe ─────────────────────────────────────────
-
 
 def test_check_tcp_probe_rejects_list_expected_response_contains() -> None:
     """expected_response_contains as list → clear error, not TypeError.
@@ -372,9 +345,7 @@ def test_check_tcp_probe_rejects_list_expected_response_contains() -> None:
     assert "expected_response_contains" in result["reason"]
     assert "str" in result["reason"]
 
-
 # ── verify.py: verify dispatcher ─────────────────────────────────────────
-
 
 def test_verify_rejects_string_plan() -> None:
     """plan as JSON string → clear error, not list-of-chars AttributeError.
@@ -393,9 +364,7 @@ def test_verify_rejects_string_plan() -> None:
     assert result["passed"] is False
     assert "list" in result["reason"]
 
-
 # ── Regression: None is allowed for optional parameters ──────────────────
-
 
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_none_content_check_allowed(mock_req: Any) -> None:
@@ -410,7 +379,6 @@ def test_check_http_none_content_check_allowed(mock_req: Any) -> None:
     assert result.get("reason") is None or "content_check" not in str(
         result.get("reason", "")
     )
-
 
 @patch("cve_env.tools.verify.requests.request")
 def test_check_http_request_none_headers_allowed(mock_req: Any) -> None:
@@ -433,9 +401,7 @@ def test_check_http_request_none_headers_allowed(mock_req: Any) -> None:
         result.get("reason", "")
     )
 
-
 # ── agent/tools.py: dockerfile_gen — remaining 3 of 6 guarded fields ─────
-
 
 def test_dockerfile_gen_rejects_string_ports() -> None:
     """ports as JSON string → clear error, not list-of-chars EXPOSE instruction."""
@@ -443,7 +409,6 @@ def test_dockerfile_gen_rejects_string_ports() -> None:
     p = _payload(result)
     assert p.get("ok") is False
     assert any("ports" in issue and "list" in issue for issue in p.get("issues", []))
-
 
 def test_dockerfile_gen_rejects_string_apt_packages() -> None:
     """apt_packages as JSON string → clear error, not char-by-char apt install."""
@@ -455,7 +420,6 @@ def test_dockerfile_gen_rejects_string_apt_packages() -> None:
     assert any(
         "apt_packages" in issue and "list" in issue for issue in p.get("issues", [])
     )
-
 
 def test_dockerfile_gen_rejects_string_cve_named_packages() -> None:
     """cve_named_packages as JSON string → clear error, not char-by-char install."""
@@ -469,9 +433,7 @@ def test_dockerfile_gen_rejects_string_cve_named_packages() -> None:
         for issue in p.get("issues", [])
     )
 
-
 # ── verify.py: check_tcp_probe additional guards ────────────────────────
-
 
 def test_check_tcp_probe_rejects_string_read_bytes() -> None:
     """read_bytes as string → clear error, not TypeError from 'str' <= 0.
@@ -488,7 +450,6 @@ def test_check_tcp_probe_rejects_string_read_bytes() -> None:
     assert result["passed"] is False
     assert "read_bytes" in result["reason"]
     assert "int" in result["reason"]
-
 
 def test_check_tcp_probe_rejects_string_tls() -> None:
     """tls as string 'false' → clear error, not silent TLS-always-on.
@@ -507,9 +468,7 @@ def test_check_tcp_probe_rejects_string_tls() -> None:
     assert "tls" in result["reason"]
     assert "bool" in result["reason"]
 
-
 # ── verify.py: check_exec additional guards ───────────────────────────────
-
 
 def test_check_exec_rejects_string_expected_exit() -> None:
     """expected_exit as string → clear error, not silent wrong result.
@@ -527,9 +486,7 @@ def test_check_exec_rejects_string_expected_exit() -> None:
     assert "expected_exit" in result["reason"]
     assert "int" in result["reason"]
 
-
 # ── verify.py: stability_wait dispatch guard ─────────────────────────────
-
 
 def test_check_tcp_probe_rejects_string_timeout_seconds() -> None:
     """timeout_seconds as string → clear error, not TypeError inside socket.
@@ -547,7 +504,6 @@ def test_check_tcp_probe_rejects_string_timeout_seconds() -> None:
     assert "timeout_seconds" in result["reason"]
     assert "float" in result["reason"] or "int" in result["reason"]
 
-
 def test_check_exec_rejects_string_timeout_seconds() -> None:
     """timeout_seconds as string → clear error, not TypeError from float().
 
@@ -562,7 +518,6 @@ def test_check_exec_rejects_string_timeout_seconds() -> None:
     assert result["passed"] is False
     assert "timeout_seconds" in result["reason"]
     assert "float" in result["reason"] or "int" in result["reason"]
-
 
 def test_tcp_probe_check_step_rejects_null_host_port() -> None:
     """tcp_probe_check step with host_port=null → clear error, not int(None) crash.
@@ -591,7 +546,6 @@ def test_tcp_probe_check_step_rejects_null_host_port() -> None:
     assert result["passed"] is False
     assert "host_port" in result["reason"]
     assert "int" in result["reason"]
-
 
 def test_stability_wait_dispatch_rejects_null_wait_seconds() -> None:
     """wait_seconds=null in plan step → clear error, not int(None) TypeError.

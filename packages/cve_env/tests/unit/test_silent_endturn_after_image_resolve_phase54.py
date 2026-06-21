@@ -28,13 +28,12 @@ xfail(strict=True) at RED, atomic removal at GREEN.
 """
 
 from __future__ import annotations
-
-
 import pytest
 pytest.importorskip("claude_agent_sdk")
 
-from cve_env.agent.loop import _map_status, _StreamState
+import pytest
 
+from cve_env.agent.loop import _map_status, _StreamState
 
 def _make_state(**kw) -> _StreamState:
     """Construct fresh _StreamState with kw overrides for end_turn branch.
@@ -46,12 +45,10 @@ def _make_state(**kw) -> _StreamState:
         setattr(s, k, v)
     return s
 
-
 def _seed_tool_uses(state: _StreamState, names: list[str]) -> None:
     """Seed state.tool_uses_seen with the given tool names (in order)."""
     for n in names:
         state.tool_uses_seen.append({"name": n, "input": {}})
-
 
 def test_stream_state_has_image_resolve_ok_field() -> None:
     """The _StreamState dataclass must have an image_resolve_ok: bool field."""
@@ -64,7 +61,6 @@ def test_stream_state_has_image_resolve_ok_field() -> None:
     assert "image_resolve_ok: bool" in src, (
         "_StreamState missing image_resolve_ok field declaration"
     )
-
 
 def test_loop_sets_image_resolve_ok_on_tool_result_ok() -> None:
     """loop.py must set state.image_resolve_ok = True when image_resolve
@@ -86,7 +82,6 @@ def test_loop_sets_image_resolve_ok_on_tool_result_ok() -> None:
     assert 'payload.get("ok") is True' in window, (
         "set site missing payload.get('ok') is True guard within 400 chars"
     )
-
 
 def test_classifier_emits_quit_after_image_resolve() -> None:
     """The silent-end-turn classifier must emit give_up_reason
@@ -110,7 +105,6 @@ def test_classifier_emits_quit_after_image_resolve() -> None:
     assert "image_resolve_ok" in window_up, (
         "quit_after_image_resolve emission missing image_resolve_ok guard within 800 chars"
     )
-
 
 def test_prompts_contains_post_image_resolve_rule() -> None:
     """prompts.py SYSTEM_PROMPT must contain an open-clause commitment rule:
@@ -146,7 +140,6 @@ def test_prompts_contains_post_image_resolve_rule() -> None:
         f"action set within 600 chars; window={window[:200]!r}"
     )
 
-
 # ============================================================================
 # Behavioral _map_status truth-table tests (Phase 54-deep.S.A.2 F-02 fix)
 #
@@ -154,7 +147,6 @@ def test_prompts_contains_post_image_resolve_rule() -> None:
 # runtime behavior. These tests exercise _map_status with seeded state and
 # assert the canonical mapping.
 # ============================================================================
-
 
 def test_quit_after_image_resolve_branch_fires_on_shellshock_pattern() -> None:
     """Phase 54-deep.2 primary behavioral test: the Shellshock pattern.
@@ -188,7 +180,6 @@ def test_quit_after_image_resolve_branch_fires_on_shellshock_pattern() -> None:
         f"got: {state.give_up_reason!r}"
     )
 
-
 def test_quit_after_image_resolve_yields_to_phase_51b_when_docker_built_ok() -> None:
     """Phase 51B branch takes precedence — docker_built_ok is the more
     specific signal. Order in _map_status is intentional."""
@@ -205,7 +196,6 @@ def test_quit_after_image_resolve_yields_to_phase_51b_when_docker_built_ok() -> 
     assert state.give_up_reason == "quit_without_verify_after_build", (
         f"Phase 51B precedence broken; got give_up_reason={state.give_up_reason!r}"
     )
-
 
 def test_quit_after_image_resolve_yields_when_build_attempted() -> None:
     """W (2026-05-23): false-positive fix. When the agent resolved an image then
@@ -229,7 +219,6 @@ def test_quit_after_image_resolve_yields_when_build_attempted() -> None:
         f"quit_after_image_resolve; got {state.give_up_reason!r}"
     )
 
-
 def test_quit_after_image_resolve_yields_when_source_build_attempted() -> None:
     """source_build attempt = build-path pivot; Phase 54-deep.2 marker
     does NOT fire — generic quit_without_verify_or_giveup catches it."""
@@ -246,7 +235,6 @@ def test_quit_after_image_resolve_yields_when_source_build_attempted() -> None:
     assert state.give_up_reason == "quit_without_verify_or_giveup", (
         f"source_build path should yield generic marker; got: {state.give_up_reason!r}"
     )
-
 
 def test_image_resolve_ok_false_does_not_emit_marker() -> None:
     """Regression-guard: if image_resolve.ok=False (or never called), the

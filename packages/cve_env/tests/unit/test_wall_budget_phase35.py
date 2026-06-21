@@ -26,7 +26,6 @@ import time
 
 import pytest
 
-
 def _try_import_helper():
     """Try to import the Phase 35 wall-budget helper.
 
@@ -39,7 +38,6 @@ def _try_import_helper():
     except ImportError:
         return None
 
-
 def _try_import_exception():
     """Try to import the WallBudgetExceeded exception.
 
@@ -51,7 +49,6 @@ def _try_import_exception():
         return WallBudgetExceeded
     except ImportError:
         return None
-
 
 def test_wall_budget_helper_raises_when_elapsed_exceeds() -> None:
     """When (now - start) > budget AND budget > 0, helper must raise
@@ -74,7 +71,6 @@ def test_wall_budget_helper_raises_when_elapsed_exceeds() -> None:
     # Message must mention the turn
     assert "5" in msg, f"turn not in message: {msg!r}"
 
-
 def test_wall_budget_disabled_when_budget_zero() -> None:
     """When budget == 0, helper MUST NOT raise regardless of elapsed.
 
@@ -87,7 +83,6 @@ def test_wall_budget_disabled_when_budget_zero() -> None:
     started_long_ago = time.time() - 100000.0  # 1 day in the past
     # Must not raise — budget=0 is the disabled sentinel
     helper(started_long_ago, 0.0, turn=999)
-
 
 def test_wall_budget_does_not_raise_when_within() -> None:
     """When (now - start) <= budget, helper MUST NOT raise.

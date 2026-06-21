@@ -956,7 +956,7 @@ def test_phase57_build_launched_unverified_when_docker_run_ok_then_end_turn(
             )
         )
     assert outcome.status == "launched_no_verify", (
-        f"expected launched_unverified, got {outcome.status}: {outcome.reason}"
+        f"expected launched_no_verify, got {outcome.status}: {outcome.reason}"
     )
 
 
@@ -1658,8 +1658,12 @@ def test_phase_12_6_toml_loader_empty_when_file_absent(
     import importlib
     from cve_env import config as _config_mod
 
-    importlib.reload(_config_mod)
-    assert _config_mod._TOML_CONFIG == {}
+    original = _config_mod._TOML_CONFIG
+    try:
+        importlib.reload(_config_mod)
+        assert _config_mod._TOML_CONFIG == {}
+    finally:
+        _config_mod._TOML_CONFIG = original
 
 
 def test_phase_12_6_toml_stage_budget_overrides_default(
@@ -1675,8 +1679,12 @@ def test_phase_12_6_toml_stage_budget_overrides_default(
     import importlib
     from cve_env import config as _config_mod
 
-    importlib.reload(_config_mod)
-    assert _config_mod.get_stage_budget("RESEARCH") == 0.25
+    original = _config_mod._TOML_CONFIG
+    try:
+        importlib.reload(_config_mod)
+        assert _config_mod.get_stage_budget("RESEARCH") == 0.25
+    finally:
+        _config_mod._TOML_CONFIG = original
 
 
 def test_phase_12_6_env_var_overrides_toml(
@@ -1691,8 +1699,12 @@ def test_phase_12_6_env_var_overrides_toml(
     import importlib
     from cve_env import config as _config_mod
 
-    importlib.reload(_config_mod)
-    assert _config_mod.get_stage_budget("RESEARCH") == 0.15
+    original = _config_mod._TOML_CONFIG
+    try:
+        importlib.reload(_config_mod)
+        assert _config_mod.get_stage_budget("RESEARCH") == 0.15
+    finally:
+        _config_mod._TOML_CONFIG = original
 
 
 def test_phase_12_1_other_bucket_for_unknown_tool(

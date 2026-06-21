@@ -22,10 +22,9 @@ verify_passed=True yields ``final_turn_cap`` / ``budget_exhausted`` — NEVER
 from __future__ import annotations
 
 import pytest
+pytest.importorskip("claude_agent_sdk")
 
 from cve_env import config
-
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.llm import SuccessReached
 from cve_env.agent.loop import (
@@ -34,20 +33,16 @@ from cve_env.agent.loop import (
     _terminal_status_for_result,
 )
 
-
 def _state(*, verify_passed: bool = False) -> _StreamState:
     s = _StreamState()
     s.verify_passed = verify_passed
     return s
 
-
 def test_success_reached_is_an_exception() -> None:
     assert issubclass(SuccessReached, Exception)
 
-
 def test_flag_defaults_off() -> None:
     assert config.get_enable_halt_on_verified_success() is False
-
 
 def test_halt_fires_on_final_success_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -55,12 +50,10 @@ def test_halt_fires_on_final_success_when_enabled(
     monkeypatch.setenv("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", "1")
     assert _should_halt_on_verified_success("final_success") is True
 
-
 def test_no_halt_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", raising=False)
     # default-OFF: even a final_success must NOT halt unless explicitly enabled
     assert _should_halt_on_verified_success("final_success") is False
-
 
 @pytest.mark.parametrize(
     "status", ["final_turn_cap", "budget_exhausted", "final_no_verify", "final_give_up"]
@@ -71,7 +64,6 @@ def test_halt_never_fires_on_non_success(
     # Even with the flag ON, only `final_success` triggers the halt.
     monkeypatch.setenv("CVE_ENV_ENABLE_HALT_ON_VERIFIED_SUCCESS", "1")
     assert _should_halt_on_verified_success(status) is False
-
 
 def test_terminal_status_distinguishes_endturn_from_cap() -> None:
     """The SAFETY invariant the halt relies on: cap+verify_passed is NEVER

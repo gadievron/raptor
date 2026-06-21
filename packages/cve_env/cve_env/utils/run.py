@@ -126,9 +126,13 @@ def run_with_timeout(
             result_q.put({"fnf": exc})
         except OSError as exc:
             result_q.put({"oserr": exc})
+        except Exception as exc:
+            result_q.put({"oserr": exc})  # surface as OSError-class failure
 
     worker = threading.Thread(target=_target, daemon=True)
     worker.start()
+    # Daemon thread abandoned on timeout — holds FDs until process exit.
+    # In long bench runs, monitor FD count.
     worker.join(timeout + _REAP_GRACE_S)
     if worker.is_alive():
         # subprocess.run wedged in its own unbounded post-kill wait() — abandon.

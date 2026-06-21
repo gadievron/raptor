@@ -57,6 +57,8 @@ def robust_json_parse(text: str) -> dict[str, Any] | None:
         with contextlib.suppress(IndexError):
             stripped = stripped.split("```", 1)[1].split("```", 1)[0].strip()
 
+    # Takes outermost { }. Nested JSON in prose may extract wrong object.
+    # Callers should prefer structured tool output.
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start < 0 or end <= start:
@@ -91,7 +93,7 @@ def sanitize_dockerfile(text: str) -> str:
     if not text:
         return text
 
-    text = re.sub(r"\\{3,}", r"\\\\", text)
+    text = re.sub(r"\\{4,}", r"\\\\", text)  # collapse 4+ backslashes to 2
 
     out_lines: list[str] = []
     for raw in text.split("\n"):
@@ -102,7 +104,7 @@ def sanitize_dockerfile(text: str) -> str:
             if "=" not in body:
                 line = f"{_EMPTY_LABEL_MARKER}{line}"
             elif "\\\\" in line:
-                line = re.sub(r"\\{2,}", "", line)
+                line = re.sub(r"\\{2,}", "\\\\", line)
         out_lines.append(line)
     return "\n".join(out_lines)
 
@@ -113,6 +115,8 @@ def _check_from_line(stripped: str, from_images: list[str]) -> list[str]:
     parts = stripped.split()
     idx = 1
     while idx < len(parts) and parts[idx].startswith("--"):
+        if "=" not in parts[idx]:
+            idx += 1  # skip the flag's value too
         idx += 1
     if idx >= len(parts):
         return ["FROM line missing image name"]
@@ -120,8 +124,6 @@ def _check_from_line(stripped: str, from_images: list[str]) -> list[str]:
     from_images.append(image)
     if image.startswith(("/", "./")):
         issues.append(f"FROM: not a docker image (looks like a path): {image}")
-    elif " " in image:
-        issues.append(f"FROM: image name contains whitespace: {image}")
     else:
         # Strip the ``@sha256:<digest>`` suffix BEFORE parsing the tag.
         # Otherwise ``nginx:latest@sha256:<digest>`` has ``@`` so a
@@ -178,11 +180,16 @@ def _merge_continuation_lines(text: str) -> list[str]:
         buf = buf + " " + raw.lstrip() if buf else raw
         # If buf still ends in a backslash, we're mid-continuation; do
         # NOT flush yet. Strip trailing whitespace before checking.
+        # Count trailing backslashes — only merge on odd count (real
+        # continuation). Even count = escaped literal backslashes.
         rstripped = buf.rstrip()
-        if rstripped.endswith("\\"):
+        stripped_bs = rstripped.rstrip("\\")
+        num_backslashes = len(rstripped) - len(stripped_bs)
+        if num_backslashes % 2 == 1:  # odd = real continuation
             # Drop the trailing `\` and keep accumulating.
             buf = rstripped[:-1]
             continue
+        # even (including 0) = not a continuation, flush.
         out.append(buf)
         buf = ""
     if buf:

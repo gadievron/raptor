@@ -22,16 +22,16 @@ prevents future drift between the two layers.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import re
 from typing import Any
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.loop import _is_version_assertion_exec_check
 from cve_env.config import VERSION_ASSERTION_CMD_PATTERN
-
 
 def _warning_thinks_has_version(results: list[dict[str, Any]]) -> bool:
     """Mirror the warning-side heuristic from
@@ -48,13 +48,11 @@ def _warning_thinks_has_version(results: list[dict[str, Any]]) -> bool:
             return True
     return False
 
-
 def _gate_thinks_has_version(results: list[dict[str, Any]]) -> bool:
     """Mirror the gate-side aggregation across results — gate flips state to
     True if ANY exec_check matches via the per-entry helper.
     """
     return any(_is_version_assertion_exec_check(entry) for entry in results)
-
 
 # Cases: each is a list of verify-result entries, plus an `expected` flag.
 _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
@@ -194,7 +192,6 @@ _CASES: list[tuple[str, list[dict[str, Any]], bool]] = [
     ),
 ]
 
-
 def test_gate_and_warning_agree_on_version_assertion_detection() -> None:
     """For every case, both layers must return the same boolean."""
     disagreements: list[str] = []
@@ -210,7 +207,6 @@ def test_gate_and_warning_agree_on_version_assertion_detection() -> None:
         "(or both disagree with expected). They share VERSION_ASSERTION_CMD_PATTERN "
         "so any drift is a bug:\n" + "\n".join(disagreements)
     )
-
 
 def test_version_assertion_pattern_is_imported_from_canonical_source() -> None:
     """Ensure no consumer has forked its own regex.

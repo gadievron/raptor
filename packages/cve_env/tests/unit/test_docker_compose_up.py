@@ -724,15 +724,15 @@ def test_compose_keeps_devices_intentionally(tmp_path: Path) -> None:
     assert web.get("devices") == ["/dev/foo:/dev/foo"]
 
 
-# -- S23.4 (2026-05-03): docker compose up --pull always --------------------
-# Cache-bypass cascade-leak fix. Compose stacks reference registry images
-# (vulhub/X, library/X, etc.); --pull always forces fresh fetch, bypassing
-# the local Docker layer cache (the cascade-test Phase 2 leak source).
+# -- S23.4 (2026-05-03): docker compose up --pull missing -------------------
+# Changed from --pull always to --pull missing so locally-built images
+# (source_build path) are not re-pulled from registry, which would fail.
+# --pull missing still fetches registry images that aren't cached locally.
 
 
 @patch("cve_env.tools.docker_compose_up._run_compose")
 def test_up_stack_appends_pull_always(mock_run: MagicMock, tmp_path: Path) -> None:
-    """`docker compose up -d` must include `--pull always`."""
+    """`docker compose up -d` must include `--pull missing`."""
     compose_file = tmp_path / "docker-compose.yml"
     compose_file.write_text("services:\n  web:\n    image: vulhub/openssl:1.0.1g\n")
     # Mock _run_compose: first call (up) returns "", second call (ps) returns
@@ -759,4 +759,4 @@ def test_up_stack_appends_pull_always(mock_run: MagicMock, tmp_path: Path) -> No
     assert "up" in up_args, f"first _run_compose should be up: {up_args}"
     assert "--pull" in up_args, f"missing --pull in up cmd: {up_args}"
     pull_idx = up_args.index("--pull")
-    assert up_args[pull_idx + 1] == "always", f"--pull value not 'always': {up_args}"
+    assert up_args[pull_idx + 1] == "missing", f"--pull value not 'missing': {up_args}"

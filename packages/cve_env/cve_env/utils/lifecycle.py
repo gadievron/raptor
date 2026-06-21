@@ -40,8 +40,9 @@ def acquire_lock() -> Path:
     """
     path = LOCK_DIR / f"{LOCK_PREFIX}{os.getpid()}{LOCK_SUFFIX}"
     try:
-        with path.open("x") as fh:
-            fh.write(str(os.getpid()))
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
     except FileExistsError:
         logger.warning("stale lockfile %s already exists; overwriting", path)
         path.write_text(str(os.getpid()))
@@ -72,6 +73,8 @@ def count_other_active_builds() -> int:
         if pid == own_pid:
             continue
         try:
+            # os.kill(pid, 0) may succeed for a recycled PID. Low risk:
+            # PID recycling window is small relative to build duration.
             os.kill(pid, 0)
         except ProcessLookupError:
             path.unlink(missing_ok=True)
@@ -111,8 +114,10 @@ def cleanup_containers(cve_id: str, timeout: float = 30.0) -> int:
     ids = [i.strip() for i in ids if i.strip()]
     if not ids:
         return 0
-    run_with_timeout(["docker", "rm", "-f", *ids], timeout=timeout)
-    return len(ids)
+    outcome = run_with_timeout(["docker", "rm", "-f", *ids], timeout=timeout)
+    if outcome.returncode == 0:
+        return len(ids)
+    return 0
 
 
 def cleanup_result_images(cve_id: str, timeout: float = 30.0) -> int:
@@ -176,8 +181,10 @@ def cleanup_result_images(cve_id: str, timeout: float = 30.0) -> int:
     tags = list(dict.fromkeys(tags))  # dedupe, preserve order
     if not tags:
         return 0
-    run_with_timeout(["docker", "rmi", *tags], timeout=timeout)
-    return len(tags)
+    outcome = run_with_timeout(["docker", "rmi", *tags], timeout=timeout)
+    if outcome.returncode == 0:
+        return len(tags)
+    return 0
 
 
 def prune_images(timeout: float = 30.0) -> None:

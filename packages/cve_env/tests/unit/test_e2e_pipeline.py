@@ -67,6 +67,8 @@ class _FakeTCPSocket:
 
 
 # --- Phase 2 helpers: SDK message synthesis (mirror test_loop.py:36-124) ---
+# SDK message helpers -- intentionally duplicated per FORBIDDEN-K. Keep
+# defaults aligned with test_loop.py canonical copy.
 
 
 def _text_block(text: str) -> Any:
@@ -104,7 +106,7 @@ def _user(*blocks: Any) -> Any:
     return UserMessage(content=list(blocks), parent_tool_use_id=None)
 
 
-def _result(stop_reason: str, *, cost_usd: float = 0.50, turns: int = 8) -> Any:
+def _result(stop_reason: str, *, cost_usd: float = 0.03, turns: int = 3) -> Any:
     from claude_agent_sdk import ResultMessage
 
     return ResultMessage(
@@ -138,7 +140,13 @@ def _host() -> HostInfo:
 def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn") -> Any:
     """Mirror of test_loop.py:88-124 — replays synthetic messages
     through on_message; returns an AgentRunOutcome derived from the
-    final ResultMessage."""
+    final ResultMessage.
+
+    Mirrors real _run_query_once behaviour: catches GiveUpReceived,
+    TurnCapReached, and BudgetCapExceeded from on_message and
+    synthesizes outcome.
+    """
+    from cve_env.agent.llm import BudgetCapExceeded, GiveUpReceived, TurnCapReached
 
     async def fake_run_agent(
         *,
@@ -154,11 +162,32 @@ def _fake_run_agent_factory(messages: list[Any], stop_reason: str = "end_turn") 
         verify_passed_check: Any = None,
     ) -> AgentRunOutcome:
         result_msg = None
-        for m in messages:
-            if on_message is not None:
-                on_message(m)
-            if type(m).__name__ == "ResultMessage":
-                result_msg = m
+        early_stop_reason: str | None = None
+        try:
+            for m in messages:
+                if on_message is not None:
+                    on_message(m)
+                if type(m).__name__ == "ResultMessage":
+                    result_msg = m
+        except GiveUpReceived:
+            early_stop_reason = "end_turn"
+        except TurnCapReached:
+            early_stop_reason = "max_turns_reached"
+        except BudgetCapExceeded:
+            early_stop_reason = "budget_exceeded"
+
+        if early_stop_reason is not None:
+            return AgentRunOutcome(
+                stop_reason=early_stop_reason,
+                num_turns=result_msg.num_turns if result_msg else 0,
+                total_cost_usd=(result_msg.total_cost_usd or 0.0)
+                if result_msg
+                else 0.0,
+                is_error=False,
+                session_id=result_msg.session_id if result_msg else "",
+                final_text="",
+                tool_uses=[],
+            )
         if result_msg is None:
             result_msg = _result(stop_reason)
             if on_message is not None:
@@ -725,7 +754,7 @@ def test_e2e_verify_failed_yields_no_verify_pass(tmp_path: Path) -> None:
             build(_cve(), _host(), run_id="e2e-verify-fail", audit_root=tmp_path)
         )
     assert outcome.status == "verify_failed", (
-        f"expected no_verify_pass, got {outcome.status}"
+        f"expected verify_failed, got {outcome.status}"
     )
     assert outcome.verify_passed is False
 
@@ -787,7 +816,7 @@ def test_e2e_lifecycle_only_smoke_yields_success_partial(tmp_path: Path) -> None
             build(_cve(), _host(), run_id="e2e-partial", audit_root=tmp_path)
         )
     assert outcome.status == "verified_partial", (
-        f"expected success_partial (lifecycle-only smoke), got {outcome.status}"
+        f"expected verified_partial (lifecycle-only smoke), got {outcome.status}"
     )
     assert outcome.verify_passed is True
 

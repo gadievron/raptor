@@ -13,13 +13,14 @@ clean early-stop outcome.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent import _activity, llm
 from cve_env.agent.llm import (
@@ -28,11 +29,9 @@ from cve_env.agent.llm import (
     _run_query_once,
 )
 
-
 async def _yield_one() -> Any:
     """SDK stream stand-in: emit a single message (on_message fires, then raises)."""
     yield MagicMock(name="assistant_message")
-
 
 def _drive(exc: BaseException, monkeypatch: Any) -> tuple[Any, int]:
     monkeypatch.setenv("CVE_ENV_SDK_IDLE_TIMEOUT_S", "300")  # idle watchdog inactive
@@ -49,14 +48,12 @@ def _drive(exc: BaseException, monkeypatch: Any) -> tuple[Any, int]:
     )
     return outcome, calls["n"]
 
-
 def test_no_progress_is_clean_early_stop(monkeypatch: Any) -> None:
     outcome, n = _drive(NoProgressReached("test"), monkeypatch)
     assert outcome.stop_reason == "max_turns_reached", (
         f"NoProgressReached must early-stop as max_turns_reached, got {outcome.stop_reason!r}"
     )
     assert n == 1, "on_message fired once; no retry"
-
 
 def test_wall_budget_is_clean_early_stop(monkeypatch: Any) -> None:
     outcome, n = _drive(WallBudgetExceeded("test"), monkeypatch)

@@ -27,14 +27,14 @@ Location: src/cve_env/agent/loop.py:477-491.
 """
 
 from __future__ import annotations
+import pytest
+pytest.importorskip("claude_agent_sdk")
 
 from types import SimpleNamespace
 
 import pytest
-pytest.importorskip("claude_agent_sdk")
 
 from cve_env.agent.loop import _accum_tokens, _StreamState
-
 
 def test_accum_none_usage_is_noop() -> None:
     """usage=None → no-op (falsy short-circuit at line 484)."""
@@ -43,14 +43,12 @@ def test_accum_none_usage_is_noop() -> None:
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 0
 
-
 def test_accum_empty_dict_is_noop() -> None:
     """Empty dict is falsy in Python → no-op (short-circuit)."""
     state = _StreamState()
     _accum_tokens(state, {})
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 0
-
 
 def test_accum_dict_with_both_keys() -> None:
     """Standard dict usage from SDK ResultMessage."""
@@ -59,14 +57,12 @@ def test_accum_dict_with_both_keys() -> None:
     assert state.total_input_tokens == 1500
     assert state.total_output_tokens == 250
 
-
 def test_accum_dict_missing_input_tokens_key() -> None:
     """Missing input_tokens → .get(..., 0) returns 0; output added normally."""
     state = _StreamState()
     _accum_tokens(state, {"output_tokens": 500})
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 500
-
 
 def test_accum_dict_missing_output_tokens_key() -> None:
     """Missing output_tokens → 0 added; input added normally."""
@@ -75,7 +71,6 @@ def test_accum_dict_missing_output_tokens_key() -> None:
     assert state.total_input_tokens == 1000
     assert state.total_output_tokens == 0
 
-
 def test_accum_dict_none_values_coerced_to_zero() -> None:
     """`(value or 0)` predicate at lines 487-488 maps None → 0 (defensive
     against SDK emitting null fields)."""
@@ -83,7 +78,6 @@ def test_accum_dict_none_values_coerced_to_zero() -> None:
     _accum_tokens(state, {"input_tokens": None, "output_tokens": None})
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 0
-
 
 def test_accum_object_with_attrs() -> None:
     """SDK may emit usage as an object (claude_agent_sdk types). Uses
@@ -94,7 +88,6 @@ def test_accum_object_with_attrs() -> None:
     assert state.total_input_tokens == 2000
     assert state.total_output_tokens == 400
 
-
 def test_accum_object_missing_attrs() -> None:
     """getattr(..., 0) default → 0 added for missing attrs."""
     usage = SimpleNamespace()  # no input_tokens, no output_tokens
@@ -103,7 +96,6 @@ def test_accum_object_missing_attrs() -> None:
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 0
 
-
 def test_accum_object_with_none_attr() -> None:
     """Object with attr=None → `or 0` coerces to 0."""
     usage = SimpleNamespace(input_tokens=None, output_tokens=None)
@@ -111,7 +103,6 @@ def test_accum_object_with_none_attr() -> None:
     _accum_tokens(state, usage)
     assert state.total_input_tokens == 0
     assert state.total_output_tokens == 0
-
 
 def test_accum_is_cumulative_across_calls() -> None:
     """Successive calls accumulate; not replace. Critical for the
@@ -123,7 +114,6 @@ def test_accum_is_cumulative_across_calls() -> None:
     assert state.total_input_tokens == 350
     assert state.total_output_tokens == 35
 
-
 def test_accum_mixed_dict_and_object() -> None:
     """Real runs interleave dict-shaped (AssistantMessage.usage) and
     object-shaped (ResultMessage.usage) values. Both branches accumulate
@@ -133,7 +123,6 @@ def test_accum_mixed_dict_and_object() -> None:
     _accum_tokens(state, SimpleNamespace(input_tokens=300, output_tokens=30))
     assert state.total_input_tokens == 400
     assert state.total_output_tokens == 40
-
 
 def test_accum_int_coercion_handles_floats() -> None:
     """The int() cast at lines 487-491 handles float inputs (defensive).
