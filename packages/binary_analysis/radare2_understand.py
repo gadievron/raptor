@@ -72,6 +72,11 @@ from packages.binary_analysis.function_cfg import (  # noqa: E402
     save_cached_cfgs,
 )
 
+# Highest homology dimension computed per function. β_2 is what the
+# decompiler-confidence tag needs (β_2 > 0 ⇔ irreducible control flow);
+# β_3 is rarely informative and costs an extra path-enumeration level.
+_HOMOLOGY_MAX_DIM = 2
+
 # Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
 # Composed from the shared taxonomy; the union here defines what
@@ -123,6 +128,20 @@ class FunctionInfo:
     # default runs pay no extra r2 cost. A directed Graph-protocol object
     # consumable by core.inventory.path_homology / dominators.
     basic_block_cfg: Optional["BasicBlockCFG"] = None
+    # Path-homology structural signal (Phase 3). Populated only under
+    # analyse(path_homology=True); all None/False on default runs so
+    # standard output is byte-for-byte unchanged. Reported only — no
+    # effect on prioritisation ranking in this phase.
+    #   path_betti  — Betti vector (β_0, β_1, β_2): β_1 ≈ loop count,
+    #                 β_2 > 0 ⇒ irreducible control flow.
+    #   cyclomatic  — directed cyclomatic complexity, for comparison.
+    #   decompiler_low_confidence — β_2 > 0, i.e. the CFG is irreducible
+    #                 so decompiler control-flow structuring likely
+    #                 produced goto-soup; weight the decompiled C lower.
+    path_betti: Optional[List[int]] = None
+    path_betti_complete: bool = True
+    cyclomatic: Optional[int] = None
+    decompiler_low_confidence: bool = False
 
 
 @dataclass
@@ -179,6 +198,9 @@ class BinaryContextMap:
                     f.transitively_reaches_dangerous,
                 "transitive_distance": f.transitive_distance,
                 "rationale": f.rationale,
+                # Path-homology fields are emitted only when computed
+                # (path_homology=True); absent on default runs.
+                **(homology_report(f) or {}),
             }
 
         entry_points = [fn_dict(f, "BEP") for f in self.entry_points]
@@ -225,6 +247,64 @@ class BinaryContextMap:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(self.to_dict(), indent=2, default=str))
         return out_path
+
+
+def homology_report(fn: FunctionInfo) -> Optional[Dict[str, Any]]:
+    """The reported path-homology subset for a function, or ``None`` when
+    homology wasn't computed (default runs). Shared by ``to_dict`` and the
+    fuzz-priority record builders so the surfaced shape is identical."""
+    if fn.path_betti is None:
+        return None
+    return {
+        "path_betti": list(fn.path_betti),
+        "path_betti_complete": fn.path_betti_complete,
+        "cyclomatic": fn.cyclomatic,
+        "decompiler_low_confidence": fn.decompiler_low_confidence,
+    }
+
+
+def compute_path_homology(ctx: BinaryContextMap) -> int:
+    """Compute the path-homology structural signal for every interesting
+    function that has a basic-block CFG (Phase 3, path-homology arc).
+
+    Populates ``path_betti`` / ``path_betti_complete`` / ``cyclomatic`` /
+    ``decompiler_low_confidence`` on each ``FunctionInfo``. Pure and
+    r2-free — operates on CFGs already extracted in Phase 2, so it is
+    unit-testable without radare2. Returns the number of functions
+    annotated.
+
+    Reported only: this does not alter prioritisation ranking. A
+    per-function ``β_2 > 0`` (irreducible control flow) sets
+    ``decompiler_low_confidence`` and is also surfaced as a context note
+    so operators can see at a glance which functions the decompiler likely
+    mangled.
+    """
+    from core.inventory.path_homology import betti, cyclomatic_number
+
+    annotated = 0
+    low_confidence: List[str] = []
+    for fn in ctx.interesting_functions:
+        cfg = fn.basic_block_cfg
+        if cfg is None or not cfg.nodes():
+            continue
+        bv = betti(cfg, max_dim=_HOMOLOGY_MAX_DIM)
+        fn.path_betti = list(bv.betti)
+        fn.path_betti_complete = bv.complete
+        fn.cyclomatic = cyclomatic_number(cfg)
+        fn.decompiler_low_confidence = bv.b2 > 0
+        annotated += 1
+        if fn.decompiler_low_confidence:
+            low_confidence.append(fn.name)
+
+    if low_confidence:
+        shown = ", ".join(sorted(low_confidence)[:10])
+        more = "" if len(low_confidence) <= 10 else f" (+{len(low_confidence) - 10} more)"
+        ctx.notes.append(
+            f"path-homology: {len(low_confidence)} function(s) have "
+            f"irreducible control flow (β_2 > 0) — decompiler output for "
+            f"these is likely unreliable: {shown}{more}"
+        )
+    return annotated
 
 
 def probe_capability() -> Dict[str, Any]:
@@ -359,6 +439,7 @@ class BinaryUnderstand:
         max_strings: int = 100,
         quick: bool = False,
         extract_cfgs: bool = False,
+        path_homology: bool = False,
     ) -> BinaryContextMap:
         """Run the full analysis pipeline.
 
@@ -479,12 +560,15 @@ class BinaryUnderstand:
                 # dangerous / transitive_distance fields used by
                 # the prioritise step.
                 self._tag_transitive_callers(r2, ctx)
-                # Phase 2 (path-homology arc): opt-in per-function
-                # basic-block CFG extraction. Off by default so standard
-                # runs pay no extra r2 cost. Must follow _extract_
-                # functions (needs interesting_functions populated).
-                if extract_cfgs:
+                # Phase 2/3 (path-homology arc): opt-in per-function
+                # basic-block CFG extraction + structural-homology
+                # signal. Off by default so standard runs pay no extra
+                # r2 cost. path_homology implies CFG extraction. Must
+                # follow _extract_functions (needs interesting_functions).
+                if extract_cfgs or path_homology:
                     self._extract_function_cfgs(r2, ctx)
+                if path_homology:
+                    compute_path_homology(ctx)
                 self._decompile_priorities(
                     r2, ctx, limit=max_decompile,
                 )
@@ -974,6 +1058,9 @@ class BinaryUnderstand:
                 "direct_sinks": list(fn.calls_dangerous),
                 "transitive_sinks": list(fn.transitively_reaches_dangerous),
                 "transitive_distance": fn.transitive_distance,
+                # Reported-only path-homology fields (absent unless
+                # path_homology=True). Does NOT feed `score` in this phase.
+                **(homology_report(fn) or {}),
             })
             if len(priorities) >= 20:
                 break
@@ -1063,6 +1150,17 @@ class BinaryUnderstand:
         for fn in ctx.interesting_functions:
             if fn.name in rationale_by_name:
                 fn.rationale = rationale_by_name[fn.name]
+        # Merge reported-only path-homology fields into the LLM-built
+        # records by function name (absent unless path_homology=True).
+        homology_by_name = {
+            fn.name: homology_report(fn)
+            for fn in ctx.interesting_functions
+            if homology_report(fn) is not None
+        }
+        for p in ctx.fuzz_priorities:
+            extra = homology_by_name.get(p.get("function"))
+            if extra:
+                p.update(extra)
 
 
 def analyse_binary_context(
@@ -1074,6 +1172,7 @@ def analyse_binary_context(
     max_strings: int = 100,
     quick: bool = False,
     extract_cfgs: bool = False,
+    path_homology: bool = False,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
@@ -1092,6 +1191,12 @@ def analyse_binary_context(
     function's ``basic_block_cfg`` (Phase 2, path-homology arc) via r2
     ``afbj``, cached per build-id. Off by default — adds a per-function
     r2 call. Ignored under ``quick``.
+
+    ``path_homology=True`` (implies ``extract_cfgs``) additionally
+    computes the per-function path-homology structural signal (Phase 3):
+    Betti vector, cyclomatic complexity, and a ``decompiler_low_confidence``
+    tag (β_2 > 0 ⇒ irreducible control flow). Reported only — surfaced in
+    the context map and fuzz priorities; does not change ranking.
     """
     analyser = BinaryUnderstand(binary_path, llm=llm)
     context = analyser.analyse(
@@ -1099,6 +1204,7 @@ def analyse_binary_context(
         max_strings=max_strings,
         quick=quick,
         extract_cfgs=extract_cfgs,
+        path_homology=path_homology,
     )
     if out_path:
         context.write(out_path)
