@@ -338,6 +338,64 @@ def beta1_report(
     }
 
 
+def _auc(scored: Sequence[tuple]) -> Optional[float]:
+    """Area under the ROC curve via the Mann–Whitney statistic, tie-aware.
+    ``scored`` is a list of ``(score, is_positive)``. AUC = P(a random
+    positive outranks a random negative); 0.5 is chance. Dependency-free.
+    ``None`` when either class is empty."""
+    pairs = list(scored)
+    n_pos = sum(1 for _, lab in pairs if lab)
+    n_neg = len(pairs) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+    order = sorted(range(len(pairs)), key=lambda i: pairs[i][0])
+    ranks = [0.0] * len(pairs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j < len(order) and pairs[order[j]][0] == pairs[order[i]][0]:
+            j += 1
+        avg_rank = (i + j - 1) / 2.0 + 1.0          # 1-based average rank
+        for k in range(i, j):
+            ranks[order[k]] = avg_rank
+        i = j
+    sum_ranks_pos = sum(ranks[k] for k in range(len(pairs)) if pairs[k][1])
+    return (sum_ranks_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
+def compare_to_cyclomatic(
+    records: Sequence[FunctionRecord],
+    positive_label: str = "reaches_dangerous",
+) -> Dict:
+    """Head-to-head: does β_1 separate the positive class *better than*
+    cyclomatic complexity (the cheap baseline β_1 must beat to justify the
+    homology machinery)? Reports threshold-free AUC for β_1, cyclomatic,
+    and the gap (cyclomatic − β_1, the direction-aware part β_1 adds).
+
+    Decision logic the caller applies: if AUC(β_1) ≈ AUC(cyclomatic) the
+    topology buys nothing over the subtraction; if AUC(gap) ≈ 0.5 the
+    distinctive ‘fill’ contribution is noise."""
+    usable = [
+        r for r in records
+        if r.has_b1 and r.cyclomatic is not None
+        and r.label in (positive_label, "benign")
+    ]
+    pos = lambda r: r.label == positive_label  # noqa: E731
+    auc_b1 = _auc([(r.betti[1], pos(r)) for r in usable])
+    auc_cyc = _auc([(r.cyclomatic, pos(r)) for r in usable])
+    auc_gap = _auc([(r.gap, pos(r)) for r in usable])
+    delta = (None if auc_b1 is None or auc_cyc is None
+             else auc_b1 - auc_cyc)
+    return {
+        "n": len(usable),
+        "n_positive": sum(1 for r in usable if pos(r)),
+        "auc_beta1": auc_b1,
+        "auc_cyclomatic": auc_cyc,
+        "auc_gap": auc_gap,
+        "beta1_minus_cyclomatic_auc": delta,
+    }
+
+
 def beta1_gate(
     records: Sequence[FunctionRecord],
     positive_label: str = "reaches_dangerous",

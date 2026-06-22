@@ -77,15 +77,13 @@ from packages.binary_analysis.function_cfg import (  # noqa: E402
 # β_3 is rarely informative and costs an extra path-enumeration level.
 _HOMOLOGY_MAX_DIM = 2
 
-# Phase 5: cap on the β_1 priority bonus. The Phase 4 gate killed the β_2
-# signal (vacuous on real binaries) but Phase 4.5 validated β_1 as a
-# SECONDARY signal: among functions with comparable dangerous-sink
-# reachability, higher β_1 (more genuine loops / control-flow complexity)
-# means more room for bugs (mean β_1 ≈ 16 for sink-reaching functions vs
-# ≈ 4 for the rest, RR 2.3). Capped well below one direct-sink unit (10)
-# so it tie-breaks rather than overriding the primary reachability score.
-# NB: confounded with size; treated as a mild prior, not a strong claim.
-_BETTI_BONUS_CAP = 8
+# NB: an earlier Phase 5 wired a β_1 term into the fuzz-priority score.
+# It was reverted: the β_1-vs-cyclomatic head-to-head (AUC on the
+# attack-surface proxy: β_1 0.693 vs cyclomatic 0.707) showed β_1 does
+# NOT improve on plain cyclomatic complexity — the two are collinear and
+# cyclomatic is both marginally better and far cheaper. So path homology
+# stays *reported-only* (path_betti / cyclomatic surfaced under
+# --path-homology); nothing feeds ranking. See docs/design-path-homology-cfg.md.
 
 # Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
@@ -271,20 +269,6 @@ def homology_report(fn: FunctionInfo) -> Optional[Dict[str, Any]]:
         "cyclomatic": fn.cyclomatic,
         "decompiler_low_confidence": fn.decompiler_low_confidence,
     }
-
-
-def betti_priority_bonus(fn: FunctionInfo) -> int:
-    """Phase 5 secondary fuzz-priority term from β_1.
-
-    Returns 0 unless path homology was computed (i.e. ``--path-homology``);
-    otherwise ``min(β_1, _BETTI_BONUS_CAP)``. Bounded below one direct-sink
-    unit so it tie-breaks among similar reachability rather than dominating
-    it. Reads β_1 only when actually computed (a truncated ``(β_0,)`` vector
-    means β_1 is unknown → no bonus, never treated as 0)."""
-    betti = fn.path_betti
-    if not betti or len(betti) < 2:
-        return 0
-    return min(betti[1], _BETTI_BONUS_CAP)
 
 
 def compute_path_homology(ctx: BinaryContextMap) -> int:
@@ -1055,9 +1039,7 @@ class BinaryUnderstand:
                 transitive = len(fn.transitively_reaches_dangerous) * weight
             else:
                 transitive = 0
-            # Phase 5: bounded β_1 secondary term — 0 unless --path-homology
-            # populated path_betti, so default ranking is unchanged.
-            return direct + transitive + betti_priority_bonus(fn)
+            return direct + transitive
 
         priorities = []
         ranked = sorted(ctx.interesting_functions, key=lambda f: -_score(f))

@@ -6,15 +6,16 @@ the binary reverse-engineering path. It is a metric / triage / decompiler-
 confidence signal, **not** a soundness primitive: it never licenses a
 suppression and never touches the sanitizer-cut chokepoint.
 
-Status: **Phases 1–5 done.** The β_2 / irreducibility signal failed its
-Phase 4 gate (vacuous on real binaries — 1 / 8,459 functions), so the
-arc **pivoted to β_1** (the direction-aware cyclomatic refinement
-Huntsman's grep result actually used). Phase 4.5 validated β_1 (dense;
-high β_1 over-represented among attack-surface functions, RR 2.27) and
-Phase 5 wired it as a *bounded, secondary* fuzz-priority term, gated on
-`--path-homology` (default ranking unchanged). β_2 is dead; its
-reported-only fields remain harmless. Phases 6–7 (source-level /
-persistence) on hold. This is a follow-on metrics arc to
+Status: **Phases 1–4.5 done; Phase 5 reverted; arc lands as reported-only
+telemetry + two negative results.** β_2 / irreducibility failed its Phase 4
+gate (vacuous on real binaries — 1 / 8,459 functions). The arc pivoted to
+β_1 (Huntsman's grep result was β_1-based), but the β_1-vs-cyclomatic
+head-to-head showed **β_1 does not beat plain cyclomatic complexity**
+(AUC 0.693 vs 0.707) while costing far more — so the briefly-added β_1
+ranking term was reverted. Under `--path-homology`, `path_betti` /
+`cyclomatic` are surfaced for inspection but **nothing feeds ranking**;
+default runs are unchanged. Phases 6–7 (source-level / persistence) on
+hold. This is a follow-on metrics arc to
 `design-aggregation-dominators-wp.md` (Project B built the CFG / `Graph`
 substrate this reuses).
 
@@ -201,17 +202,19 @@ gated on the validation in Phase 4.
 | 2 | **Binary CFG extraction.** Per-function basic-block CFG via r2 `afbj` in `radare2_understand.py`; `Graph` adapter; per-build-id cache. | `packages/binary_analysis/function_cfg.py` (`BasicBlockCFG` adapter + `parse_afbj` + build-id cache, all r2-free/testable); `FunctionInfo.basic_block_cfg` populated under opt-in `analyse(extract_cfgs=True)` (off by default → no cost/behaviour change); 16 unit tests. No scoring change. | **done** |
 | 3 | **Compute + surface (reported only).** Betti vector per function; attach to `FunctionInfo`, `fuzz_priorities`, `binary-context-map.json`; derive `decompiler_low_confidence` (β_2 > 0). Behind `--path-homology` (off by default), plumbed `analyse → analyse_binary_context → orchestrator.execute → raptor_fuzzing` CLI. | `compute_path_homology` + `homology_report` (module-level, r2-free/testable); `FunctionInfo` fields + `to_dict`/fuzz-priority surfacing; β_2>0 context note; 8 unit tests. No ranking effect (does not feed `_score`). | **done** |
 | 4 | **Validation gate (β_2).** Does `β_2⁺` separate vulnerable/benign, or predict decompiler-structuring failure (`goto` in `pdc`)? | `core/inventory/path_homology_precision.py` + `libexec/raptor-path-homology-precision` (cross-tab, risk ratio, rule-of-three, non-vacuousness guard). **8,459 functions / 6 binaries → NO-GO** (β_2 vacuous; see "Phase 4 result"). | **done — NO-GO (β_2)** |
-| 4.5 | **β_1 pivot validation.** The constructive pivot after the β_2 NO-GO: is **β_1** (direction-aware cyclomatic — what Huntsman's grep result used) non-vacuous and does high β_1 separate attack-surface functions? | `beta1_report`/`beta1_gate` added to the harness; ran the same corpus → **GO** (β_1 54% non-zero; sink-reachers mean β_1 15.75 vs 3.94, top-quartile RR 2.27). See "Phase 4.5 result". | **done — GO (β_1)** |
-| 5 | **Wire β_1 into triage.** Bounded β_1 term in `_score()` (the β_2 decompiler-discount dropped — vacuous). | `betti_priority_bonus` (cap 8, < one direct-sink unit) added to `_heuristic_prioritise._score`; 0 unless `--path-homology`, so default ranking unchanged. Verified end-to-end on `/usr/bin/grep`. | **done (β_1 variant)** |
+| 4.5 | **β_1 pivot validation.** Is **β_1** non-vacuous, and — the decisive test — does it separate attack-surface functions *better than the cyclomatic baseline it must beat to justify the homology machinery*? | `beta1_report` / `compare_to_cyclomatic` (threshold-free AUC) added. β_1 is dense (54% non-zero) and tracks attack surface, **but does NOT beat cyclomatic**: AUC β_1 0.693 vs cyclomatic 0.707 (Δ −0.014); gap AUC 0.700. All collinear (size). See "Phase 4.5 result". | **done — NO improvement over cyclomatic** |
+| 5 | ~~Wire β_1 into triage.~~ | **Reverted.** The β_1 term was added then removed once the head-to-head showed β_1 ≤ cyclomatic (cheaper, marginally better). Nothing feeds ranking; path homology stays reported-only. | **reverted** |
 | 6 | **Source-level C/C++ signal.** Homology over `cfg_builder_cpp.py`'s goto/switch-aware CFG. | — | **on hold** — source β_2 faces the same vacuity; a β_1 source signal is the candidate if pursued |
 | 7 | **Persistent path homology.** Persistent path homology (Chowdhury–Mémoli) over the nesting hierarchy. | — | **on hold** |
 
-**Phases 1–5 done (with a pivot).** Phases 1–3 shipped the reported-only
-machinery. **Phase 4 — the evidence gate — returned NO-GO for β_2** (the
-irreducibility signal is vacuous on real binaries; the gate working as
-intended). Rather than abandon the arc, **Phase 4.5 pivoted to β_1** (GO)
-and **Phase 5 wired β_1** as a bounded secondary signal. Phases 6–7
-(source-level / persistence) are on hold. See the result sections below.
+**Phases 1–4.5 done; Phase 5 reverted.** Phases 1–3 shipped the
+reported-only machinery. **Phase 4 returned NO-GO for β_2** (vacuous on
+real binaries). **Phase 4.5 pivoted to β_1** and ran the decisive
+head-to-head: **β_1 does not beat cyclomatic complexity** (AUC 0.693 vs
+0.707), so the briefly-added Phase 5 ranking term was **reverted**. The
+arc lands as reported-only telemetry plus two clean negative results; the
+evidence gate did its job twice. Phases 6–7 on hold. See the result
+sections below.
 
 ## Phase 4 result — NO-GO (β_2 signal vacuous on real binaries)
 
@@ -260,31 +263,49 @@ dangerous-sink reachability (`calls_dangerous` /
   over-represented among sink-reachers with **risk ratio 2.27**
   (P=0.55 vs 0.24).
 
-**Decision: GO** for β_1 as a *secondary* signal — enough to clear the
-bar β_2 failed (dense + tracks attack surface).
+β_1 clears the *non-vacuity* bar β_2 failed (dense; tracks attack
+surface), so initially this read as a GO. **But the decisive test is
+whether β_1 beats the baseline it would replace — cyclomatic complexity —
+not whether it beats chance.** Adding that head-to-head changed the
+verdict.
 
-**Honest caveats.** (1) The label is a proxy, not ground-truth
-vulnerability — a NIST SARD run remains the gold standard. (2) β_1 is
-**confounded with function size**: larger functions have both higher β_1
-and higher sink-reachability, so part of the separation is "bigger
-functions reach more sinks." β_1 is therefore treated as a *mild prior*,
-not a causal vulnerability claim — which is why Phase 5 bounds its
-influence well below the primary reachability score. A size-controlled
-comparison on a labelled corpus is the proper follow-up.
+**Head-to-head (threshold-free AUC, label = reaches-dangerous proxy,
+8,457 functions):**
 
-## Phase 5 — β_1 wired as a bounded secondary signal
+| metric | AUC |
+|---|---|
+| cyclomatic complexity | **0.707** |
+| β_1 | 0.693 |
+| gap (cyclomatic − β_1) | 0.700 |
 
-`betti_priority_bonus(fn) = min(β_1, 8)` added to
-`_heuristic_prioritise._score` (cap 8 < one direct-sink unit = 10, so it
-tie-breaks among comparable reachability rather than overriding it). It
-is **0 unless `--path-homology`** populated `path_betti`, so default
-ranking is byte-for-byte unchanged; reads β_1 only when computed (a
-truncated `(β_0,)` vector → no bonus, never treated as 0). The β_2-based
-decompiler-confidence discount from the original Phase 5 plan is dropped
-(β_2 vacuous). Verified end-to-end on `/usr/bin/grep`.
+β_1 is **0.014 *worse*** than plain cyclomatic, and the gap (β_1's
+distinctive direction-aware contribution) carries no independent signal —
+all three are collinear, jointly measuring function size/complexity.
+**Conclusion: β_1 does not improve on cyclomatic for this task**, and it
+is far more expensive (r2 `afbj` + GF(2) elimination vs `|E|−|V|+c`).
 
-Phases 6–7 remain on hold (see "Follow-up" for why their unblocking is
-gated on the size-controlled validation).
+**Honest caveats on even this comparison.** The label is a size-confounded
+attack-surface proxy, not CVE ground truth; an AUC of ~0.70 for *all*
+three is "complexity correlates with attack surface," already captured by
+the existing dangerous-sink scoring. A labelled, size-stratified NIST
+SARD run could in principle show β_1 separating *within* size strata where
+cyclomatic cannot — but on the evidence in hand, β_1 loses, so nothing is
+wired.
+
+## Phase 5 — reverted
+
+A bounded β_1 term (`min(β_1, 8)`) was briefly added to
+`_heuristic_prioritise._score`, then **removed** once the head-to-head
+above showed β_1 ≤ cyclomatic. Wiring the more expensive, no-better
+metric into ranking would have been exactly the unvalidated-signal
+mistake the Phase 4 gate exists to prevent. Path homology therefore stays
+**reported-only**: under `--path-homology`, `path_betti` and `cyclomatic`
+are surfaced in `binary-context-map.json` for inspection, but **nothing
+feeds prioritisation**. Default runs are unchanged.
+
+Phases 6–7 remain on hold — and the bar for unblocking them is now
+higher: a *source-level* β_1 would have to beat source cyclomatic, which
+the binary result makes unlikely without new evidence.
 
 ## Follow-up (open) — size-controlled β_1 validation on labelled ground truth
 
@@ -304,10 +325,11 @@ signal **beyond size, on real vulnerability labels**.
   still separate vulnerable from benign? Equivalently, an odds ratio for
   β_1 with cyclomatic as a covariate. The point is to dissolve the
   "bigger functions reach more sinks" confound.
-- **Decision rule.** If β_1 separates *within* size strata → raise the
-  Phase 5 weight and **revisit Phase 6** (does a source β_1 beat plain
-  cyclomatic?) and possibly **Phase 7**. If it doesn't → β_1 stays the
-  current bounded prior and the arc closes here.
+- **Decision rule.** The corpus head-to-head already shows β_1 ≤ cyclomatic
+  *overall*; the only remaining hope is that β_1 separates *within* size
+  strata where cyclomatic cannot. If it does → reconsider wiring β_1 (and
+  revisit Phases 6–7). If it doesn't → the arc closes: path homology
+  stays reported-only and cyclomatic is the metric of record.
 - **Command.** `libexec/raptor-path-homology-precision <sard-manifest.json>`
   (manifest: `{"binaries":[{"path":..,"vulnerable_functions":[..]}]}`).
 

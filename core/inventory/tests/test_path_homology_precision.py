@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.inventory.path_homology_precision import (  # noqa: E402
     FunctionRecord,
+    _auc,
     beta1_gate,
     beta1_report,
+    compare_to_cyclomatic,
     count_gotos,
     cross_tab,
     decompiler_report,
@@ -181,3 +183,26 @@ class TestBeta1:
         g = beta1_gate(recs)
         assert g["non_vacuous"] is False
         assert g["suggested_pass"] is False
+
+
+class TestAUC:
+    def test_perfect_reversed_and_chance(self):
+        assert _auc([(1.0, True), (0.0, False)]) == 1.0
+        assert _auc([(0.0, True), (1.0, False)]) == 0.0
+        assert _auc([(1.0, True), (1.0, False)]) == 0.5  # tie
+        assert _auc([(1.0, True)]) is None               # one class empty
+
+    def test_compare_to_cyclomatic_shape(self):
+        # β_1 perfectly separates here; cyclomatic does not — sanity that
+        # the head-to-head reports both and the delta.
+        recs = [
+            _rec("p1", [1, 9, 0], label="reaches_dangerous", cyclomatic=9),
+            _rec("p2", [1, 8, 0], label="reaches_dangerous", cyclomatic=9),
+            _rec("b1", [1, 1, 0], label="benign", cyclomatic=9),
+            _rec("b2", [1, 0, 0], label="benign", cyclomatic=9),
+        ]
+        c = compare_to_cyclomatic(recs)
+        assert c["n"] == 4 and c["n_positive"] == 2
+        assert c["auc_beta1"] == 1.0           # β_1 separates
+        assert c["auc_cyclomatic"] == 0.5      # cyclomatic constant → chance
+        assert c["beta1_minus_cyclomatic_auc"] == 0.5

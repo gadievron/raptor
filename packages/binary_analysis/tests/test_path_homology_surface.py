@@ -9,10 +9,8 @@ from pathlib import Path
 
 from packages.binary_analysis.function_cfg import parse_afbj
 from packages.binary_analysis.radare2_understand import (
-    _BETTI_BONUS_CAP,
     BinaryContextMap,
     FunctionInfo,
-    betti_priority_bonus,
     compute_path_homology,
     homology_report,
 )
@@ -102,27 +100,6 @@ class TestHomologyReport:
             "cyclomatic", "decompiler_low_confidence",
         }
         assert rep["decompiler_low_confidence"] is True
-
-
-class TestBettiPriorityBonus:
-    def test_zero_without_homology(self):
-        # Default runs (no path_betti) get no bonus → ranking unchanged.
-        assert betti_priority_bonus(FunctionInfo(name="x", address=0)) == 0
-
-    def test_zero_for_truncated_vector(self):
-        f = FunctionInfo(name="t", address=0)
-        f.path_betti = [1]  # only β_0; β_1 unknown, not 0
-        assert betti_priority_bonus(f) == 0
-
-    def test_uses_beta1(self):
-        f = FunctionInfo(name="c", address=0)
-        f.path_betti = [1, 3, 0]
-        assert betti_priority_bonus(f) == 3
-
-    def test_capped(self):
-        f = FunctionInfo(name="big", address=0)
-        f.path_betti = [1, 999, 0]
-        assert betti_priority_bonus(f) == _BETTI_BONUS_CAP
 
 
 class TestToDictSurfacing:
