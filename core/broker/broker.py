@@ -1,11 +1,16 @@
 """Top-level capability broker — the dispatcher.
 
-Given a RAPTOR mode and its requirements, the broker:
-1. Checks the local system's capabilities.
-2. If local is capable, returns a LocalExecution plan (no-op).
-3. If not, searches the inventory for a compatible remote system.
-4. Optionally provisions missing tools on the best candidate.
-5. Returns a RemoteExecution plan with the transport and staging paths.
+Given a RAPTOR mode and its requirements, the broker scores every
+system in the fleet (local *and* remote) and picks the best one.
+
+The local host has no special privilege — it competes on score like
+every other system.  RAPTOR runs equally well on Ubuntu, Docker, and
+macOS; the broker routes each mode to whatever system will finish it
+fastest, regardless of where the operator launched the session.
+
+A small tiebreak bonus avoids unnecessary transport overhead when
+scores are effectively equal, but a beefy remote box will always
+beat a lightweight local host.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from core.broker.capabilities import (
 from core.broker.inventory import Inventory
 from core.broker.probe import probe_system
 from core.broker.provision import ProvisionResult, provision_tools
+from core.broker.scoring import score_system
 from core.broker.transport import (
     CommandResult,
     RemoteSystemEntry,
@@ -36,10 +42,15 @@ from core.broker.transport import (
 
 logger = logging.getLogger(__name__)
 
+# When local and remote score within this margin, prefer local to avoid
+# transport overhead.  Small enough that a meaningfully better remote
+# system always wins.
+_LOCAL_TIEBREAK = 0.5
+
 
 @dataclass(frozen=True)
 class LocalExecution:
-    """The local system can handle this mode — no brokering needed."""
+    """The local system won the scoring — run here, no transport needed."""
 
     capabilities: SystemCapabilities
     verdict: CapabilityVerdict
@@ -47,7 +58,7 @@ class LocalExecution:
 
 @dataclass(frozen=True)
 class RemoteExecution:
-    """Execution must be routed to a remote system."""
+    """A remote system won the scoring — execution routed over transport."""
 
     entry: RemoteSystemEntry
     capabilities: SystemCapabilities
@@ -106,45 +117,59 @@ class Broker:
         mode: str,
         requirements: Optional[ModeRequirements] = None,
     ) -> LocalExecution | RemoteExecution:
-        """Resolve where *mode* should execute.
+        """Score every system (local + fleet) and route to the best one.
 
-        Returns a LocalExecution if the local system is capable, or a
-        RemoteExecution with an open transport and staged workdir if a
-        remote system is needed.
+        The local host competes on score like any fleet member.  When
+        scores are within ``_LOCAL_TIEBREAK``, local wins to avoid
+        unnecessary transport overhead.
         """
         reqs = requirements or MODE_REQUIREMENTS.get(
             mode, ModeRequirements(mode=mode)
         )
 
-        local_verdict = self.local_capabilities.satisfies(reqs)
-        if local_verdict.met:
-            logger.info(
-                "mode '%s' can run locally — %s",
-                mode,
-                local_verdict.summary(),
-            )
-            return LocalExecution(
-                capabilities=self.local_capabilities,
-                verdict=local_verdict,
-            )
-
-        logger.info(
-            "mode '%s' cannot run locally: %s — searching inventory",
-            mode,
-            local_verdict.summary(),
+        local_caps = self.local_capabilities
+        local_verdict = local_caps.satisfies(reqs)
+        local_score = (
+            score_system(local_caps, mode) if local_verdict.met else -1.0
         )
 
         candidates = self._inventory.find_capable(reqs)
-        if candidates:
-            entry, caps = candidates[0]
-            logger.info(
-                "found capable remote system: %s (%s)",
-                entry.alias,
-                entry.host,
-            )
-            return self._prepare_remote(entry, caps, reqs)
+        best_remote: Optional[tuple[RemoteSystemEntry, SystemCapabilities, float]] = None
+        for entry, caps in candidates:
+            s = score_system(caps, mode, entry=entry)
+            if best_remote is None or s > best_remote[2]:
+                best_remote = (entry, caps, s)
 
-        # No fully capable system — try partial match + provision
+        if best_remote and local_verdict.met:
+            remote_entry, remote_caps, remote_score = best_remote
+            if remote_score > local_score + _LOCAL_TIEBREAK:
+                logger.info(
+                    "mode '%s': remote %s (%.1f) beats local (%.1f) — routing remotely",
+                    mode, remote_entry.alias, remote_score, local_score,
+                )
+                return self._prepare_remote(remote_entry, remote_caps, reqs)
+            logger.info(
+                "mode '%s': local (%.1f) wins over %s (%.1f)",
+                mode, local_score, remote_entry.alias, remote_score,
+            )
+            return LocalExecution(
+                capabilities=local_caps, verdict=local_verdict,
+            )
+
+        if local_verdict.met:
+            logger.info("mode '%s': local only (%.1f), no remotes", mode, local_score)
+            return LocalExecution(
+                capabilities=local_caps, verdict=local_verdict,
+            )
+
+        if best_remote:
+            remote_entry, remote_caps, remote_score = best_remote
+            logger.info(
+                "mode '%s': local incapable, routing to %s (%.1f)",
+                mode, remote_entry.alias, remote_score,
+            )
+            return self._prepare_remote(remote_entry, remote_caps, reqs)
+
         if self._auto_provision:
             return self._provision_and_prepare(reqs)
 
