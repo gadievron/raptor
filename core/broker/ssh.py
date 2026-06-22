@@ -2,6 +2,11 @@
 
 Uses paramiko for connection management and SFTP for file transfer,
 with rsync as a fast-path when available on both ends.
+
+Credential resolution is delegated to ``core.broker.creds`` —
+supports ssh-agent, key files with passphrases, env-var passwords,
+OS keyring, sshpass (for subprocess paths like rsync), SSH_ASKPASS,
+and interactive prompts.
 """
 
 from __future__ import annotations
@@ -13,6 +18,14 @@ import subprocess
 from pathlib import Path
 from typing import Mapping, Optional
 
+from core.broker.creds import (
+    AuthMethod,
+    ResolvedCredential,
+    resolve_ssh_credential,
+    sshpass_env,
+    sshpass_prefix,
+    ssh_askpass_env,
+)
 from core.broker.transport import (
     CommandResult,
     RemoteSystemEntry,
@@ -30,6 +43,7 @@ class SSHTransport(Transport):
         self._entry = entry
         self._client: Optional[object] = None  # paramiko.SSHClient
         self._sftp: Optional[object] = None  # paramiko.SFTPClient
+        self._credential: Optional[ResolvedCredential] = None
 
     def connect(self) -> None:
         try:
@@ -40,6 +54,16 @@ class SSHTransport(Transport):
                 "pip install paramiko"
             ) from exc
 
+        self._credential = resolve_ssh_credential(
+            self._entry.alias,
+            has_key_file=bool(self._entry.key_path),
+        )
+        logger.info(
+            "SSH auth method for %s: %s",
+            self._entry.alias,
+            self._credential.method.value,
+        )
+
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -48,27 +72,33 @@ class SSHTransport(Transport):
             "port": self._entry.port,
             "username": self._entry.user,
             "timeout": 30,
-            "allow_agent": True,
+            "allow_agent": self._credential.method == AuthMethod.SSH_AGENT,
             "look_for_keys": True,
         }
+
         if self._entry.key_path:
             connect_kwargs["key_filename"] = self._entry.key_path
+        if self._credential.key_passphrase:
+            connect_kwargs["passphrase"] = self._credential.key_passphrase
+        if self._credential.password:
+            connect_kwargs["password"] = self._credential.password
 
         try:
             client.connect(**connect_kwargs)
         except Exception as exc:
             raise TransportError(
                 f"SSH connection to {self._entry.host}:{self._entry.port} "
-                f"failed: {exc}"
+                f"failed ({self._credential.method.value}): {exc}"
             ) from exc
 
         self._client = client
         self._sftp = client.open_sftp()
         logger.info(
-            "SSH connected to %s@%s:%d",
+            "SSH connected to %s@%s:%d via %s",
             self._entry.user,
             self._entry.host,
             self._entry.port,
+            self._credential.method.value,
         )
 
     def disconnect(self) -> None:
@@ -179,36 +209,49 @@ class SSHTransport(Transport):
         result = self.run("which rsync", timeout=10)
         return result.ok
 
-    def _rsync_upload(self, local_dir: str, remote_dir: str) -> None:
-        dst = (
-            f"{self._entry.user}@{self._entry.host}:{remote_dir}"
-        )
-        cmd = [
-            "rsync", "-az", "--delete",
-            "-e", f"ssh -p {self._entry.port} -o StrictHostKeyChecking=no",
-        ]
-        if self._entry.key_path:
-            cmd[-1] += f" -i {self._entry.key_path}"
-        cmd += [f"{local_dir}/", dst]
+    def _build_rsync_cmd(self, direction: str, src: str, dst: str) -> tuple[list[str], dict[str, str]]:
+        """Build rsync command with proper credential passing.
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        Returns (cmd, env_additions).  Handles sshpass, SSH_ASKPASS,
+        key files, and agent forwarding for the subprocess SSH path.
+        """
+        ssh_cmd = f"ssh -p {self._entry.port} -o StrictHostKeyChecking=no"
+        if self._entry.key_path:
+            ssh_cmd += f" -i {self._entry.key_path}"
+
+        env_add: dict[str, str] = {}
+        prefix: list[str] = []
+
+        if self._credential and self._credential.password:
+            sp = sshpass_prefix(self._credential)
+            if sp:
+                prefix = sp
+                env_add.update(sshpass_env(self._credential))
+            else:
+                env_add.update(ssh_askpass_env(self._credential))
+
+        cmd = prefix + ["rsync", "-az"]
+        if direction == "upload":
+            cmd.append("--delete")
+        cmd += ["-e", ssh_cmd, src, dst]
+        return cmd, env_add
+
+    def _rsync_upload(self, local_dir: str, remote_dir: str) -> None:
+        dst = f"{self._entry.user}@{self._entry.host}:{remote_dir}"
+        cmd, env_add = self._build_rsync_cmd("upload", f"{local_dir}/", dst)
+
+        env = {**os.environ, **env_add}
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         if proc.returncode != 0:
             raise TransportError(f"rsync upload failed: {proc.stderr}")
 
     def _rsync_download(self, remote_dir: str, local_dir: str) -> None:
-        src = (
-            f"{self._entry.user}@{self._entry.host}:{remote_dir}"
-        )
-        cmd = [
-            "rsync", "-az",
-            "-e", f"ssh -p {self._entry.port} -o StrictHostKeyChecking=no",
-        ]
-        if self._entry.key_path:
-            cmd[-1] += f" -i {self._entry.key_path}"
-        cmd += [f"{src}/", local_dir]
+        src = f"{self._entry.user}@{self._entry.host}:{remote_dir}"
+        cmd, env_add = self._build_rsync_cmd("download", f"{src}/", local_dir)
 
         os.makedirs(local_dir, exist_ok=True)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        env = {**os.environ, **env_add}
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         if proc.returncode != 0:
             raise TransportError(f"rsync download failed: {proc.stderr}")
 

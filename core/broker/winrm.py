@@ -3,6 +3,10 @@
 Uses pywinrm for PowerShell-based remote execution on Windows hosts.
 File transfer uses the WinRM PSRP copy mechanism (base64-encoded
 chunks over the session) since WinRM has no native file transfer.
+
+Credential resolution is delegated to ``core.broker.creds`` —
+supports env-var passwords, OS keyring, Kerberos tickets, and
+interactive prompts.
 """
 
 from __future__ import annotations
@@ -13,6 +17,11 @@ import os
 from pathlib import Path, PureWindowsPath
 from typing import Mapping, Optional
 
+from core.broker.creds import (
+    AuthMethod,
+    ResolvedCredential,
+    resolve_winrm_credential,
+)
 from core.broker.transport import (
     CommandResult,
     RemoteSystemEntry,
@@ -31,6 +40,7 @@ class WinRMTransport(Transport):
     def __init__(self, entry: RemoteSystemEntry) -> None:
         self._entry = entry
         self._session: Optional[object] = None  # winrm.Session
+        self._credential: Optional[ResolvedCredential] = None
 
     def connect(self) -> None:
         try:
@@ -41,14 +51,26 @@ class WinRMTransport(Transport):
                 "pip install pywinrm"
             ) from exc
 
+        self._credential = resolve_winrm_credential(
+            self._entry.alias,
+            self._entry.winrm_auth,
+        )
+        logger.info(
+            "WinRM auth method for %s: %s",
+            self._entry.alias,
+            self._credential.method.value,
+        )
+
         scheme = "https" if self._entry.winrm_use_ssl else "http"
         port = self._entry.port if self._entry.port != 22 else 5986
         endpoint = f"{scheme}://{self._entry.host}:{port}/wsman"
 
+        password = self._credential.password or ""
+
         try:
             self._session = winrm.Session(
                 endpoint,
-                auth=(self._entry.user, ""),
+                auth=(self._entry.user, password),
                 transport=self._entry.winrm_auth,
                 server_cert_validation="ignore",
             )
@@ -61,14 +83,16 @@ class WinRMTransport(Transport):
             raise
         except Exception as exc:
             raise TransportError(
-                f"WinRM connection to {endpoint} failed: {exc}"
+                f"WinRM connection to {endpoint} failed "
+                f"({self._credential.method.value}): {exc}"
             ) from exc
 
         logger.info(
-            "WinRM connected to %s@%s:%d",
+            "WinRM connected to %s@%s:%d via %s",
             self._entry.user,
             self._entry.host,
             port,
+            self._credential.method.value,
         )
 
     def disconnect(self) -> None:

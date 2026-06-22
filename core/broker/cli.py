@@ -80,6 +80,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Actually install (default is dry-run)",
     )
 
+    # -- store-cred --------------------------------------------------------
+    sc_p = sub.add_parser(
+        "store-cred",
+        help="Store a system's password in the OS keyring (macOS Keychain / GNOME Keyring / Windows Credential Manager)",
+    )
+    sc_p.add_argument("alias", help="System alias to store credentials for")
+    sc_p.add_argument(
+        "--keypass", action="store_true",
+        help="Store an SSH key passphrase instead of a login password",
+    )
+
     # -- deps --------------------------------------------------------------
     deps_p = sub.add_parser(
         "deps",
@@ -115,6 +126,7 @@ def main(args: list[str]) -> int:
         "probe": _cmd_probe,
         "check": _cmd_check,
         "provision": _cmd_provision,
+        "store-cred": _cmd_store_cred,
         "deps": _cmd_deps,
     }
     return handlers[parsed.subcommand](parsed)
@@ -288,6 +300,34 @@ def _print_capabilities(caps: SystemCapabilities) -> None:
     print(f"  Tools:     {', '.join(sorted(caps.tools)) or 'none'}")
     if caps.labels:
         print(f"  Labels:    {', '.join(sorted(caps.labels))}")
+
+
+def _cmd_store_cred(parsed: argparse.Namespace) -> int:
+    import getpass as _getpass
+
+    from core.broker.creds import store_in_keyring
+
+    purpose = "SSH key passphrase" if parsed.keypass else "password"
+    try:
+        pw = _getpass.getpass(f"Enter {purpose} for {parsed.alias}: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled")
+        return 1
+
+    if not pw:
+        print("[!] Empty credential — nothing stored", file=sys.stderr)
+        return 1
+
+    if store_in_keyring(parsed.alias, pw, is_keypass=parsed.keypass):
+        print(f"[+] Stored {purpose} for {parsed.alias} in OS keyring")
+        return 0
+
+    print(
+        f"[!] Failed to store in keyring — install 'keyring' package "
+        f"or use RAPTOR_BROKER_PASS_{parsed.alias.upper().replace('-', '_')} env var instead",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _cmd_deps(parsed: argparse.Namespace) -> int:
