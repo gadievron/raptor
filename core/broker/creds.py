@@ -338,8 +338,9 @@ def ssh_askpass_env(credential: ResolvedCredential) -> dict[str, str]:
         mode="w", prefix="raptor-askpass-", suffix=".sh",
         delete=False,
     )
+    escaped_pw = credential.password.replace("'", "'\"'\"'")
     script.write("#!/bin/sh\n")
-    script.write(f'echo "{credential.password}"\n')
+    script.write(f"printf '%s\\n' '{escaped_pw}'\n")
     script.close()
     os.chmod(script.name, stat.S_IRWXU)
 

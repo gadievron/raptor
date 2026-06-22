@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -130,7 +131,8 @@ class SSHTransport(Transport):
             full_cmd = f"cd {_shell_quote(cwd)} && {command}"
         if env:
             prefix = " ".join(
-                f"{k}={_shell_quote(v)}" for k, v in env.items()
+                f"{_validated_env_key(k)}={_shell_quote(v)}"
+                for k, v in env.items()
             )
             full_cmd = f"{prefix} {full_cmd}"
 
@@ -221,7 +223,7 @@ class SSHTransport(Transport):
         """
         ssh_cmd = f"ssh -p {self._entry.port} -o StrictHostKeyChecking=no"
         if self._entry.key_path:
-            ssh_cmd += f" -i {self._entry.key_path}"
+            ssh_cmd += f" -i {_shell_quote(self._entry.key_path)}"
 
         env_add: dict[str, str] = {}
         prefix: list[str] = []
@@ -290,6 +292,18 @@ class SSHTransport(Transport):
 
 def _rsync_available() -> bool:
     return shutil.which("rsync") is not None
+
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validated_env_key(key: str) -> str:
+    """Reject env keys that could inject shell metacharacters."""
+    if not _ENV_KEY_RE.match(key):
+        raise TransportError(
+            f"invalid environment variable name: {key!r}"
+        )
+    return key
 
 
 def _shell_quote(s: str) -> str:

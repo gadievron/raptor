@@ -16,6 +16,7 @@ from typing import Mapping, Optional, Sequence
 class TransportKind(Enum):
     SSH = "ssh"
     WINRM = "winrm"
+    ADB = "adb"
 
 
 @dataclass(frozen=True)

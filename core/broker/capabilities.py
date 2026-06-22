@@ -19,6 +19,7 @@ class OperatingSystem(Enum):
     LINUX = "linux"
     DARWIN = "darwin"
     WINDOWS = "windows"
+    ANDROID = "android"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -31,16 +32,22 @@ class Architecture(Enum):
     X86_64 = "x86_64"
     AARCH64 = "aarch64"
     ARM64 = "arm64"
+    ARMV7 = "armv7"
     UNKNOWN = "unknown"
 
     @classmethod
     def detect(cls) -> "Architecture":
         raw = platform.machine().lower()
-        normalised = {"amd64": "x86_64", "arm64": "aarch64"}.get(raw, raw)
+        normalised = {
+            "amd64": "x86_64",
+            "arm64": "aarch64",
+            "armv7l": "armv7",
+            "armv8l": "aarch64",
+        }.get(raw, raw)
         return cls(normalised) if normalised in cls._value2member_map_ else cls.UNKNOWN
 
     def is_arm(self) -> bool:
-        return self in (Architecture.AARCH64, Architecture.ARM64)
+        return self in (Architecture.AARCH64, Architecture.ARM64, Architecture.ARMV7)
 
 
 @dataclass(frozen=True)

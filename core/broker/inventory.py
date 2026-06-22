@@ -48,20 +48,28 @@ class Inventory:
             return
 
         for entry_dict in data.get("systems", []):
-            entry = RemoteSystemEntry.from_dict(entry_dict)
-            self._systems[entry.alias] = entry
+            try:
+                entry = RemoteSystemEntry.from_dict(entry_dict)
+                self._systems[entry.alias] = entry
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("skipping malformed system entry: %s", exc)
 
         for alias, caps_dict in data.get("capabilities", {}).items():
-            self._capabilities[alias] = SystemCapabilities(
-                alias=alias,
-                os=OperatingSystem(caps_dict["os"]),
-                arch=Architecture(caps_dict["arch"]),
-                tools=frozenset(caps_dict.get("tools", [])),
-                ram_mb=caps_dict.get("ram_mb", 0),
-                cores=caps_dict.get("cores", 0),
-                free_disk_mb=caps_dict.get("free_disk_mb", 0),
-                labels=frozenset(caps_dict.get("labels", [])),
-            )
+            try:
+                self._capabilities[alias] = SystemCapabilities(
+                    alias=alias,
+                    os=OperatingSystem(caps_dict["os"]),
+                    arch=Architecture(caps_dict["arch"]),
+                    tools=frozenset(caps_dict.get("tools", [])),
+                    ram_mb=int(caps_dict.get("ram_mb", 0)),
+                    cores=int(caps_dict.get("cores", 0)),
+                    free_disk_mb=int(caps_dict.get("free_disk_mb", 0)),
+                    labels=frozenset(caps_dict.get("labels", [])),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "skipping malformed capabilities for %s: %s", alias, exc,
+                )
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

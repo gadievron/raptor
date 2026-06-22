@@ -66,6 +66,10 @@ def _build_transport(entry: RemoteSystemEntry) -> Transport:
         from core.broker.winrm import WinRMTransport
 
         return WinRMTransport(entry)
+    elif entry.transport == TransportKind.ADB:
+        from core.broker.adb import ADBTransport
+
+        return ADBTransport(entry)
     else:
         raise TransportError(f"unsupported transport: {entry.transport}")
 
@@ -282,4 +286,6 @@ class BrokerError(Exception):
 def _remote_workdir(entry: RemoteSystemEntry) -> str:
     if entry.transport == TransportKind.WINRM:
         return f"C:\\raptor\\work\\{os.getpid()}"
+    if entry.transport == TransportKind.ADB:
+        return f"/data/local/tmp/raptor-work/{os.getpid()}"
     return f"/tmp/raptor-work/{os.getpid()}"

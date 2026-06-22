@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from pathlib import Path, PureWindowsPath
 from typing import Mapping, Optional
 
@@ -113,7 +114,9 @@ class WinRMTransport(Transport):
         ps_lines: list[str] = []
         if env:
             for k, v in env.items():
-                ps_lines.append(f'$env:{k} = "{_ps_escape(v)}"')
+                ps_lines.append(
+                    f'$env:{_validated_env_key(k)} = "{_ps_escape(v)}"'
+                )
         if cwd:
             ps_lines.append(f'Set-Location -Path "{_ps_escape(cwd)}"')
         ps_lines.append(command)
@@ -257,16 +260,40 @@ class WinRMTransport(Transport):
             entries = [entries]
 
         for entry in entries:
-            full = entry["FullName"]
+            if not isinstance(entry, dict):
+                continue
+            full = entry.get("FullName")
+            is_container = entry.get("PSIsContainer")
+            if not isinstance(full, str) or is_container is None:
+                continue
+
             rel = os.path.relpath(
                 full.replace("\\", "/"),
                 remote_dir.replace("\\", "/"),
             )
+            if rel.startswith("..") or os.path.isabs(rel):
+                logger.warning(
+                    "path traversal in remote listing, skipping: %s", full,
+                )
+                continue
+
             local_path = os.path.join(local_dir, rel)
-            if entry["PSIsContainer"]:
+            if is_container:
                 os.makedirs(local_path, exist_ok=True)
             else:
                 self._download_file(full, local_path)
+
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validated_env_key(key: str) -> str:
+    """Reject env keys that could inject PowerShell metacharacters."""
+    if not _ENV_KEY_RE.match(key):
+        raise TransportError(
+            f"invalid environment variable name: {key!r}"
+        )
+    return key
 
 
 def _ps_escape(s: str) -> str:

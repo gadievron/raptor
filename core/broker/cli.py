@@ -23,6 +23,7 @@ from typing import Optional
 from core.broker.broker import Broker, BrokerError, LocalExecution, RemoteExecution
 from core.broker.capabilities import (
     MODE_REQUIREMENTS,
+    Architecture,
     ModeRequirements,
     OperatingSystem,
     SystemCapabilities,
@@ -48,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_p.add_argument("host", help="Hostname or IP address")
     add_p.add_argument("--port", type=int, default=22, help="SSH/WinRM port (default: 22)")
     add_p.add_argument("--user", default="root", help="Remote username (default: root)")
-    add_p.add_argument("--transport", choices=["ssh", "winrm"], default="ssh")
+    add_p.add_argument("--transport", choices=["ssh", "winrm", "adb"], default="ssh")
     add_p.add_argument("--key", dest="key_path", help="Path to SSH private key")
     add_p.add_argument("--labels", help="Comma-separated labels (e.g. gpu,high-mem)")
     add_p.add_argument("--no-probe", action="store_true", help="Skip capability probing")
@@ -145,6 +146,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run in detached tmux/screen session (survives disconnects)",
     )
     tk_p.add_argument(
+        "--os",
+        choices=["linux", "darwin", "windows", "android"],
+        help="Require target system OS",
+    )
+    tk_p.add_argument(
+        "--arch",
+        choices=["x86_64", "aarch64", "armv7"],
+        help="Require target system architecture",
+    )
+    tk_p.add_argument(
+        "--transport",
+        dest="require_transport",
+        choices=["ssh", "winrm", "adb"],
+        help="Require transport kind",
+    )
+    tk_p.add_argument(
+        "--require-tools",
+        help="Comma-separated tools the target must have (e.g. gdb,afl++)",
+    )
+    tk_p.add_argument(
         "extra_args", nargs="*",
         help="Additional arguments passed to the remote command",
     )
@@ -180,6 +201,106 @@ def _build_parser() -> argparse.ArgumentParser:
         help="List all tracked detached tasks",
     )
 
+    # -- lift --------------------------------------------------------------
+    lf_p = sub.add_parser(
+        "lift",
+        help="Pull a binary from a fleet member to local staging",
+    )
+    lf_p.add_argument(
+        "source",
+        help="alias:/remote/path (e.g. pixel-7:/data/app/com.example/base.apk)",
+    )
+    lf_p.add_argument(
+        "--no-unpack", action="store_true",
+        help="Skip automatic unpacking (APK, PE)",
+    )
+    lf_p.add_argument(
+        "--staging-dir",
+        help="Override local staging directory",
+    )
+
+    # -- lift-and-route ----------------------------------------------------
+    lr_p = sub.add_parser(
+        "lift-and-route",
+        help="Pull a binary from one system, route analysis to the best other",
+    )
+    lr_p.add_argument(
+        "source",
+        help="alias:/remote/path (e.g. pixel-7:/data/app/com.example/base.apk)",
+    )
+    lr_p.add_argument("mode", help="RAPTOR mode for analysis (fuzz, scan, etc.)")
+    lr_p.add_argument(
+        "--no-unpack", action="store_true",
+        help="Skip automatic unpacking (APK, PE)",
+    )
+    lr_p.add_argument(
+        "--prefer", dest="prefer_alias",
+        help="Soft preference for analysis system alias",
+    )
+    lr_p.add_argument(
+        "--labels", help="Comma-separated required labels",
+    )
+    lr_p.add_argument(
+        "--timeout", type=int, default=3600,
+        help="Execution timeout in seconds (default: 3600)",
+    )
+    lr_p.add_argument(
+        "--detach", action="store_true",
+        help="Run analysis in detached session",
+    )
+    lr_p.add_argument(
+        "--os",
+        choices=["linux", "darwin", "windows", "android"],
+        help="Require analysis system OS",
+    )
+    lr_p.add_argument(
+        "--arch",
+        choices=["x86_64", "aarch64", "armv7"],
+        help="Require analysis system architecture",
+    )
+    lr_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Lift the binary but only show routing — don't execute",
+    )
+    lr_p.add_argument(
+        "extra_args", nargs="*",
+        help="Additional arguments passed to the remote command",
+    )
+
+    # -- engage ------------------------------------------------------------
+    eg_p = sub.add_parser(
+        "engage",
+        help="Plan fleet deployment for an engagement",
+    )
+    eg_p.add_argument(
+        "action",
+        choices=["propose", "confirm", "show", "clear", "override"],
+        help="Engagement action",
+    )
+    eg_p.add_argument(
+        "--scope",
+        choices=["full", "source-audit", "binary", "web-assessment", "mobile", "reversing"],
+        help="Predefined scope (sets of modes)",
+    )
+    eg_p.add_argument(
+        "--modes",
+        help="Comma-separated modes (overrides --scope)",
+    )
+    eg_p.add_argument(
+        "--target", dest="target_desc", default="",
+        help="Target description for the engagement",
+    )
+    eg_p.add_argument(
+        "--exclude",
+        help="Comma-separated aliases to exclude",
+    )
+    eg_p.add_argument(
+        "--set",
+        dest="override_pairs",
+        action="append",
+        help="mode=alias override (repeatable, e.g. --set fuzz=linux-arm)",
+    )
+
     return parser
 
 
@@ -209,6 +330,9 @@ def main(args: list[str]) -> int:
         "task-collect": _cmd_task_collect,
         "task-cancel": _cmd_task_cancel,
         "task-list": _cmd_task_list,
+        "lift": _cmd_lift,
+        "lift-and-route": _cmd_lift_and_route,
+        "engage": _cmd_engage,
     }
     return handlers[parsed.subcommand](parsed)
 
@@ -487,6 +611,7 @@ def _cmd_rank(parsed: argparse.Namespace) -> int:
 
 
 def _cmd_task(parsed: argparse.Namespace) -> int:
+    from core.broker.scoring import TaskConstraints
     from core.broker.tasks import (
         TaskExecutor,
         TaskRouter,
@@ -495,6 +620,21 @@ def _cmd_task(parsed: argparse.Namespace) -> int:
     )
 
     labels = frozenset(parsed.labels.split(",")) if parsed.labels else frozenset()
+
+    req_os = OperatingSystem(parsed.os) if parsed.os else None
+    req_arch = Architecture(parsed.arch) if parsed.arch else None
+    req_transport = TransportKind(parsed.require_transport) if parsed.require_transport else None
+    req_tools = frozenset(parsed.require_tools.split(",")) if parsed.require_tools else frozenset()
+
+    constraints = None
+    if any((req_os, req_arch, req_transport, req_tools)):
+        constraints = TaskConstraints(
+            require_os=req_os,
+            require_arch=req_arch,
+            require_transport=req_transport,
+            require_tools=req_tools,
+        )
+
     spec = TaskSpec(
         mode=parsed.mode,
         target_path=parsed.target,
@@ -502,10 +642,14 @@ def _cmd_task(parsed: argparse.Namespace) -> int:
         labels=labels,
         prefer_alias=parsed.prefer_alias,
         timeout=parsed.timeout,
+        constraints=constraints,
     )
 
+    from core.broker.engage import load_engagement
+
     inv = Inventory()
-    router = TaskRouter(inv)
+    engagement = load_engagement()
+    router = TaskRouter(inv, engagement=engagement)
 
     try:
         assignment = router.route(spec)
@@ -519,6 +663,8 @@ def _cmd_task(parsed: argparse.Namespace) -> int:
     print(f"    Target: {spec.target_path}")
     print(f"    Routed: {s.entry.alias} ({s.entry.host}) — score {s.score:.1f}")
     print(f"    Reason: {assignment.reason}")
+    if engagement:
+        print(f"    Plan:   {engagement.target_description or 'active'}")
 
     if assignment.alternatives:
         print(f"    Alternatives: {', '.join(a.entry.alias for a in assignment.alternatives)}")
@@ -667,6 +813,319 @@ def _cmd_task_list(parsed: argparse.Namespace) -> int:
 
     print()
     return 0
+
+
+def _cmd_engage(parsed: argparse.Namespace) -> int:
+    from core.broker.engage import (
+        ENGAGEMENT_SCOPES,
+        EngagementPlan,
+        clear_engagement,
+        confirm_engagement,
+        format_plan,
+        format_proposal,
+        load_engagement,
+        propose_engagement,
+        save_engagement,
+    )
+
+    action = parsed.action
+
+    if action == "clear":
+        if clear_engagement():
+            print("[+] Active engagement plan cleared")
+        else:
+            print("[*] No active engagement plan")
+        return 0
+
+    if action == "show":
+        plan = load_engagement()
+        if not plan:
+            print("[*] No active engagement plan")
+            print("    Create one: raptor broker engage propose --scope full --target 'my target'")
+            return 0
+        print(f"\n{format_plan(plan)}")
+        return 0
+
+    if action == "propose":
+        modes = _resolve_engage_modes(parsed)
+        if not modes:
+            return 1
+
+        inv = Inventory()
+        proposal = propose_engagement(inv, modes, parsed.target_desc)
+        print(f"\n{format_proposal(proposal)}")
+
+        print(f"\n[*] Review the proposal above.")
+        print(f"    Confirm:   raptor broker engage confirm --scope {parsed.scope or 'full'} --target '{parsed.target_desc}'")
+        print(f"    Override:  raptor broker engage confirm ... --set fuzz=linux-arm --exclude pixel-7")
+        return 0
+
+    if action == "confirm":
+        modes = _resolve_engage_modes(parsed)
+        if not modes:
+            return 1
+
+        inv = Inventory()
+        proposal = propose_engagement(inv, modes, parsed.target_desc)
+
+        overrides: dict[str, str] = {}
+        if parsed.override_pairs:
+            for pair in parsed.override_pairs:
+                if "=" not in pair:
+                    print(f"[!] Invalid override format '{pair}' — expected mode=alias", file=sys.stderr)
+                    return 1
+                mode, _, alias = pair.partition("=")
+                overrides[mode] = alias
+
+        exclude = frozenset(parsed.exclude.split(",")) if parsed.exclude else frozenset()
+
+        plan = confirm_engagement(proposal, overrides=overrides, exclude=exclude)
+        path = save_engagement(plan)
+
+        print(f"\n{format_plan(plan)}")
+        print(f"\n[+] Engagement plan confirmed and saved to {path}")
+        print(f"    Tasks will now route according to this plan.")
+        print(f"    Override per-task: raptor broker task fuzz /target --prefer other-system")
+        print(f"    Clear:            raptor broker engage clear")
+        return 0
+
+    if action == "override":
+        plan = load_engagement()
+        if not plan:
+            print("[!] No active engagement plan to override", file=sys.stderr)
+            return 1
+
+        if not parsed.override_pairs and not parsed.exclude:
+            print("[!] Provide --set mode=alias and/or --exclude alias", file=sys.stderr)
+            return 1
+
+        inv = Inventory()
+        proposal = propose_engagement(inv, plan.modes, plan.target_description)
+
+        overrides: dict[str, str] = {}
+        if parsed.override_pairs:
+            for pair in parsed.override_pairs:
+                if "=" not in pair:
+                    print(f"[!] Invalid override '{pair}'", file=sys.stderr)
+                    return 1
+                mode, _, alias = pair.partition("=")
+                overrides[mode] = alias
+
+        existing_exclude = plan.excluded_aliases
+        new_exclude = frozenset(parsed.exclude.split(",")) if parsed.exclude else frozenset()
+
+        updated = confirm_engagement(
+            proposal, overrides=overrides,
+            exclude=existing_exclude | new_exclude,
+        )
+        path = save_engagement(updated)
+        print(f"\n{format_plan(updated)}")
+        print(f"\n[+] Engagement plan updated at {path}")
+        return 0
+
+    return 0
+
+
+def _resolve_engage_modes(parsed: argparse.Namespace) -> frozenset[str]:
+    from core.broker.engage import ENGAGEMENT_SCOPES
+
+    if parsed.modes:
+        return frozenset(parsed.modes.split(","))
+    if parsed.scope:
+        scope = ENGAGEMENT_SCOPES.get(parsed.scope)
+        if not scope:
+            print(f"[!] Unknown scope '{parsed.scope}'", file=sys.stderr)
+            return frozenset()
+        return scope
+    print(
+        "[!] Specify --scope or --modes\n"
+        "    Scopes: full, source-audit, binary, web-assessment, mobile, reversing",
+        file=sys.stderr,
+    )
+    return frozenset()
+
+
+def _parse_source_spec(source: str) -> tuple[str, str]:
+    """Parse ``alias:/remote/path`` into (alias, path)."""
+    if ":" not in source:
+        raise ValueError(
+            f"invalid source format '{source}' — expected alias:/remote/path"
+        )
+    alias, _, path = source.partition(":")
+    if not alias or not path:
+        raise ValueError(
+            f"invalid source format '{source}' — expected alias:/remote/path"
+        )
+    return alias, path
+
+
+def _cmd_lift(parsed: argparse.Namespace) -> int:
+    from core.broker.lift import LiftError, LiftSpec, lift, list_native_libs
+
+    try:
+        alias, remote_path = _parse_source_spec(parsed.source)
+    except ValueError as exc:
+        print(f"[!] {exc}", file=sys.stderr)
+        return 1
+
+    inv = Inventory()
+    spec = LiftSpec(
+        source_alias=alias,
+        remote_path=remote_path,
+        unpack=not parsed.no_unpack,
+    )
+
+    print(f"[*] Lifting {remote_path} from {alias}...")
+    try:
+        lifted = lift(spec, inv, staging_dir=parsed.staging_dir)
+    except LiftError as exc:
+        print(f"[!] Lift failed: {exc}", file=sys.stderr)
+        return 1
+
+    size_str = f"{lifted.size_bytes / 1024:.1f} KB"
+    if lifted.size_bytes > 1024 * 1024:
+        size_str = f"{lifted.size_bytes / (1024 * 1024):.1f} MB"
+
+    print(f"\n[+] Lifted successfully")
+    print(f"    Source:  {alias}:{remote_path}")
+    print(f"    Local:   {lifted.local_path}")
+    print(f"    Size:    {size_str}")
+    if lifted.file_type:
+        print(f"    Type:    {lifted.file_type}")
+
+    if lifted.unpacked_dir:
+        natives = list_native_libs(lifted)
+        if natives:
+            print(f"    Unpacked: {lifted.unpacked_dir}")
+            print(f"    Native libs ({len(natives)}):")
+            for lib in natives[:10]:
+                print(f"      - {lib}")
+            if len(natives) > 10:
+                print(f"      ... and {len(natives) - 10} more")
+
+    print(f"\n    Route for analysis:")
+    print(f"      raptor broker lift-and-route {parsed.source} fuzz --detach")
+    print(f"      raptor broker lift-and-route {parsed.source} scan")
+
+    return 0
+
+
+def _cmd_lift_and_route(parsed: argparse.Namespace) -> int:
+    from core.broker.lift import (
+        LiftError,
+        LiftSpec,
+        choose_fuzz_target,
+        lift,
+    )
+    from core.broker.scoring import TaskConstraints
+    from core.broker.tasks import (
+        TaskExecutor,
+        TaskRouter,
+        TaskRoutingError,
+        TaskSpec,
+    )
+
+    try:
+        alias, remote_path = _parse_source_spec(parsed.source)
+    except ValueError as exc:
+        print(f"[!] {exc}", file=sys.stderr)
+        return 1
+
+    inv = Inventory()
+
+    # Phase 1: Lift
+    print(f"[*] Phase 1: Lifting {remote_path} from {alias}...")
+    spec = LiftSpec(
+        source_alias=alias,
+        remote_path=remote_path,
+        unpack=not parsed.no_unpack,
+    )
+
+    try:
+        lifted = lift(spec, inv)
+    except LiftError as exc:
+        print(f"[!] Lift failed: {exc}", file=sys.stderr)
+        return 1
+
+    size_mb = lifted.size_bytes / (1024 * 1024)
+    print(f"    Lifted {lifted.original_name} ({size_mb:.1f} MB)")
+    if lifted.file_type:
+        print(f"    Type: {lifted.file_type}")
+
+    # Pick best target (native .so for APKs, original otherwise)
+    if parsed.mode == "fuzz":
+        target_path = choose_fuzz_target(lifted)
+        if target_path != lifted.local_path:
+            print(f"    Fuzz target: {target_path}")
+    else:
+        target_path = lifted.local_path
+
+    # Phase 2: Route
+    print(f"\n[*] Phase 2: Routing {parsed.mode} to best system...")
+
+    labels = frozenset(parsed.labels.split(",")) if parsed.labels else frozenset()
+
+    req_os = OperatingSystem(parsed.os) if parsed.os else None
+    req_arch = Architecture(parsed.arch) if parsed.arch else None
+
+    constraints = None
+    if any((req_os, req_arch)):
+        constraints = TaskConstraints(
+            require_os=req_os,
+            require_arch=req_arch,
+        )
+
+    task_spec = TaskSpec(
+        mode=parsed.mode,
+        target_path=target_path,
+        args=tuple(parsed.extra_args),
+        labels=labels,
+        prefer_alias=parsed.prefer_alias,
+        timeout=parsed.timeout,
+        constraints=constraints,
+    )
+
+    router = TaskRouter(inv)
+    try:
+        assignment = router.route(task_spec)
+    except TaskRoutingError as exc:
+        print(f"[!] Routing failed: {exc}", file=sys.stderr)
+        return 1
+
+    s = assignment.system
+    print(f"    Routed: {s.entry.alias} ({s.entry.host})")
+    print(f"    Score:  {s.score:.1f}")
+    print(f"    Reason: {assignment.reason}")
+    print(f"    Path:   {alias} → localhost → {s.entry.alias}")
+
+    if parsed.dry_run:
+        print(f"\n    [dry-run] Would execute {parsed.mode} on {s.entry.alias}")
+        return 0
+
+    # Phase 3: Execute
+    print(f"\n[*] Phase 3: Executing on {s.entry.alias}...")
+    executor = TaskExecutor()
+
+    if parsed.detach:
+        handle = executor.launch(assignment)
+        print(f"\n[+] Task {handle.task_id} running in {handle.backend} session")
+        print(f"    Source:  {alias}:{remote_path}")
+        print(f"    Target:  {s.entry.alias}")
+        print(f"    Check:   raptor broker task-status {handle.task_id}")
+        print(f"    Collect: raptor broker task-collect {handle.task_id}")
+        return 0
+
+    result = executor.execute(assignment)
+
+    print(f"\n[{'+'if result.state.value == 'completed' else '!'}] {result.state.value}")
+    if result.duration_secs is not None:
+        print(f"    Duration: {result.duration_secs}s")
+    if result.output_dir:
+        print(f"    Results:  {result.output_dir}")
+    if result.error:
+        print(f"    Error:    {result.error}")
+
+    return 0 if result.state.value == "completed" else 1
 
 
 def _format_requirements(reqs: ModeRequirements) -> str:

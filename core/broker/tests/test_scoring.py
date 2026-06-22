@@ -14,8 +14,11 @@ from core.broker.scoring import (
     MODE_RESOURCE_WEIGHTS,
     ResourceWeights,
     ScoredSystem,
+    TaskConstraints,
+    TOOL_PLATFORM_MATRIX,
     rank_fleet,
     score_system,
+    tool_available_on,
 )
 from core.broker.transport import RemoteSystemEntry, TransportKind
 
@@ -136,3 +139,115 @@ class TestRankFleet:
             [(entry, caps)], "scan", labels=frozenset({"gpu"}),
         )
         assert len(ranked) == 1
+
+
+class TestToolAvailableOn:
+    def test_afl_on_linux_x86(self):
+        assert tool_available_on("afl++", OperatingSystem.LINUX, Architecture.X86_64)
+
+    def test_afl_not_on_windows(self):
+        assert not tool_available_on("afl++", OperatingSystem.WINDOWS, Architecture.X86_64)
+
+    def test_rr_only_linux_x86(self):
+        assert tool_available_on("rr", OperatingSystem.LINUX, Architecture.X86_64)
+        assert not tool_available_on("rr", OperatingSystem.LINUX, Architecture.AARCH64)
+
+    def test_codeql_cross_platform(self):
+        assert tool_available_on("codeql", OperatingSystem.LINUX, Architecture.X86_64)
+        assert tool_available_on("codeql", OperatingSystem.DARWIN, Architecture.AARCH64)
+        assert tool_available_on("codeql", OperatingSystem.WINDOWS, Architecture.X86_64)
+
+    def test_unknown_tool_assumed_portable(self):
+        assert tool_available_on("mytool", OperatingSystem.WINDOWS, Architecture.AARCH64)
+
+    def test_windbg_only_windows(self):
+        assert tool_available_on("windbg", OperatingSystem.WINDOWS, Architecture.X86_64)
+        assert not tool_available_on("windbg", OperatingSystem.LINUX, Architecture.X86_64)
+
+
+class TestTaskConstraints:
+    def test_frozen(self):
+        c = TaskConstraints(require_os=OperatingSystem.LINUX)
+        with pytest.raises(AttributeError):
+            c.require_os = OperatingSystem.WINDOWS
+
+    def test_defaults_are_none(self):
+        c = TaskConstraints()
+        assert c.require_os is None
+        assert c.require_arch is None
+        assert c.require_transport is None
+        assert c.require_tools == frozenset()
+
+
+class TestHardGates:
+    def test_require_os_excludes_mismatch(self):
+        linux = (_entry("lin"), _caps(os=OperatingSystem.LINUX))
+        windows = (
+            _entry("win", host="10.0.0.2", transport=TransportKind.WINRM),
+            _caps(os=OperatingSystem.WINDOWS),
+        )
+        constraints = TaskConstraints(require_os=OperatingSystem.LINUX)
+        ranked = rank_fleet(
+            [linux, windows], "scan", constraints=constraints,
+        )
+        assert len(ranked) == 1
+        assert ranked[0].entry.alias == "lin"
+
+    def test_require_arch_excludes_mismatch(self):
+        x86 = (_entry("x86"), _caps(arch=Architecture.X86_64))
+        arm = (_entry("arm", host="10.0.0.2"), _caps(arch=Architecture.AARCH64))
+        constraints = TaskConstraints(require_arch=Architecture.X86_64)
+        ranked = rank_fleet(
+            [x86, arm], "scan", constraints=constraints,
+        )
+        assert len(ranked) == 1
+        assert ranked[0].entry.alias == "x86"
+
+    def test_require_transport_excludes_mismatch(self):
+        ssh_sys = (_entry("ssh"), _caps())
+        winrm_sys = (
+            _entry("winrm", host="10.0.0.2", transport=TransportKind.WINRM),
+            _caps(os=OperatingSystem.WINDOWS),
+        )
+        constraints = TaskConstraints(require_transport=TransportKind.SSH)
+        ranked = rank_fleet(
+            [ssh_sys, winrm_sys], "scan", constraints=constraints,
+        )
+        assert len(ranked) == 1
+        assert ranked[0].entry.alias == "ssh"
+
+    def test_require_tools_excludes_missing(self):
+        has = (_entry("has"), _caps(tools=frozenset({"gdb", "afl++"})))
+        lacks = (_entry("lacks", host="10.0.0.2"), _caps(tools=frozenset({"gdb"})))
+        constraints = TaskConstraints(require_tools=frozenset({"afl++"}))
+        ranked = rank_fleet(
+            [has, lacks], "scan", constraints=constraints,
+        )
+        assert len(ranked) == 1
+        assert ranked[0].entry.alias == "has"
+
+
+class TestSoftBonuses:
+    def test_prefer_os_boosts_score(self):
+        caps = _caps(os=OperatingSystem.LINUX, cores=8)
+        entry = _entry()
+        constraints = TaskConstraints(prefer_os=OperatingSystem.LINUX)
+        boosted = score_system(caps, "scan", constraints=constraints, entry=entry)
+        unboosted = score_system(caps, "scan")
+        assert boosted > unboosted
+
+    def test_prefer_transport_boosts_score(self):
+        caps = _caps()
+        entry = _entry(transport=TransportKind.SSH)
+        constraints = TaskConstraints(prefer_transport=TransportKind.SSH)
+        boosted = score_system(caps, "scan", constraints=constraints, entry=entry)
+        unboosted = score_system(caps, "scan")
+        assert boosted > unboosted
+
+    def test_prefer_arch_boosts_score(self):
+        caps = _caps(arch=Architecture.X86_64)
+        entry = _entry()
+        constraints = TaskConstraints(prefer_arch=Architecture.X86_64)
+        boosted = score_system(caps, "scan", constraints=constraints, entry=entry)
+        unboosted = score_system(caps, "scan")
+        assert boosted > unboosted

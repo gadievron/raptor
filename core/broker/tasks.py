@@ -34,7 +34,10 @@ import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence
+
+if TYPE_CHECKING:
+    from core.broker.engage import EngagementPlan
 
 from core.broker.broker import _build_transport
 from core.broker.capabilities import (
@@ -44,7 +47,7 @@ from core.broker.capabilities import (
     SystemCapabilities,
 )
 from core.broker.inventory import Inventory
-from core.broker.scoring import ScoredSystem, rank_fleet
+from core.broker.scoring import ScoredSystem, TaskConstraints, rank_fleet
 from core.broker.sessions import (
     RemoteTaskState,
     SessionBackend,
@@ -87,6 +90,7 @@ class TaskSpec:
     prefer_alias: Optional[str] = None
     timeout: int = 3600
     detach: bool = False
+    constraints: Optional[TaskConstraints] = None
 
     @property
     def is_url_target(self) -> bool:
@@ -164,16 +168,22 @@ def _load_task_handle(task_id: str) -> Optional[TaskHandle]:
     path = _TASK_STATE_DIR / f"{task_id}.json"
     if not path.exists():
         return None
-    data = json.loads(path.read_text())
-    return TaskHandle(
-        task_id=data["task_id"],
-        system_alias=data["system_alias"],
-        workspace=data["workspace"],
-        backend=data["backend"],
-        started_at=data["started_at"],
-        spec_mode=data["spec_mode"],
-        spec_target=data["spec_target"],
-    )
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            return None
+        return TaskHandle(
+            task_id=str(data["task_id"]),
+            system_alias=str(data["system_alias"]),
+            workspace=str(data["workspace"]),
+            backend=str(data["backend"]),
+            started_at=float(data["started_at"]),
+            spec_mode=str(data["spec_mode"]),
+            spec_target=str(data["spec_target"]),
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("failed to load task handle %s: %s", task_id, exc)
+        return None
 
 
 def _remove_task_handle(task_id: str) -> None:
@@ -195,10 +205,21 @@ def list_active_tasks() -> list[TaskHandle]:
 
 
 class TaskRouter:
-    """Pick the best fleet member for a task."""
+    """Pick the best fleet member for a task.
 
-    def __init__(self, inventory: Inventory) -> None:
+    If an active engagement plan exists (see ``engage.py``), the
+    router honours it: the plan's assigned system for the mode is
+    used unless the operator overrides with ``prefer_alias``.
+    Excluded systems are never routed to.
+    """
+
+    def __init__(
+        self,
+        inventory: Inventory,
+        engagement: Optional["EngagementPlan"] = None,
+    ) -> None:
         self._inventory = inventory
+        self._engagement = engagement
 
     def route(self, spec: TaskSpec) -> TaskAssignment:
         """Score the fleet and assign the task to the best system.
@@ -211,11 +232,18 @@ class TaskRouter:
                 "no systems registered — add one with 'raptor broker add'"
             )
 
+        if self._engagement:
+            fleet = [
+                (e, c) for e, c in fleet
+                if not self._engagement.is_excluded(e.alias)
+            ]
+
         ranked = rank_fleet(
             fleet,
             spec.mode,
             require_capable=True,
             labels=spec.labels,
+            constraints=spec.constraints,
         )
 
         if not ranked:
@@ -224,17 +252,29 @@ class TaskRouter:
                 f"register a capable system or provision an existing one"
             )
 
-        if spec.prefer_alias:
-            preferred = [s for s in ranked if s.entry.alias == spec.prefer_alias]
+        effective_prefer = spec.prefer_alias
+
+        if not effective_prefer and self._engagement:
+            plan_alias = self._engagement.system_for_mode(spec.mode)
+            if plan_alias:
+                effective_prefer = plan_alias
+
+        if effective_prefer:
+            preferred = [s for s in ranked if s.entry.alias == effective_prefer]
             if preferred:
                 winner = preferred[0]
                 others = tuple(s for s in ranked if s is not winner)
-                reason = f"operator preference ({spec.prefer_alias}), score {winner.score}"
+                if spec.prefer_alias:
+                    reason = f"operator override ({effective_prefer}), score {winner.score}"
+                elif self._engagement:
+                    reason = f"engagement plan ({effective_prefer}), score {winner.score}"
+                else:
+                    reason = f"operator preference ({effective_prefer}), score {winner.score}"
             else:
                 winner = ranked[0]
                 others = tuple(ranked[1:])
                 reason = (
-                    f"preferred system '{spec.prefer_alias}' not capable; "
+                    f"preferred system '{effective_prefer}' not capable; "
                     f"best: {winner.entry.alias} (score {winner.score})"
                 )
         else:
@@ -265,7 +305,22 @@ class TaskExecutor:
     execution via tmux/screen (long-running tasks like fuzzing).
     """
 
-    _WORKSPACE_PREFIX = "/tmp/raptor-task-"
+    _UNIX_WORKSPACE = "/tmp/raptor-task-"
+    _WIN_WORKSPACE = "C:\\temp\\raptor-task-"
+
+    @staticmethod
+    def _workspace_path(task_id: str, is_windows: bool, is_android: bool = False) -> str:
+        if is_windows:
+            return f"C:\\temp\\raptor-task-{task_id}"
+        if is_android:
+            return f"/data/local/tmp/raptor-task-{task_id}"
+        return f"/tmp/raptor-task-{task_id}"
+
+    @staticmethod
+    def _join(base: str, child: str, is_windows: bool) -> str:
+        if is_windows:
+            return f"{base}\\{child}"
+        return f"{base}/{child}"
 
     def execute(self, assignment: TaskAssignment) -> TaskResult:
         """Run the assigned task end-to-end (blocking).
@@ -276,20 +331,20 @@ class TaskExecutor:
         task_id = assignment.task_id
         spec = assignment.spec
         entry = assignment.system.entry
-        workspace = f"{self._WORKSPACE_PREFIX}{task_id}"
         is_windows = assignment.system.capabilities.os == OperatingSystem.WINDOWS
+        workspace = self._workspace_path(task_id, is_windows)
 
         transport = _build_transport(entry)
         t0 = time.time()
 
         try:
             transport.connect()
-            self._setup_workspace(transport, workspace, spec, task_id)
-            target_dir = f"{workspace}/target"
-            output_dir = f"{workspace}/output"
+            self._setup_workspace(transport, workspace, spec, task_id, is_windows)
+            target_dir = self._join(workspace, "target", is_windows)
+            output_dir = self._join(workspace, "output", is_windows)
             remote_target = target_dir if not spec.is_url_target else spec.target_path
 
-            cmd = self._build_command(spec, remote_target, output_dir)
+            cmd = self._build_command(spec, remote_target, output_dir, is_windows)
             logger.info("[%s] running on %s: %s", task_id, entry.alias, cmd)
 
             result = transport.run(cmd, timeout=spec.timeout, cwd=workspace)
@@ -347,29 +402,31 @@ class TaskExecutor:
                 pass
 
     def launch(self, assignment: TaskAssignment) -> TaskHandle:
-        """Start a task in a detached tmux/screen session.
+        """Start a task in a detached tmux/screen/PowerShell session.
 
         Returns a TaskHandle for later ``poll()`` and ``collect()``.
-        The remote process survives SSH disconnects.
+        The remote process survives SSH/WinRM disconnects.
         """
         task_id = assignment.task_id
         spec = assignment.spec
         entry = assignment.system.entry
-        workspace = f"{self._WORKSPACE_PREFIX}{task_id}"
+        remote_os = assignment.system.capabilities.os
+        is_windows = remote_os == OperatingSystem.WINDOWS
+        workspace = self._workspace_path(task_id, is_windows)
 
         transport = _build_transport(entry)
 
         try:
             transport.connect()
 
-            backend = detect_session_backend(transport)
-            self._setup_workspace(transport, workspace, spec, task_id)
+            backend = detect_session_backend(transport, remote_os)
+            self._setup_workspace(transport, workspace, spec, task_id, is_windows)
 
-            target_dir = f"{workspace}/target"
-            output_dir = f"{workspace}/output"
+            target_dir = self._join(workspace, "target", is_windows)
+            output_dir = self._join(workspace, "output", is_windows)
             remote_target = target_dir if not spec.is_url_target else spec.target_path
 
-            cmd = self._build_command(spec, remote_target, output_dir)
+            cmd = self._build_command(spec, remote_target, output_dir, is_windows)
             start_detached(transport, task_id, cmd, workspace, backend)
 
             handle = TaskHandle(
@@ -408,9 +465,13 @@ class TaskExecutor:
             )
 
         transport = _build_transport(entry)
+        is_windows = _is_windows_system(inventory, handle.system_alias)
         try:
             transport.connect()
-            return poll(transport, handle.task_id, handle.workspace)
+            return poll(
+                transport, handle.task_id, handle.workspace,
+                is_windows=is_windows,
+            )
         finally:
             try:
                 transport.disconnect()
@@ -432,15 +493,15 @@ class TaskExecutor:
             )
 
         transport = _build_transport(entry)
-        is_windows = False
-        caps = inventory.get_capabilities(handle.system_alias)
-        if caps:
-            is_windows = caps.os == OperatingSystem.WINDOWS
+        is_windows = _is_windows_system(inventory, handle.system_alias)
 
         try:
             transport.connect()
 
-            state = poll(transport, handle.task_id, handle.workspace)
+            state = poll(
+                transport, handle.task_id, handle.workspace,
+                is_windows=is_windows,
+            )
             if state.running:
                 return TaskResult(
                     task_id=handle.task_id,
@@ -450,7 +511,8 @@ class TaskExecutor:
                     stderr=state.tail_stderr,
                 )
 
-            output_dir = f"{handle.workspace}/output"
+            sep = "\\" if is_windows else "/"
+            output_dir = f"{handle.workspace}{sep}output"
             local_output = self._collect_results(
                 transport, output_dir, handle.task_id,
             )
@@ -499,10 +561,7 @@ class TaskExecutor:
         if not entry:
             return False
 
-        is_windows = False
-        caps = inventory.get_capabilities(handle.system_alias)
-        if caps:
-            is_windows = caps.os == OperatingSystem.WINDOWS
+        is_windows = _is_windows_system(inventory, handle.system_alias)
 
         transport = _build_transport(entry)
         try:
@@ -532,11 +591,12 @@ class TaskExecutor:
         workspace: str,
         spec: TaskSpec,
         task_id: str,
+        is_windows: bool = False,
     ) -> None:
         """Create workspace and upload target if needed."""
         transport.mkdir(workspace)
-        target_dir = f"{workspace}/target"
-        output_dir = f"{workspace}/output"
+        target_dir = self._join(workspace, "target", is_windows)
+        output_dir = self._join(workspace, "output", is_windows)
         transport.mkdir(output_dir)
 
         if not spec.is_url_target:
@@ -548,12 +608,20 @@ class TaskExecutor:
         spec: TaskSpec,
         remote_target: str,
         output_dir: str,
+        is_windows: bool = False,
     ) -> str:
-        """Build the shell command to run on the remote."""
+        """Build the shell command to run on the remote.
+
+        On Windows, uses ``python raptor.py`` since the ``raptor``
+        shell wrapper won't exist.  On Unix, uses ``raptor``.
+        """
         parts = [spec.mode, remote_target]
         parts.extend(spec.args)
         parts.extend(["--output", output_dir])
         args_str = " ".join(parts)
+
+        if is_windows:
+            return f"python raptor.py {args_str}"
         return f"raptor {args_str}"
 
     def _collect_results(
@@ -576,6 +644,11 @@ class TaskExecutor:
         except TransportError as exc:
             logger.warning("[%s] result download failed: %s", task_id, exc)
             return None
+
+
+def _is_windows_system(inventory: Inventory, alias: str) -> bool:
+    caps = inventory.get_capabilities(alias)
+    return caps is not None and caps.os == OperatingSystem.WINDOWS
 
 
 class TaskRoutingError(Exception):

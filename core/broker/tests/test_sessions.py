@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.broker.capabilities import OperatingSystem
 from core.broker.sessions import (
     RemoteTaskState,
     SessionBackend,
@@ -53,6 +54,10 @@ class TestDetectSessionBackend:
         })
         assert detect_session_backend(t) == SessionBackend.NOHUP
 
+    def test_windows_returns_powershell(self):
+        t = _mock_transport()
+        assert detect_session_backend(t, OperatingSystem.WINDOWS) == SessionBackend.POWERSHELL
+
 
 class TestStartDetached:
     def test_tmux_session_created(self):
@@ -87,8 +92,8 @@ class TestStartDetached:
 class TestPoll:
     def test_completed_task(self):
         t = _mock_transport({
-            "cat /tmp/ws/.raptor-exit-code": CommandResult(0, "0\n", ""),
-            "cat /tmp/ws/.raptor-pid": CommandResult(0, "12345\n", ""),
+            ".raptor-exit-code": CommandResult(0, "0\n", ""),
+            ".raptor-pid": CommandResult(0, "12345\n", ""),
             "tail": CommandResult(0, "output line\n", ""),
         })
         state = poll(t, "abc123", "/tmp/ws")
@@ -97,8 +102,8 @@ class TestPoll:
 
     def test_running_task(self):
         t = _mock_transport({
-            "cat /tmp/ws/.raptor-exit-code": CommandResult(1, "", "No such file"),
-            "cat /tmp/ws/.raptor-pid": CommandResult(0, "12345\n", ""),
+            ".raptor-exit-code": CommandResult(1, "", "No such file"),
+            ".raptor-pid": CommandResult(0, "12345\n", ""),
             "tail": CommandResult(0, "progress...\n", ""),
         })
         state = poll(t, "abc123", "/tmp/ws")
@@ -107,7 +112,7 @@ class TestPoll:
 
     def test_failed_task(self):
         t = _mock_transport({
-            "cat /tmp/ws/.raptor-exit-code": CommandResult(0, "1\n", ""),
+            ".raptor-exit-code": CommandResult(0, "1\n", ""),
             "tail": CommandResult(0, "", "error output\n"),
         })
         state = poll(t, "abc123", "/tmp/ws")
@@ -129,3 +134,54 @@ class TestCleanupWorkspace:
         cleanup_workspace(t, "C:\\temp\\raptor-task-abc", is_windows=True)
         t.run.assert_called_once()
         assert "Remove-Item" in t.run.call_args[0][0]
+
+
+class TestStartDetachedWindows:
+    def test_powershell_writes_wrapper_and_starts(self):
+        t = _mock_transport()
+        start_detached(
+            t, "abc123", "python raptor.py fuzz C:\\target",
+            "C:\\temp\\raptor-task-abc123", SessionBackend.POWERSHELL,
+        )
+        calls = [str(c) for c in t.run.call_args_list]
+        assert any("Set-Content" in c for c in calls)
+        assert any("Start-Process" in c for c in calls)
+
+    def test_powershell_raises_on_wrapper_failure(self):
+        t = MagicMock()
+        t.run.return_value = CommandResult(1, "", "write error")
+        with pytest.raises(Exception, match="failed to write wrapper"):
+            start_detached(
+                t, "abc", "cmd", "C:\\temp\\x", SessionBackend.POWERSHELL,
+            )
+
+
+class TestPollWindows:
+    def test_completed_windows_task(self):
+        t = _mock_transport({
+            "Test-Path": CommandResult(0, "0\n", ""),
+            "Get-Content": CommandResult(0, "0\n", ""),
+        })
+        state = poll(t, "abc123", "C:\\temp\\ws", is_windows=True)
+        assert state.running is False
+        assert state.exit_code == 0
+
+    def test_running_windows_task(self):
+        results = {}
+
+        def run_side_effect(cmd, **kwargs):
+            if "raptor-exit-code" in cmd and "Test-Path" in cmd:
+                return CommandResult(0, "", "")
+            if "raptor-pid" in cmd and "Test-Path" in cmd:
+                return CommandResult(0, "12345\n", "")
+            if "Get-Process" in cmd:
+                return CommandResult(0, "12345\n", "")
+            if "Get-Content" in cmd and "Tail" in cmd:
+                return CommandResult(0, "progress...\n", "")
+            return CommandResult(1, "", "")
+
+        t = MagicMock()
+        t.run.side_effect = run_side_effect
+
+        state = poll(t, "abc123", "C:\\temp\\ws", is_windows=True)
+        assert state.running is True
