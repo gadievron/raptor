@@ -91,6 +91,10 @@ class SSHTransport(Transport):
                 f"failed ({self._credential.method.value}): {exc}"
             ) from exc
 
+        transport = client.get_transport()
+        if transport:
+            transport.set_keepalive(60)
+
         self._client = client
         self._sftp = client.open_sftp()
         logger.info(

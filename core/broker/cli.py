@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from typing import Optional
 
 from core.broker.broker import Broker, BrokerError, LocalExecution, RemoteExecution
@@ -140,8 +141,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show routing decision without executing",
     )
     tk_p.add_argument(
+        "--detach", action="store_true",
+        help="Run in detached tmux/screen session (survives disconnects)",
+    )
+    tk_p.add_argument(
         "extra_args", nargs="*",
         help="Additional arguments passed to the remote command",
+    )
+
+    # -- task-status -------------------------------------------------------
+    ts_p = sub.add_parser(
+        "task-status",
+        help="Check status of a detached task",
+    )
+    ts_p.add_argument("task_id", help="Task ID to check")
+
+    # -- task-collect ------------------------------------------------------
+    tc_p = sub.add_parser(
+        "task-collect",
+        help="Download results from a completed detached task",
+    )
+    tc_p.add_argument("task_id", help="Task ID to collect")
+    tc_p.add_argument(
+        "--no-cleanup", action="store_true",
+        help="Keep remote workspace after collecting",
+    )
+
+    # -- task-cancel -------------------------------------------------------
+    tx_p = sub.add_parser(
+        "task-cancel",
+        help="Kill a running detached task",
+    )
+    tx_p.add_argument("task_id", help="Task ID to cancel")
+
+    # -- task-list ---------------------------------------------------------
+    sub.add_parser(
+        "task-list",
+        help="List all tracked detached tasks",
     )
 
     return parser
@@ -169,6 +205,10 @@ def main(args: list[str]) -> int:
         "deps": _cmd_deps,
         "rank": _cmd_rank,
         "task": _cmd_task,
+        "task-status": _cmd_task_status,
+        "task-collect": _cmd_task_collect,
+        "task-cancel": _cmd_task_cancel,
+        "task-list": _cmd_task_list,
     }
     return handlers[parsed.subcommand](parsed)
 
@@ -487,8 +527,18 @@ def _cmd_task(parsed: argparse.Namespace) -> int:
         print(f"\n    [dry-run] Would execute on {s.entry.alias}")
         return 0
 
-    print(f"\n[*] Executing on {s.entry.alias}...")
     executor = TaskExecutor()
+
+    if parsed.detach:
+        print(f"\n[*] Launching detached on {s.entry.alias}...")
+        handle = executor.launch(assignment)
+        print(f"\n[+] Task {handle.task_id} running in {handle.backend} session")
+        print(f"    Check:   raptor broker task-status {handle.task_id}")
+        print(f"    Collect: raptor broker task-collect {handle.task_id}")
+        print(f"    Cancel:  raptor broker task-cancel {handle.task_id}")
+        return 0
+
+    print(f"\n[*] Executing on {s.entry.alias}...")
     result = executor.execute(assignment)
 
     print(f"\n[{'+'if result.state.value == 'completed' else '!'}] {result.state.value}")
@@ -502,6 +552,121 @@ def _cmd_task(parsed: argparse.Namespace) -> int:
         print(f"    Exit:     {result.exit_code}")
 
     return 0 if result.state.value == "completed" else 1
+
+
+def _cmd_task_status(parsed: argparse.Namespace) -> int:
+    from core.broker.tasks import TaskExecutor, _load_task_handle
+
+    handle = _load_task_handle(parsed.task_id)
+    if not handle:
+        print(f"[!] No tracked task '{parsed.task_id}'", file=sys.stderr)
+        return 1
+
+    inv = Inventory()
+    executor = TaskExecutor()
+
+    try:
+        state = executor.poll_task(handle, inv)
+    except Exception as exc:
+        print(f"[!] Poll failed: {exc}", file=sys.stderr)
+        return 1
+
+    elapsed = time.time() - handle.started_at
+    status = "RUNNING" if state.running else f"FINISHED (exit {state.exit_code})"
+
+    print(f"\n[*] Task {handle.task_id}")
+    print(f"    Mode:    {handle.spec_mode}")
+    print(f"    System:  {handle.system_alias}")
+    print(f"    Backend: {handle.backend}")
+    print(f"    Status:  {status}")
+    print(f"    Elapsed: {elapsed:.0f}s")
+    if state.pid:
+        print(f"    PID:     {state.pid}")
+    if state.tail_stdout:
+        print(f"\n--- stdout (last 20 lines) ---")
+        print(state.tail_stdout)
+    if state.tail_stderr:
+        print(f"--- stderr (last 20 lines) ---")
+        print(state.tail_stderr)
+
+    return 0
+
+
+def _cmd_task_collect(parsed: argparse.Namespace) -> int:
+    from core.broker.tasks import TaskExecutor, _load_task_handle
+
+    handle = _load_task_handle(parsed.task_id)
+    if not handle:
+        print(f"[!] No tracked task '{parsed.task_id}'", file=sys.stderr)
+        return 1
+
+    inv = Inventory()
+    executor = TaskExecutor()
+    result = executor.collect(
+        handle, inv, cleanup=not parsed.no_cleanup,
+    )
+
+    if result.state.value == "running":
+        print(f"[*] Task {handle.task_id} is still running — cannot collect yet")
+        return 1
+
+    print(f"\n[{'+'if result.state.value == 'completed' else '!'}] {result.state.value}")
+    if result.duration_secs is not None:
+        print(f"    Duration: {result.duration_secs:.0f}s")
+    if result.output_dir:
+        print(f"    Results:  {result.output_dir}")
+    if result.error:
+        print(f"    Error:    {result.error}")
+
+    return 0 if result.state.value == "completed" else 1
+
+
+def _cmd_task_cancel(parsed: argparse.Namespace) -> int:
+    from core.broker.tasks import TaskExecutor, _load_task_handle
+
+    handle = _load_task_handle(parsed.task_id)
+    if not handle:
+        print(f"[!] No tracked task '{parsed.task_id}'", file=sys.stderr)
+        return 1
+
+    inv = Inventory()
+    executor = TaskExecutor()
+    killed = executor.cancel(handle, inv)
+
+    if killed:
+        print(f"[-] Task {handle.task_id} cancelled on {handle.system_alias}")
+    else:
+        print(f"[!] Could not cancel task {handle.task_id}", file=sys.stderr)
+
+    return 0 if killed else 1
+
+
+def _cmd_task_list(parsed: argparse.Namespace) -> int:
+    from core.broker.tasks import list_active_tasks
+
+    tasks = list_active_tasks()
+    if not tasks:
+        print("No tracked tasks.")
+        return 0
+
+    print(f"\n{'Task ID':<14} {'Mode':<10} {'System':<16} {'Backend':<8} {'Elapsed':>10}")
+    print("-" * 66)
+
+    import time as _time
+
+    for h in tasks:
+        elapsed = _time.time() - h.started_at
+        if elapsed < 3600:
+            elapsed_str = f"{elapsed:.0f}s"
+        else:
+            elapsed_str = f"{elapsed / 3600:.1f}h"
+        print(
+            f"{h.task_id:<14} {h.spec_mode:<10} {h.system_alias:<16} "
+            f"{h.backend:<8} {elapsed_str:>10}"
+        )
+
+    print()
+    return 0
 
 
 def _format_requirements(reqs: ModeRequirements) -> str:

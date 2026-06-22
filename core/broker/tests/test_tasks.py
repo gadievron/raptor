@@ -14,12 +14,17 @@ from core.broker.capabilities import (
 from core.broker.inventory import Inventory
 from core.broker.tasks import (
     TaskAssignment,
+    TaskHandle,
     TaskResult,
     TaskRouter,
     TaskRoutingError,
     TaskSpec,
     TaskState,
     _generate_task_id,
+    _load_task_handle,
+    _remove_task_handle,
+    _save_task_handle,
+    _TASK_STATE_DIR,
 )
 from core.broker.transport import RemoteSystemEntry, TransportKind
 
@@ -165,3 +170,50 @@ class TestTaskResult:
         assert result.exit_code is None
         assert result.stdout == ""
         assert result.output_dir is None
+
+
+class TestTaskHandlePersistence:
+    def test_save_and_load(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.broker.tasks._TASK_STATE_DIR", tmp_path)
+        handle = TaskHandle(
+            task_id="abc123",
+            system_alias="linux-box",
+            workspace="/tmp/raptor-task-abc123",
+            backend="tmux",
+            started_at=1700000000.0,
+            spec_mode="fuzz",
+            spec_target="/src",
+        )
+        _save_task_handle(handle)
+        loaded = _load_task_handle("abc123")
+        assert loaded is not None
+        assert loaded.task_id == "abc123"
+        assert loaded.system_alias == "linux-box"
+        assert loaded.backend == "tmux"
+        assert loaded.spec_mode == "fuzz"
+
+    def test_load_nonexistent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.broker.tasks._TASK_STATE_DIR", tmp_path)
+        assert _load_task_handle("nonexistent") is None
+
+    def test_remove(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("core.broker.tasks._TASK_STATE_DIR", tmp_path)
+        handle = TaskHandle(
+            task_id="del123",
+            system_alias="box",
+            workspace="/tmp/x",
+            backend="tmux",
+            started_at=1700000000.0,
+            spec_mode="scan",
+            spec_target="/src",
+        )
+        _save_task_handle(handle)
+        assert _load_task_handle("del123") is not None
+        _remove_task_handle("del123")
+        assert _load_task_handle("del123") is None
+
+
+class TestTaskSpec:
+    def test_detach_flag(self):
+        spec = TaskSpec(mode="fuzz", target_path="/src", detach=True)
+        assert spec.detach is True

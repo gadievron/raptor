@@ -300,12 +300,31 @@ def sshpass_env(credential: ResolvedCredential) -> dict[str, str]:
     return {}
 
 
+_askpass_tempfiles: list[str] = []
+
+
+def _cleanup_askpass_files() -> None:
+    """Remove any askpass tempfiles on exit."""
+    for path in _askpass_tempfiles:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    _askpass_tempfiles.clear()
+
+
+import atexit
+atexit.register(_cleanup_askpass_files)
+
+
 def ssh_askpass_env(credential: ResolvedCredential) -> dict[str, str]:
     """Return SSH_ASKPASS env setup for non-interactive password passing.
 
     When sshpass isn't available but we have a password, sets up a
     minimal SSH_ASKPASS script that echoes the password.  This works
     in CI environments without a TTY.
+
+    Tempfiles are cleaned up at process exit via atexit.
     """
     if not credential.password:
         return {}
@@ -323,6 +342,8 @@ def ssh_askpass_env(credential: ResolvedCredential) -> dict[str, str]:
     script.write(f'echo "{credential.password}"\n')
     script.close()
     os.chmod(script.name, stat.S_IRWXU)
+
+    _askpass_tempfiles.append(script.name)
 
     return {
         "SSH_ASKPASS": script.name,
