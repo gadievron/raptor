@@ -65,6 +65,12 @@ from core.function_taxonomy import (  # noqa: E402
     STRING_OVERFLOW_FUNCS as _T_STROVF,
     TOCTOU_FUNCS as _T_TOCTOU,
 )
+from packages.binary_analysis.function_cfg import (  # noqa: E402
+    BasicBlockCFG,
+    load_cached_cfgs,
+    parse_afbj,
+    save_cached_cfgs,
+)
 
 # Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
@@ -112,6 +118,11 @@ class FunctionInfo:
     transitive_distance: int = 0  # min hops to any sink (0 = not reachable)
     decompiled: str = ""        # Filled lazily for high-priority functions
     rationale: str = ""         # LLM-supplied if analysed
+    # Intra-function basic-block CFG (Phase 2, path-homology arc).
+    # Populated only when analyse(extract_cfgs=True); None otherwise so
+    # default runs pay no extra r2 cost. A directed Graph-protocol object
+    # consumable by core.inventory.path_homology / dominators.
+    basic_block_cfg: Optional["BasicBlockCFG"] = None
 
 
 @dataclass
@@ -334,6 +345,7 @@ class BinaryUnderstand:
     _T_QUERY = 60.0         # ij / iij / iEj / aflj / izj
     _T_XREF = 30.0          # axffj per function (cheap in-memory lookup)
     _T_CALLGRAPH = 90.0     # aflcj — full call graph as JSON (one-shot)
+    _T_BLOCKS = 30.0        # afbj per function — basic blocks (in-memory)
 
     # Transitive-call BFS hop limit. The motivating CVE pattern is
     # "parser builds struct → 2-3 internal helpers → strcpy" — depth
@@ -346,6 +358,7 @@ class BinaryUnderstand:
         max_decompile: int = 20,
         max_strings: int = 100,
         quick: bool = False,
+        extract_cfgs: bool = False,
     ) -> BinaryContextMap:
         """Run the full analysis pipeline.
 
@@ -466,6 +479,12 @@ class BinaryUnderstand:
                 # dangerous / transitive_distance fields used by
                 # the prioritise step.
                 self._tag_transitive_callers(r2, ctx)
+                # Phase 2 (path-homology arc): opt-in per-function
+                # basic-block CFG extraction. Off by default so standard
+                # runs pay no extra r2 cost. Must follow _extract_
+                # functions (needs interesting_functions populated).
+                if extract_cfgs:
+                    self._extract_function_cfgs(r2, ctx)
                 self._decompile_priorities(
                     r2, ctx, limit=max_decompile,
                 )
@@ -804,6 +823,51 @@ class BinaryUnderstand:
             )
             fn.transitive_distance = dist
 
+    def _extract_function_cfgs(self, r2, ctx: BinaryContextMap) -> None:
+        """Populate ``fn.basic_block_cfg`` for each interesting function
+        (Phase 2, path-homology arc).
+
+        Pulls each function's basic-block graph via r2 ``afbj`` and parses
+        it (in ``function_cfg.parse_afbj``) into a directed Graph-protocol
+        object. Results are cached on disk per build-id so re-analysing
+        the same binary reuses extraction — the dominant cost (r2 ``aaa``)
+        already ran once; this avoids paying even the per-function ``afbj``
+        again across separate invocations.
+
+        Best-effort and isolated: a parse/timeout failure on one function
+        leaves that ``basic_block_cfg`` as ``None`` and never aborts the
+        analysis. No scoring effect — Phase 3 consumes these CFGs.
+        """
+        cached = load_cached_cfgs(self.binary) or {}
+        extracted: Dict[int, BasicBlockCFG] = {}
+        for fn in ctx.interesting_functions:
+            if fn.is_imported:
+                continue
+            cfg = cached.get(fn.address)
+            if cfg is None:
+                try:
+                    blocks = json.loads(
+                        self._cmd_t(
+                            r2, f"afbj @ {fn.address}", self._T_BLOCKS)
+                        or "[]"
+                    )
+                    cfg = parse_afbj(blocks, entry_addr=fn.address)
+                except Exception as e:
+                    logger.debug(
+                        "afbj failed for %s @ %#x: %s",
+                        fn.name, fn.address, e)
+                    continue
+            fn.basic_block_cfg = cfg
+            extracted[fn.address] = cfg
+
+        # Persist the merged map (cache hits + new extractions) so the
+        # cache converges to the full set even if earlier runs covered
+        # only a subset of functions.
+        if extracted:
+            merged = dict(cached)
+            merged.update(extracted)
+            save_cached_cfgs(self.binary, merged)
+
     def _decompile_priorities(
         self,
         r2,
@@ -1009,6 +1073,7 @@ def analyse_binary_context(
     max_decompile: int = 20,
     max_strings: int = 100,
     quick: bool = False,
+    extract_cfgs: bool = False,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
@@ -1022,12 +1087,18 @@ def analyse_binary_context(
     fingerprinting, bump capability-delta. Order of magnitude
     faster on typical binaries. ``dangerous_sinks`` and
     ``interesting_functions`` come back empty.
+
+    ``extract_cfgs=True`` additionally populates each interesting
+    function's ``basic_block_cfg`` (Phase 2, path-homology arc) via r2
+    ``afbj``, cached per build-id. Off by default — adds a per-function
+    r2 call. Ignored under ``quick``.
     """
     analyser = BinaryUnderstand(binary_path, llm=llm)
     context = analyser.analyse(
         max_decompile=max_decompile,
         max_strings=max_strings,
         quick=quick,
+        extract_cfgs=extract_cfgs,
     )
     if out_path:
         context.write(out_path)
