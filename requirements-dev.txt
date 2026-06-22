@@ -7,7 +7,7 @@
 ruff==0.15.12
 
 # Type checking
-mypy==2.0.0
+mypy==2.1.0
 
 # Testing
 # pytest pinned exactly: the root pytest.ini uses ``--import-mode=importlib``

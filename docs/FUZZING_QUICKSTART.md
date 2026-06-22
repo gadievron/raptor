@@ -149,6 +149,36 @@ python3 raptor_fuzzing.py \
     --max-crashes 5
 ```
 
+### Built-in Starter Corpus
+
+If you do not pass `--corpus`, RAPTOR now has a checked-in starter corpus
+instead of four tiny hard-coded seeds. The order is:
+
+1. Use `--corpus` exactly as supplied.
+2. Use autonomous corpus generation when `--autonomous` is enabled or the
+   orchestrator can generate one.
+3. Fall back to RAPTOR's built-in corpus under
+   `packages/fuzzing/data/seed_corpus/`.
+
+The built-in corpus is deliberately small and reviewable: text, JSON, XML, HTTP,
+CSV, INI, URL-encoded values, path-ish strings, integer boundaries, format
+strings, and RAPTOR-style command prefixes such as `STACK:` and `HEAP:`.
+
+To export it for review or local editing:
+
+```bash
+python3 raptor_fuzzing.py --export-seed-corpus /tmp/raptor-fuzz-seeds
+```
+
+Then run with it explicitly if you want to add your own local cases:
+
+```bash
+python3 raptor_fuzzing.py \
+    --binary ./myapp \
+    --corpus /tmp/raptor-fuzz-seeds \
+    --duration 1800
+```
+
 ### Autonomous Mode (Intelligent Corpus Generation)
 
 **NEW**: RAPTOR can automatically generate intelligent seed inputs by analysing your binary, eliminating the need for manual corpus creation.
@@ -349,7 +379,9 @@ python3 raptor_fuzzing.py \
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--binary` | *required* | Path to binary to fuzz |
-| `--corpus` | auto-generated | Seed input directory |
+| `--corpus` | built-in/autonomous | Seed input directory |
+| `--export-seed-corpus` | none | Export RAPTOR's built-in seed corpus and exit |
+| `--seed-profile` | `default` | Built-in seed corpus profile |
 | `--autonomous` | disabled | Enable intelligent corpus generation |
 | `--goal` | none | Goal-directed fuzzing objective |
 | `--duration` | 3600 | Fuzzing duration in seconds |
@@ -552,5 +584,4 @@ Use binary mode for:
 2. Review generated exploits in `out/*/exploits/`
 3. Test exploits in isolated environment
 4. Report vulnerabilities responsibly
-
 

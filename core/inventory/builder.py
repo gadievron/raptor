@@ -36,6 +36,7 @@ from .call_graph import (
     extract_call_graph_go,
     extract_call_graph_java,
     extract_call_graph_javascript,
+    extract_call_graph_lua,
     extract_call_graph_php,
     extract_call_graph_python,
     extract_call_graph_ruby,
@@ -829,6 +830,10 @@ def _process_single_file(
             ).to_dict()
         elif language == 'php':
             record['call_graph'] = extract_call_graph_php(
+                parse_text,
+            ).to_dict()
+        elif language == 'lua':
+            record['call_graph'] = extract_call_graph_lua(
                 parse_text,
             ).to_dict()
         elif language == 'c':

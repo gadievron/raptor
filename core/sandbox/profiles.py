@@ -14,6 +14,8 @@ sandbox() invocation in the process.
 
 import types
 
+FRIDA_PROFILE = "frida"
+
 # Profile definitions
 # -------------------
 # Profiles set ENFORCEMENT strictness. Audit mode is an ORTHOGONAL
@@ -30,12 +32,28 @@ import types
 # strict:       same policy intent as full, but fail-closed if the host cannot
 #               provide the platform isolation backend. On Linux target/output
 #               isolation also requires mount namespaces.
+# target_run:   posture for spawning a harness-authored target binary
+#               that needs to expose a local listener (loopback TCP, UDS,
+#               etc.). Same Landlock + seccomp posture as ``full`` but
+#               ``block_network=False`` so the listener is reachable to
+#               the spawning harness. Callers that want isolation FROM
+#               the host's loopback (not just FROM the wider network)
+#               pair this profile with ``core/sandbox/
+#               netns_coordinator.py`` to put the listener in a shared
+#               isolated net-ns; the coordinator overrides
+#               ``block_network=True`` + ``inherit_netns=True`` per call,
+#               so the profile's loopback setting is irrelevant on that
+#               path. Defence-in-depth still comes from Landlock (caller
+#               passes ``allowed_tcp_ports=[port]`` per call) and seccomp.
 # debug:        full, but seccomp permits ptrace so gdb/rr can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
 #               so ptrace_scope=1 naturally authorises the trace.
 #               Composes with --audit so operators can see what would
 #               have been blocked while still running gdb/rr.
+# frida:        debug + AF_UNIX sockets allowed (frida-helper uses Unix
+#               domain sockets for its internal IPC with the target
+#               process). AF_NETLINK/AF_PACKET/SOCK_RAW stay blocked.
 # network-only: network blocked + rlimits only (no Landlock, no seccomp).
 #               For tools whose correctness requires unrestricted fs or
 #               syscalls within a build — user's last-resort-short-of-none.
@@ -47,7 +65,9 @@ import types
 PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "strict":       types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
+    "target_run":   types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
+    FRIDA_PROFILE:  types.MappingProxyType({"block_network": False, "use_landlock": True,  "seccomp": "frida"}),
     "network-only": types.MappingProxyType({"block_network": True,  "use_landlock": False, "seccomp": ""}),
     "none":         types.MappingProxyType({"block_network": False, "use_landlock": False, "seccomp": ""}),
 })
@@ -82,4 +102,9 @@ _SANDBOX_KWARGS = frozenset({
     # the persona is built once per context and reused across run()
     # calls. Per-call override would silently no-op.
     "sanitise_host_fingerprint", "cpu_count", "require_sanitisation",
+    # etc_overlay — dict mapping in-sandbox /etc paths to host source
+    # files that should be bind-mounted over them inside the sandbox.
+    # Sandbox-context-level because the bind happens during mount-ns
+    # init; per-call override would silently no-op.
+    "etc_overlay",
 })

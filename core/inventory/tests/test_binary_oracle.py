@@ -627,6 +627,7 @@ def test_classifier_recognises_always_inline_empty_body(
 # Inc 4 — operator surface: --binary CLI flag + build_inventory auto-enrich
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_build_inventory_auto_enriches_when_binary_path_set(
     tmp_path: Path, built_demo: Path, monkeypatch,
 ) -> None:

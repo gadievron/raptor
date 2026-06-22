@@ -55,6 +55,9 @@ Examples:
   # Force the orchestrator (libFuzzer + telemetry) and stop after planning:
   python3 raptor_fuzzing.py --binary ./target --orchestrator --plan-only
 
+  # Export RAPTOR's built-in starter corpus for review or local editing:
+  python3 raptor_fuzzing.py --export-seed-corpus /tmp/raptor-fuzz-seeds
+
   # Force the legacy AFL++-only path (e.g. for reproducing pre-orchestrator
   # behaviour):
   python3 raptor_fuzzing.py --binary ./target --legacy
@@ -62,7 +65,21 @@ Examples:
     )
 
     ap.add_argument("--binary", help="Path to binary to fuzz")
+    ap.add_argument(
+        "--repo",
+        help=argparse.SUPPRESS,
+    )
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
+    ap.add_argument(
+        "--seed-profile",
+        default="default",
+        help="Built-in seed corpus profile to use when RAPTOR materialises its own corpus (default: default)",
+    )
+    ap.add_argument(
+        "--export-seed-corpus",
+        metavar="DIR",
+        help="Materialise RAPTOR's built-in seed corpus into DIR and exit",
+    )
     ap.add_argument(
         "--prepare-corpus",
         metavar="PROJECT_DIR",
@@ -190,6 +207,23 @@ Examples:
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
 
+    if args.export_seed_corpus:
+        from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
+
+        seed_out = Path(args.export_seed_corpus)
+        try:
+            manifest = prepare_builtin_seed_corpus(seed_out, profile=args.seed_profile)
+        except Exception as e:
+            logger.error(f"Failed to export built-in seed corpus: {e}")
+            sys.exit(1)
+
+        print("Built-in seed corpus exported")
+        print(f"  profile: {manifest['profile']}")
+        print(f"  output: {manifest['out_dir']}")
+        print(f"  seeds: {manifest['seed_count']}")
+        print(f"  manifest: {Path(manifest['out_dir']) / 'manifest.json'}")
+        sys.exit(0)
+
     if args.prepare_corpus:
         from core.config import RaptorConfig
         from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
@@ -219,6 +253,9 @@ Examples:
         print(f"  skipped: {manifest['skipped_count']}")
         print(f"  manifest: {Path(manifest['out_dir']) / 'manifest.json'}")
         sys.exit(0)
+
+    if not args.binary and args.repo:
+        args.binary = args.repo
 
     if not args.binary:
         ap.error("--binary is required unless --prepare-corpus is used")
@@ -312,6 +349,7 @@ Examples:
                 corpus_dir=corpus_dir,
                 dict_path=Path(args.dict) if args.dict else None,
                 source_context_dir=binary_path.parent,
+                seed_profile=args.seed_profile,
             )
         except KeyboardInterrupt:
             print("\nCampaign interrupted by user.")
@@ -450,6 +488,7 @@ Examples:
             check_sanitizers=args.check_sanitizers,
             recompile_guide=args.recompile_guide,
             use_showmap=args.use_showmap,
+            seed_profile=args.seed_profile,
         )
 
         num_crashes, crashes_dir = afl_runner.run_fuzzing(

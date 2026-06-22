@@ -160,6 +160,33 @@ class TestOrchestratorPlanning(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    def test_prepare_corpus_falls_back_to_builtin_seed_corpus(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            target = out_dir / "target"
+            target.write_bytes(b"\x7fELF\x02\x01\x01")
+            plan = type(
+                "Plan",
+                (),
+                {"target": type("Target", (), {"path": target})()},
+            )()
+            orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+
+            with patch("packages.autonomous.CorpusGenerator",
+                       side_effect=RuntimeError("no generator")):
+                corpus, info = orch._prepare_corpus(
+                    plan,
+                    out_dir=out_dir,
+                    corpus_dir=None,
+                    source_context_dir=None,
+                )
+
+            self.assertEqual(corpus, out_dir / "seed-corpus")
+            self.assertEqual(info["source"], "raptor_builtin_seed_corpus")
+            self.assertGreaterEqual(info["seeds"], 10)
+            self.assertTrue((corpus / "seed-0006-http-get").is_file())
+            self.assertTrue((out_dir / "seed-corpus.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -352,6 +352,119 @@ class TestContextMap:
         # HTML-escaped angle brackets should be present
         assert "&lt;" in out or "&gt;" in out
 
+    def test_entry_point_name_used_when_route_fields_absent(self):
+        data = {
+            "entry_points": [
+                {"id": "EP-001", "name": "ap_read_request", "file": "server/protocol.c", "line": 803,
+                 "auth_required": False}
+            ],
+        }
+        out = gen_context_map(data)
+        assert "ap_read_request [PUBLIC]" in out
+        assert "? [PUBLIC]" not in out
+
+    def test_html_entities_are_unescaped_before_mermaid_sanitizing(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "name": "ap_read_request"}],
+            "sink_details": [
+                {"id": "SINK-001", "operation": "ap_get_client_block -&gt; proxy body forwarding",
+                 "reaches_from": ["EP-001"]}
+            ],
+        }
+        out = gen_context_map(data)
+        assert "-&gt;" not in out
+        assert "-> proxy body forwarding" in out
+
+    def test_duplicate_boundary_edges_are_deduplicated(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "name": "route"}],
+            "boundary_details": [
+                {"id": "TB-001", "boundary": "routing", "covers": ["EP-001", "EP-001"]},
+                {"id": "TB-002", "boundary": "routing again", "covers": ["EP-001"]},
+            ],
+            "sink_details": [
+                {"id": "SINK-001", "operation": "redirect", "reaches_from": ["EP-001", "EP-001"]},
+            ],
+        }
+        out = gen_context_map(data)
+        assert out.count("EP-001 --> TB-001") == 1
+        assert out.count("TB-001 --> SINK-001") == 1
+        assert out.count("TB-002 --> SINK-001") == 1
+
+    def test_remote_context_filters_local_support_tool_sinks(self):
+        data = {
+            "meta": {"app_type": "http_server", "target": "/src/httpd-2.0.35"},
+            "entry_points": [{"id": "EP-001", "name": "ap_read_request"}],
+            "sink_details": [
+                {"id": "SINK-001", "operation": "strcpy(connecthost, proxyhost)",
+                 "file": "support/ab.c", "line": 1124, "reaches_from": []},
+                {"id": "SINK-002", "operation": "cgi_environment",
+                 "file": "server/util_script.c", "line": 369, "reaches_from": ["EP-001"]},
+            ],
+            "unchecked_flows": [
+                {"entry_point": "EP-001", "sink": "SINK-001", "missing_boundary": "local CLI"},
+                {"entry_point": "EP-001", "sink": "SINK-002", "missing_boundary": "remote flow"},
+            ],
+        }
+        out = gen_context_map(data)
+        assert "support/ab.c" not in out
+        assert "SINK-001" not in out
+        assert "server/util_script.c" in out
+        assert "SINK-002" in out
+
+    def test_c0_control_chars_from_entity_decode_are_stripped(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "name": "before&#9;after&#12;end"}],
+        }
+        out = gen_context_map(data)
+        assert "\t" not in out
+        assert "\x0c" not in out
+        assert "before after end" in out
+
+    def test_entry_label_method_prefix_not_eaten(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "method": "GET", "name": "GETTER"}],
+        }
+        out = gen_context_map(data)
+        assert "GET GETTER" in out
+
+    def test_entry_label_method_already_in_route_not_duplicated(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "method": "GET", "path": "GET /users"}],
+        }
+        out = gen_context_map(data)
+        assert "GET GET /users" not in out
+        assert "GET /users" in out
+
+    def test_non_dict_items_in_lists_are_skipped(self):
+        data = {
+            "entry_points": [{"id": "EP-001", "name": "real"}, "garbage", 42, None],
+            "sink_details": ["bad", {"id": "SINK-001", "operation": "op"}],
+        }
+        out = gen_context_map(data)
+        assert "EP-001" in out
+        assert "SINK-001" in out
+        assert "flowchart LR" in out
+
+    def test_empty_id_entries_do_not_break_class_line(self):
+        data = {
+            "entry_points": [{"name": "no-id"}, {"id": "EP-001", "name": "has-id"}],
+        }
+        out = gen_context_map(data)
+        assert "class ,EP-001" not in out
+        assert "class EP-001 ep" in out
+
+    def test_support_filter_preserves_all_when_only_support_sinks(self):
+        data = {
+            "meta": {"app_type": "http_server"},
+            "entry_points": [{"id": "EP-001", "name": "handler"}],
+            "sink_details": [
+                {"id": "SINK-001", "operation": "run", "file": "support/tool.c", "reaches_from": []},
+            ],
+        }
+        out = gen_context_map(data)
+        assert "SINK-001" in out
+
     def test_sanitized_context_map_is_still_usable_mermaid(self):
         data = {
             "entry_points": [

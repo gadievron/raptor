@@ -40,6 +40,10 @@ import sys
 from pathlib import Path
 from typing import List
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 

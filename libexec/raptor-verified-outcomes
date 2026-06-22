@@ -49,7 +49,7 @@ def main(argv=None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from core.verified_outcome import collect_outcomes, render_outcome_summary
+    from core.labeled_attempts.view import collect_outcomes, render_outcome_summary
 
     out_dir = Path(args.output_dir)
     project_root = Path(args.project_root) if args.project_root else None

@@ -92,10 +92,17 @@ class TestNegativeCases:
 class TestRealBinaryParse:
     @pytest.fixture(autouse=True)
     def _require_elf_host(self):
-        """All tests in this class need a Linux-shaped host with
-        /bin/ls. macOS test runners (Mach-O coreutils) skip."""
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present on host")
+        """All tests in this class need a Linux-shaped host with an
+        ELF /bin/ls. macOS test runners (Mach-O coreutils) skip — the
+        old guard only checked existence, so it failed to skip on a
+        host where /bin/ls exists but is Mach-O."""
+        p = Path("/bin/ls")
+        try:
+            is_elf = p.is_file() and p.read_bytes()[:4] == b"\x7fELF"
+        except OSError:
+            is_elf = False
+        if not is_elf:
+            pytest.skip("/bin/ls is not an ELF binary on this host")
 
     def test_parse_bin_ls(self):
         """Parser doesn't crash on a real binary; the metadata
@@ -167,8 +174,13 @@ class TestRadare2Parity:
         )
         if not probe_capability().get("available"):
             pytest.skip("radare2 stack not available")
-        if not Path("/bin/ls").exists():
-            pytest.skip("/bin/ls not present")
+        p = Path("/bin/ls")
+        try:
+            is_elf = p.is_file() and p.read_bytes()[:4] == b"\x7fELF"
+        except OSError:
+            is_elf = False
+        if not is_elf:
+            pytest.skip("/bin/ls is not an ELF binary on this host")
 
     def test_imports_match_radare2_ls(self):
         """Native ELF parser must produce the exact same import

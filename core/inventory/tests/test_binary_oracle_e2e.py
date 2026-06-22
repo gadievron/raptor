@@ -131,6 +131,7 @@ def _alive_helper_line(inv: dict) -> int:
     raise AssertionError("alive_helper_0 not in inventory")
 
 
+@pytest.mark.slow
 def test_e2e_explicit_binary_flag_path(_synthetic_target_built) -> None:
     """The ``--binary`` explicit-path path: operator points at a
     binary; classifier finds the dead function absent and the

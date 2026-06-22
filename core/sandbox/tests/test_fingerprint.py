@@ -19,6 +19,7 @@ import pytest
 
 from core.sandbox.fingerprint import (
     HOST_CPU_COUNT,
+    _host_cpu_count,
     _HOSTNAME,
     _DOMAINNAME,
     _MACHINE_ID,
@@ -37,7 +38,7 @@ def test_host_cpu_count_sentinel_resolves_to_host(tmp_path):
     """build_persona(cpu_count=HOST_CPU_COUNT) must resolve to the
     host's actual schedulable CPU count via os.sched_getaffinity(0).
     Persona.cpu_count is the resolved int, not the sentinel."""
-    expected = len(os.sched_getaffinity(0))
+    expected = _host_cpu_count()
     persona = build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
     assert persona.cpu_count == expected, (
         f"sentinel resolved to {persona.cpu_count}, expected {expected}"
@@ -48,7 +49,7 @@ def test_host_cpu_count_sentinel_yields_n_cpuinfo_blocks(tmp_path):
     """With the sentinel, /proc/cpuinfo claims as many processors as
     the host has available — preserves capability surface for callers
     that need real parallelism (codeql, parallel builds)."""
-    expected = len(os.sched_getaffinity(0))
+    expected = _host_cpu_count()
     build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
     content = (tmp_path / "cpuinfo").read_text()
     indices = [

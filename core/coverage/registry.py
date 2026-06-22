@@ -62,6 +62,7 @@ _REGISTRY = {
     # binary-coverage tracers, addr2line/DWARF-resolved to source.
     "bincov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "drcov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
+    "frida": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     "sancov": (CATEGORY_RUNTIME, DEPTH_RUNTIME),
     # Python-test runtime (coverage.py / pytest-cov).
     "coverage.py": (CATEGORY_RUNTIME, DEPTH_RUNTIME),

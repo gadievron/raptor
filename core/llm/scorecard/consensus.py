@@ -164,12 +164,13 @@ def record_consensus_outcomes(
                 # primary's reasoning — that would mis-attribute the
                 # majority's text to the dissenter.
                 reasoning = str(this_model_result.get("reasoning") or "")
+                truth_label = (
+                    f"majority of {len(verdicts)} models voted "
+                    f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
+                )
                 sample = {
                     "this_reasoning": reasoning[:_MAX_REASONING_CHARS],
-                    "other_reasoning": (
-                        f"majority of {len(verdicts)} models voted "
-                        f"{'exploitable' if majority_says_exploitable else 'not exploitable'}"
-                    ),
+                    "other_reasoning": truth_label,
                 }
             try:
                 scorecard.record_event(

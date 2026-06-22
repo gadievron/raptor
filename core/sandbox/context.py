@@ -315,8 +315,11 @@ def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
     return False
 
 
+_UNSET = object()
+
+
 @contextmanager
-def sandbox(block_network: bool = False, target: str = None, output: str = None,
+def sandbox(block_network=_UNSET, target: str = None, output: str = None,
             map_root: bool = False, limits: dict = None,
             allowed_tcp_ports: list = None, profile: str = None,
             disabled: bool = False,
@@ -329,9 +332,11 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             audit_run_dir: Optional[str] = None,
             observe: bool = False,
             writable_paths: Optional[list] = None,
+            exclude_tmp_baseline: bool = False,
             sanitise_host_fingerprint: bool = False,
             cpu_count: Optional[int] = None,
-            require_sanitisation: bool = False):
+            require_sanitisation: bool = False,
+            etc_overlay: Optional[dict] = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -694,7 +699,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"Valid profiles: {sorted(PROFILES)}."
             )
         p = PROFILES[profile]
-        block_network = p["block_network"]
+        if block_network is _UNSET:
+            block_network = p["block_network"]
         seccomp_profile = p["seccomp"] or None
         if not p["use_landlock"]:
             # Profile forces Landlock off — warn if the caller handed us
@@ -714,6 +720,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             target = None
             output = None
             allowed_tcp_ports = None
+    if block_network is _UNSET:
+        block_network = False
     strict_required = profile == "strict"
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
@@ -811,7 +819,17 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     extra_writable_paths = list(writable_paths or [])
     writable_paths = None
     if target or output or allowed_tcp_ports or extra_writable_paths:
-        writable_paths = ["/tmp"]
+        # ``/tmp`` is in the writable baseline so Python's pyc cache
+        # and the C compiler's intermediate files survive. Callers that
+        # specifically don't want a sandboxed child to be able to write
+        # ANYWHERE under /tmp (e.g. the exploit-engine substrate, where
+        # an LLM-emitted producer could otherwise rewrite the target
+        # wrapper script at ``/tmp/compile-and-run-target-*/target``)
+        # set ``exclude_tmp_baseline=True``. ONLY use this when you've
+        # verified the sandboxed program doesn't need /tmp to start —
+        # ``python3 -S`` exploits don't write pyc cache, but a normal
+        # ``python3`` import will.
+        writable_paths = [] if exclude_tmp_baseline else ["/tmp"]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
             # open in the mount-ns child after pivot_root (the new
@@ -1122,6 +1140,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
         strict_env = kwargs.pop("strict_env", False)
+        _skip_pid_ns = kwargs.pop("skip_pid_ns", False)
+        _skip_mount_ns = kwargs.pop("skip_mount_ns", False)
+        _inherit_netns = kwargs.pop("inherit_netns", False)
+        _start_new_session = kwargs.pop("start_new_session", True)
         if kwargs.get("env") is None:
             kwargs.pop("env", None)  # drop any explicit None
             kwargs["env"] = RaptorConfig.get_safe_env()
@@ -1396,7 +1418,9 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 unshare_supports_kill_child,
             )
             unshare_cmd = [_resolve_sandbox_binary("unshare"),
-                           "--user", "--pid", "--fork", "--ipc"]
+                           "--user", "--fork", "--ipc"]
+            if not _skip_pid_ns:
+                unshare_cmd.append("--pid")
             if block_network:
                 unshare_cmd.append("--net")
             # Belt-and-braces orphan teardown: if `unshare` is killed
@@ -1696,7 +1720,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                 if proxy_instance is not None else None),
                     fake_home=fake_home,
                     map_root=map_root,
-                    start_new_session=kwargs.get("start_new_session", True),
+                    start_new_session=_start_new_session,
                     strict_env=strict_env,
                 )
                 used_spawn = True
@@ -1749,6 +1773,18 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             (audit_run_dir or output)
                             if nonlocal_audit_mode else None
                         )
+                        # skip_mount_ns: no bind-tree, host FS visible.
+                        # Landlock read-restrict needs ALL system dirs
+                        # enumerated (infeasible); pass None → reads
+                        # allowed everywhere, writes still restricted.
+                        _spawn_readable = (
+                            None if _skip_mount_ns
+                            else _readable_with_tools
+                        )
+                        _spawn_restrict_reads = (
+                            False if _skip_mount_ns
+                            else restrict_reads
+                        )
                         result = _spawn_mod.run_sandboxed(
                             cmd,
                             target=target, output=output,
@@ -1756,7 +1792,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             nproc_limit=nproc_limit,
                             limits=effective_limits,
                             writable_paths=writable_paths or [],
-                            readable_paths=_readable_with_tools,
+                            readable_paths=_spawn_readable,
                             allowed_tcp_ports=list(allowed_tcp_ports)
                                 if allowed_tcp_ports else None,
                             seccomp_profile=seccomp_profile,
@@ -1774,9 +1810,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             observe_nonce=(nonlocal_observe_nonce
                                            if observe and nonlocal_audit_mode
                                            else None),
-                            restrict_reads=restrict_reads,
+                            restrict_reads=_spawn_restrict_reads,
                             strict_env=strict_env,
                             persona=_persona,
+                            etc_overlay=etc_overlay,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and
@@ -1788,7 +1825,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             # /crash-analysis per run_untrusted's
                             # docstring) pass start_new_session=False
                             # explicitly and that is honoured.
-                            start_new_session=kwargs.get("start_new_session", True),
+                            start_new_session=_start_new_session,
+                            inherit_netns=_inherit_netns,
+                            skip_pid_ns=_skip_pid_ns,
+                            skip_mount_ns=_skip_mount_ns,
                         )
                         used_spawn = True
                         # Authoritative setup-failure signal from the exec-
@@ -2345,7 +2385,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
 
 
 # Convenience: standalone run function for one-off sandboxed commands
-def run(cmd: List[str], block_network: bool = False, target: str = None,
+def run(cmd: List[str], block_network: bool = True, target: str = None,
         output: str = None, allowed_tcp_ports: list = None,
         profile: str = None, disabled: bool = False, limits: dict = None,
         map_root: bool = False,
@@ -2358,9 +2398,11 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         audit_run_dir: Optional[str] = None,
         observe: bool = False,
         writable_paths: Optional[list] = None,
+        exclude_tmp_baseline: bool = False,
         sanitise_host_fingerprint: bool = False,
         cpu_count: Optional[int] = None,
         require_sanitisation: bool = False,
+        etc_overlay: Optional[dict] = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -2385,9 +2427,11 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  audit_run_dir=audit_run_dir,
                  observe=observe,
                  writable_paths=writable_paths,
+                 exclude_tmp_baseline=exclude_tmp_baseline,
                  sanitise_host_fingerprint=sanitise_host_fingerprint,
                  cpu_count=cpu_count,
-                 require_sanitisation=require_sanitisation) as _run:
+                 require_sanitisation=require_sanitisation,
+                 etc_overlay=etc_overlay) as _run:
         return _run(cmd, **kwargs)
 
 

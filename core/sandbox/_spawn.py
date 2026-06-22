@@ -448,6 +448,10 @@ def run_sandboxed(
     restrict_reads: bool = False,
     strict_env: bool = False,
     persona: Optional["Persona"] = None,
+    inherit_netns: bool = False,
+    etc_overlay: Optional[dict] = None,
+    skip_pid_ns: bool = False,
+    skip_mount_ns: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -985,7 +989,7 @@ def run_sandboxed(
             # Step 3: create namespaces. Leaves us as "nobody" in the
             # new user-ns until the parent runs newuidmap on us.
             ns_flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC
-            if block_network:
+            if block_network and not inherit_netns:
                 ns_flags |= CLONE_NEWNET
             if persona is not None:
                 # Fresh UTS namespace so sethostname/setdomainname only
@@ -995,18 +999,22 @@ def run_sandboxed(
                 ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
-            # Step 4.5 (audit mode): declare PR_SET_PTRACER_ANY so the
-            # tracer subprocess (our sibling, not descendant) can SEIZE
-            # us under Yama scope 1. Must run BEFORE we signal "R" to
-            # the parent — the parent will fork the tracer right after
-            # newuidmap, and the tracer attempts SEIZE while we're
-            # blocked on the go-pipe. Without prctl in place by then,
-            # the SEIZE returns EPERM under default Yama policy.
+            # Step 4.5: declare PR_SET_PTRACER_ANY under Yama scope 1.
+            #
+            # Two cases need this:
+            # - audit mode: the tracer (our sibling) must SEIZE us.
+            # - debug profile: tools like frida/gdb use helper
+            #   processes that ptrace across the ancestry boundary.
+            #   The debug seccomp filter already allows the ptrace
+            #   syscall; this makes Yama consistent with that.
+            #
+            # Must run BEFORE "R" — the parent may fork the tracer
+            # right after newuidmap.
             #
             # The child here is uid 65534 ("nobody") after unshare but
             # before newuidmap — PR_SET_PTRACER doesn't require any
             # capability; it just declares permission to be traced.
-            if _audit_engaged:
+            if _audit_engaged or seccomp_profile == "debug":
                 try:
                     import ctypes as _c
                     import ctypes.util as _cu
@@ -1082,12 +1090,13 @@ def run_sandboxed(
             # their original paths so they exist inside the pivoted
             # root — otherwise Landlock's allowlist would cover a path
             # the child can't reach (ENOENT before EACCES).
-            if target or output:
+            if (target or output) and not skip_mount_ns:
                 _status_step = b"M"
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
                                root_path=_root_dir,
-                               persona=persona)
+                               persona=persona,
+                               etc_overlay=etc_overlay)
 
             # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
             # to a mask of size persona.cpu_count. The persona's
@@ -1153,16 +1162,49 @@ def run_sandboxed(
             # threads survived the parent fork) so the multi-threaded
             # warning shouldn't fire here, but suppress defensively
             # to match every other production fork() site.
+            #
+            # skip_pid_ns=True keeps the child in the parent's pid-ns
+            # (still forks once for the exec-in-child pattern, but no
+            # CLONE_NEWPID). This is the escape hatch for tools that
+            # break inside a fresh pid-ns — chiefly gdb, whose host-
+            # info probe reads /proc/1/* and gets EPERM when PID 1
+            # resolves to systemd (in init_user_ns, where our user-ns
+            # CAP_SYS_PTRACE doesn't apply). Found via bpftrace 2026-06-14:
+            # __ptrace_may_access fires with target_pid=1 target_comm=systemd
+            # then returns -EPERM, breaking gdb's bp insertion.
             import warnings as _warnings
             with _warnings.catch_warnings():
                 _warnings.filterwarnings(
                     "ignore", category=DeprecationWarning,
                     message=r".*fork.*may lead to deadlocks.*",
                 )
-                os.unshare(CLONE_NEWPID)
+                if not skip_pid_ns:
+                    os.unshare(CLONE_NEWPID)
                 grand = os.fork()
             if grand == 0:
                 # Grandchild runs as PID 1 in the new pid-ns.
+                #
+                # /proc was bind-mounted from HOST in setup_mount_ns
+                # (step 6) before the pid-ns existed, so it exposes
+                # host pids. Inside the new pid-ns the grandchild has
+                # ns-local PIDs (1, 2, ...), and any tool that does
+                # path lookups on /proc/<pid> (gdb's ptrace+POKE plumbing,
+                # for instance) gets ENOENT — the host procfs doesn't
+                # know about the ns-local pid. Remount a FRESH proc fs
+                # in our newly-entered pid-ns so /proc/<ns-pid> resolves.
+                # This is best-effort: if mount fails (no CAP_SYS_ADMIN
+                # in the right user-ns, or the kernel disallows the
+                # second mount), we keep the bind-mounted host /proc
+                # and accept that ns-pid procfs lookups will ENOENT.
+                try:
+                    import ctypes as _ctypes
+                    _libc = _ctypes.CDLL("libc.so.6", use_errno=True)
+                    _libc.mount(b"proc", b"/proc", b"proc", 0, None)
+                except Exception:  # noqa: BLE001
+                    warn_post_fork(
+                        b"_spawn: grandchild fresh proc mount failed; "
+                        b"/proc/<ns-pid>/* will ENOENT for gdb/ptrace\n"
+                    )
                 if env is not None:
                     exec_env = env
                     # Defense-in-depth: context.py:run() already strips

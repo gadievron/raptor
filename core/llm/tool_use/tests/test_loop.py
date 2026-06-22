@@ -8,6 +8,7 @@ those concerns are tested in the provider-specific test files.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -299,6 +300,116 @@ def test_max_cost_usd_terminates_pre_flight() -> None:
     assert len(fp.calls) == 2
 
 
+def test_cost_budget_exception_carries_partial_messages() -> None:
+    """When the cost cap fires mid-run, the exception exposes the
+    partial conversation so callers can persist the trajectory up to
+    termination. Without this, a budget-capped run is invisible —
+    we never see what the model was thrashing on.
+    """
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {}), in_t=1000, out_t=1000),
+        _tool_call_response(("c2", "echo", {}), in_t=1000, out_t=1000),
+        _text_response("never reached", in_t=1000, out_t=1000),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_cost_usd=0.020)
+    try:
+        loop.run("expensive")
+        raise AssertionError("expected CostBudgetExceeded")
+    except CostBudgetExceeded as exc:
+        # initial user prompt + 2 assistant turns + 2 user tool-result
+        # turns = 5 messages survived.
+        assert len(exc.messages) == 5
+        assert exc.tool_calls_made == 2
+
+
+# ---------------------------------------------------------------------------
+# Caller-supplied give-up predicate
+# ---------------------------------------------------------------------------
+
+
+def test_should_continue_false_terminates_with_give_up() -> None:
+    """A ``should_continue`` predicate returning False halts the loop
+    cleanly with ``terminated_by='give_up'``. Pre-flight check at the
+    top of each iteration, so the False decision blocks the next
+    provider call rather than mid-turn cleanup."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _tool_call_response(("c2", "echo", {})),  # never reached
+    ])
+    call_count = {"n": 0}
+
+    def predicate() -> bool:
+        call_count["n"] += 1
+        # Continue for one iteration, then give up.
+        return call_count["n"] <= 1
+
+    out = ToolUseLoop(
+        fp, [_echo_tool()], should_continue=predicate,
+    ).run("loop")
+    assert out.terminated_by == "give_up"
+    assert out.iterations == 1
+    assert out.tool_calls_made == 1
+    assert len(fp.calls) == 1  # second response was never consumed
+    assert call_count["n"] == 2  # called pre-iter 0 (True) + pre-iter 1 (False)
+
+
+def test_should_continue_raising_is_non_fatal(caplog) -> None:
+    """A predicate that raises must not crash the loop — the
+    exception is swallowed and the iteration proceeds as if the
+    predicate returned True. Catches programming errors in the
+    caller's predicate without aborting a long-running run. The
+    exception is logged at WARNING so the bug is visible to
+    operators (silent swallow would be a diagnosis hazard)."""
+    fp = _FakeProvider([_text_response("done")])
+
+    def boom() -> bool:
+        raise RuntimeError("predicate crashed")
+
+    with caplog.at_level(logging.WARNING, logger="core.llm.tool_use.loop"):
+        out = ToolUseLoop(
+            fp, [_echo_tool()], should_continue=boom,
+        ).run("safe")
+    assert out.terminated_by == "complete"
+    # The predicate-crash exception must be logged so a buggy
+    # predicate is diagnosable.
+    assert any(
+        "should_continue predicate raised" in r.message
+        for r in caplog.records
+    ), f"expected WARNING about predicate crash, got: {caplog.records}"
+
+
+def test_should_continue_emits_give_up_event() -> None:
+    """The structured event stream surfaces ``LoopTerminated(reason=
+    "give_up")`` so subscribers can distinguish caller-driven
+    termination from cost / time / iteration caps."""
+    events: list[LoopEvent] = []
+    fp = _FakeProvider([_tool_call_response(("c1", "echo", {}))])
+    ToolUseLoop(
+        fp, [_echo_tool()],
+        should_continue=lambda: False,
+        events=events.append,
+    ).run("loop")
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].reason == "give_up"
+
+
+def test_should_continue_true_is_no_op() -> None:
+    """A predicate that always returns True leaves loop behaviour
+    unchanged — terminates on the model's COMPLETE response, not
+    on the predicate. Regression guard against accidentally
+    short-circuiting valid loops."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _text_response("done"),
+    ])
+    out = ToolUseLoop(
+        fp, [_echo_tool()], should_continue=lambda: True,
+    ).run("loop")
+    assert out.terminated_by == "complete"
+    assert out.tool_calls_made == 1
+
+
 def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
     """Wall-clock budget caps the whole run. Pre-flight check before
     each iteration; once elapsed >= max_seconds, the loop returns a
@@ -313,7 +424,14 @@ def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
         v = clock["t"]
         clock["t"] += 4.0
         return v
-    monkeypatch.setattr("core.llm.tool_use.loop.time.monotonic", _tick)
+    # Patch via the imported-module handle rather than the dotted
+    # string. pytest 8+ resolves "core.llm.tool_use.loop.time.monotonic"
+    # by walking the package namespace; ``core.llm.tool_use.__init__``
+    # does not re-export ``loop`` as an attribute, so the walk fails
+    # at the ``.loop`` step. Using the module object directly skips
+    # the resolver and works on every pytest version.
+    from core.llm.tool_use import loop as _loop_mod
+    monkeypatch.setattr(_loop_mod.time, "monotonic", _tick)
 
     fp = _FakeProvider([
         _tool_call_response(("c1", "echo", {})),
@@ -532,6 +650,41 @@ def test_context_overflow_truncate_raises_when_exhausted() -> None:
     with pytest.raises(ContextOverflow, match="still exceeds"):
         loop.run("y" * 1000)
     assert len(fp.calls) == 0
+
+
+def test_context_overflow_carries_partial_state_after_tool_call() -> None:
+    """When the overflow fires AFTER a tool call has completed, the
+    exception's ``messages`` and ``tool_calls_made`` reflect the
+    partial work — caller can persist the trajectory up to the
+    point of termination, not just the empty-prompt state.
+
+    Covers both pre-flight RAISE paths: the initial estimate gate
+    AND the post-truncation 'still too large' gate share the same
+    partial-state contract.
+    """
+    # Window 50 tokens: the initial prompt + first tool round-trip
+    # fits, but the second iteration's pre-flight estimate (which
+    # includes the echo'd back tool result) tips over.
+    fp = _FakeProvider(
+        [
+            _tool_call_response(("c1", "echo", {"big": "x" * 400})),
+            _text_response("never reached"),
+        ],
+        ctx_window=50,
+    )
+    loop = ToolUseLoop(
+        fp, [_echo_tool()],
+        context_policy=ContextPolicy.RAISE,
+    )
+    try:
+        loop.run("go")
+        raise AssertionError("expected ContextOverflow")
+    except ContextOverflow as exc:
+        # One tool call completed before the overflow.
+        assert exc.tool_calls_made == 1
+        # Messages list includes the partial trajectory up to overflow.
+        # At minimum: initial user + assistant turn 0 + user tool_result.
+        assert len(exc.messages) >= 3
 
 
 def test_context_overflow_truncate_policy_drops_oldest() -> None:

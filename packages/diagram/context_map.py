@@ -7,25 +7,111 @@ with unchecked flows shown as dashed edges.
 
 from __future__ import annotations
 
+import html
+import re
+
 from core.json import load_json
 from pathlib import Path
 from typing import Any
 
 from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
+_C0_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
+
 
 def _node_id(prefix: str, index: int) -> str:
     return f"{prefix}{index:03d}"
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    raw = _C0_RE.sub(" ", html.unescape(str(value)))
+    return _sanitize(raw).replace("-&gt;", "->")
+
+
+def _first_text(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _entry_label(ep: dict[str, Any]) -> str:
+    method = _first_text(ep, "method")
+    route = _first_text(ep, "path", "entry", "route", "name", "function", "id")
+    if method and route and not (route.startswith(method + " ") or route == method):
+        return f"{method} {route}"
+    return route or "?"
+
+
+def _sink_label(sink: dict[str, Any]) -> str:
+    return _first_text(sink, "operation", "location", "name", "type", "id") or "?"
+
+
+def _is_remote_surface(data: dict[str, Any]) -> bool:
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    app_type = str(meta.get("app_type") or meta.get("target_kind") or "").lower()
+    target = str(meta.get("target") or "").lower()
+    return (
+        app_type in {"http_server", "web_app", "web_service", "web"}
+        or "httpd-" in target
+        or target.endswith("/httpd")
+    )
+
+
+def _is_support_tool(item: dict[str, Any]) -> bool:
+    fields = (
+        item.get("file"),
+        item.get("location"),
+        item.get("operation"),
+        item.get("name"),
+        item.get("entry"),
+        item.get("path"),
+    )
+    text = " ".join(str(f) for f in fields if f).replace("\\", "/")
+    return text.startswith("support/") or "/support/" in f"/{text}"
+
+
+def _filter_support_tool_sinks(
+    data: dict[str, Any],
+    sink_details: list[dict[str, Any]],
+    unchecked_flows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not _is_remote_surface(data):
+        return sink_details, unchecked_flows
+
+    support_ids = {
+        str(sink.get("id"))
+        for sink in sink_details
+        if sink.get("id") and _is_support_tool(sink) and not sink.get("reaches_from")
+    }
+    if not support_ids:
+        return sink_details, unchecked_flows
+
+    non_support = [sink for sink in sink_details if str(sink.get("id")) not in support_ids]
+    if not non_support:
+        return sink_details, unchecked_flows
+
+    filtered_flows = [
+        flow for flow in unchecked_flows
+        if str(flow.get("sink")) not in support_ids
+    ]
+    return non_support, filtered_flows
 
 
 def generate(data: dict[str, Any]) -> str:
     """Return Mermaid flowchart markdown from a context-map.json dict."""
     lines = ["flowchart LR"]
 
-    entry_points = data.get("entry_points", [])
-    boundary_details = data.get("boundary_details", [])
-    sink_details = data.get("sink_details", [])
-    unchecked_flows = data.get("unchecked_flows", [])
+    entry_points = [e for e in data.get("entry_points", []) if isinstance(e, dict)]
+    boundary_details = [b for b in data.get("boundary_details", []) if isinstance(b, dict)]
+    sink_details = [s for s in data.get("sink_details", []) if isinstance(s, dict)]
+    unchecked_flows = [f for f in data.get("unchecked_flows", []) if isinstance(f, dict)]
 
     # Fallback: plain sources/sinks when detailed lists are absent
     if not entry_points and data.get("sources"):
@@ -34,6 +120,7 @@ def generate(data: dict[str, Any]) -> str:
              "path": s.get("entry") or s.get("description") or s.get("name") or "unknown",
              "file": "", "line": ""}
             for i, s in enumerate(data["sources"])
+            if isinstance(s, dict)
         ]
     if not sink_details and data.get("sinks"):
         sink_details = [
@@ -41,7 +128,14 @@ def generate(data: dict[str, Any]) -> str:
              "operation": s.get("location") or s.get("description") or s.get("name") or "unknown",
              "file": "", "line": ""}
             for i, s in enumerate(data["sinks"])
+            if isinstance(s, dict)
         ]
+
+    sink_details, unchecked_flows = _filter_support_tool_sinks(
+        data,
+        sink_details,
+        unchecked_flows,
+    )
 
     # -- Entry point nodes --
     if entry_points:
@@ -49,13 +143,11 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Entry Points")
     for ep in entry_points:
         ep_id = _sid(ep.get("id", "EP-?"))
-        method = ep.get("method", "")
-        path = ep.get("path", ep.get("entry", "?"))
         file_ref = ep.get("file", "")
         line_ref = ep.get("line", "")
         loc = f"{file_ref}:{line_ref}" if file_ref else ""
         auth = "" if ep.get("auth_required", True) else " [PUBLIC]"
-        label = _sanitize(f"{method} {path}{auth}\\n{loc}".strip())
+        label = _text(f"{_entry_label(ep)}{auth}\\n{loc}".strip())
         lines.append(f'    {ep_id}["{label}"]')
 
     # -- Trust boundary nodes --
@@ -64,11 +156,11 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Trust Boundaries")
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
-        boundary = _sanitize(tb.get("boundary", tb.get("type", "?")))
+        boundary = _text(tb.get("boundary", tb.get("type", "?")))
         file_ref = tb.get("file", "")
         line_ref = tb.get("line", "")
         loc = f"{file_ref}:{line_ref}" if file_ref else ""
-        label = _sanitize(f"{boundary}\\n{loc}".strip())
+        label = _text(f"{boundary}\\n{loc}".strip())
         lines.append(f'    {tb_id}{{"{label}"}}')
 
     # -- Sink nodes --
@@ -77,21 +169,28 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Sinks")
     for sink in sink_details:
         sink_id = _sid(sink.get("id", "SINK-?"))
-        op = sink.get("operation", sink.get("type", "?"))
         file_ref = sink.get("file", "")
         line_ref = sink.get("line", "")
         loc = f"{file_ref}:{line_ref}" if file_ref else ""
-        label = _sanitize(f"{op}\\n{loc}".strip())
+        label = _text(f"{_sink_label(sink)}\\n{loc}".strip())
         lines.append(f'    {sink_id}[/"{label}"\\]')
 
     # -- Edges: EP → TB (covers) --
     lines.append("")
     lines.append("    %% Flows")
     covered_eps: set[str] = set()
+    emitted_edges: set[str] = set()
+
+    def add_edge(edge: str) -> None:
+        if edge in emitted_edges:
+            return
+        emitted_edges.add(edge)
+        lines.append(edge)
+
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
         for ep_id in [_sid(e) for e in tb.get("covers", [])]:
-            lines.append(f"    {ep_id} --> {tb_id}")
+            add_edge(f"    {ep_id} --> {tb_id}")
             covered_eps.add(ep_id)
 
     # -- Edges: TB → SINK (reaches_from) --
@@ -105,10 +204,9 @@ def generate(data: dict[str, Any]) -> str:
             ]
             if tb_for_ep:
                 for tb_id in tb_for_ep:
-                    lines.append(f"    {tb_id} --> {sink_id}")
+                    add_edge(f"    {tb_id} --> {sink_id}")
             else:
-                # No TB, direct edge (will also appear as unchecked)
-                lines.append(f"    {ep_id} --> {sink_id}")
+                add_edge(f"    {ep_id} --> {sink_id}")
 
     # -- Unchecked flows: dashed red edges --
     if unchecked_flows:
@@ -117,8 +215,8 @@ def generate(data: dict[str, Any]) -> str:
     for flow in unchecked_flows:
         ep_id = _sid(flow.get("entry_point", "?"))
         sink_id = _sid(flow.get("sink", "?"))
-        reason = _sanitize(flow.get("missing_boundary", "no check"))
-        lines.append(f"    {ep_id} -. \"{reason}\" .-> {sink_id}")
+        reason = _text(flow.get("missing_boundary", "no check"))
+        add_edge(f"    {ep_id} -. \"{reason}\" .-> {sink_id}")
 
     # -- Style classes --
     lines.append("")
@@ -127,14 +225,17 @@ def generate(data: dict[str, Any]) -> str:
     lines.append("    classDef sink fill:#fee2e2,stroke:#dc2626,color:#7f1d1d")
 
     if entry_points:
-        ep_ids = ",".join(_sid(ep.get("id", "")) for ep in entry_points)
-        lines.append(f"    class {ep_ids} ep")
+        ep_ids = ",".join(_sid(ep.get("id", "")) for ep in entry_points if ep.get("id"))
+        if ep_ids:
+            lines.append(f"    class {ep_ids} ep")
     if boundary_details:
-        tb_ids = ",".join(_sid(tb.get("id", "")) for tb in boundary_details)
-        lines.append(f"    class {tb_ids} tb")
+        tb_ids = ",".join(_sid(tb.get("id", "")) for tb in boundary_details if tb.get("id"))
+        if tb_ids:
+            lines.append(f"    class {tb_ids} tb")
     if sink_details:
-        sink_ids = ",".join(_sid(s.get("id", "")) for s in sink_details)
-        lines.append(f"    class {sink_ids} sink")
+        sink_ids = ",".join(_sid(s.get("id", "")) for s in sink_details if s.get("id"))
+        if sink_ids:
+            lines.append(f"    class {sink_ids} sink")
 
     return "\n".join(lines)
 

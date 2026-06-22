@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from packages.fuzzing.seed_corpus import SeedCorpusOptions, prepare_seed_corpus
+from packages.fuzzing.seed_corpus import (
+    SeedCorpusOptions,
+    prepare_builtin_seed_corpus,
+    prepare_seed_corpus,
+)
 
 
 def test_prepare_seed_corpus_groups_supported_inputs_and_writes_manifest(tmp_path):
@@ -171,3 +175,49 @@ def test_prepare_seed_corpus_ignores_output_directory_inside_source(tmp_path):
     assert not (out / "json" / "seed-0001.json").exists()
     assert (out / "yaml" / "seed-0001.yaml").is_file()
     assert (out / "notes.txt").read_text(encoding="utf-8") == "operator note\n"
+
+
+def test_prepare_builtin_seed_corpus_materialises_flat_manifest(tmp_path):
+    out = tmp_path / "builtin"
+
+    manifest = prepare_builtin_seed_corpus(out)
+
+    assert manifest["source"] == "raptor_builtin_seed_corpus"
+    assert manifest["profile"] == "default"
+    assert manifest["seed_count"] >= 10
+    assert (out / "manifest.json").is_file()
+    destinations = [seed["destination"] for seed in manifest["seeds"]]
+    assert "seed-0003-json-object" in destinations
+    assert "seed-0006-http-get" in destinations
+    assert "seed-0014-command-prefixes" in destinations
+    assert all("/" not in destination for destination in destinations)
+    assert (out / "seed-0003-json-object").read_text(encoding="utf-8").startswith("{")
+    assert manifest["seeds"][0]["sha256"]
+
+
+def test_prepare_builtin_seed_corpus_resets_only_raptor_generated_files(tmp_path):
+    out = tmp_path / "builtin"
+    out.mkdir()
+    operator_note = out / "operator-note.txt"
+    operator_note.write_text("keep me\n", encoding="utf-8")
+
+    first = prepare_builtin_seed_corpus(out)
+    generated = out / first["seeds"][0]["destination"]
+    generated.write_text("stale\n", encoding="utf-8")
+    second = prepare_builtin_seed_corpus(out)
+
+    assert operator_note.read_text(encoding="utf-8") == "keep me\n"
+    assert generated.read_text(encoding="utf-8") != "stale\n"
+    assert first["seed_count"] == second["seed_count"]
+
+
+def test_prepare_builtin_seed_corpus_refuses_dangerous_outputs(tmp_path, monkeypatch):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_builtin_seed_corpus(fake_home)
+
+    with pytest.raises(ValueError, match="too broad or dangerous"):
+        prepare_builtin_seed_corpus(Path(fake_home.anchor))

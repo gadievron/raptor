@@ -895,9 +895,18 @@ class ModelScorecard:
                 wc, wi = weighted_counts(
                     buckets, freshness_half_life_days,
                     datetime.now(timezone.utc))
-                c, i = round(wc), round(wi)
             else:
-                c, i = flatten_counts(buckets)
+                wc, wi = flatten_counts(buckets)
+            # ``flatten_counts`` returns floats (buckets are integer
+            # today; the deferred Phase 4's posterior-weighted updates
+            # will make them fractional, and this read path is already
+            # float-ready). The DecisionClassStats CLI surface stays
+            # int-typed for clean display — round here. Wilson UB
+            # math is invariant under this rounding for cells with
+            # ``total >= 10`` (where the gate fires); pre-gate
+            # ``learning`` cells are unaffected by ±0.5 fractional
+            # rounding in the counts.
+            c, i = int(round(wc)), int(round(wi))
             events[et] = _EventCounts(correct=c, incorrect=i)
         return DecisionClassStats(
             decision_class=decision_class,
@@ -1144,12 +1153,20 @@ class ModelScorecard:
             # RaptorLogger takes a single pre-formatted message string,
             # not %-style positional args. Build the message here so
             # the log line stays one greppable line.
+            # Round the events totals for display — flatten_counts
+            # returns floats (the deferred Phase 4's calibrated buckets
+            # would contribute fractional values); the log line is purely
+            # informational and integers read more cleanly here. The
+            # underlying cells / on-disk JSON retain their actual fractional
+            # values.
+            ec_display = int(round(events_correct))
+            ei_display = int(round(events_incorrect))
             logger.info(
                 f"scorecard auto-GC: dropped {total_dropped} cells "
                 f"across {len(per_model_counts)} deprecated model(s) "
                 f"({per_model_str}); totals: "
-                f"{events_correct + events_incorrect} events purged "
-                f"({events_correct} correct, {events_incorrect} "
+                f"{ec_display + ei_display} events purged "
+                f"({ec_display} correct, {ei_display} "
                 "incorrect)"
             )
 

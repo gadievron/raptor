@@ -1970,7 +1970,7 @@ def _path_derived_module(
     base = file_path
     suffix_match = None
     for suffix in (".pyi", ".py", ".tsx", ".jsx", ".mjs", ".cjs",
-                    ".ts", ".js", ".rb"):
+                    ".ts", ".js", ".rb", ".lua"):
         if base.endswith(suffix):
             base = base[: -len(suffix)]
             suffix_match = suffix
@@ -1981,15 +1981,19 @@ def _path_derived_module(
         base = base[: -len("/__init__")]
     elif base.endswith("/index"):
         base = base[: -len("/index")]
+    elif base.endswith("/init"):
+        base = base[: -len("/init")]
     if not base:
         return []
     out: List[str] = [f"{base.replace('/', '.')}.{class_name}.{fn_name}"]
-    if base.startswith("src/"):
-        stripped = base[len("src/"):]
-        if stripped:
-            out.append(
-                f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
-            )
+    for prefix in ("src/", "luasrc/", "lib/"):
+        if base.startswith(prefix):
+            stripped = base[len(prefix):]
+            if stripped:
+                out.append(
+                    f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
+                )
+            break
     return out
 
 
@@ -2406,6 +2410,59 @@ def binary_call_edge_present(
             return False
         edges = meta.get("binary_oracle_edges")
         return bool(edges)
+    return False
+
+
+def frida_runtime_trace_present(
+    inventory: Dict[str, Any],
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """True when frida observed this function executing at runtime.
+
+    Checks for ``metadata.frida_runtime_trace.observed`` on the
+    inventory item. The enrichment pipeline sets this when the
+    function name appears in frida's events.jsonl output.
+
+    SOUND — runtime observation is mechanically sound evidence of
+    reachability (stronger than static call-graph edges). But
+    earns_suppression=False because this PROMOTES (proves reachable);
+    it doesn't suppress.
+    """
+    if not file_path or not name:
+        return False
+    normalised = file_path.replace("\\", "/")
+    idx = _get_bo_item_index(inventory)
+    by_name = idx.get(normalised)
+    if not by_name:
+        return False
+    candidates = by_name.get(name)
+    if not candidates:
+        return False
+    if line and len(candidates) > 1:
+        enclosing = [
+            it for it in candidates
+            if int(it.get("line_start") or 0) <= line
+            and (int(it.get("line_end") or 0) == 0
+                 or line <= int(it.get("line_end") or 0))
+        ]
+        if enclosing:
+            candidates = [max(
+                enclosing,
+                key=lambda it: int(it.get("line_start") or 0),
+            )]
+        else:
+            candidates = candidates[:1]
+    for item in candidates:
+        meta = item.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        frida = meta.get("frida_runtime_trace")
+        if not isinstance(frida, dict):
+            continue
+        if frida.get("observed"):
+            return True
     return False
 
 
@@ -4065,6 +4122,7 @@ __all__ = [
     "entry_reachability",
     "is_lexically_dead",
     "is_registered_via_call",
+    "frida_runtime_trace_present",
     "module_aborts_on_load",
     "parse_evidence_entry",
     "reverse_closure",

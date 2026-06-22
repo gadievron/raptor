@@ -294,9 +294,9 @@ def _ollama_check_url() -> str:
     matching the convention already used by ``core.llm.detection``.
     """
     from core.config import RaptorConfig
+    from core.llm.detection import _host_is_local
     host = RaptorConfig.OLLAMA_HOST.rstrip("/")
-    is_local = "localhost" in host or "127.0.0.1" in host
-    base = host if is_local else "[REMOTE-OLLAMA]"
+    base = host if _host_is_local(host) else "[REMOTE-OLLAMA]"
     return f"{base}/api/tags"
 
 

@@ -264,7 +264,23 @@ class ContextPolicy(Enum):
 class ContextOverflow(RuntimeError):
     """Raised by the loop when ``ContextPolicy.RAISE`` is in effect and
     the next turn's request would exceed the provider's context
-    window."""
+    window.
+
+    Carries the partial-state attributes ``messages`` and
+    ``tool_calls_made`` so callers can persist the trajectory up to the
+    point of termination. Both default to empty/0 when the raiser had
+    no access to them.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        messages: list[Any] | None = None,
+        tool_calls_made: int = 0,
+    ) -> None:
+        super().__init__(*args)
+        self.messages = list(messages) if messages else []
+        self.tool_calls_made = tool_calls_made
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +296,22 @@ class CostBudgetExceeded(RuntimeError):
     Pre-flight only: a single surprise-large response cannot be blocked
     until we know its cost, but subsequent calls in the same loop run
     cannot pile on once the cap is reached.
+
+    Carries the partial-state attributes ``messages`` and
+    ``tool_calls_made`` so callers can persist the trajectory up to the
+    point of termination. Both default to empty/0 when the raiser had
+    no access to them.
     """
+
+    def __init__(
+        self,
+        *args: Any,
+        messages: list[Any] | None = None,
+        tool_calls_made: int = 0,
+    ) -> None:
+        super().__init__(*args)
+        self.messages = list(messages) if messages else []
+        self.tool_calls_made = tool_calls_made
 
 
 class ToolHandlerTimeout(RuntimeError):
@@ -395,6 +426,7 @@ class LoopTerminated:
         "tool_timeout",              # handler timeout, not configured to terminate
         "context_overflow",          # request would exceed context window
         "provider_error",            # transport / API failure after retries
+        "give_up",                   # caller-supplied should_continue returned False
     ]
     iterations: int
     total_cost_usd: float
@@ -461,5 +493,6 @@ class ToolLoopResult:
         "tool_timeout",
         "context_overflow",
         "provider_error",
+        "give_up",
     ]
     error_message: str | None = None

@@ -1515,7 +1515,7 @@ class AutonomousSecurityAgentV2:
             return self._verified_outcomes
         outcomes = []
         try:
-            from core.verified_outcome import collect_outcomes
+            from core.labeled_attempts.view import collect_outcomes
             project_root = None
             try:
                 from core.run.output import _resolve_active_project

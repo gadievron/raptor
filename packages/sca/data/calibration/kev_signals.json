@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-09T08:59:51Z",
+    "fetched_at": "2026-06-16T10:53:24Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10871,6 +10871,20 @@
       "ransomware_use": false,
       "vendor": "Palo Alto Networks"
     },
+    "CVE-2026-10520": {
+      "date_added": "2026-06-11",
+      "kev": true,
+      "product": "Sentry",
+      "ransomware_use": false,
+      "vendor": "Ivanti"
+    },
+    "CVE-2026-11645": {
+      "date_added": "2026-06-09",
+      "kev": true,
+      "product": "Chromium V8",
+      "ransomware_use": false,
+      "vendor": "Google"
+    },
     "CVE-2026-1281": {
       "date_added": "2026-01-29",
       "kev": true,
@@ -10945,6 +10959,20 @@
       "date_added": "2026-05-14",
       "kev": true,
       "product": "Catalyst SD-WAN",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20245": {
+      "date_added": "2026-06-09",
+      "kev": true,
+      "product": "Catalyst SD-WAN Manager",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20262": {
+      "date_added": "2026-06-15",
+      "kev": true,
+      "product": "Catalyst SD-WAN Manager",
       "ransomware_use": false,
       "vendor": "Cisco"
     },
@@ -11172,6 +11200,13 @@
       "ransomware_use": false,
       "vendor": "TrueConf"
     },
+    "CVE-2026-35273": {
+      "date_added": "2026-06-12",
+      "kev": true,
+      "product": " PeopleSoft Enterprise PeopleTools",
+      "ransomware_use": true,
+      "vendor": "Oracle"
+    },
     "CVE-2026-35616": {
       "date_added": "2026-04-06",
       "kev": true,
@@ -11274,7 +11309,7 @@
       "date_added": "2026-06-08",
       "kev": true,
       "product": "Security Gateway",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Check Point"
     },
     "CVE-2026-5281": {
@@ -11284,12 +11319,26 @@
       "ransomware_use": false,
       "vendor": "Google"
     },
+    "CVE-2026-54420": {
+      "date_added": "2026-06-15",
+      "kev": true,
+      "product": "cPanel Plugin",
+      "ransomware_use": false,
+      "vendor": "LiteSpeed"
+    },
     "CVE-2026-6973": {
       "date_added": "2026-05-07",
       "kev": true,
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-7473": {
+      "date_added": "2026-06-09",
+      "kev": true,
+      "product": "Extensible Operating System",
+      "ransomware_use": false,
+      "vendor": "Arista"
     },
     "CVE-2026-8398": {
       "date_added": "2026-05-27",

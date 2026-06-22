@@ -85,9 +85,8 @@ class TestCreateDefaultCorpus:
         expected = output_dir / "corpus_default"
         assert result == expected
         assert expected.is_dir()
-        for idx in range(4):
-            seed = expected / f"seed{idx}"
-            assert seed.is_file(), f"missing {seed}"
+        assert (expected / "manifest.json").is_file()
+        assert (expected / "seed-0006-http-get").is_file()
 
         # CWD is NOT polluted.
         assert not (cwd / "out").exists()
@@ -112,10 +111,10 @@ class TestCreateDefaultCorpus:
         runner = self._make_runner(output_dir)
         corpus = runner._create_default_corpus()
 
-        assert (corpus / "seed0").read_bytes() == b"A" * 10
-        assert (corpus / "seed1").read_bytes() == b"test\n"
-        assert (corpus / "seed2").read_bytes() == b"\x00\x01\x02\x03"
-        assert (corpus / "seed3").read_bytes() == b"GET / HTTP/1.0\r\n\r\n"
+        assert (corpus / "seed-0001-text-small").read_bytes() == b"test\n"
+        assert b"GET /search" in (corpus / "seed-0006-http-get").read_bytes()
+        assert b"STACK:" in (corpus / "seed-0014-command-prefixes").read_bytes()
+        assert (corpus / "manifest.json").is_file()
 
 if __name__ == "__main__":
     unittest.main()

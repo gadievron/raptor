@@ -192,6 +192,31 @@ def run_sandboxed(cmd: List[str], *,
                   # only as None when sanitisation was requested but
                   # platform unsupported.
                   persona=None,  # noqa: ARG001
+                  # inherit_netns: Linux-only — used by _spawn to skip
+                  # CLONE_NEWNET when target/exploit are forked from the
+                  # coordinator already inside the shared netns. macOS
+                  # has no network namespaces; accepted + ignored for
+                  # signature parity with _spawn.run_sandboxed.
+                  inherit_netns=False,  # noqa: ARG001
+                  # etc_overlay: Linux-only — uses mount-ns + bind-mounts
+                  # to overlay per-Problem files at /etc/<...> inside
+                  # the sandbox. macOS sandbox-exec has no equivalent
+                  # mount primitive; accepted + ignored for signature
+                  # parity with _spawn.run_sandboxed.
+                  etc_overlay=None,  # noqa: ARG001
+                  # skip_pid_ns: Linux-only — opts out of the nested
+                  # CLONE_NEWPID so gdb's host-info probe can read
+                  # /proc/1/* without the systemd-init permission gap
+                  # described in _spawn.run_sandboxed. macOS sandbox-
+                  # exec has no pid-namespace concept (host PIDs are
+                  # always visible inside the SBPL sandbox), so this
+                  # kwarg is accepted + ignored for signature parity.
+                  skip_pid_ns=False,  # noqa: ARG001
+                  # skip_mount_ns: Linux-only — skips mount-ns pivot_root
+                  # so the host filesystem stays visible (used by frida
+                  # profile). macOS sandbox-exec doesn't use mount-ns;
+                  # accepted + ignored for signature parity.
+                  skip_mount_ns=False,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.

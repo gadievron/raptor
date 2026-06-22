@@ -322,7 +322,7 @@ def _build_verified_exemplar_block(
     if not outcomes:
         return ""
     try:
-        from core.verified_outcome import render_verified_exemplars
+        from core.labeled_attempts.view import render_verified_exemplars
     except Exception:
         return ""  # substrate absent (older deployment) — skip silently
     try:

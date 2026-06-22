@@ -116,7 +116,13 @@ _SECCOMP_BLOCK_ALWAYS = (
     "bpf",                                    # eBPF program loading
     "userfaultfd",                            # userspace page-fault handler
     "perf_event_open",                        # perf subsystem
-    "process_vm_readv", "process_vm_writev",  # cross-process memory access
+    # process_vm_readv / process_vm_writev: cross-process memory access.
+    # Moved to _SECCOMP_BLOCK_UNLESS_DEBUG (2026-06-13) because gdb's
+    # inferior-memory plumbing under runtime_inspect needs them. The
+    # debug profile is only used by runtime_inspect; widening its
+    # surface to enable real interactive debugging is the explicit
+    # tradeoff (an operator opting into exploit-dev tooling accepts
+    # this; the surface stays narrow for every other profile).
     # io_uring bypasses Landlock on kernels 5.13-6.2 — Landlock hooks don't
     # cover io_uring opcodes for file ops, so a sandboxed process can use
     # io_uring to read/write/unlink files Landlock would otherwise block.
@@ -165,6 +171,11 @@ _SECCOMP_BLOCK_ALWAYS = (
 # Syscalls blocked in full, allowed in debug profile
 _SECCOMP_BLOCK_UNLESS_DEBUG = (
     "ptrace",
+    # gdb's read/write of the inferior's memory. Without these gdb
+    # has to fall back to /proc/PID/mem which has tighter Yama-policy
+    # constraints under non-init-userns.
+    "process_vm_readv",
+    "process_vm_writev",
 )
 
 # socket() family / type values we reject (via argument filter on arg 0 / 1).
@@ -383,7 +394,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         return num  # negative means unknown on this arch; caller checks
 
     blocked_syscalls = list(_SECCOMP_BLOCK_ALWAYS)
-    if profile != "debug":
+    if profile not in ("debug", "frida"):
         blocked_syscalls += list(_SECCOMP_BLOCK_UNLESS_DEBUG)
     # Audit mode: add b3 syscalls (open/openat/connect) to the trace
     # set so the tracer logs every file path attempt and connect
@@ -429,7 +440,13 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
             f"architectures if any entries appear."
         )
     # Block AF_UNIX/NETLINK/PACKET via arg 0; block SOCK_RAW via arg 1.
-    socket_family_blocks = [_AF_UNIX, _AF_NETLINK, _AF_PACKET]
+    # "frida" profile: allow AF_UNIX (frida-helper uses Unix sockets for
+    # its internal IPC with the target process) but keep NETLINK/PACKET
+    # and SOCK_RAW blocked.
+    if profile == "frida":
+        socket_family_blocks = [_AF_NETLINK, _AF_PACKET]
+    else:
+        socket_family_blocks = [_AF_UNIX, _AF_NETLINK, _AF_PACKET]
     socket_type_block = _SOCK_RAW
 
     _os_write = os.write

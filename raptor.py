@@ -19,6 +19,7 @@ Available Modes:
     agentic               - Full autonomous workflow
     codeql                - CodeQL-only analysis
     doctor                - Status report for local setup (no claude needed)
+    frida                 - Dynamic instrumentation via Frida (alpha)
     zkpox                 - ZKPoX disclosure bundles + proofs (beta).
                             Subcommands: eligible / bundle / reproduce / prove / verify
     help                  - Show detailed help for a specific mode
@@ -256,32 +257,6 @@ def _wants_help(args: list) -> bool:
     return "--help" in args or "-h" in args
 
 
-def _preflight_script_args(script_path: Path, args: list) -> int | None:
-    """Ask subprocess modes to parse args before lifecycle side effects.
-
-    Some wrapped modes resolve projects, create run directories, print
-    OUTPUT_DIR, and start LLM dispatcher plumbing in the parent before the
-    child script's argparse sees malformed flags. For modes that support the
-    ``RAPTOR_ARGPARSE_ONLY`` contract, run that cheap parse-only path first.
-
-    Returns an exit code when preflight failed or timed out. Returns ``None``
-    when the caller should continue into the normal lifecycle.
-    """
-    if script_path.name != "raptor_agentic.py":
-        return None
-    from core.config import RaptorConfig
-    env = RaptorConfig.get_safe_env()
-    env["RAPTOR_ARGPARSE_ONLY"] = "1"
-    cmd = [sys.executable, str(script_path)] + args
-    try:
-        proc = subprocess.run(cmd, env=env, timeout=15)
-    except subprocess.TimeoutExpired:
-        print(f"✗ Argument validation for {script_path.name} timed out",
-              file=sys.stderr)
-        return 1
-    return proc.returncode if proc.returncode != 0 else None
-
-
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -305,10 +280,6 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # to recognise the flag. Pre-flight gate fires below, after
     # the catalog estimate is computed.
     max_cost_usd, args = _extract_and_strip_max_cost_usd(args)
-
-    preflight_rc = _preflight_script_args(script_path, args)
-    if preflight_rc is not None:
-        return preflight_rc
 
     # CLAUDE.md DEFAULT TARGET DIRECTORY: back-fill --repo from
     # (1) active project → (2) RAPTOR_CALLER_DIR when args don't carry
@@ -1091,6 +1062,28 @@ def mode_zkpox(args: list) -> int:
 
 
 
+def mode_frida(args: list) -> int:
+    """Run a Frida dynamic-instrumentation session.
+
+    The libexec wrapper owns lifecycle setup (output directory + run
+    state tracking) and dispatches to :mod:`packages.frida.cli`.
+    Routing through the wrapper rather than calling the cli module
+    directly keeps the lifecycle behaviour identical whether the
+    operator runs ``bin/raptor frida ...`` or invokes the wrapper
+    directly from a /frida skill.
+    """
+    import subprocess
+    from core.config import RaptorConfig
+    script_root = Path(__file__).parent
+    wrapper = script_root / "libexec" / "raptor-frida"
+    if not wrapper.exists():
+        print(f"✗ Frida wrapper not found: {wrapper}")
+        return 1
+    env = RaptorConfig.get_safe_env()
+    env.setdefault("_RAPTOR_TRUSTED", "1")
+    return subprocess.call([str(wrapper), *args], env=env)
+
+
 def _mode_help_scripts() -> dict:
     """Map mode name → the script whose argparse renders that mode's help.
 
@@ -1178,6 +1171,7 @@ Available Modes:
   codeql                - CodeQL-only analysis
   analyze               - LLM-powered vulnerability analysis (requires SARIF input)
   doctor                - Status report for local setup (no claude needed)
+  frida                 - Dynamic instrumentation via Frida (alpha)
   zkpox                 - ZKPoX disclosure bundles + proofs (beta).
                           Subcommands: eligible / bundle / reproduce / prove / verify
 
@@ -1322,6 +1316,7 @@ def main():
         'doctor': mode_doctor,
         'zkpox': mode_zkpox,
         'describe': mode_describe,
+        'frida': mode_frida,
     }
     
     if mode not in mode_handlers:
