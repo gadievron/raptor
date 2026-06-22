@@ -80,6 +80,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Actually install (default is dry-run)",
     )
 
+    # -- deps --------------------------------------------------------------
+    deps_p = sub.add_parser(
+        "deps",
+        help="Show the full dependency satisfaction matrix for this system",
+    )
+    deps_p.add_argument(
+        "--json", action="store_true",
+        help="Output machine-readable JSON",
+    )
+    deps_p.add_argument(
+        "--platform",
+        help="Override detected platform (e.g. linux-x86_64, macos-arm64, windows-x86_64)",
+    )
+
     return parser
 
 
@@ -101,6 +115,7 @@ def main(args: list[str]) -> int:
         "probe": _cmd_probe,
         "check": _cmd_check,
         "provision": _cmd_provision,
+        "deps": _cmd_deps,
     }
     return handlers[parsed.subcommand](parsed)
 
@@ -273,6 +288,49 @@ def _print_capabilities(caps: SystemCapabilities) -> None:
     print(f"  Tools:     {', '.join(sorted(caps.tools)) or 'none'}")
     if caps.labels:
         print(f"  Labels:    {', '.join(sorted(caps.labels))}")
+
+
+def _cmd_deps(parsed: argparse.Namespace) -> int:
+    from core.broker.deps import Platform, check_all, format_matrix
+
+    plat = None
+    if parsed.platform:
+        try:
+            plat = Platform(parsed.platform)
+        except ValueError:
+            valid = ", ".join(p.value for p in Platform)
+            print(f"[!] Unknown platform '{parsed.platform}'", file=sys.stderr)
+            print(f"    Valid: {valid}", file=sys.stderr)
+            return 1
+
+    result = check_all(platform=plat)
+
+    if parsed.json:
+        import json as _json
+
+        data = {
+            "platform": result.platform.value,
+            "score": f"{result.met_count}/{result.total_count}",
+            "required_score": f"{result.required_met}/{result.required_total}",
+            "dependencies": [
+                {
+                    "name": r.dep.name,
+                    "tier": r.dep.tier.value,
+                    "met": r.met,
+                    "required": r.dep.required,
+                    "affects": r.dep.affects,
+                    "install": r.guide.command if r.guide else None,
+                    "url": r.guide.url if r.guide else None,
+                    "notes": r.guide.notes if r.guide else None,
+                }
+                for r in result.results
+            ],
+        }
+        print(_json.dumps(data, indent=2))
+    else:
+        print(format_matrix(result))
+
+    return 0
 
 
 def _format_requirements(reqs: ModeRequirements) -> str:
