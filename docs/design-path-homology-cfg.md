@@ -283,8 +283,33 @@ truncated `(β_0,)` vector → no bonus, never treated as 0). The β_2-based
 decompiler-confidence discount from the original Phase 5 plan is dropped
 (β_2 vacuous). Verified end-to-end on `/usr/bin/grep`.
 
-Phases 6–7 remain on hold: source-level β_2 faces the same vacuity, and a
-source β_1 signal would be the candidate if the arc is extended.
+Phases 6–7 remain on hold (see "Follow-up" for why their unblocking is
+gated on the size-controlled validation).
+
+## Follow-up (open) — size-controlled β_1 validation on labelled ground truth
+
+Phase 4.5's GO rests on (1) an *attack-surface proxy* label and (2) a
+β_1 ↔ size confound. Before β_1 earns more than its current bounded,
+gated weight — and before Phases 6–7 are worth revisiting — it must show
+signal **beyond size, on real vulnerability labels**.
+
+- **Corpus.** NIST SARD (Juliet C/C++, or the grep variants Huntsman
+  used) — vulnerable/fixed function pairs with ground-truth labels.
+  Building it requires compilation (operator-run; *not* CI — honours the
+  no-long-local-builds rule).
+- **Method.** Reuse `records_from_binary` (β_1, cyclomatic, `gap =
+  cyclomatic − β_1` are already captured) with a manifest carrying
+  `vulnerable_functions` per SARD metadata. Then test β_1 **stratified
+  by size**: within cyclomatic-complexity buckets, does β_1 (or the gap)
+  still separate vulnerable from benign? Equivalently, an odds ratio for
+  β_1 with cyclomatic as a covariate. The point is to dissolve the
+  "bigger functions reach more sinks" confound.
+- **Decision rule.** If β_1 separates *within* size strata → raise the
+  Phase 5 weight and **revisit Phase 6** (does a source β_1 beat plain
+  cyclomatic?) and possibly **Phase 7**. If it doesn't → β_1 stays the
+  current bounded prior and the arc closes here.
+- **Command.** `libexec/raptor-path-homology-precision <sard-manifest.json>`
+  (manifest: `{"binaries":[{"path":..,"vulnerable_functions":[..]}]}`).
 
 ## 7. Validation / evidence gate (Phase 4 detail)
 
