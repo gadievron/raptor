@@ -118,6 +118,27 @@ class Inventory:
     def list_all(self) -> List[RemoteSystemEntry]:
         return list(self._systems.values())
 
+    def list_all_with_capabilities(
+        self,
+    ) -> list[tuple[RemoteSystemEntry, SystemCapabilities]]:
+        """Return all systems that have cached capabilities."""
+        pairs: list[tuple[RemoteSystemEntry, SystemCapabilities]] = []
+        for alias, entry in self._systems.items():
+            caps = self._capabilities.get(alias)
+            if caps:
+                merged = SystemCapabilities(
+                    alias=caps.alias,
+                    os=caps.os,
+                    arch=caps.arch,
+                    tools=caps.tools,
+                    ram_mb=caps.ram_mb,
+                    cores=caps.cores,
+                    free_disk_mb=caps.free_disk_mb,
+                    labels=caps.labels | entry.labels,
+                )
+                pairs.append((entry, merged))
+        return pairs
+
     def find_capable(
         self, requirements: ModeRequirements
     ) -> List[tuple[RemoteSystemEntry, SystemCapabilities]]:

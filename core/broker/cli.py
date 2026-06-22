@@ -7,6 +7,8 @@ Subcommands:
     probe     — re-probe a system and refresh cached capabilities
     check     — check if a mode can run locally or needs brokering
     provision — install missing tools on a remote system (dry-run default)
+    task      — route a task to the best fleet member and execute it
+    rank      — score fleet members for a mode (dry-run routing)
 """
 
 from __future__ import annotations
@@ -105,6 +107,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override detected platform (e.g. linux-x86_64, macos-arm64, windows-x86_64)",
     )
 
+    # -- rank --------------------------------------------------------------
+    rk_p = sub.add_parser(
+        "rank",
+        help="Score fleet members for a mode (dry-run routing)",
+    )
+    rk_p.add_argument("mode", help="RAPTOR mode to score for")
+    rk_p.add_argument(
+        "--labels", help="Comma-separated required labels (e.g. gpu,high-mem)",
+    )
+
+    # -- task --------------------------------------------------------------
+    tk_p = sub.add_parser(
+        "task",
+        help="Route a task to the best fleet member and execute it",
+    )
+    tk_p.add_argument("mode", help="RAPTOR mode to run")
+    tk_p.add_argument("target", help="Target path or URL")
+    tk_p.add_argument(
+        "--prefer", dest="prefer_alias",
+        help="Soft preference for a system alias",
+    )
+    tk_p.add_argument(
+        "--labels", help="Comma-separated required labels",
+    )
+    tk_p.add_argument(
+        "--timeout", type=int, default=3600,
+        help="Execution timeout in seconds (default: 3600)",
+    )
+    tk_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Show routing decision without executing",
+    )
+    tk_p.add_argument(
+        "extra_args", nargs="*",
+        help="Additional arguments passed to the remote command",
+    )
+
     return parser
 
 
@@ -128,6 +167,8 @@ def main(args: list[str]) -> int:
         "provision": _cmd_provision,
         "store-cred": _cmd_store_cred,
         "deps": _cmd_deps,
+        "rank": _cmd_rank,
+        "task": _cmd_task,
     }
     return handlers[parsed.subcommand](parsed)
 
@@ -371,6 +412,96 @@ def _cmd_deps(parsed: argparse.Namespace) -> int:
         print(format_matrix(result))
 
     return 0
+
+
+def _cmd_rank(parsed: argparse.Namespace) -> int:
+    from core.broker.scoring import rank_fleet
+
+    inv = Inventory()
+    fleet = inv.list_all_with_capabilities()
+    if not fleet:
+        print("No systems with cached capabilities. Probe them first.")
+        return 0
+
+    labels = frozenset(parsed.labels.split(",")) if parsed.labels else frozenset()
+    ranked = rank_fleet(fleet, parsed.mode, require_capable=False, labels=labels)
+
+    if not ranked:
+        print(f"No systems match the label filter.")
+        return 0
+
+    print(f"\nFleet ranking for mode '{parsed.mode}':")
+    print(f"{'#':<4} {'Alias':<16} {'Score':>8} {'Capable':>8} {'OS':<10} {'Cores':>6} {'RAM MB':>8}")
+    print("-" * 70)
+
+    for i, s in enumerate(ranked, 1):
+        capable = "yes" if s.verdict.met else "NO"
+        print(
+            f"{i:<4} {s.entry.alias:<16} {s.score:>8.1f} {capable:>8} "
+            f"{s.capabilities.os.value:<10} {s.capabilities.cores:>6} "
+            f"{s.capabilities.ram_mb:>8}"
+        )
+
+    print()
+    return 0
+
+
+def _cmd_task(parsed: argparse.Namespace) -> int:
+    from core.broker.tasks import (
+        TaskExecutor,
+        TaskRouter,
+        TaskRoutingError,
+        TaskSpec,
+    )
+
+    labels = frozenset(parsed.labels.split(",")) if parsed.labels else frozenset()
+    spec = TaskSpec(
+        mode=parsed.mode,
+        target_path=parsed.target,
+        args=tuple(parsed.extra_args),
+        labels=labels,
+        prefer_alias=parsed.prefer_alias,
+        timeout=parsed.timeout,
+    )
+
+    inv = Inventory()
+    router = TaskRouter(inv)
+
+    try:
+        assignment = router.route(spec)
+    except TaskRoutingError as exc:
+        print(f"[!] Routing failed: {exc}", file=sys.stderr)
+        return 1
+
+    s = assignment.system
+    print(f"\n[*] Task {assignment.task_id}")
+    print(f"    Mode:   {spec.mode}")
+    print(f"    Target: {spec.target_path}")
+    print(f"    Routed: {s.entry.alias} ({s.entry.host}) — score {s.score:.1f}")
+    print(f"    Reason: {assignment.reason}")
+
+    if assignment.alternatives:
+        print(f"    Alternatives: {', '.join(a.entry.alias for a in assignment.alternatives)}")
+
+    if parsed.dry_run:
+        print(f"\n    [dry-run] Would execute on {s.entry.alias}")
+        return 0
+
+    print(f"\n[*] Executing on {s.entry.alias}...")
+    executor = TaskExecutor()
+    result = executor.execute(assignment)
+
+    print(f"\n[{'+'if result.state.value == 'completed' else '!'}] {result.state.value}")
+    if result.duration_secs is not None:
+        print(f"    Duration: {result.duration_secs}s")
+    if result.output_dir:
+        print(f"    Results:  {result.output_dir}")
+    if result.error:
+        print(f"    Error:    {result.error}")
+    if result.exit_code is not None:
+        print(f"    Exit:     {result.exit_code}")
+
+    return 0 if result.state.value == "completed" else 1
 
 
 def _format_requirements(reqs: ModeRequirements) -> str:
