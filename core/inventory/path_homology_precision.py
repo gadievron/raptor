@@ -51,15 +51,43 @@ class FunctionRecord:
     address: int
     betti: List[int] = field(default_factory=list)
     decompiler_low_confidence: bool = False  # mirror of β_2 > 0
-    # Ground-truth label for claim (a): "vulnerable" / "benign" / None.
+    # Label: "vulnerable"/"benign" (NIST mode) OR "reaches_dangerous"/
+    # "benign" (attack-surface mode, Phase 4.5) OR None.
     label: Optional[str] = None
     # ``goto`` count in decompiled C for claim (b); None when the
     # function wasn't decompiled (only top-priority functions are).
     goto_count: Optional[int] = None
+    # Directed cyclomatic complexity (Phase 4.5 β_1 analysis).
+    cyclomatic: Optional[int] = None
+
+    @property
+    def has_b1(self) -> bool:
+        """Whether β_1 was actually computed. ``False`` when the Betti
+        vector is just ``(β_0,)`` — path enumeration truncated at
+        dimension 2, so β_1 is *unknown*, not zero."""
+        return len(self.betti) > 1
 
     @property
     def irreducible(self) -> bool:
+        # β_2 > 0. Requires β_2 to have been computed (len > 2); a shorter
+        # vector means β_2 is unknown → not "irreducible", just uncomputed.
         return len(self.betti) > 2 and self.betti[2] > 0
+
+    @property
+    def b1(self) -> Optional[int]:
+        """β_1, or ``None`` when it wasn't computed (truncated vector).
+        ``None`` is deliberately distinct from ``0`` so callers don't
+        treat an uncomputed dimension as a trivial one."""
+        return self.betti[1] if self.has_b1 else None
+
+    @property
+    def gap(self) -> Optional[int]:
+        """cyclomatic − β_1: the direction-aware refinement (branch/merge
+        commutative squares β_1 fills). ``None`` when either cyclomatic or
+        β_1 is unknown."""
+        if self.cyclomatic is None or not self.has_b1:
+            return None
+        return self.cyclomatic - self.betti[1]
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +259,117 @@ def count_gotos(decompiled: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Phase 4.5 — β_1 analysis (the constructive pivot after the β_2 NO-GO)
+# ---------------------------------------------------------------------------
+#
+# β_2 was vacuous on real binaries; β_1 (direction-aware cyclomatic) is
+# dense and is what Huntsman's grep result actually used. This measures:
+#   * non-vacuity — does β_1 / the cyclomatic−β_1 gap actually occur?
+#   * separation — is high β_1 over-represented among "positive" functions
+#     (attack-surface proxy: reaches a dangerous sink) vs benign?
+
+def _mean(xs):
+    return (sum(xs) / len(xs)) if xs else None
+
+
+def _quantile(sorted_xs, q):
+    if not sorted_xs:
+        return None
+    idx = min(len(sorted_xs) - 1, int(q * len(sorted_xs)))
+    return sorted_xs[idx]
+
+
+def beta1_report(
+    records: Sequence[FunctionRecord],
+    positive_label: str = "reaches_dangerous",
+) -> Dict:
+    """β_1 non-vacuity + separation against a positive label.
+
+    Non-vacuity contrasts with the β_2 NO-GO: β_1 should be dense, and the
+    cyclomatic−β_1 gap should be frequently non-zero (proving the
+    direction-aware refinement is real, not a cyclomatic clone).
+
+    Separation: among labelled records, is "high β_1" (corpus top
+    quartile) over-represented in the positive group vs benign? Reported
+    via per-group mean β_1 / mean gap and the risk ratio of being
+    top-quartile.
+    """
+    n_total = len(records)
+    # β_1 stats only over records where β_1 was actually computed; a
+    # truncated vector means β_1 is unknown, NOT zero (excluding it avoids
+    # mislabelling a too-complex-to-enumerate function as trivial).
+    usable = [r for r in records if r.has_b1]
+    n = len(usable)
+    nonzero_b1 = sum(1 for r in usable if r.betti[1] > 0)
+    with_gap = [r for r in usable if r.gap is not None]
+    nonzero_gap = sum(1 for r in with_gap if r.gap and r.gap > 0)
+
+    labelled = [r for r in usable if r.label in (positive_label, "benign")]
+    pos = [r for r in labelled if r.label == positive_label]
+    neg = [r for r in labelled if r.label == "benign"]
+
+    sorted_b1 = sorted(r.betti[1] for r in labelled)
+    thr = _quantile(sorted_b1, 0.75) or 0
+    # "high" = at/above the top-quartile threshold (and threshold > 0 so a
+    # corpus of mostly-trivial functions doesn't make everything "high").
+    pos_high = sum(1 for r in pos if thr > 0 and r.betti[1] >= thr)
+    neg_high = sum(1 for r in neg if thr > 0 and r.betti[1] >= thr)
+    p_high_pos = (pos_high / len(pos)) if pos else None
+    p_high_neg = (neg_high / len(neg)) if neg else None
+
+    return {
+        "n_total": n_total,
+        "n_with_b1": n,
+        "n_excluded_truncated": n_total - n,
+        "nonzero_b1": nonzero_b1,
+        "frac_nonzero_b1": (nonzero_b1 / n) if n else None,
+        "frac_nonzero_gap": (nonzero_gap / len(with_gap)) if with_gap else None,
+        "positive_label": positive_label,
+        "n_positive": len(pos),
+        "n_benign": len(neg),
+        "mean_b1_positive": _mean([r.betti[1] for r in pos]),
+        "mean_b1_benign": _mean([r.betti[1] for r in neg]),
+        "mean_gap_positive": _mean([r.gap for r in pos if r.gap is not None]),
+        "mean_gap_benign": _mean([r.gap for r in neg if r.gap is not None]),
+        "top_quartile_b1_threshold": thr,
+        "p_highb1_given_positive": p_high_pos,
+        "p_highb1_given_benign": p_high_neg,
+        "risk_ratio_highb1": _risk_ratio(p_high_pos, p_high_neg),
+    }
+
+
+def beta1_gate(
+    records: Sequence[FunctionRecord],
+    positive_label: str = "reaches_dangerous",
+) -> Dict:
+    """Suggested go/no-go for the β_1 signal. Unlike β_2, the first hurdle
+    is *non-vacuity* (β_1 should be dense); then separation (high β_1
+    over-represented in the positive group, RR ≥ threshold)."""
+    rep = beta1_report(records, positive_label)
+    vacuous = (rep["frac_nonzero_b1"] or 0) < 0.05
+    rr = rep["risk_ratio_highb1"]
+    separates = rr is not None and (rr == float("inf") or rr >= _GATE_RISK_RATIO)
+    if vacuous:
+        reason = ("β_1 vacuous (<5% of functions have β_1 > 0) — "
+                  "unexpected; cannot validate")
+    elif separates:
+        reason = (f"β_1 dense ({rep['frac_nonzero_b1']:.0%} non-zero) and "
+                  f"high-β_1 over-represented in {positive_label}: "
+                  f"RR={rr} (P={rep['p_highb1_given_positive']} vs "
+                  f"{rep['p_highb1_given_benign']})")
+    else:
+        reason = (f"β_1 dense but no separation: high-β_1 RR={rr} "
+                  f"(threshold {_GATE_RISK_RATIO})")
+    return {
+        "suggested_pass": (not vacuous) and separates,
+        "non_vacuous": not vacuous,
+        "separates": separates,
+        "reason": reason,
+        "report": rep,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Record extraction (needs radare2) + reporting
 # ---------------------------------------------------------------------------
 
@@ -260,9 +399,17 @@ def records_from_binary(
         if fn.path_betti is None:
             continue
         base = fn.name.split(".")[-1]
-        label = None
         if has_labels:
+            # NIST mode: ground-truth vulnerability labels.
             label = "vulnerable" if base in vuln else "benign"
+        else:
+            # Attack-surface mode (Phase 4.5): the pipeline's own
+            # dangerous-sink reachability as an available proxy label —
+            # weaker than CVE ground truth, but directly relevant to the
+            # fuzz-prioritisation use case.
+            reaches = bool(fn.calls_dangerous
+                           or fn.transitively_reaches_dangerous)
+            label = "reaches_dangerous" if reaches else "benign"
         out.append(FunctionRecord(
             binary=str(binary_path),
             function=fn.name,
@@ -271,6 +418,7 @@ def records_from_binary(
             decompiler_low_confidence=fn.decompiler_low_confidence,
             label=label,
             goto_count=count_gotos(fn.decompiled) if fn.decompiled else None,
+            cyclomatic=fn.cyclomatic,
         ))
     return out
 

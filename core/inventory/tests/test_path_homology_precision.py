@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.inventory.path_homology_precision import (  # noqa: E402
     FunctionRecord,
+    beta1_gate,
+    beta1_report,
     count_gotos,
     cross_tab,
     decompiler_report,
@@ -22,11 +24,11 @@ from core.inventory.path_homology_precision import (  # noqa: E402
 )
 
 
-def _rec(name, betti, label=None, goto=None):
+def _rec(name, betti, label=None, goto=None, cyclomatic=None):
     return FunctionRecord(
         binary="b", function=name, address=0,
         betti=betti, decompiler_low_confidence=(len(betti) > 2 and betti[2] > 0),
-        label=label, goto_count=goto)
+        label=label, goto_count=goto, cyclomatic=cyclomatic)
 
 
 class TestPrimitives:
@@ -129,3 +131,53 @@ class TestGate:
         d = gate_decision(recs)
         assert d["decompiler_pass"] is True
         assert d["suggested_pass"] is True
+
+
+class TestBettiAccessors:
+    def test_b1_none_when_uncomputed(self):
+        # Only β_0 computed (truncated): β_1 is unknown, NOT zero.
+        r = _rec("t", [1])
+        assert r.has_b1 is False
+        assert r.b1 is None
+        assert r.gap is None
+
+    def test_b1_value_when_computed(self):
+        r = _rec("c", [1, 5, 0], cyclomatic=9)
+        assert r.has_b1 is True
+        assert r.b1 == 5
+        assert r.gap == 4  # cyclomatic − β_1
+
+    def test_gap_none_without_cyclomatic(self):
+        assert _rec("c", [1, 5, 0]).gap is None
+
+
+class TestBeta1:
+    def test_excludes_truncated_from_stats(self):
+        # A truncated function must not be counted as β_1 = 0.
+        recs = [_rec("a", [1, 4, 0]), _rec("trunc", [1])]
+        rep = beta1_report(recs)
+        assert rep["n_total"] == 2
+        assert rep["n_with_b1"] == 1
+        assert rep["n_excluded_truncated"] == 1
+        assert rep["frac_nonzero_b1"] == 1.0  # the one usable record has β_1>0
+
+    def test_separation_and_gate(self):
+        # High β_1 concentrated in the positive ("reaches_dangerous") group.
+        recs = (
+            [_rec(f"p{i}", [1, 20, 0], label="reaches_dangerous",
+                  cyclomatic=20) for i in range(4)]
+            + [_rec(f"b{i}", [1, 1, 0], label="benign", cyclomatic=1)
+               for i in range(12)]
+        )
+        g = beta1_gate(recs)
+        rep = g["report"]
+        assert rep["mean_b1_positive"] > rep["mean_b1_benign"]
+        assert g["non_vacuous"] is True
+        assert g["separates"] is True
+        assert g["suggested_pass"] is True
+
+    def test_vacuous_b1_is_no_go(self):
+        recs = [_rec(f"f{i}", [1, 0, 0], label="benign") for i in range(30)]
+        g = beta1_gate(recs)
+        assert g["non_vacuous"] is False
+        assert g["suggested_pass"] is False

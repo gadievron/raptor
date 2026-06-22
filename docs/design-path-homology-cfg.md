@@ -6,12 +6,15 @@ the binary reverse-engineering path. It is a metric / triage / decompiler-
 confidence signal, **not** a soundness primitive: it never licenses a
 suppression and never touches the sanitizer-cut chokepoint.
 
-Status: **Phases 1–3 shipped (reported-only); Phase 4 gate returned
-NO-GO; Phases 5–7 not pursued.** The β_2 / irreducibility signal proved
-*vacuous on real binaries* (1 / 8,459 functions) — the evidence gate
-working as designed. The reported-only telemetry stays; nothing feeds
-ranking. Constructive next step is a β_1 (not β_2) experiment — see
-"Phase 4 result". This is a follow-on metrics arc to
+Status: **Phases 1–5 done.** The β_2 / irreducibility signal failed its
+Phase 4 gate (vacuous on real binaries — 1 / 8,459 functions), so the
+arc **pivoted to β_1** (the direction-aware cyclomatic refinement
+Huntsman's grep result actually used). Phase 4.5 validated β_1 (dense;
+high β_1 over-represented among attack-surface functions, RR 2.27) and
+Phase 5 wired it as a *bounded, secondary* fuzz-priority term, gated on
+`--path-homology` (default ranking unchanged). β_2 is dead; its
+reported-only fields remain harmless. Phases 6–7 (source-level /
+persistence) on hold. This is a follow-on metrics arc to
 `design-aggregation-dominators-wp.md` (Project B built the CFG / `Graph`
 substrate this reuses).
 
@@ -197,15 +200,18 @@ gated on the validation in Phase 4.
 | 1 | **Homology core.** `core/inventory/path_homology.py`: `betti(graph, max_dim)` over `GF(2)`, dims 0–3, dep-free; `BettiVector` dataclass + per-dim path budget with `complete` flag; `cyclomatic_number` companion. | Module + 27 unit tests: the closed-form layered-digraph oracle `K_{n…}` (`β_2 = 1`, `β_3 = 1`, `β_2 = 2`), `β_0` = components, directed-cycle `β_1`, structured-CFG triviality (`β_{≥2} = 0`), the if/else `β_1 < cyclomatic` divergence, and budget truncation. No integration. | **done** |
 | 2 | **Binary CFG extraction.** Per-function basic-block CFG via r2 `afbj` in `radare2_understand.py`; `Graph` adapter; per-build-id cache. | `packages/binary_analysis/function_cfg.py` (`BasicBlockCFG` adapter + `parse_afbj` + build-id cache, all r2-free/testable); `FunctionInfo.basic_block_cfg` populated under opt-in `analyse(extract_cfgs=True)` (off by default → no cost/behaviour change); 16 unit tests. No scoring change. | **done** |
 | 3 | **Compute + surface (reported only).** Betti vector per function; attach to `FunctionInfo`, `fuzz_priorities`, `binary-context-map.json`; derive `decompiler_low_confidence` (β_2 > 0). Behind `--path-homology` (off by default), plumbed `analyse → analyse_binary_context → orchestrator.execute → raptor_fuzzing` CLI. | `compute_path_homology` + `homology_report` (module-level, r2-free/testable); `FunctionInfo` fields + `to_dict`/fuzz-priority surfacing; β_2>0 context note; 8 unit tests. No ranking effect (does not feed `_score`). | **done** |
-| 4 | **Validation / reproduction gate.** Harness over a corpus of r2-extracted function CFGs. Measure: (a) does `β_2⁺` separate vulnerable from benign functions? (b) does `β_2 > 0` correlate with decompiler-structuring failure (`goto` in `pdc` output)? | `core/inventory/path_homology_precision.py` + `libexec/raptor-path-homology-precision` (cross-tab, risk ratio, rule-of-three, non-vacuousness guard; 11 unit tests). **Ran on 8,459 functions from 6 macOS binaries → NO-GO** (see "Phase 4 result"). | **done — NO-GO** |
-| 5 | **Wire into triage (gated on Phase 4 = go).** Add a Betti term to `_score()` and an LLM decompiler-confidence discount. | — | **blocked: Phase 4 NO-GO** — does not proceed |
-| 6 | **Source-level C/C++ signal.** Homology over `cfg_builder_cpp.py`'s goto/switch-aware CFG. | — | **on hold** — same β_2-vacuity risk as the binary track; re-scope to β_1 first (see Phase 4 result) |
-| 7 | **Persistent path homology.** Persistent path homology (Chowdhury–Mémoli) over the nesting hierarchy. | — | **on hold** — pending arc re-scope |
+| 4 | **Validation gate (β_2).** Does `β_2⁺` separate vulnerable/benign, or predict decompiler-structuring failure (`goto` in `pdc`)? | `core/inventory/path_homology_precision.py` + `libexec/raptor-path-homology-precision` (cross-tab, risk ratio, rule-of-three, non-vacuousness guard). **8,459 functions / 6 binaries → NO-GO** (β_2 vacuous; see "Phase 4 result"). | **done — NO-GO (β_2)** |
+| 4.5 | **β_1 pivot validation.** The constructive pivot after the β_2 NO-GO: is **β_1** (direction-aware cyclomatic — what Huntsman's grep result used) non-vacuous and does high β_1 separate attack-surface functions? | `beta1_report`/`beta1_gate` added to the harness; ran the same corpus → **GO** (β_1 54% non-zero; sink-reachers mean β_1 15.75 vs 3.94, top-quartile RR 2.27). See "Phase 4.5 result". | **done — GO (β_1)** |
+| 5 | **Wire β_1 into triage.** Bounded β_1 term in `_score()` (the β_2 decompiler-discount dropped — vacuous). | `betti_priority_bonus` (cap 8, < one direct-sink unit) added to `_heuristic_prioritise._score`; 0 unless `--path-homology`, so default ranking unchanged. Verified end-to-end on `/usr/bin/grep`. | **done (β_1 variant)** |
+| 6 | **Source-level C/C++ signal.** Homology over `cfg_builder_cpp.py`'s goto/switch-aware CFG. | — | **on hold** — source β_2 faces the same vacuity; a β_1 source signal is the candidate if pursued |
+| 7 | **Persistent path homology.** Persistent path homology (Chowdhury–Mémoli) over the nesting hierarchy. | — | **on hold** |
 
-**Total: 7 phases.** Phases 1–3 (the reported-only machinery) shipped and
-stand. **Phase 4 — the evidence gate — returned NO-GO**, so Phases 5–7 do
-not proceed as designed: the β_2 / irreducibility signal is vacuous on
-real binaries (see below). This is the gate working as intended.
+**Phases 1–5 done (with a pivot).** Phases 1–3 shipped the reported-only
+machinery. **Phase 4 — the evidence gate — returned NO-GO for β_2** (the
+irreducibility signal is vacuous on real binaries; the gate working as
+intended). Rather than abandon the arc, **Phase 4.5 pivoted to β_1** (GO)
+and **Phase 5 wired β_1** as a bounded secondary signal. Phases 6–7
+(source-level / persistence) are on hold. See the result sections below.
 
 ## Phase 4 result — NO-GO (β_2 signal vacuous on real binaries)
 
@@ -233,13 +239,52 @@ remain as *reported-only* telemetry (harmless, off by default; the
 `path_betti` / `cyclomatic` fields they surface are still informative
 when an operator asks for them) — but nothing feeds `_score()`.
 
-**Constructive pivot (not in this arc).** Huntsman's actual
+**Constructive pivot — taken (Phase 4.5).** Huntsman's actual
 vulnerability result (the grep `dfamust` outlier, Fig 8–9) was a
-**β_1 / cyclomatic** anomaly in *dimension 1* — not β_2. β_1 (the
-direction-aware cyclomatic refinement, already computed and dense on
-every function) is the signal worth testing next, against a *labelled*
-corpus (NIST SARD), as a separate experiment. Phases 6–7 are on hold
-behind that re-scope, since source-level β_2 faces the same vacuity.
+**β_1 / cyclomatic** anomaly in *dimension 1* — not β_2. So we pivoted to
+β_1 rather than abandoning the arc (see next).
+
+## Phase 4.5 result — GO (β_1)
+
+Same corpus (8,457 functions with β_1 computed), β_1 instead of β_2.
+Labels are an *attack-surface proxy* — the pipeline's own
+dangerous-sink reachability (`calls_dangerous` /
+`transitively_reaches_dangerous`), not CVE ground truth.
+
+- **Non-vacuous** (clears β_2's failure mode): **54%** of functions have
+  `β_1 > 0`; **67.5%** have a non-zero `cyclomatic − β_1` gap — so the
+  direction-aware refinement genuinely occurs (β_1 is not a cyclomatic
+  clone).
+- **Separation**: functions reaching a dangerous sink have **mean β_1
+  15.75 vs 3.94** for the rest; "high β_1" (corpus top quartile) is
+  over-represented among sink-reachers with **risk ratio 2.27**
+  (P=0.55 vs 0.24).
+
+**Decision: GO** for β_1 as a *secondary* signal — enough to clear the
+bar β_2 failed (dense + tracks attack surface).
+
+**Honest caveats.** (1) The label is a proxy, not ground-truth
+vulnerability — a NIST SARD run remains the gold standard. (2) β_1 is
+**confounded with function size**: larger functions have both higher β_1
+and higher sink-reachability, so part of the separation is "bigger
+functions reach more sinks." β_1 is therefore treated as a *mild prior*,
+not a causal vulnerability claim — which is why Phase 5 bounds its
+influence well below the primary reachability score. A size-controlled
+comparison on a labelled corpus is the proper follow-up.
+
+## Phase 5 — β_1 wired as a bounded secondary signal
+
+`betti_priority_bonus(fn) = min(β_1, 8)` added to
+`_heuristic_prioritise._score` (cap 8 < one direct-sink unit = 10, so it
+tie-breaks among comparable reachability rather than overriding it). It
+is **0 unless `--path-homology`** populated `path_betti`, so default
+ranking is byte-for-byte unchanged; reads β_1 only when computed (a
+truncated `(β_0,)` vector → no bonus, never treated as 0). The β_2-based
+decompiler-confidence discount from the original Phase 5 plan is dropped
+(β_2 vacuous). Verified end-to-end on `/usr/bin/grep`.
+
+Phases 6–7 remain on hold: source-level β_2 faces the same vacuity, and a
+source β_1 signal would be the candidate if the arc is extended.
 
 ## 7. Validation / evidence gate (Phase 4 detail)
 
