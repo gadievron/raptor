@@ -115,6 +115,20 @@ class FailureMode(str, Enum):
     # exemplars for the next run.
     HARNESS_SIDE_CHANNEL = "harness_side_channel"
 
+    # The run ended for environmental reasons, not because the model
+    # hit a reasoning ceiling. Producers with environment-feasibility
+    # context can classify here when their non-success is structural:
+    # mitigation posture blocks the technique entirely, build deps
+    # missing, target runtime mismatch, instrumentation incompatible
+    # with the target, etc.
+    #
+    # Distinct from MODEL_REASONING_CEILING because retrying with
+    # better priming won't help — the environment is the wall. The
+    # retrieval layer should skip these as strategy exemplars so the
+    # corpus doesn't propagate "this technique didn't work here"
+    # lessons to attempts in different environments where it might.
+    CONSTRAINED_BY_ENV = "constrained_by_env"
+
     # Catch-all for "the run failed but we can't classify why."
     UNKNOWN = "unknown"
 
