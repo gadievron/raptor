@@ -52,8 +52,12 @@ from core.security.log_sanitisation import escape_nonprintable
 
 _USAGE = (
     "usage: raptor doctor [--strict] [--verbose]\n"
-    "  --strict     non-zero exit on warnings too (CI gate)\n"
-    "  --verbose    include passing checks in the output\n"
+    "       raptor doctor --codex-login\n"
+    "       raptor doctor --codex-device-login\n"
+    "  --strict              non-zero exit on warnings too (CI gate)\n"
+    "  --verbose             include passing checks in the output\n"
+    "  --codex-login         delegate browser login to `codex login`\n"
+    "  --codex-device-login  delegate headless login to `codex login --device-auth`\n"
 )
 
 
@@ -580,12 +584,18 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(argv or [])
     strict = False
     verbose = False
+    codex_login = False
+    codex_device_login = False
     while argv:
         a = argv.pop(0)
         if a == "--strict":
             strict = True
         elif a in ("--verbose", "-v"):
             verbose = True
+        elif a == "--codex-login":
+            codex_login = True
+        elif a == "--codex-device-login":
+            codex_device_login = True
         elif a in ("--help", "-h"):
             # `--help` is a help request, not a usage error: print usage to
             # stdout and exit 0, matching every other raptor.py mode. Pre-fix
@@ -597,6 +607,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(_USAGE, file=sys.stderr)
             return 2
+
+    if codex_login and codex_device_login:
+        print(_USAGE, file=sys.stderr)
+        return 2
+    if strict and (codex_login or codex_device_login):
+        print(_USAGE, file=sys.stderr)
+        return 2
+    if codex_login or codex_device_login:
+        from .codex import run_codex_login
+        return run_codex_login(device_auth=codex_device_login)
 
     try:
         gathered = _gather()
