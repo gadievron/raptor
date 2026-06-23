@@ -2472,6 +2472,12 @@ def main() -> None:
     )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
+    ap.add_argument(
+        "--codex-exec",
+        action="store_true",
+        help="Prep findings, then analyse them through authenticated `codex exec` "
+             "(PR2 analysis-only bridge; no exploit or patch generation).",
+    )
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
 
     model_group = ap.add_argument_group(
@@ -2522,6 +2528,7 @@ def main() -> None:
         getattr(args, "consensus", None),
         getattr(args, "judge", None),
         getattr(args, "aggregate", None),
+        getattr(args, "codex_exec", False),
     ])
 
     # Suggest --findings if validation artifacts exist nearby
@@ -2539,7 +2546,7 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
-    # When role flags are present, force prep-only then hand off to orchestrator
+    # When role/Codex flags are present, force prep-only then hand off to orchestrator.
     prep_only = args.prep_only or _has_role_flags
     agent = AutonomousSecurityAgentV2(
         repo_path, out_dir,
@@ -2576,20 +2583,21 @@ def main() -> None:
                                         prefer_globs=args.prefer,
                                         exclude_globs=args.exclude_dir)
 
-    # Orchestrated path: role flags → prep then parallel dispatch
+    # Orchestrated path: role/Codex flags → prep then parallel dispatch.
     if _has_role_flags and report.get("mode") == "prep_only":
         prep_report_path = out_dir / "autonomous_analysis_report.json"
         if prep_report_path.exists():
             from packages.llm_analysis.orchestrator import (
                 build_llm_config_from_flags, orchestrate,
             )
-            llm_config = build_llm_config_from_flags(
+            use_codex_exec = bool(getattr(args, "codex_exec", False))
+            llm_config = None if use_codex_exec else build_llm_config_from_flags(
                 models=args.model or [],
                 consensus=args.consensus,
                 judge=args.judge,
                 aggregate=args.aggregate,
             )
-            if llm_config:
+            if llm_config or use_codex_exec:
                 result = orchestrate(
                     prep_report_path=prep_report_path,
                     repo_path=repo_path,
@@ -2597,6 +2605,9 @@ def main() -> None:
                     max_parallel=args.max_parallel,
                     max_findings=args.max_findings,
                     llm_config=llm_config,
+                    use_codex_exec=use_codex_exec,
+                    no_exploits=use_codex_exec,
+                    no_patches=use_codex_exec,
                     deep_validate=getattr(args, "deep_validate", False),
                     deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 )

@@ -1326,6 +1326,13 @@ Examples:
              "base64) are disabled; model-independent floor still holds. "
              "Logged in run metadata and flagged in the final report.",
     )
+    parser.add_argument(
+        "--codex-exec",
+        action="store_true",
+        help="Use authenticated Codex CLI web-login state via `codex exec` "
+             "for Phase 4 analysis. PR2 bridge is analysis-only; exploit, "
+             "patch, consensus, judge, aggregate, and group LLM tasks are disabled.",
+    )
     model_group = parser.add_argument_group(
         "multi-model analysis",
         "Choose which LLMs analyse findings. The primary model is auto-detected "
@@ -1431,6 +1438,9 @@ Examples:
     args = parser.parse_args()
 
     apply_cli_args(args, parser=parser)
+
+    if args.codex_exec and args.sequential:
+        parser.error("--codex-exec requires Phase 4 orchestration; remove --sequential")
 
     if args.threat_model_only:
         args.threat_model = True
@@ -2464,13 +2474,14 @@ Examples:
     analysis = {}
     autonomous_out = None
     analysis_report = None
-    if not llm_env.llm_available:
+    if not llm_env.llm_available and not args.codex_exec:
         print("\n⚠️  Phase 3 skipped - No LLM provider available")
         print("    To enable autonomous analysis, either:")
         print("    1. Set ANTHROPIC_API_KEY environment variable, OR")
         print("    2. Set OPENAI_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY, OR")
         print("    3. Run Ollama locally (https://ollama.ai), OR")
-        print("    4. Run inside Claude Code (claude)")
+        print("    4. Run inside Claude Code (claude), OR")
+        print("    5. Run `python3 raptor.py doctor --codex-login` and pass --codex-exec")
         logger.warning("Phase 3 skipped - No LLM provider configured")
     else:
         autonomous_out = out_dir / "autonomous"
@@ -2519,7 +2530,7 @@ Examples:
             analysis_cmd.append("--no-annotations")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
-        if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+        if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
         rc, stdout, stderr = run_command_streaming(
@@ -2591,7 +2602,7 @@ Examples:
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
     orchestration_result = None
-    if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+    if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
         print("\n" + "=" * 70)
         print("ANALYSING", flush=True)
         print("=" * 70)
@@ -2606,7 +2617,7 @@ Examples:
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
                 aggregate=getattr(args, "aggregate", None),
-                auto_detect=llm_env.external_llm,
+                auto_detect=(llm_env.external_llm and not args.codex_exec),
             )
             # Dataflow validation is on by default when CodeQL ran;
             # `--no-validate-dataflow` opts out entirely. `--deep-validate`
@@ -2617,9 +2628,9 @@ Examples:
                 out_dir=out_dir,
                 max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
                 max_findings=args.max_findings,
-                no_exploits=args.no_exploits,
-                no_patches=args.no_patches,
-                llm_config=llm_config,
+                no_exploits=args.no_exploits or args.codex_exec,
+                no_patches=args.no_patches or args.codex_exec,
+                llm_config=None if args.codex_exec else llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
                 dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
@@ -2627,12 +2638,13 @@ Examples:
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
                 allow_unreachable=getattr(args, "allow_unreachable", False),
+                use_codex_exec=args.codex_exec,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
     elif not llm_env.llm_available:
         print("\n  No LLM available. Findings prepared for manual review.")
-        print("  For automated analysis, set an API key or install Claude Code.")
+        print("  For automated analysis, set an API key, install Claude Code, or pass --codex-exec after Codex login.")
 
     # ========================================================================
     # POST-PASS: /validate (opt-in via --validate)
@@ -3202,6 +3214,8 @@ Examples:
             via = orch.get("analysis_model") or "external LLM"
         elif mode == "cc_fallback":
             via = "Claude Code (fallback)"
+        elif mode == "codex_exec":
+            via = "Codex exec"
         else:
             via = mode
         n = orch.get('findings_analysed', 0)
@@ -3226,6 +3240,8 @@ Examples:
         via = orch_phase.get("analysis_model") or "external LLM"
     elif mode == "cc_fallback":
         via = "Claude Code (fallback)"
+    elif mode == "codex_exec":
+        via = "Codex exec"
     else:
         via = None
 
