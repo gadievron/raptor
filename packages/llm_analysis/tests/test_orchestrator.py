@@ -18,6 +18,7 @@ from packages.llm_analysis.orchestrator import (
     CostTracker,
     CUTOFF_SKIP_CONSENSUS,
 )
+from packages.llm_analysis.dispatch import DispatchResult
 from packages.llm_analysis.tasks import (
     ConsensusTask,
     ExploitTask,
@@ -198,7 +199,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -270,7 +271,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -287,6 +288,46 @@ class TestOrchestrate:
         # Verify merged report was written
         out_file = tmp_path / "orch" / "orchestrated_report.json"
         assert out_file.exists()
+
+    def test_codex_exec_dispatch_is_analysis_only(self, tmp_path):
+        """Codex PR2 dispatches analysis and skips later LLM stages."""
+        findings = [_make_finding("f-001", "py/sql-injection", "db.py", 42)]
+        report = _make_prep_report(findings=findings)
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        prompts = []
+
+        def fake_codex(prompt, schema, repo_path, codex_bin, out_dir):
+            prompts.append(prompt)
+            return DispatchResult(
+                result=_make_cc_result("f-001", exploitable=True),
+                model="codex-exec",
+            )
+
+        with patch("core.startup.codex.find_codex_executable", return_value="/usr/bin/codex"), \
+             patch("packages.llm_analysis.orchestrator.invoke_codex_exec",
+                   side_effect=fake_codex):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                use_codex_exec=True,
+                no_exploits=False,
+                no_patches=False,
+                max_parallel=1,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["mode"] == "codex_exec"
+        assert result["orchestration"]["analysis_model"] == "codex-exec"
+        assert result["orchestration"]["analysis_models"] == ["codex-exec"]
+        assert result["orchestration"]["cost_usd_unknown"] is True
+        assert result["orchestration"]["billing_source"] == "codex_subscription"
+        assert len(prompts) == 1
+        assert "Stage A:" in prompts[0]
+        assert "Generate a proof-of-concept exploit" not in prompts[0]
+        assert result["orchestration"]["group_analyses"] == 0
 
     def test_sloppy_response_normalised_through_pipeline(self, tmp_path):
         """Sloppy LLM output is normalised by response validation in cc_dispatch."""
@@ -313,7 +354,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -376,7 +417,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run", side_effect=mock_run):
+             patch("core.sandbox.run_untrusted_networked", side_effect=mock_run):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -999,7 +1040,7 @@ class TestWeakenedDefenses:
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which",
                    return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+             patch("core.sandbox.run_untrusted_networked",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
                 prep_report_path=report_path,

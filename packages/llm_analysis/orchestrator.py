@@ -7,6 +7,7 @@ analysis, exploit generation, patch creation, consensus, and retry.
 
 Dispatch routing:
   - External LLM configured: parallel generate_structured() / generate()
+  - Explicit Codex exec: authenticated codex exec analysis transport
   - No external LLM + claude on PATH: claude -p sub-agents (via cc_dispatch)
   - Neither: return None (manual review)
 
@@ -21,9 +22,10 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+from packages.llm_analysis.codex_dispatch import CODEX_MODEL, invoke_codex_exec
 from packages.llm_analysis.finding_adapter import FindingAdapter
 from core.reporting.formatting import format_elapsed as _format_elapsed
 
@@ -485,6 +487,7 @@ def orchestrate(
     deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
     allow_unreachable: bool = False,
+    use_codex_exec: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -493,6 +496,7 @@ def orchestrate(
     group analysis.
 
     Dispatch routing:
+    - use_codex_exec True -> authenticated codex exec analysis transport
     - llm_config provided (external LLM) -> parallel generate_structured()
     - llm_config None + claude on PATH -> claude -p sub-agents
     - Neither -> return None
@@ -510,6 +514,10 @@ def orchestrate(
         accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
             the model fails the envelope probe. If False (default), abort
             orchestration with a clear error instead of silently weakening.
+        use_codex_exec: Use authenticated Codex CLI web-login state through
+            ``codex exec``. PR2 limits this mode to analysis-only evidence
+            review; exploit, patch, retry, consensus, judge, aggregate, and
+            group LLM tasks remain disabled.
 
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
@@ -594,13 +602,16 @@ def orchestrate(
     n_aggregate = len(role_resolution.get("aggregate_models", []))
     analysis_model = role_resolution.get("analysis_model")
     analysis_model_name = analysis_model.model_name if analysis_model else ""
-    is_cc_dispatch = not (llm_config and llm_config.primary_model)
+    is_codex_dispatch = bool(use_codex_exec)
+    is_cc_dispatch = not is_codex_dispatch and not (llm_config and llm_config.primary_model)
     analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)
     if n_analysis > 1:
         model_label = ", ".join(m.model_name for m in analysis_models_all)
     else:
-        model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
+        model_label = analysis_model_name or (
+            "Codex exec" if is_codex_dispatch else ("Claude Code" if is_cc_dispatch else "unknown")
+        )
     n = len(findings)
     extras = []
     if n_analysis > 1:
@@ -627,7 +638,9 @@ def orchestrate(
     from core.security.prompt_telemetry import defense_telemetry
 
     dispatch_mode = "none"
-    dispatch_fn = None
+    dispatch_fn: Optional[
+        Callable[[str, Optional[Dict[str, Any]], Optional[str], float, Any], DispatchResult]
+    ] = None
     start_time = time.monotonic()
 
     # Bound across both dispatch modes so the merged-dict construction
@@ -635,10 +648,33 @@ def orchestrate(
     # the CC paths (where it stays None and the count is 0).
     client = None
 
-    if llm_config and llm_config.primary_model:
+    if use_codex_exec:
+        from core.startup.codex import find_codex_executable
+        codex_bin = find_codex_executable()
+        if not codex_bin:
+            print("\n  codex not found on PATH — cannot dispatch Codex exec analysis")
+            print("  Install Codex CLI, then run `python3 raptor.py doctor --codex-login`")
+            return None
+
+        def codex_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
+            # Codex exec receives a single stdin prompt. Keep the defended
+            # task system instructions ahead of the envelope-wrapped finding.
+            full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+            return invoke_codex_exec(full, schema, repo_path, codex_bin, out_dir)
+
+        dispatch_fn = codex_dispatch_fn
+        dispatch_mode = "codex_exec"
+    elif llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
-        client = LLMClient(llm_config)
+        llm_client = LLMClient(llm_config)
+        client = llm_client
 
         # Multi-model duplicate guard: when a primary model fails and
         # the client silently falls back, the fallback target may
@@ -654,10 +690,16 @@ def orchestrate(
             if m and getattr(m, "model_name", None)
         }
 
-        def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+        def external_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
             other_active = _active_analysis_names - {model.model_name}
             if schema:
-                response = client.generate_structured(
+                response = llm_client.generate_structured(
                     prompt=prompt, schema=schema, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
                     exclude_fallback_to=other_active,
@@ -676,7 +718,7 @@ def orchestrate(
                     resolved_model=response.resolved_model,
                 )
             else:
-                response = client.generate(
+                response = llm_client.generate(
                     prompt=prompt, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
                     exclude_fallback_to=other_active,
@@ -688,6 +730,7 @@ def orchestrate(
                     resolved_model=response.resolved_model,
                 )
 
+        dispatch_fn = external_dispatch_fn
         dispatch_mode = "external_llm"
     else:
         # CC: dispatch via claude -p subprocess
@@ -702,14 +745,23 @@ def orchestrate(
             print("  Install Claude Code: npm install -g @anthropic-ai/claude-code")
             return None
 
-        def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+        def cc_dispatch_fn(
+            prompt: str,
+            schema: Optional[Dict[str, Any]],
+            system_prompt: Optional[str],
+            temperature: float,
+            model: Any,
+        ) -> DispatchResult:
             # CC's invoke_cc_simple has no separate system_prompt slot — everything
             # goes via stdin. Prepend the system prompt so the bundle migration's
             # role-separated build_prompt (user-only) doesn't lose its instructions.
             full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
             return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
+        dispatch_fn = cc_dispatch_fn
         dispatch_mode = "cc_dispatch"
+
+    assert dispatch_fn is not None
 
     # --- Canary probe: verify model handles the defense envelope ---
     # Multi-model: probe each analysis model; use strictest compatible profile.
@@ -841,12 +893,15 @@ def orchestrate(
     # short-circuit FP result on trusted cells so the full ANALYSE
     # call is skipped; bumps ``client.short_circuits`` so /agentic
     # surfaces the savings count.
-    prefilter_fn = None
+    prefilter_fn: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None
     if dispatch_mode == "external_llm":
         from packages.llm_analysis.prefilter import prefilter_for_finding
+        assert client is not None
 
-        def prefilter_fn(item):
+        def external_prefilter_fn(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return prefilter_for_finding(client, item)
+
+        prefilter_fn = external_prefilter_fn
 
     analysis_results = dispatch_task(
         AnalysisTask(profile=profile, allow_unreachable=allow_unreachable),
@@ -854,6 +909,8 @@ def orchestrate(
         results_by_id, cost_tracker, max_parallel,
         prefilter_fn=prefilter_fn,
     )
+
+    codex_analysis_only = dispatch_mode == "codex_exec"
 
     # Fallback: if external LLM failed entirely, try CC
     if (dispatch_mode == "external_llm"
@@ -864,9 +921,17 @@ def orchestrate(
             print("\n  All external LLM calls failed — falling back to Claude Code")
             dispatch_mode = "cc_fallback"
 
-            def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+            def cc_fallback_dispatch_fn(
+                prompt: str,
+                schema: Optional[Dict[str, Any]],
+                system_prompt: Optional[str],
+                temperature: float,
+                model: Any,
+            ) -> DispatchResult:
                 full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
                 return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
+
+            dispatch_fn = cc_fallback_dispatch_fn
 
             # Carry the per-model intersected profile into the
             # CC-fallback AnalysisTask. Pre-fix `AnalysisTask()`
@@ -1043,10 +1108,11 @@ def orchestrate(
             )
 
     # Stage F: self-consistency check + retry contradictions and low confidence
-    dispatch_task(
-        RetryTask(results_by_id=results_by_id, profile=profile), findings,
-        dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
-    )
+    if not codex_analysis_only:
+        dispatch_task(
+            RetryTask(results_by_id=results_by_id, profile=profile), findings,
+            dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
+        )
 
     # Snapshot original primary verdicts BEFORE the consensus
     # stage runs. ConsensusTask.finalize() mutates
@@ -1073,7 +1139,7 @@ def orchestrate(
     consensus_models = role_resolution.get("consensus_models", [])
     consensus_budget_skipped = False
     consensus_all_errored = False
-    if consensus_models:
+    if consensus_models and not codex_analysis_only:
         consensus_task = ConsensusTask(profile=profile)
         eligible = consensus_task.select_items(findings, results_by_id)
         # Snapshot the cost tracker state BEFORE dispatch so we can
@@ -1119,7 +1185,7 @@ def orchestrate(
 
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
-    if judge_models:
+    if judge_models and not codex_analysis_only:
         # Use the pre-consensus snapshot so JUDGE_REVIEW producer
         # sees the actual primary verdict, not the consensus-
         # overridden one. Falls back to the post-consensus state
@@ -1247,7 +1313,7 @@ def orchestrate(
     # changing per-finding verdicts.
     aggregate_models = role_resolution.get("aggregate_models", [])
     aggregation = None
-    if aggregate_models:
+    if aggregate_models and not codex_analysis_only:
         if n_analysis_models < 2:
             print("\n  Aggregate: skipped — requires at least two analysis models")
         else:
@@ -1271,13 +1337,13 @@ def orchestrate(
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
     # so this is a no-op when CC already generated them.
-    if not no_exploits:
+    if not no_exploits and not codex_analysis_only:
         dispatch_task(
             ExploitTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
-    if not no_patches:
+    if not no_patches and not codex_analysis_only:
         dispatch_task(
             PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
@@ -1301,10 +1367,12 @@ def orchestrate(
     group_task = GroupAnalysisTask(
         results_by_id=results_by_id, findings=findings, profile=profile,
     )
-    group_results = dispatch_task(
-        group_task, groups, dispatch_fn, role_resolution,
-        results_by_id, cost_tracker, max_parallel,
-    )
+    group_results = []
+    if not codex_analysis_only:
+        group_results = dispatch_task(
+            group_task, groups, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+        )
     group_analyses = {}
     for r in group_results:
         gid = r.get("finding_id")  # group_id comes through as finding_id
@@ -1366,15 +1434,28 @@ def orchestrate(
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
-    analysis_models_list = role_resolution.get("analysis_models", [])
+    orchestration_analysis_model = role_resolution.get("analysis_model")
+    analysis_models_list = [
+        model for model in role_resolution.get("analysis_models", [])
+        if model is not None
+    ]
+    if orchestration_analysis_model is not None:
+        orchestration_analysis_model_name = orchestration_analysis_model.model_name
+    elif is_codex_dispatch:
+        orchestration_analysis_model_name = CODEX_MODEL
+    elif is_cc_dispatch:
+        orchestration_analysis_model_name = "Claude Code"
+    else:
+        orchestration_analysis_model_name = None
     merged["orchestration"] = {
         "mode": dispatch_mode,
         "multi_model": len(analysis_models_list) > 1,
-        "analysis_model": (role_resolution.get("analysis_model").model_name
-                          if role_resolution.get("analysis_model")
-                          else ("Claude Code" if is_cc_dispatch else None)),
+        "analysis_model": orchestration_analysis_model_name,
         "analysis_models": ([m.model_name for m in analysis_models_list]
-                           or (["Claude Code"] if is_cc_dispatch else [])),
+                           or ([CODEX_MODEL] if is_codex_dispatch
+                               else (["Claude Code"] if is_cc_dispatch else []))),
+        "cost_usd_unknown": bool(is_codex_dispatch),
+        "billing_source": "codex_subscription" if is_codex_dispatch else None,
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
@@ -1572,8 +1653,12 @@ def _intersect_profiles(profiles: list) -> Any:
     base = profiles[0]
     tag_styles = {p.tag_style for p in profiles}
     role_placements = {p.role_placement for p in profiles}
+    profile_names = {
+        str(name) for name in (getattr(p, "name", "") for p in profiles)
+        if name
+    }
     return ModelDefenseProfile(
-        name="multi-" + "+".join(sorted({p.name for p in profiles})),
+        name="multi-" + "+".join(sorted(profile_names or {"unknown"})),
         tag_style=base.tag_style if len(tag_styles) == 1 else "nonce-only",
         envelope_xml=all(p.envelope_xml for p in profiles),
         datamarking=all(p.datamarking for p in profiles),
@@ -1779,10 +1864,11 @@ def _detect_multi_model_collapse(
         if not isinstance(analyses, list) or not analyses:
             continue
         distinct = {
-            a.get("model") for a in analyses if isinstance(a, dict)
+            model for model in (
+                a.get("model") for a in analyses if isinstance(a, dict)
+            )
+            if isinstance(model, str) and model != "?"
         }
-        distinct.discard("?")
-        distinct.discard(None)
         if len(distinct) < n_analysis_models:
             collapsed.append((fid, sorted(distinct)))
     return collapsed
