@@ -1015,6 +1015,18 @@ def mode_doctor(args: list) -> int:
     return doctor_main(args)
 
 
+def mode_broker(args: list) -> int:
+    """Manage the remote system fleet for cross-platform execution.
+
+    The broker lets RAPTOR route work to compatible remote systems
+    when the local host lacks required capabilities (e.g. fuzzing
+    from macOS routes to a Linux box via SSH, or Windows-specific
+    analysis routes via WinRM).
+    """
+    from core.broker.cli import main as broker_main
+    return broker_main(args)
+
+
 def mode_frida(args: list) -> int:
     """Run a Frida dynamic-instrumentation session.
 
@@ -1124,6 +1136,7 @@ Available Modes:
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
   doctor      - Status report for local setup (no claude needed)
   frida       - Dynamic instrumentation via Frida (alpha)
+  broker      - Manage remote systems for cross-platform execution
 
 Examples:
   # Full autonomous workflow
@@ -1259,6 +1272,7 @@ def main():
         'doctor': mode_doctor,
         'describe': mode_describe,
         'frida': mode_frida,
+        'broker': mode_broker,
     }
     
     if mode not in mode_handlers:
