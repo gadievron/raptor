@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis.orchestrator import (
     orchestrate,
+    _build_orchestration_mode_policy,
     _merge_results,
     _structural_grouping,
     _check_self_consistency,
@@ -28,6 +30,63 @@ from packages.llm_analysis.cc_dispatch import (
     build_schema,
 )
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
+
+
+class TestOrchestrationModePolicy:
+    """Mode-derived policy stays small and behaviour-preserving."""
+
+    def test_codex_policy_is_analysis_only(self):
+        policy = _build_orchestration_mode_policy(
+            use_codex_exec=True,
+            llm_config=None,
+            role_resolution={"analysis_model": None, "analysis_models": []},
+        )
+
+        assert policy.dispatch_mode == "codex_exec"
+        assert policy.model_label == "Codex exec"
+        assert policy.report_analysis_model == "codex-exec"
+        assert policy.report_analysis_models == ("codex-exec",)
+        assert policy.cost_usd_unknown is True
+        assert policy.billing_source == "codex_subscription"
+        assert policy.allows_stage("analysis") is True
+        assert policy.allows_stage("retry") is False
+        assert policy.allows_stage("patch") is False
+        assert policy.allows_stage("group") is False
+
+    def test_claude_policy_uses_subprocess_metadata(self):
+        policy = _build_orchestration_mode_policy(
+            use_codex_exec=False,
+            llm_config=None,
+            role_resolution={"analysis_model": None, "analysis_models": []},
+        )
+
+        assert policy.dispatch_mode == "cc_dispatch"
+        assert policy.model_label == "Claude Code"
+        assert policy.report_analysis_model == "Claude Code"
+        assert policy.report_analysis_models == ("Claude Code",)
+        assert policy.cost_usd_unknown is False
+        assert policy.billing_source is None
+        assert policy.allows_stage("retry") is True
+
+    def test_external_policy_preserves_model_roles(self):
+        primary = SimpleNamespace(model_name="gpt-5")
+        secondary = SimpleNamespace(model_name="claude-sonnet-4")
+        policy = _build_orchestration_mode_policy(
+            use_codex_exec=False,
+            llm_config=SimpleNamespace(primary_model=primary),
+            role_resolution={
+                "analysis_model": primary,
+                "analysis_models": [primary, secondary],
+            },
+        )
+
+        assert policy.dispatch_mode == "external_llm"
+        assert policy.model_label == "gpt-5, claude-sonnet-4"
+        assert policy.report_analysis_model == "gpt-5"
+        assert policy.report_analysis_models == ("gpt-5", "claude-sonnet-4")
+        assert policy.cost_usd_unknown is False
+        assert policy.billing_source is None
+        assert policy.allows_stage("consensus") is True
 
 
 def _make_prep_report(findings=None, mode="prep_only"):

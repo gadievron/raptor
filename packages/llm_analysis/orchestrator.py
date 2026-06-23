@@ -21,6 +21,7 @@ import shutil
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -35,6 +36,98 @@ logger = logging.getLogger(__name__)
 CUTOFF_SKIP_CONSENSUS = 0.70
 CUTOFF_SKIP_EXPLOITS = 0.85
 CUTOFF_SINGLE_MODEL = 0.95
+
+
+_CODEX_DISABLED_STAGES = frozenset({
+    "retry",
+    "consensus",
+    "judge",
+    "aggregate",
+    "exploit",
+    "patch",
+    "group",
+})
+
+
+@dataclass(frozen=True)
+class OrchestrationModePolicy:
+    """Derived dispatch-mode policy for labels, metadata, and stage gates."""
+
+    dispatch_mode: str
+    is_codex_dispatch: bool
+    is_cc_dispatch: bool
+    analysis_only: bool
+    model_label: str
+    report_analysis_model: Optional[str]
+    report_analysis_models: Tuple[str, ...]
+    cost_usd_unknown: bool
+    billing_source: Optional[str]
+
+    def allows_stage(self, stage: str) -> bool:
+        return not (self.analysis_only and stage in _CODEX_DISABLED_STAGES)
+
+
+def _model_name(model: Any) -> Optional[str]:
+    name = getattr(model, "model_name", None)
+    return str(name) if name else None
+
+
+def _build_orchestration_mode_policy(
+    *,
+    use_codex_exec: bool,
+    llm_config: Any,
+    role_resolution: Dict[str, Any],
+) -> OrchestrationModePolicy:
+    """Return mode-derived orchestration policy without touching dispatch."""
+
+    has_external_llm = bool(llm_config and getattr(llm_config, "primary_model", None))
+    is_codex_dispatch = bool(use_codex_exec)
+    is_cc_dispatch = not is_codex_dispatch and not has_external_llm
+    dispatch_mode = (
+        "codex_exec" if is_codex_dispatch
+        else ("external_llm" if has_external_llm else "cc_dispatch")
+    )
+
+    analysis_models = tuple(
+        name for name in (
+            _model_name(model)
+            for model in role_resolution.get("analysis_models", [])
+            if model is not None
+        )
+        if name
+    )
+    analysis_model_name = _model_name(role_resolution.get("analysis_model"))
+    if len(analysis_models) > 1:
+        model_label = ", ".join(analysis_models)
+    else:
+        model_label = analysis_model_name or (
+            "Codex exec" if is_codex_dispatch
+            else ("Claude Code" if is_cc_dispatch else "unknown")
+        )
+
+    report_analysis_model = analysis_model_name
+    report_analysis_models = analysis_models
+    if not report_analysis_model and is_codex_dispatch:
+        report_analysis_model = CODEX_MODEL
+    elif not report_analysis_model and is_cc_dispatch:
+        report_analysis_model = "Claude Code"
+    if not report_analysis_models:
+        if is_codex_dispatch:
+            report_analysis_models = (CODEX_MODEL,)
+        elif is_cc_dispatch:
+            report_analysis_models = ("Claude Code",)
+
+    return OrchestrationModePolicy(
+        dispatch_mode=dispatch_mode,
+        is_codex_dispatch=is_codex_dispatch,
+        is_cc_dispatch=is_cc_dispatch,
+        analysis_only=is_codex_dispatch,
+        model_label=model_label,
+        report_analysis_model=report_analysis_model,
+        report_analysis_models=report_analysis_models,
+        cost_usd_unknown=is_codex_dispatch,
+        billing_source="codex_subscription" if is_codex_dispatch else None,
+    )
 
 
 class CostTracker:
@@ -601,17 +694,13 @@ def orchestrate(
     n_judge = len(role_resolution.get("judge_models", []))
     n_aggregate = len(role_resolution.get("aggregate_models", []))
     analysis_model = role_resolution.get("analysis_model")
-    analysis_model_name = analysis_model.model_name if analysis_model else ""
-    is_codex_dispatch = bool(use_codex_exec)
-    is_cc_dispatch = not is_codex_dispatch and not (llm_config and llm_config.primary_model)
     analysis_models_all = role_resolution.get("analysis_models", [])
+    mode_policy = _build_orchestration_mode_policy(
+        use_codex_exec=use_codex_exec,
+        llm_config=llm_config,
+        role_resolution=role_resolution,
+    )
     n_analysis = len(analysis_models_all)
-    if n_analysis > 1:
-        model_label = ", ".join(m.model_name for m in analysis_models_all)
-    else:
-        model_label = analysis_model_name or (
-            "Codex exec" if is_codex_dispatch else ("Claude Code" if is_cc_dispatch else "unknown")
-        )
     n = len(findings)
     extras = []
     if n_analysis > 1:
@@ -623,7 +712,7 @@ def orchestrate(
     if n_aggregate:
         extras.append(f"{n_aggregate} aggregate")
     extra_str = f" ({', '.join(extras)})" if extras else ""
-    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
+    print(f"\n  {n} finding{'s' if n != 1 else ''} → {mode_policy.model_label}{extra_str}")
 
     # --- Build dispatch callable ---
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
@@ -637,7 +726,7 @@ def orchestrate(
     )
     from core.security.prompt_telemetry import defense_telemetry
 
-    dispatch_mode = "none"
+    dispatch_mode = mode_policy.dispatch_mode
     dispatch_fn: Optional[
         Callable[[str, Optional[Dict[str, Any]], Optional[str], float, Any], DispatchResult]
     ] = None
@@ -669,7 +758,6 @@ def orchestrate(
             return invoke_codex_exec(full, schema, repo_path, codex_bin, out_dir)
 
         dispatch_fn = codex_dispatch_fn
-        dispatch_mode = "codex_exec"
     elif llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
@@ -731,7 +819,6 @@ def orchestrate(
                 )
 
         dispatch_fn = external_dispatch_fn
-        dispatch_mode = "external_llm"
     else:
         # CC: dispatch via claude -p subprocess
         if block_cc_dispatch:
@@ -759,7 +846,6 @@ def orchestrate(
             return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
         dispatch_fn = cc_dispatch_fn
-        dispatch_mode = "cc_dispatch"
 
     assert dispatch_fn is not None
 
@@ -855,7 +941,7 @@ def orchestrate(
                 f"{_m}={_e}" for _m, _e in _failed_probe_models
             )
             if not accept_weakened_defenses:
-                print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
+                print(f"\n  Envelope probe failed for {mode_policy.model_label}: {_fail_summary}")
                 print("  The model cannot honour the defense envelope — aborting.")
                 print("  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
                 return None
@@ -879,7 +965,7 @@ def orchestrate(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
                     _fmname, _ferr,
                 )
-            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
+            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {mode_policy.model_label} ***")
             print("  Running with reduced defences (--accept-weakened-defenses)")
             print(f"  Reason: {_fail_summary}")
             print("  Model-independent floor still applies (autofetch redaction,"
@@ -909,8 +995,6 @@ def orchestrate(
         results_by_id, cost_tracker, max_parallel,
         prefilter_fn=prefilter_fn,
     )
-
-    codex_analysis_only = dispatch_mode == "codex_exec"
 
     # Fallback: if external LLM failed entirely, try CC
     if (dispatch_mode == "external_llm"
@@ -1108,7 +1192,7 @@ def orchestrate(
             )
 
     # Stage F: self-consistency check + retry contradictions and low confidence
-    if not codex_analysis_only:
+    if mode_policy.allows_stage("retry"):
         dispatch_task(
             RetryTask(results_by_id=results_by_id, profile=profile), findings,
             dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
@@ -1139,7 +1223,7 @@ def orchestrate(
     consensus_models = role_resolution.get("consensus_models", [])
     consensus_budget_skipped = False
     consensus_all_errored = False
-    if consensus_models and not codex_analysis_only:
+    if consensus_models and mode_policy.allows_stage("consensus"):
         consensus_task = ConsensusTask(profile=profile)
         eligible = consensus_task.select_items(findings, results_by_id)
         # Snapshot the cost tracker state BEFORE dispatch so we can
@@ -1185,7 +1269,7 @@ def orchestrate(
 
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
-    if judge_models and not codex_analysis_only:
+    if judge_models and mode_policy.allows_stage("judge"):
         # Use the pre-consensus snapshot so JUDGE_REVIEW producer
         # sees the actual primary verdict, not the consensus-
         # overridden one. Falls back to the post-consensus state
@@ -1313,7 +1397,7 @@ def orchestrate(
     # changing per-finding verdicts.
     aggregate_models = role_resolution.get("aggregate_models", [])
     aggregation = None
-    if aggregate_models and not codex_analysis_only:
+    if aggregate_models and mode_policy.allows_stage("aggregate"):
         if n_analysis_models < 2:
             print("\n  Aggregate: skipped — requires at least two analysis models")
         else:
@@ -1337,13 +1421,13 @@ def orchestrate(
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
     # so this is a no-op when CC already generated them.
-    if not no_exploits and not codex_analysis_only:
+    if not no_exploits and mode_policy.allows_stage("exploit"):
         dispatch_task(
             ExploitTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
-    if not no_patches and not codex_analysis_only:
+    if not no_patches and mode_policy.allows_stage("patch"):
         dispatch_task(
             PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
@@ -1368,7 +1452,7 @@ def orchestrate(
         results_by_id=results_by_id, findings=findings, profile=profile,
     )
     group_results = []
-    if not codex_analysis_only:
+    if mode_policy.allows_stage("group"):
         group_results = dispatch_task(
             group_task, groups, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
@@ -1434,28 +1518,13 @@ def orchestrate(
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
-    orchestration_analysis_model = role_resolution.get("analysis_model")
-    analysis_models_list = [
-        model for model in role_resolution.get("analysis_models", [])
-        if model is not None
-    ]
-    if orchestration_analysis_model is not None:
-        orchestration_analysis_model_name = orchestration_analysis_model.model_name
-    elif is_codex_dispatch:
-        orchestration_analysis_model_name = CODEX_MODEL
-    elif is_cc_dispatch:
-        orchestration_analysis_model_name = "Claude Code"
-    else:
-        orchestration_analysis_model_name = None
     merged["orchestration"] = {
         "mode": dispatch_mode,
-        "multi_model": len(analysis_models_list) > 1,
-        "analysis_model": orchestration_analysis_model_name,
-        "analysis_models": ([m.model_name for m in analysis_models_list]
-                           or ([CODEX_MODEL] if is_codex_dispatch
-                               else (["Claude Code"] if is_cc_dispatch else []))),
-        "cost_usd_unknown": bool(is_codex_dispatch),
-        "billing_source": "codex_subscription" if is_codex_dispatch else None,
+        "multi_model": len(mode_policy.report_analysis_models) > 1,
+        "analysis_model": mode_policy.report_analysis_model,
+        "analysis_models": list(mode_policy.report_analysis_models),
+        "cost_usd_unknown": mode_policy.cost_usd_unknown,
+        "billing_source": mode_policy.billing_source,
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
