@@ -164,6 +164,35 @@ def test_codex_exec_timeout_is_loud(monkeypatch, tmp_path):
     assert result.result["error_type"] == "timeout"
 
 
+def test_codex_exec_can_use_orchestrator_auth_preflight(monkeypatch, tmp_path):
+    from packages.llm_analysis import codex_dispatch
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        _last_message_path(cmd).write_text(json.dumps(_valid_result()), encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    def fail_auth(**_kwargs):
+        raise AssertionError("auth should have been preflighted by orchestrator")
+
+    monkeypatch.setattr(codex_dispatch, "check_codex_auth", fail_auth)
+    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+
+    result = codex_dispatch.invoke_codex_exec(
+        prompt="x",
+        schema=_analysis_schema(),
+        repo_path=tmp_path,
+        codex_bin="/usr/bin/codex",
+        out_dir=tmp_path / "out",
+        auth_preflighted=True,
+    )
+
+    assert captured["cmd"][:2] == ["/usr/bin/codex", "exec"]
+    assert result.result["billing_source"] == "codex_subscription"
+
+
 def test_codex_exec_nonzero_exit_writes_sanitized_debug(monkeypatch, tmp_path):
     from packages.llm_analysis import codex_dispatch
 

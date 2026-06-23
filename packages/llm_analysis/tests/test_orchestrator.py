@@ -30,6 +30,7 @@ from packages.llm_analysis.cc_dispatch import (
     build_schema,
 )
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
+from core.startup.codex import CodexAuthStatus
 
 
 class TestOrchestrationModePolicy:
@@ -357,14 +358,23 @@ class TestOrchestrate:
 
         prompts = []
 
-        def fake_codex(prompt, schema, repo_path, codex_bin, out_dir):
+        def fake_codex(prompt, schema, repo_path, codex_bin, out_dir, **kwargs):
             prompts.append(prompt)
+            assert kwargs["auth_preflighted"] is True
             return DispatchResult(
                 result=_make_cc_result("f-001", exploitable=True),
                 model="codex-exec",
             )
 
-        with patch("core.startup.codex.find_codex_executable", return_value="/usr/bin/codex"), \
+        with patch(
+            "core.startup.codex.check_codex_auth",
+            return_value=CodexAuthStatus(
+                executable="/usr/bin/codex",
+                authenticated=True,
+                available=True,
+                detail="authenticated",
+            ),
+        ) as check_auth, \
              patch("packages.llm_analysis.orchestrator.invoke_codex_exec",
                    side_effect=fake_codex):
             result = orchestrate(
@@ -378,6 +388,7 @@ class TestOrchestrate:
             )
 
         assert result is not None
+        check_auth.assert_called_once_with(timeout=10)
         assert result["orchestration"]["mode"] == "codex_exec"
         assert result["orchestration"]["analysis_model"] == "codex-exec"
         assert result["orchestration"]["analysis_models"] == ["codex-exec"]
@@ -387,6 +398,38 @@ class TestOrchestrate:
         assert "Stage A:" in prompts[0]
         assert "Generate a proof-of-concept exploit" not in prompts[0]
         assert result["orchestration"]["group_analyses"] == 0
+
+    def test_codex_exec_auth_failure_stops_before_dispatch(self, tmp_path, capsys):
+        """Codex exec gives one operator-facing auth error before dispatch."""
+        findings = [_make_finding("f-001", "py/sql-injection", "db.py", 42)]
+        report = _make_prep_report(findings=findings)
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        with patch(
+            "core.startup.codex.check_codex_auth",
+            return_value=CodexAuthStatus(
+                executable="/usr/bin/codex",
+                authenticated=False,
+                available=True,
+                detail="not logged in",
+            ),
+        ) as check_auth, \
+             patch("packages.llm_analysis.orchestrator.invoke_codex_exec") as invoke:
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                use_codex_exec=True,
+                max_parallel=1,
+            )
+
+        assert result is None
+        check_auth.assert_called_once_with(timeout=10)
+        invoke.assert_not_called()
+        output = capsys.readouterr().out
+        assert "Codex authentication unavailable" in output
+        assert "doctor --codex-login" in output
 
     def test_sloppy_response_normalised_through_pipeline(self, tmp_path):
         """Sloppy LLM output is normalised by response validation in cc_dispatch."""

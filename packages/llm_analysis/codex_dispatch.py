@@ -193,18 +193,22 @@ def invoke_codex_exec(
     codex_bin: Optional[str] = None,
     out_dir: Optional[Union[Path, str]] = None,
     timeout: int = CODEX_TIMEOUT,
+    auth_preflighted: bool = False,
 ) -> DispatchResult:
     """Invoke ``codex exec`` for one RAPTOR analysis prompt."""
 
     codex = codex_bin or find_codex_executable()
-    auth = check_codex_auth(executable=codex, timeout=10)
-    if not auth.authenticated:
-        detail = _sanitize(auth.detail)
-        message = "Codex authentication unavailable"
-        if detail:
-            message = f"{message}: {detail}"
-        return DispatchResult(result={"error": message, "error_type": "auth"})
-    codex_executable = auth.executable or codex
+    if auth_preflighted:
+        codex_executable = codex
+    else:
+        auth = check_codex_auth(executable=codex, timeout=10)
+        if not auth.authenticated:
+            detail = _sanitize(auth.detail)
+            message = "Codex authentication unavailable"
+            if detail:
+                message = f"{message}: {detail}"
+            return DispatchResult(result={"error": message, "error_type": "auth"})
+        codex_executable = auth.executable or codex
     if not codex_executable:
         return DispatchResult(
             result={"error": "Codex authentication unavailable: executable missing"},

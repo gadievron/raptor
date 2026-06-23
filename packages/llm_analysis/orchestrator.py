@@ -738,11 +738,16 @@ def orchestrate(
     client = None
 
     if use_codex_exec:
-        from core.startup.codex import find_codex_executable
-        codex_bin = find_codex_executable()
-        if not codex_bin:
-            print("\n  codex not found on PATH — cannot dispatch Codex exec analysis")
-            print("  Install Codex CLI, then run `python3 raptor.py doctor --codex-login`")
+        from core.startup.codex import check_codex_auth
+        codex_status = check_codex_auth(timeout=10)
+        codex_bin = codex_status.executable
+        if not codex_status.authenticated or not codex_bin:
+            detail = codex_status.detail.strip()
+            print("\n  Codex authentication unavailable — cannot dispatch Codex exec analysis")
+            if detail:
+                print(f"  {detail}")
+            print("  Run `python3 raptor.py doctor --codex-login` for browser login")
+            print("  or `python3 raptor.py doctor --codex-device-login` for device auth")
             return None
 
         def codex_dispatch_fn(
@@ -755,7 +760,14 @@ def orchestrate(
             # Codex exec receives a single stdin prompt. Keep the defended
             # task system instructions ahead of the envelope-wrapped finding.
             full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
-            return invoke_codex_exec(full, schema, repo_path, codex_bin, out_dir)
+            return invoke_codex_exec(
+                full,
+                schema,
+                repo_path,
+                codex_bin,
+                out_dir,
+                auth_preflighted=True,
+            )
 
         dispatch_fn = codex_dispatch_fn
     elif llm_config and llm_config.primary_model:
