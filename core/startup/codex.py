@@ -9,6 +9,7 @@ other credential store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import shutil
 import subprocess
 from typing import Sequence
@@ -32,9 +33,12 @@ class CodexAuthStatus:
 
 
 def find_codex_executable() -> str | None:
-    """Return the Codex executable path if it is on ``PATH``."""
+    """Return the resolved Codex executable path if it is on ``PATH``."""
 
-    return shutil.which("codex")
+    codex = shutil.which("codex")
+    if not codex:
+        return None
+    return str(Path(codex).resolve())
 
 
 def _tail(text: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
