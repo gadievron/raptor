@@ -225,10 +225,17 @@ class TestUsage:
     ):
         seen = {}
 
+        class Status:
+            authenticated = False
+
         def fake_login(**kwargs):
             seen.update(kwargs)
             return 7
 
+        monkeypatch.setattr(
+            "core.startup.codex.check_codex_auth",
+            lambda: Status(),
+        )
         monkeypatch.setattr(
             "core.startup.codex.run_codex_login",
             fake_login,
@@ -242,10 +249,17 @@ class TestUsage:
     ):
         seen = {}
 
+        class Status:
+            authenticated = False
+
         def fake_login(**kwargs):
             seen.update(kwargs)
             return 0
 
+        monkeypatch.setattr(
+            "core.startup.codex.check_codex_auth",
+            lambda: Status(),
+        )
         monkeypatch.setattr(
             "core.startup.codex.run_codex_login",
             fake_login,
@@ -253,6 +267,34 @@ class TestUsage:
         rc = main(["--codex-device-login"])
         assert rc == 0
         assert seen == {"device_auth": True}
+
+    def test_codex_login_skips_when_already_authenticated(
+        self, monkeypatch, capsys,
+    ):
+        class Status:
+            authenticated = True
+
+        called = False
+
+        def fake_login(**_kwargs):
+            nonlocal called
+            called = True
+            return 7
+
+        monkeypatch.setattr(
+            "core.startup.codex.check_codex_auth",
+            lambda: Status(),
+        )
+        monkeypatch.setattr(
+            "core.startup.codex.run_codex_login",
+            fake_login,
+        )
+
+        rc = main(["--codex-login"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert not called
+        assert "already authenticated" in captured.out
 
     def test_codex_login_flags_are_mutually_exclusive(self, capsys):
         rc = main(["--codex-login", "--codex-device-login"])
