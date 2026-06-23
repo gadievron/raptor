@@ -344,7 +344,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(_USAGE, file=sys.stderr)
         return 2
     if codex_login or codex_device_login:
-        from .codex import run_codex_login
+        from .codex import check_codex_auth, run_codex_login
+        status = check_codex_auth()
+        if status.authenticated:
+            print("Codex already authenticated.")
+            return 0
         return run_codex_login(device_auth=codex_device_login)
 
     try:
