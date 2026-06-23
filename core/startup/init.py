@@ -266,6 +266,21 @@ def check_llm() -> tuple[list, list]:
         if shutil.which("claude"):
             lines.append("        claude code ✓")
 
+        try:
+            from .codex import check_codex_auth
+            codex_status = check_codex_auth()
+            if codex_status.available and codex_status.authenticated:
+                lines.append("        codex ✓ (authenticated)")
+            elif codex_status.available:
+                lines.append("        codex login needed")
+                warnings.append(
+                    "Codex CLI is installed but not authenticated — "
+                    "run `raptor doctor --codex-login` for browser login "
+                    "or `raptor doctor --codex-device-login` for device auth"
+                )
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"Codex CLI detection: {e}")
+
     except Exception as e:
         lines.append("   llm: detection error")
         warnings.append(f"LLM detection: {e}")
