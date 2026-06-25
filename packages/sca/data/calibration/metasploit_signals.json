@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-06-16T10:53:24Z",
+    "fetched_at": "2026-06-23T08:57:53Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6647,
+    "modules_scanned": 6655,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -18132,6 +18132,12 @@
         "exploit_unix/webapp/sugarcrm_rest_unserialize_exec"
       ]
     },
+    "CVE-2025-25205": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/audiobookshelf_auth_bypass"
+      ]
+    },
     "CVE-2025-2563": {
       "has_msf_module": true,
       "module_paths": [
@@ -18917,6 +18923,12 @@
         "auxiliary_scanner/http/nable_ncentral_auth_bypass_xxe"
       ]
     },
+    "CVE-2026-0826": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/misc/poly_unauth_rce_cve_2026_0826"
+      ]
+    },
     "CVE-2026-1281": {
       "has_msf_module": true,
       "module_paths": [
@@ -19059,6 +19071,30 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/apache_activemq_jolokia_rce"
+      ]
+    },
+    "CVE-2026-34413": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/xerte_unauthenticated_mediaupload"
+      ]
+    },
+    "CVE-2026-34414": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/xerte_unauthenticated_mediaupload"
+      ]
+    },
+    "CVE-2026-34415": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/xerte_unauthenticated_mediaupload"
+      ]
+    },
+    "CVE-2026-41459": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/xerte_unauthenticated_mediaupload"
       ]
     },
     "CVE-2026-41679": {

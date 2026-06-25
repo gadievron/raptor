@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-16T10:53:24Z",
+    "fetched_at": "2026-06-23T08:57:53Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10969,6 +10969,13 @@
       "ransomware_use": false,
       "vendor": "Cisco"
     },
+    "CVE-2026-20253": {
+      "date_added": "2026-06-18",
+      "kev": true,
+      "product": "Enterprise",
+      "ransomware_use": false,
+      "vendor": "Splunk"
+    },
     "CVE-2026-20262": {
       "date_added": "2026-06-15",
       "kev": true,
@@ -11304,6 +11311,13 @@
       "product": "cPanel Plugin",
       "ransomware_use": false,
       "vendor": "LiteSpeed"
+    },
+    "CVE-2026-48907": {
+      "date_added": "2026-06-16",
+      "kev": true,
+      "product": "Joomla Content Editor ",
+      "ransomware_use": false,
+      "vendor": "Widget Factory"
     },
     "CVE-2026-50751": {
       "date_added": "2026-06-08",
