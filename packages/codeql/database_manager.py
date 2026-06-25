@@ -115,6 +115,42 @@ class DatabaseManager:
         in /usr/bin)."""
         return [str(Path(self.codeql_cli).resolve().parent)]
 
+    def _codeql_log_dir(self, repo_hash: str, language: str) -> Path:
+        safe_language = re.sub(r"[^A-Za-z0-9_.-]+", "_", language)
+        ns_tail = time.monotonic_ns() % 1_000_000
+        return (
+            self.db_root
+            / "logs"
+            / repo_hash
+            / f"{safe_language}-{os.getpid()}-{ns_tail:06d}"
+        )
+
+    def _summarise_codeql_logs(self, log_dir: Path) -> str:
+        """Return a bounded tail of CodeQL CLI logs for operator diagnostics."""
+        if not log_dir.exists():
+            return ""
+
+        log_files = sorted(
+            (p for p in log_dir.rglob("*") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:3]
+        if not log_files:
+            return ""
+
+        sections = [f"CodeQL log directory: {log_dir}"]
+        for path in log_files:
+            try:
+                lines = path.read_text(errors="replace").splitlines()
+            except OSError as exc:
+                sections.append(f"{path}: <could not read: {exc}>")
+                continue
+            tail = "\n".join(lines[-80:])
+            if len(tail) > 6000:
+                tail = tail[-6000:]
+            sections.append(f"{path} tail:\n{tail}")
+        return "\n\n".join(sections)
+
     def _detect_codeql_cli(self) -> Optional[str]:
         """Detect CodeQL CLI path.
 
@@ -638,6 +674,8 @@ class DatabaseManager:
         repo_hash = self.compute_repo_hash(repo_path)
         canonical_path = self.get_database_dir(repo_hash, language)
         staging_path = self._staging_path(repo_hash, language)
+        codeql_log_dir = self._codeql_log_dir(repo_hash, language)
+        codeql_log_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure parent directory exists (db_root/<repo_hash>/)
         canonical_path.parent.mkdir(parents=True, exist_ok=True)
@@ -690,6 +728,7 @@ class DatabaseManager:
             str(staging_path),
             f"--language={language}",
             f"--source-root={repo_path}",
+            f"--logdir={codeql_log_dir}",
         ]
         # Central CodeQL resource tunables (-j / -M / --max-disk-cache,
         # tuning.json-backed).  ``include_disk_cache=True`` because
@@ -730,6 +769,10 @@ class DatabaseManager:
                 cached=False,
             )
         env = RaptorConfig.get_safe_env()
+        # The sandbox pid1 shim is RAPTOR-owned infrastructure. Database
+        # creation still runs the target build untrusted inside that sandbox,
+        # but the shim itself must be allowed to dispatch.
+        env["_RAPTOR_TRUSTED"] = "1"
         if build_system and build_system.env_vars:
             # Filter build env vars through the same blocklist — a malicious
             # repo's build config could try to re-inject LD_PRELOAD, BASH_ENV, etc.
@@ -833,6 +876,7 @@ class DatabaseManager:
                 # pushing long builds past CODEQL_TIMEOUT.
                 sanitise_host_fingerprint=True,
                 cpu_count=HOST_CPU_COUNT,
+                strict_env=True,
             )
 
             success = result.returncode == 0
@@ -841,8 +885,13 @@ class DatabaseManager:
                 errors.append(f"Database creation failed with exit code {result.returncode}")
                 if result.stderr:
                     errors.append(result.stderr[:1000])  # Truncate long errors
+                codeql_log_summary = self._summarise_codeql_logs(codeql_log_dir)
+                if codeql_log_summary:
+                    errors.append(codeql_log_summary)
                 logger.error(f"✗ Database creation failed for {language}")
                 logger.error(result.stderr[:500])
+                if codeql_log_summary:
+                    logger.error(codeql_log_summary[:4000])
                 # Cleanup partial staging on build failure — no point keeping
                 # broken DBs around to confuse future cache lookups (they
                 # never reach canonical anyway since promote is gated on
@@ -1010,7 +1059,12 @@ class DatabaseManager:
 
         except subprocess.TimeoutExpired:
             errors.append(f"Database creation timed out after {RaptorConfig.CODEQL_TIMEOUT}s")
+            codeql_log_summary = self._summarise_codeql_logs(codeql_log_dir)
+            if codeql_log_summary:
+                errors.append(codeql_log_summary)
             logger.error(f"✗ Database creation timed out for {language}")
+            if codeql_log_summary:
+                logger.error(codeql_log_summary[:4000])
 
             return DatabaseResult(
                 success=False,

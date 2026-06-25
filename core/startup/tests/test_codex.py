@@ -1,7 +1,5 @@
 """Tests for Codex CLI readiness and delegated login setup."""
 
-from __future__ import annotations
-
 import os
 import subprocess
 

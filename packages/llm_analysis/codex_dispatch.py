@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -29,6 +30,11 @@ logger = logging.getLogger(__name__)
 CODEX_TIMEOUT = 300
 CODEX_MODEL = "codex-exec"
 MAX_DIAGNOSTIC_CHARS = 500
+CODEX_PROXY_HOSTS = (
+    "api.openai.com",
+    "chatgpt.com",
+    "auth.openai.com",
+)
 
 CODEX_EXEC_TRUSTED_PREAMBLE = """RAPTOR trusted transport instructions:
 - Analyse only the evidence in the user prompt; do not modify files.
@@ -56,6 +62,33 @@ def _safe_id(value: str) -> str:
     sanitised = _SAFE_ID_RE.sub("_", (value or "").strip())
     sanitised = sanitised.replace("..", "_")
     return (sanitised or "unknown")[:80]
+
+
+def _readable_paths_for_codex(codex_bin: str) -> list[str]:
+    """Return host paths Codex needs under RAPTOR restrict-read sandboxing."""
+
+    paths: list[str] = []
+    try:
+        resolved = Path(codex_bin).resolve()
+    except OSError:
+        resolved = Path(codex_bin)
+    for candidate in (
+        resolved,
+        resolved.parent,
+        Path.home() / ".codex",
+        Path.home() / ".config" / "codex",
+    ):
+        paths.append(str(candidate))
+    return list(dict.fromkeys(paths))
+
+
+def _writable_paths_for_codex() -> list[str]:
+    """Return narrowly-scoped Codex state dirs writable under sandboxing."""
+
+    return [
+        str(Path.home() / ".codex"),
+        str(Path.home() / ".config" / "codex"),
+    ]
 
 
 JsonSchemaType = Union[str, list[str]]
@@ -235,13 +268,26 @@ def invoke_codex_exec(
     full_prompt = f"{CODEX_EXEC_TRUSTED_PREAMBLE}\n\n{prompt}"
     started = time.monotonic()
     try:
-        proc = subprocess.run(
+        from core.sandbox import run_untrusted_networked
+
+        env = RaptorConfig.get_safe_env(preserve_proxy=True)
+        for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+            if key in os.environ:
+                env[key] = os.environ[key]
+        env["_RAPTOR_TRUSTED"] = "1"
+        proc = run_untrusted_networked(
             cmd,
             input=full_prompt,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=RaptorConfig.get_safe_env(preserve_proxy=True),
+            env=env,
+            target=str(repo_path),
+            output=str(out_dir or "."),
+            readable_paths=_readable_paths_for_codex(codex_executable),
+            writable_paths=_writable_paths_for_codex(),
+            proxy_hosts=list(CODEX_PROXY_HOSTS),
+            caller_label="codex-exec",
         )
     except subprocess.TimeoutExpired:
         return DispatchResult(

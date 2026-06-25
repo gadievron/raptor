@@ -68,6 +68,7 @@ def _last_message_path(cmd: list[str]) -> Path:
 
 
 def test_codex_exec_uses_arg_list_read_only_ephemeral_and_stdin(monkeypatch, tmp_path):
+    import core.sandbox
     from packages.llm_analysis import codex_dispatch
 
     captured = {}
@@ -80,7 +81,7 @@ def test_codex_exec_uses_arg_list_read_only_ephemeral_and_stdin(monkeypatch, tmp
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", lambda **kwargs: _auth_ok())
-    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
 
     result = codex_dispatch.invoke_codex_exec(
         prompt=f"finding says: {hostile}",
@@ -101,6 +102,18 @@ def test_codex_exec_uses_arg_list_read_only_ephemeral_and_stdin(monkeypatch, tmp
     assert "RAPTOR trusted transport instructions" in captured["kwargs"]["input"]
     assert captured["kwargs"]["timeout"] == 12
     assert captured["kwargs"]["capture_output"] is True
+    assert captured["kwargs"]["target"] == str(tmp_path / "repo")
+    assert captured["kwargs"]["output"] == str(tmp_path / "out")
+    assert captured["kwargs"]["proxy_hosts"] == list(codex_dispatch.CODEX_PROXY_HOSTS)
+    assert captured["kwargs"]["caller_label"] == "codex-exec"
+    assert captured["kwargs"]["env"]["_RAPTOR_TRUSTED"] == "1"
+    assert captured["kwargs"]["readable_paths"]
+    assert str(Path("/usr/bin/codex")) in captured["kwargs"]["readable_paths"]
+    assert str(Path.home() / ".codex") in captured["kwargs"]["readable_paths"]
+    assert captured["kwargs"]["writable_paths"] == [
+        str(Path.home() / ".codex"),
+        str(Path.home() / ".config" / "codex"),
+    ]
     assert result.model == "codex-exec"
     assert result.result["cost_usd_unknown"] is True
     assert result.result["billing_source"] == "codex_subscription"
@@ -143,13 +156,14 @@ def test_codex_exec_auth_failure_is_loud(monkeypatch, tmp_path):
 
 
 def test_codex_exec_timeout_is_loud(monkeypatch, tmp_path):
+    import core.sandbox
     from packages.llm_analysis import codex_dispatch
 
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", lambda **kwargs: _auth_ok())
-    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
 
     result = codex_dispatch.invoke_codex_exec(
         prompt="x",
@@ -165,6 +179,7 @@ def test_codex_exec_timeout_is_loud(monkeypatch, tmp_path):
 
 
 def test_codex_exec_can_use_orchestrator_auth_preflight(monkeypatch, tmp_path):
+    import core.sandbox
     from packages.llm_analysis import codex_dispatch
 
     captured = {}
@@ -178,7 +193,7 @@ def test_codex_exec_can_use_orchestrator_auth_preflight(monkeypatch, tmp_path):
         raise AssertionError("auth should have been preflighted by orchestrator")
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", fail_auth)
-    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
 
     result = codex_dispatch.invoke_codex_exec(
         prompt="x",
@@ -194,13 +209,14 @@ def test_codex_exec_can_use_orchestrator_auth_preflight(monkeypatch, tmp_path):
 
 
 def test_codex_exec_nonzero_exit_writes_sanitized_debug(monkeypatch, tmp_path):
+    import core.sandbox
     from packages.llm_analysis import codex_dispatch
 
     def fake_run(cmd, **kwargs):
         return MagicMock(returncode=7, stdout="secret?\x00", stderr="bad\x1b[31m")
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", lambda **kwargs: _auth_ok())
-    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
 
     result = codex_dispatch.invoke_codex_exec(
         prompt="x",
@@ -219,6 +235,7 @@ def test_codex_exec_nonzero_exit_writes_sanitized_debug(monkeypatch, tmp_path):
 
 
 def test_codex_exec_malformed_output_is_loud(monkeypatch, tmp_path):
+    import core.sandbox
     from packages.llm_analysis import codex_dispatch
 
     def fake_run(cmd, **kwargs):
@@ -226,7 +243,7 @@ def test_codex_exec_malformed_output_is_loud(monkeypatch, tmp_path):
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", lambda **kwargs: _auth_ok())
-    monkeypatch.setattr(codex_dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
 
     result = codex_dispatch.invoke_codex_exec(
         prompt="x",

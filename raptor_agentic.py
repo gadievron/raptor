@@ -15,6 +15,7 @@ Complete end-to-end autonomous security testing:
 """
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -36,6 +37,36 @@ from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
+
+_CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _set_console_log_level(level: int, *, include_root: bool = False) -> None:
+    """Set operator-facing console verbosity without touching file audit logs."""
+    for handler in logger.logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            handler.setLevel(level)
+
+    if not include_root:
+        return
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if (
+            isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, logging.FileHandler)
+            and getattr(handler, "_raptor_root_handler", False)
+        ):
+            handler.setLevel(level)
+    root_logger.setLevel(level)
+
+
+def _configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
+    """Apply run-level console logging flags."""
+    if log_level:
+        _set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
+    elif verbose:
+        _set_console_log_level(logging.DEBUG)
 
 
 def _tuning_default(key: str) -> int:
@@ -1294,6 +1325,15 @@ Examples:
                             "Surfaces per-LLM-call detail (cache hits, retries, "
                             "per-call cost/duration). Useful for debugging "
                             "multi-model dispatches or schema validation failures.")
+    parser.add_argument(
+        "--log-level",
+        choices=_CONSOLE_LOG_LEVELS,
+        type=str.upper,
+        help=(
+            "Set console log level for this run. Use WARNING to hide INFO "
+            "sandbox/proxy chatter; overrides --verbose."
+        ),
+    )
 
     # Fuzzing integration (Phase 5: dynamic confirmation)
     parser.add_argument("--fuzz", action="store_true",
@@ -1447,15 +1487,12 @@ Examples:
     if args.phase_timeout != RaptorConfig.DEFAULT_TIMEOUT:
         RaptorConfig.DEFAULT_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
 
-    # --verbose: drop the existing console StreamHandler from INFO to
-    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
-    # cost/duration) becomes visible. Doesn't change the file handler
-    # (already DEBUG) — only what the operator sees on stderr.
-    if getattr(args, "verbose", False):
-        import logging
-        for h in logger.logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-                h.setLevel(logging.DEBUG)
+    # Run-level console verbosity. File audit logging remains DEBUG;
+    # this only controls what the operator sees on stderr.
+    _configure_run_logging(
+        getattr(args, "log_level", None),
+        getattr(args, "verbose", False),
+    )
 
     # Propagate --trust-repo to every target-repo trust check so each
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)

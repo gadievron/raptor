@@ -6,13 +6,11 @@ copy, persist, or log credential material from ``~/.codex`` or any
 other credential store.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Sequence
+from typing import Optional, Sequence
 
 from core.config import RaptorConfig
 from core.security.log_sanitisation import escape_nonprintable
@@ -26,13 +24,13 @@ MAX_DIAGNOSTIC_CHARS = 500
 class CodexAuthStatus:
     """Result of a ``codex login status`` readiness check."""
 
-    executable: str | None
+    executable: Optional[str]
     authenticated: bool
     available: bool
     detail: str = ""
 
 
-def find_codex_executable() -> str | None:
+def find_codex_executable() -> Optional[str]:
     """Return the resolved Codex executable path if it is on ``PATH``."""
 
     codex = shutil.which("codex")
@@ -52,7 +50,7 @@ def _tail(text: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
 
 def check_codex_auth(
     *,
-    executable: str | None = None,
+    executable: Optional[str] = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> CodexAuthStatus:
     """Check whether Codex CLI is installed and authenticated.
@@ -124,7 +122,7 @@ def codex_login_command(*, device_auth: bool = False) -> list[str]:
 
 def run_codex_login(
     *,
-    executable: str | None = None,
+    executable: Optional[str] = None,
     device_auth: bool = False,
     extra_args: Sequence[str] = (),
 ) -> int:

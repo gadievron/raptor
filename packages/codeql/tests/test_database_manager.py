@@ -228,6 +228,8 @@ class TestStagingPromote:
                          env_vars={}, confidence=1.0, detected_files=[])
 
         def fake_sandbox_run(cmd, **kwargs):
+            assert kwargs["env"]["_RAPTOR_TRUSTED"] == "1"
+            assert kwargs["strict_env"] is True
             # Simulate codeql writing the DB to the staging path it was
             # given on the command line. cmd[3] is the staging path
             # (codeql, database, create, <staging>, ...).
@@ -410,6 +412,70 @@ class TestStagingPromote:
         assert result.success is False
         assert not canonical.exists(), "failed build must not promote"
         assert not list(canonical.parent.glob(".staging-*")), "staging cleanup"
+
+    def test_build_failure_surfaces_codeql_log_tail(self, db_manager, tmp_path):
+        canonical = tmp_path / "cache" / "abc" / "cpp-db"
+        canonical.parent.mkdir(parents=True)
+
+        bs = BuildSystem(type="cmake", command="cmake --build build-codeql",
+                         working_dir=tmp_path, env_vars={},
+                         confidence=1.0, detected_files=[])
+
+        def fake_sandbox_run(cmd, **kwargs):
+            log_arg = next(arg for arg in cmd if str(arg).startswith("--logdir="))
+            log_dir = Path(str(log_arg).split("=", 1)[1])
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "database-create.log").write_text(
+                "CodeQL wrapper output\n"
+                "nvcc fatal   : Unsupported gpu architecture 'compute_999'\n"
+            )
+            r = MagicMock()
+            r.returncode = 2
+            r.stdout = ""
+            r.stderr = "A fatal error occurred: Exit status 1 from command"
+            return r
+
+        with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
+             patch.object(db_manager, '_count_database_files', return_value=0), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'get_cached_database', return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash', return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir', return_value=canonical):
+            result = db_manager.create_database(tmp_path, "cpp", bs)
+
+        joined_errors = "\n".join(result.errors)
+        assert "CodeQL log directory:" in joined_errors
+        assert "nvcc fatal" in joined_errors
+
+    def test_timeout_surfaces_codeql_log_tail(self, db_manager, tmp_path):
+        canonical = tmp_path / "cache" / "abc" / "cpp-db"
+        canonical.parent.mkdir(parents=True)
+
+        bs = BuildSystem(type="cmake", command="cmake --build build-codeql",
+                         working_dir=tmp_path, env_vars={},
+                         confidence=1.0, detected_files=[])
+
+        def fake_sandbox_run(cmd, **kwargs):
+            log_arg = next(arg for arg in cmd if str(arg).startswith("--logdir="))
+            log_dir = Path(str(log_arg).split("=", 1)[1])
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "database-create.log").write_text(
+                "[build-stdout] [ 38%] Linking CUDA executable cudaGraphsPerfScaling\n"
+            )
+            raise sp.TimeoutExpired(cmd, 1800)
+
+        with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
+             patch.object(db_manager, '_count_database_files', return_value=0), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'get_cached_database', return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash', return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir', return_value=canonical):
+            result = db_manager.create_database(tmp_path, "cpp", bs)
+
+        joined_errors = "\n".join(result.errors)
+        assert "Database creation timed out" in joined_errors
+        assert "CodeQL log directory:" in joined_errors
+        assert "cudaGraphsPerfScaling" in joined_errors
 
 
 class TestStaleMarkerGC:
