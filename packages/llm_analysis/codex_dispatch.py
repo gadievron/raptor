@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, Union
 
 from core.config import RaptorConfig
 from core.security.log_sanitisation import escape_nonprintable
+from core.security.redaction import redact_secrets
 from core.startup.codex import check_codex_auth, find_codex_executable
 from packages.llm_analysis.dispatch import DispatchResult
 
@@ -48,9 +49,9 @@ _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def _sanitize(text: str, *, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
-    """Return bounded, terminal-safe subprocess diagnostics."""
+    """Return bounded, redacted, terminal-safe subprocess diagnostics."""
 
-    clean = escape_nonprintable((text or "").strip())
+    clean = escape_nonprintable(redact_secrets((text or "").strip()))
     if len(clean) <= limit:
         return clean
     return "..." + clean[-limit:]

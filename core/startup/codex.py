@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 from core.config import RaptorConfig
 from core.security.log_sanitisation import escape_nonprintable
+from core.security.redaction import redact_secrets
 
 
 DEFAULT_TIMEOUT = 10
@@ -40,9 +41,9 @@ def find_codex_executable() -> Optional[str]:
 
 
 def _tail(text: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
-    """Bound and terminal-sanitize subprocess diagnostics."""
+    """Bound, redact, and terminal-sanitize subprocess diagnostics."""
 
-    clean = escape_nonprintable(text.strip())
+    clean = escape_nonprintable(redact_secrets(text.strip()))
     if len(clean) <= limit:
         return clean
     return "..." + clean[-limit:]

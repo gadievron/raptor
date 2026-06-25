@@ -211,7 +211,12 @@ def test_codex_exec_nonzero_exit_writes_sanitized_debug(monkeypatch, tmp_path):
     from packages.llm_analysis import codex_dispatch
 
     def fake_run(cmd, **kwargs):
-        return MagicMock(returncode=7, stdout="secret?\x00", stderr="bad\x1b[31m")
+        token = "sk-proj-" + ("a" * 48)
+        return MagicMock(
+            returncode=7,
+            stdout=f"secret? {token}\x00",
+            stderr=f"bad\x1b[31m {token}",
+        )
 
     monkeypatch.setattr(codex_dispatch, "check_codex_auth", lambda **kwargs: _auth_ok())
     monkeypatch.setattr(core.sandbox, "run_untrusted_networked", fake_run)
@@ -225,11 +230,15 @@ def test_codex_exec_nonzero_exit_writes_sanitized_debug(monkeypatch, tmp_path):
     )
 
     assert "exited 7" in result.result["error"]
+    assert "sk-proj-" not in result.result["error"]
+    assert "[REDACTED]" in result.result["error"]
     debug_file = tmp_path / "out" / result.result["codex_debug_file"]
     assert debug_file.exists()
     debug_text = debug_file.read_text(encoding="utf-8")
     assert "\x00" not in debug_text
     assert "\x1b" not in debug_text
+    assert "sk-proj-" not in debug_text
+    assert "[REDACTED]" in debug_text
 
 
 def test_codex_exec_malformed_output_is_loud(monkeypatch, tmp_path):
