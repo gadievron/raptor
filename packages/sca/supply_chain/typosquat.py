@@ -46,6 +46,7 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "popular"
 # so neither is safe to auto-apply. Only hand-confirmed names go here → zero
 # false positives by construction.
 _DENYLIST_PATH = _DATA_DIR.parent / "typosquat_denylist.json"
+_ALLOWLIST_PATH = _DATA_DIR.parent / "typosquat_reviewed_legit.json"
 
 # Distances above this are not interesting; below it we always flag
 # (with severity scaled by distance).
@@ -104,6 +105,12 @@ _POPULAR_SET: Dict[str, set] = {}
 _DENYLIST_BY_ECO: Dict[str, set] = {}
 # Sentinel so a missing/!exists denylist file is loaded (and logged) once.
 _DENYLIST_RAW: Optional[Dict[str, set]] = None
+# Per-ecosystem allowlist sets (confirmed-legitimate near-names), loaded
+# once from ``_ALLOWLIST_PATH``. A name here short-circuits the distance
+# check in ``_check_one`` — it is NOT a typosquat regardless of edit
+# distance.
+_ALLOWLIST_BY_ECO: Dict[str, set] = {}
+_ALLOWLIST_RAW: Optional[Dict[str, set]] = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,9 @@ def _check_one(dep: Dependency) -> Optional[TyposquatFinding]:
     # Set lookup is O(1) — was a linear scan via ``in popular``
     # against the underlying list before the index landed.
     if name_norm in _popular_set(dep.ecosystem):
+        return None
+
+    if name_norm in _load_allowlist(dep.ecosystem):
         return None
 
     candidates = [name_norm]
@@ -296,6 +306,38 @@ def _load_denylist(ecosystem: str) -> set:
     if cached is None:
         cached = _DENYLIST_RAW.get(ecosystem, set())
         _DENYLIST_BY_ECO[ecosystem] = cached
+    return cached
+
+
+def _load_allowlist(ecosystem: str) -> set:
+    """Return the lowercased allowlist name-set for ``ecosystem``.
+
+    Same file shape as the denylist (bare list or enriched map per eco),
+    loaded from ``typosquat_reviewed_legit.json``. A name here is a
+    confirmed-legitimate near-miss that the detector must never flag."""
+    global _ALLOWLIST_RAW
+    if _ALLOWLIST_RAW is None:
+        _ALLOWLIST_RAW = {}
+        try:
+            raw = _json.loads(_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, _json.JSONDecodeError) as e:
+            logger.warning("sca.supply_chain.typosquat: failed to load "
+                           "allowlist %s: %s", _ALLOWLIST_PATH, e)
+            raw = {}
+        if isinstance(raw, dict):
+            for eco, names in raw.items():
+                if isinstance(names, list):
+                    _ALLOWLIST_RAW[eco] = {
+                        n.lower() for n in names if isinstance(n, str)}
+                elif isinstance(names, dict):
+                    _ALLOWLIST_RAW[eco] = {
+                        k.lower() for k in names if isinstance(k, str)}
+    cached = _ALLOWLIST_BY_ECO.get(ecosystem)
+    if cached is None:
+        cached = _ALLOWLIST_RAW.get(ecosystem, set())
+        _ALLOWLIST_BY_ECO[ecosystem] = cached
     return cached
 
 
