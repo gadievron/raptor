@@ -70,11 +70,13 @@ def test_check_codex_auth_sanitizes_diagnostics(monkeypatch):
     class Result:
         returncode = 1
         stdout = ""
-        stderr = "\x1b[31mnope\x1b[0m"
+        stderr = "\x1b[31mnope sk-proj-" + ("a" * 48) + "\x1b[0m"
 
     monkeypatch.setattr(codex.subprocess, "run", lambda *_a, **_kw: Result())
     status = codex.check_codex_auth(executable="/tmp/codex")
     assert "\x1b" not in status.detail
+    assert "sk-proj-" not in status.detail
+    assert "[REDACTED]" in status.detail
     assert "\\x1b[31mnope" in status.detail
 
 
