@@ -67,6 +67,67 @@ class TransitiveStatus:
     failures: int = 0
 
 
+def _is_cargo_workspace_root(cargo_toml: Path) -> bool:
+    """True if *cargo_toml* declares ``[workspace]``."""
+    try:
+        text = cargo_toml.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "[workspace]":
+            return True
+    return False
+
+
+def _collapse_cargo_workspaces(
+    by_eco_dir: Dict[Tuple[str, Path], List["Manifest"]],
+    lockfile_dirs: Dict[Tuple[str, Path], "Manifest"],
+) -> Dict[Tuple[str, Path], List["Manifest"]]:
+    """Remap Cargo workspace members to their workspace root.
+
+    A workspace member (``core/zkpox/guest/Cargo.toml``) doesn't own a
+    ``Cargo.lock`` — the lock lives at the workspace root
+    (``core/zkpox/Cargo.lock``). Spawning ``cargo update`` on the member
+    alone copies only the member's manifest without the workspace root,
+    producing wrong results or an outright failure.
+
+    Walk each Cargo entry's parent chain looking for a ``Cargo.toml``
+    with ``[workspace]`` that has a sibling ``Cargo.lock``. If found,
+    drop the member entry — the root's lockfile is already parsed by
+    the pipeline's lockfile-present gate.
+    """
+    out: Dict[Tuple[str, Path], List["Manifest"]] = {}
+    for (eco, project_dir), eco_manifests in by_eco_dir.items():
+        if eco != "Cargo":
+            out[(eco, project_dir)] = eco_manifests
+            continue
+        # Check if this entry is itself a workspace root with a lockfile
+        if ("Cargo", project_dir) in lockfile_dirs:
+            out[(eco, project_dir)] = eco_manifests
+            continue
+        # Walk parents for a workspace root with a Cargo.lock
+        collapsed = False
+        parent = project_dir.parent
+        for _ in range(10):
+            if parent == parent.parent:
+                break
+            root_toml = parent / "Cargo.toml"
+            if root_toml.exists() and _is_cargo_workspace_root(root_toml):
+                if (parent / "Cargo.lock").exists():
+                    logger.debug(
+                        "sca.transitive: collapsing Cargo member %s "
+                        "into workspace root %s (lockfile present)",
+                        project_dir, parent,
+                    )
+                    collapsed = True
+                    break
+            parent = parent.parent
+        if not collapsed:
+            out[(eco, project_dir)] = eco_manifests
+    return out
+
+
 def expand_missing_transitives(
     manifests: Sequence[Manifest],
     direct_deps: Sequence[Dependency],
@@ -123,6 +184,14 @@ def expand_missing_transitives(
         if m.ecosystem == "Inline":
             continue
         by_eco_dir.setdefault((m.ecosystem, m.path.parent), []).append(m)
+
+    # Cargo workspace collapse: workspace members (guest/, prover/, …)
+    # don't carry their own Cargo.lock — only the workspace root does.
+    # Without collapsing, each member spawns a standalone `cargo update`
+    # that copies only the member's Cargo.toml, fails or resolves a
+    # wrong dep graph, and wastes CI time. Detect workspace membership
+    # by walking parent dirs for a Cargo.toml containing [workspace].
+    by_eco_dir = _collapse_cargo_workspaces(by_eco_dir, lockfile_dirs)
 
     # Pre-resolution typosquat gate. The cascade resolver will fetch
     # PyPI / npm / etc. metadata for every name in the manifest — if
