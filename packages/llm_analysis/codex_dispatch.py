@@ -7,8 +7,6 @@ ephemeral execution flags, and validates structured output before the
 orchestrator merges it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re
