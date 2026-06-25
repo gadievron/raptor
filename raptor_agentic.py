@@ -2612,12 +2612,12 @@ Examples:
                 build_llm_config_from_flags, orchestrate,
             )
 
-            llm_config = build_llm_config_from_flags(
+            llm_config = None if args.codex_exec else build_llm_config_from_flags(
                 models=getattr(args, "model", []) or [],
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
                 aggregate=getattr(args, "aggregate", None),
-                auto_detect=(llm_env.external_llm and not args.codex_exec),
+                auto_detect=llm_env.external_llm,
             )
             # Dataflow validation is on by default when CodeQL ran;
             # `--no-validate-dataflow` opts out entirely. `--deep-validate`
@@ -2630,7 +2630,7 @@ Examples:
                 max_findings=args.max_findings,
                 no_exploits=args.no_exploits or args.codex_exec,
                 no_patches=args.no_patches or args.codex_exec,
-                llm_config=None if args.codex_exec else llm_config,
+                llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
                 dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
