@@ -169,6 +169,7 @@ def test_e2e_explicit_binary_flag_path(_synthetic_target_built) -> None:
     assert spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is True
 
 
+@pytest.mark.slow
 def test_e2e_autodetect_finds_binary(_synthetic_target_built) -> None:
     """The ``--binary-auto`` path: operator passes no explicit path;
     auto-detect walks the project tree and finds the binary under
