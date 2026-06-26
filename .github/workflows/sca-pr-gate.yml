@@ -112,21 +112,27 @@ jobs:
             --out /tmp/sca-diff.md
           DIFF_EXIT=$?
           echo "exit=$DIFF_EXIT" >> "$GITHUB_OUTPUT"
-          # Mirror the diff into the workflow's step summary so
-          # reviewers see it inline on the run page even without
-          # leaving GitHub Actions.
           if [ -f /tmp/sca-diff.md ]; then
+            # Mirror into the step summary (visible on the run page)
             cat /tmp/sca-diff.md >> "$GITHUB_STEP_SUMMARY"
+            # Also print to the log so the findings are visible
+            # inline when scrolling through CI output — especially
+            # important for fork PRs where the PR comment can't be
+            # posted.
+            echo "──── SCA diff ────"
+            cat /tmp/sca-diff.md
+            echo "──── end SCA diff ────"
           fi
 
       - name: Post PR comment
+        id: comment
         # Non-fatal: PRs from forks get a read-only GITHUB_TOKEN
         # regardless of the workflow's ``permissions:`` block (the
         # org-level "Workflow permissions" policy gates write tokens
         # to same-repo PRs). When the comment-post fails we log a
         # warning and continue — the diff is still surfaced via
-        # GITHUB_STEP_SUMMARY (above) and the regression gate (below)
-        # still fails on high-severity additions.
+        # GITHUB_STEP_SUMMARY (above), log output, and the regression
+        # gate (below) still fails on high-severity additions.
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -149,6 +155,7 @@ jobs:
             --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" \
             | head -1) || {
               echo "::warning::sca-pr-gate: could not list PR comments (likely a fork PR with restricted GITHUB_TOKEN); skipping comment post. Diff is in the step summary."
+              echo "posted=false" >> "$GITHUB_OUTPUT"
               exit 0
             }
           if [ -n "$EXISTING" ]; then
@@ -156,17 +163,27 @@ jobs:
               "/repos/${{ github.repository }}/issues/comments/$EXISTING" \
               -f body="$BODY" || {
                 echo "::warning::sca-pr-gate: PATCH on existing comment failed; skipping. Diff is in the step summary."
+                echo "posted=false" >> "$GITHUB_OUTPUT"
                 exit 0
               }
           else
             gh pr comment "$PR" --body "$BODY" || {
               echo "::warning::sca-pr-gate: gh pr comment failed (likely a fork PR with restricted GITHUB_TOKEN); skipping. Diff is in the step summary."
+              echo "posted=false" >> "$GITHUB_OUTPUT"
               exit 0
             }
           fi
+          echo "posted=true" >> "$GITHUB_OUTPUT"
 
       - name: Fail on high-severity regressions
         if: steps.diff.outputs.exit != '0'
         run: |
-          echo "::error::SCA diff reports new high-severity findings — see PR comment for details."
+          if [ "${{ steps.comment.outputs.posted }}" = "true" ]; then
+            echo "::error::SCA diff reports new high-severity findings — see PR comment for details."
+          else
+            echo "::error::SCA diff reports new high-severity findings — see 'Compute diff' log output above or the step summary on the run page."
+            echo ""
+            echo "Findings summary:"
+            cat /tmp/sca-diff.md
+          fi
           exit 1

@@ -507,6 +507,7 @@ def test_strip_ipa_suffix_handles_gcc_clone_patterns() -> None:
     assert _strip_ipa_suffix("std::foo") == "std::foo"
 
 
+@pytest.mark.slow
 def test_classifier_treats_internal_linkage_with_low_pc_as_present(
     tmp_path: Path,
 ) -> None:

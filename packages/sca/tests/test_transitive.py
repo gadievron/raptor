@@ -25,6 +25,8 @@ from unittest.mock import MagicMock
 from packages.sca.models import Confidence, Dependency, Manifest, PinStyle
 from packages.sca.resolvers import ResolverResult
 from packages.sca.transitive import (
+    _collapse_cargo_workspaces,
+    _is_cargo_workspace_root,
     expand_missing_transitives,
 )
 
@@ -619,3 +621,70 @@ def test_medium_confidence_typosquat_does_not_skip(tmp_path, monkeypatch):
     _, statuses = expand_missing_transitives(manifests, direct)
     # Medium confidence → cascade still runs (different status).
     assert statuses[0].method != "skipped_typosquat_refused"
+
+
+# ---------------------------------------------------------------------------
+# Cargo workspace collapse
+# ---------------------------------------------------------------------------
+
+
+def test_is_cargo_workspace_root(tmp_path):
+    root = tmp_path / "Cargo.toml"
+    root.write_text("[workspace]\nmembers = ['a']\n")
+    assert _is_cargo_workspace_root(root) is True
+
+    member = tmp_path / "a" / "Cargo.toml"
+    member.parent.mkdir()
+    member.write_text("[package]\nname = 'a'\n")
+    assert _is_cargo_workspace_root(member) is False
+
+
+def test_is_cargo_workspace_root_missing_file(tmp_path):
+    assert _is_cargo_workspace_root(tmp_path / "nonexistent") is False
+
+
+def test_collapse_cargo_workspaces_drops_members(tmp_path):
+    """Workspace members with a lockfile at the root get collapsed."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "Cargo.toml").write_text("[workspace]\nmembers = ['a', 'b']\n")
+    (root / "Cargo.lock").write_text("# lock\n")
+    a_dir = root / "a"
+    a_dir.mkdir()
+    (a_dir / "Cargo.toml").write_text("[package]\nname = 'a'\n")
+    b_dir = root / "b"
+    b_dir.mkdir()
+    (b_dir / "Cargo.toml").write_text("[package]\nname = 'b'\n")
+
+    m_a = _manifest("Cargo", a_dir / "Cargo.toml")
+    m_b = _manifest("Cargo", b_dir / "Cargo.toml")
+    lockfile_dirs = {
+        ("Cargo", root): _manifest("Cargo", root / "Cargo.lock", is_lockfile=True),
+    }
+    by_eco_dir = {
+        ("Cargo", a_dir): [m_a],
+        ("Cargo", b_dir): [m_b],
+    }
+    result = _collapse_cargo_workspaces(by_eco_dir, lockfile_dirs)
+    assert ("Cargo", a_dir) not in result
+    assert ("Cargo", b_dir) not in result
+
+
+def test_collapse_cargo_workspaces_keeps_non_cargo(tmp_path):
+    """Non-Cargo entries pass through untouched."""
+    pip_dir = tmp_path / "py"
+    pip_dir.mkdir()
+    m = _manifest("PyPI", pip_dir / "requirements.txt")
+    by_eco_dir = {("PyPI", pip_dir): [m]}
+    result = _collapse_cargo_workspaces(by_eco_dir, {})
+    assert ("PyPI", pip_dir) in result
+
+
+def test_collapse_cargo_workspaces_keeps_standalone(tmp_path):
+    """A standalone Cargo project (no workspace parent) stays."""
+    proj = tmp_path / "standalone"
+    proj.mkdir()
+    (proj / "Cargo.toml").write_text("[package]\nname = 'solo'\n")
+    m = _manifest("Cargo", proj / "Cargo.toml")
+    result = _collapse_cargo_workspaces({("Cargo", proj): [m]}, {})
+    assert ("Cargo", proj) in result
