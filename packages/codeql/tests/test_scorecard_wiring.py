@@ -104,6 +104,7 @@ def _build_llm(tmp_path) -> "object":
     client.request_count = 0
     client.task_type_costs = {}
     client.short_circuits = 0
+    client._daily_quota_exhausted = set()
     client._stats_lock = threading.RLock()
     client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
