@@ -579,14 +579,27 @@ class CExtractor:
             if split_match:
                 name = split_match.group(1)
                 if name not in self.KEYWORDS and name not in seen:
-                    for j in range(i + 1, min(i + 3, len(lines))):
+                    # K&R declarations (e.g. `z_streamp strm;`) may
+                    # appear between the signature and the `{`.
+                    for j in range(i + 1, min(i + 40, len(lines))):
                         fwd = lines[j].strip()
                         if fwd == '{':
-                            functions.append(FunctionInfo(name=name, line_start=i + 1))
+                            functions.append(FunctionInfo(
+                                name=name, line_start=i + 1,
+                                metadata=self._c_metadata(line, name),
+                            ))
                             seen.add(name)
                             break
-                        if fwd and fwd != '{':
-                            break
+                        if fwd.startswith('#') or fwd.startswith('//'):
+                            continue
+                        if not fwd:
+                            continue
+                        # K&R parameter declaration: `type name;` possibly
+                        # followed by a comment (`unsigned start; /* ... */`)
+                        fwd_no_comment = re.sub(r'/\*.*?\*/', '', fwd).strip()
+                        if ';' in fwd_no_comment:
+                            continue
+                        break
                 i += 1
                 continue
 
@@ -1559,9 +1572,83 @@ class TreeSitterExtractor:
                 # Python: walk into decorated definitions
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
+            elif (child.type == "function_declarator"
+                  and self.language in ("c", "cpp")
+                  and node.type in ("translation_unit", "ERROR")):
+                # C/C++ fragmented-parse recovery: macros (ZEXPORT,
+                # ZLIB_INTERNAL etc.) between return type and function
+                # name cause tree-sitter to emit the function_declarator
+                # as a top-level sibling instead of inside a
+                # function_definition. Recover the name.
+                self._recover_c_orphan_declarator(child, functions)
+            elif (child.type == "ERROR"
+                  and self.language in ("c", "cpp")
+                  and child.end_point[0] - child.start_point[0] > 2):
+                # C/C++ ERROR node recovery: look for function_declarator
+                # inside large ERROR nodes.
+                self._recover_c_error_node(child, functions)
             else:
                 self._walk(child, functions, class_name=class_name,
                            class_attributes=class_attributes)
+
+    def _recover_c_orphan_declarator(self, decl_node, functions: List[FunctionInfo]) -> None:
+        """Recover a C function from a top-level function_declarator.
+
+        When macros like ZEXPORT sit between the return type and the
+        function name, tree-sitter emits the function_declarator as a
+        sibling of the translation_unit root, not inside a
+        function_definition. Find the name and estimate the end line by
+        scanning forward for the matching compound_statement.
+        """
+        seen_names = {f.name for f in functions}
+        name = None
+        for sub in decl_node.children:
+            if sub.type == "identifier":
+                name = sub.text.decode()
+                break
+        if not name or name in seen_names or name in CExtractor.KEYWORDS:
+            return
+        # Estimate end: scan siblings for the next compound_statement
+        # (the function body `{ ... }`).
+        end_line = decl_node.start_point[0] + 1
+        sib = decl_node.next_sibling
+        while sib is not None:
+            if sib.type == "compound_statement":
+                end_line = sib.end_point[0] + 1
+                break
+            if sib.type in ("function_definition", "function_declarator",
+                            "preproc_include", "preproc_define"):
+                break
+            sib = sib.next_sibling
+        functions.append(FunctionInfo(
+            name=name,
+            line_start=decl_node.start_point[0] + 1,
+            line_end=end_line,
+            metadata=FunctionMetadata(visibility=None),
+        ))
+
+    def _recover_c_error_node(self, error_node, functions: List[FunctionInfo]) -> None:
+        """Extract functions from C/C++ ERROR nodes caused by macro annotations."""
+        seen_names = {f.name for f in functions}
+        for child in error_node.children:
+            if child.type == "function_declarator":
+                name = None
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        name = sub.text.decode()
+                        break
+                if name and name not in seen_names and name not in CExtractor.KEYWORDS:
+                    functions.append(FunctionInfo(
+                        name=name,
+                        line_start=child.start_point[0] + 1,
+                        line_end=error_node.end_point[0] + 1,
+                        metadata=FunctionMetadata(visibility=None),
+                    ))
+                    seen_names.add(name)
+            elif child.type == "compound_statement":
+                continue
+            elif child.named_child_count > 0:
+                self._recover_c_error_node(child, functions)
 
     def _extract_function(self, node, class_name: Optional[str],
                           attrs: List[str],
