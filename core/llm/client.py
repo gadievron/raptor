@@ -1440,10 +1440,6 @@ class LLMClient:
 
                         if _is_daily_quota_error(e):
                             self._daily_quota_exhausted.add(model_key)
-                            # escape_nonprintable on provider/model
-                            # — config-loaded strings, could carry
-                            # ANSI/BIDI/control bytes from a hostile
-                            # models.json edit. Defence in depth.
                             from core.security.log_sanitisation import escape_nonprintable as _esc
                             logger.warning(
                                 "Daily quota exhausted for %s/%s — "
@@ -1464,9 +1460,16 @@ class LLMClient:
                                 _esc(quota_guidance),
                             )
 
-                        # Sanitisation: redact_secrets covers API keys
-                        # and secrets; escape_nonprintable defangs
-                        # ANSI/control bytes; [:1024] caps the length.
+                        # Sanitisation is the BROADER of the two
+                        # available paths: redact_secrets covers more
+                        # patterns than _sanitize_log_message's API-key
+                        # regex; escape_nonprintable defangs ANSI/control
+                        # bytes; [:1024] caps the length. This was the
+                        # sanitisation the (now-demoted) provider ERROR
+                        # used; moving it to the surviving operator-
+                        # visible line preserves the safety properties
+                        # at the right level. See the retry-dedupe
+                        # adversarial-review notes for rationale.
                         from core.security.log_sanitisation import (
                             escape_nonprintable as _esc_np,
                         )
@@ -1764,6 +1767,13 @@ class LLMClient:
 
                     except Exception as e:
                         last_error = e
+                        # Schema reliability signal — only record the model as
+                        # schema-failing when the error class points at a
+                        # response-shape problem (parse / schema-mismatch /
+                        # validation), not at infra (network 5xx, timeouts,
+                        # quota). Otherwise we'd attribute provider flakes as
+                        # this model's schema unreliability and the SCHEMA_VALID
+                        # cell would drift to nonsense.
                         if not (_is_quota_error(e) or _is_retryable_error(e)):
                             self._record_schema_validity(model.model_name, success=False)
 
@@ -1778,6 +1788,10 @@ class LLMClient:
                             break
                         elif _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
+                            # escape_nonprintable on provider/model
+                            # — config-loaded strings, could carry
+                            # ANSI/BIDI/control bytes from a hostile
+                            # models.json edit. Defence in depth.
                             from core.security.log_sanitisation import escape_nonprintable as _esc
                             logger.warning(
                                 "Quota error for %s/%s:%s",
@@ -1785,6 +1799,8 @@ class LLMClient:
                                 _esc(quota_guidance),
                             )
 
+                        # Broader sanitisation — same rationale as the
+                        # ``generate`` retry loop above.
                         from core.security.log_sanitisation import (
                             escape_nonprintable as _esc_np,
                         )

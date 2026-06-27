@@ -94,11 +94,11 @@ def _client(
     client.total_cost = 0.0
     client.request_count = 0
     client.task_type_costs = {}
+    client._daily_quota_exhausted = set()
     client._stats_lock = threading.RLock()
     client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
     client._key_locks_cap = 4096
-    client._daily_quota_exhausted = set()
     return client
 
 
