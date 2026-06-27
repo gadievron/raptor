@@ -98,6 +98,7 @@ def _client(
     client._key_locks = OrderedDict()
     client._key_locks_guard = threading.Lock()
     client._key_locks_cap = 4096
+    client._daily_quota_exhausted = set()
     return client
 
 
