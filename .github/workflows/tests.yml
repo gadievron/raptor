@@ -126,6 +126,7 @@ jobs:
       codeql: ${{ steps.filter.outputs.codeql }}
       llm_analysis: ${{ steps.filter.outputs.llm_analysis }}
       cve_diff: ${{ steps.filter.outputs.cve_diff }}
+      cve_env: ${{ steps.filter.outputs.cve_env }}
       fuzzing: ${{ steps.filter.outputs.fuzzing }}
       sage: ${{ steps.filter.outputs.sage }}
       orchestration: ${{ steps.filter.outputs.orchestration }}
@@ -384,6 +385,7 @@ jobs:
             --ignore=packages/codeql/tests \
             --ignore=packages/llm_analysis/tests \
             --ignore=packages/cve_diff/tests \
+            --ignore=packages/cve_env/tests \
             --ignore=packages/fuzzing/tests \
             --ignore=packages/oss_forensics/tests \
             --ignore=packages/source_intel/tests \
@@ -942,6 +944,70 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m pytest packages/cve_diff/tests -n auto
 
+  python-unit-tests-cve-env:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.cve_env == 'true')
+    runs-on: ubuntu-latest
+    # cve-env's suite is unit-only in CI: its Docker/Colima E2E tests skip
+    # without a daemon. Slightly larger budget than cve_diff (20) for the
+    # larger unit-test set.
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0  # was v6.0.3
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Stagger cache restore (avoid 429 thundering herd)
+        run: sleep $((RANDOM % 8))
+
+      - name: Restore venv from cache (attempt 1, exact key)
+        id: cache-1
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Backoff before retry
+        if: steps.cache-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+        id: cache-2
+        if: steps.cache-1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          path: ${{ env.VENV_PATH }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+      - name: Install uv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # was v8.2.0
+
+      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run cve_env tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/cve_env/tests -n auto
+
   python-unit-tests-fuzzing:
     needs: [pre_check, changes]
     if: |
@@ -1024,6 +1090,7 @@ jobs:
       - python-unit-tests-codeql
       - python-unit-tests-llm-analysis
       - python-unit-tests-cve-diff
+      - python-unit-tests-cve-env
       - python-unit-tests-fuzzing
       - python-unit-tests-sage
       - python-unit-tests-orchestration
