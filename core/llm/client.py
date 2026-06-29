@@ -219,6 +219,20 @@ def _is_quota_error(error: Exception) -> bool:
     ])
 
 
+def _is_daily_quota_error(error: Exception) -> bool:
+    """Detect daily/long-horizon quota exhaustion vs transient rate limits.
+
+    Daily quotas (e.g. Gemini's per_day limit) won't clear for hours.
+    Retrying wastes API calls and wall-clock time.
+    """
+    error_str = str(error).lower()
+    return _is_quota_error(error) and any(
+        marker in error_str
+        for marker in ("per_day", "per day", "daily", "retry in 6h", "retry in 5h",
+                        "retry in 4h", "retry in 3h", "retry in 2h", "retry in 1h")
+    )
+
+
 def _is_retryable_error(error: Exception) -> bool:
     """Check if an error is transient and worth retrying.
 
@@ -226,7 +240,11 @@ def _is_retryable_error(error: Exception) -> bool:
     Non-retryable: schema validation, auth errors (401/403), bad request (400),
     Instructor failures, Pydantic validation errors.
     """
-    # Rate limits are retryable (with backoff)
+    # Daily quotas are NOT retryable — won't clear for hours
+    if _is_daily_quota_error(error):
+        return False
+
+    # Per-minute rate limits are retryable (with backoff)
     if _is_quota_error(error):
         return True
 
@@ -242,6 +260,15 @@ def _is_retryable_error(error: Exception) -> bool:
     retryable_patterns = ("timeout", "connection", "502", "503", "504",
                           "internal server error", "service unavailable")
     if any(p in error_str for p in retryable_patterns):
+        return True
+
+    # JSON parse failures from LLM output are retryable — the model
+    # generated malformed JSON but may succeed on a different sample.
+    if isinstance(error, json.JSONDecodeError):
+        return True
+    json_parse_patterns = ("unterminated string", "expecting value",
+                           "expecting property name", "invalid \\escape")
+    if any(p in error_str for p in json_parse_patterns):
         return True
 
     # Everything else is non-retryable (schema errors, 400, 401, 403, 404,
@@ -404,6 +431,11 @@ class LLMClient:
         # surfaced in /codeql's summary so the scorecard's effect on
         # cost shows up as a concrete line.
         self.short_circuits = 0
+        # Models whose daily quota is exhausted. Keyed by
+        # (provider, model_name). Checked before each attempt
+        # so we skip straight to fallback instead of burning
+        # 3 retries on guaranteed 429s.
+        self._daily_quota_exhausted: set[tuple[str, str]] = set()
         self._stats_lock = threading.RLock()
         # Per-cache-key locks. Two threads issuing the same cache key
         # serialise on its lock so only one calls the provider; the
@@ -1305,6 +1337,14 @@ class LLMClient:
                 if not model.enabled:
                     continue
 
+                model_key = (model.provider, model.model_name)
+                if model_key in self._daily_quota_exhausted:
+                    logger.debug(
+                        "Skipping %s/%s — daily quota exhausted",
+                        model.provider, model.model_name,
+                    )
+                    continue
+
                 attempts_count += 1
 
                 if model_idx == 0:
@@ -1398,7 +1438,16 @@ class LLMClient:
                     except Exception as e:
                         last_error = e
 
-                        if _is_quota_error(e):
+                        if _is_daily_quota_error(e):
+                            self._daily_quota_exhausted.add(model_key)
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Daily quota exhausted for %s/%s — "
+                                "skipping for remainder of session",
+                                _esc(model.provider), _esc(model.model_name),
+                            )
+                            break
+                        elif _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
                             # escape_nonprintable on provider/model
                             # — config-loaded strings, could carry
@@ -1594,6 +1643,14 @@ class LLMClient:
                 if not model.enabled:
                     continue
 
+                model_key = (model.provider, model.model_name)
+                if model_key in self._daily_quota_exhausted:
+                    logger.debug(
+                        "Skipping %s/%s (structured) — daily quota exhausted",
+                        model.provider, model.model_name,
+                    )
+                    continue
+
                 attempts_count += 1
 
                 if model_idx == 0:
@@ -1633,7 +1690,21 @@ class LLMClient:
                                 prompt, schema, system_prompt, **kwargs,
                             )
                         except Exception:
-                            self._release_budget(_BUDGET_RESERVATION)
+                            # The provider may have made an API call (e.g.
+                            # fallback called generate()) before the JSON
+                            # parse failed. Record any cost incurred so
+                            # tracking stays accurate.
+                            cost_delta = provider.total_cost - cost_before
+                            if cost_delta > 0:
+                                with self._stats_lock:
+                                    self.total_cost += cost_delta - _BUDGET_RESERVATION
+                                    self.request_count += 1
+                                    if task_type:
+                                        self.task_type_costs[task_type] = (
+                                            self.task_type_costs.get(task_type, 0.0) + cost_delta
+                                        )
+                            else:
+                                self._release_budget(_BUDGET_RESERVATION)
                             raise
                         duration = time.monotonic() - t_start
 
@@ -1706,7 +1777,16 @@ class LLMClient:
                         if not (_is_quota_error(e) or _is_retryable_error(e)):
                             self._record_schema_validity(model.model_name, success=False)
 
-                        if _is_quota_error(e):
+                        if _is_daily_quota_error(e):
+                            self._daily_quota_exhausted.add(model_key)
+                            from core.security.log_sanitisation import escape_nonprintable as _esc
+                            logger.warning(
+                                "Daily quota exhausted for %s/%s — "
+                                "skipping for remainder of session",
+                                _esc(model.provider), _esc(model.model_name),
+                            )
+                            break
+                        elif _is_quota_error(e):
                             quota_guidance = _get_quota_guidance(model.model_name, model.provider)
                             # escape_nonprintable on provider/model
                             # — config-loaded strings, could carry
