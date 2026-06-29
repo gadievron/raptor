@@ -260,6 +260,7 @@ class FuzzingOrchestrator:
         corpus_dir: Optional[Path] = None,
         dict_path: Optional[Path] = None,
         binary_understand: bool = True,
+        path_homology: bool = False,
         source_context_dir: Optional[Path] = None,
         seed_profile: str = "default",
     ) -> Dict[str, Any]:
@@ -325,6 +326,7 @@ class FuzzingOrchestrator:
                         plan.target.path,
                         out_path=out_dir / "binary-context-map.json",
                         llm=self.llm,
+                        path_homology=path_homology,
                     )
                     logger.info(
                         "radare2 binary-context-map written: "
