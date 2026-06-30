@@ -1,0 +1,17 @@
+# Root tool configuration for RAPTOR's own development controls.
+#
+# This is deliberately not a packaging migration. Runtime and development
+# dependencies still live in requirements.txt / requirements-dev.txt.
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Keep this in one place. The CI lint workflow reads Ruff's normal config
+# discovery path instead of repeating the rule list in shell flags.
+select = [
+    "F401", # unused imports
+    "F811", # redefinition of unused names
+    "F821", # undefined names
+    "F841", # unused local variables
+]

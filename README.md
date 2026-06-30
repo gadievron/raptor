@@ -194,6 +194,26 @@ CodeQL needs network access only during initial setup to download the CLI and qu
 
 ---
 
+## How RAPTOR checks itself
+
+RAPTOR does dogfood a fair bit of its own security stuff, but it is worth being honest about what actually blocks a PR and what just runs in the background to keep us honest. Some of this is a hard gate, some of it is a scheduled check, and some of it is just a benchmark we keep around so we can tell when we have made things worse. The fuller breakdown, including the actual parameters and how to reproduce the checks, is in `docs/security/self-assessment.md`.
+
+| Control | What it checks | Trigger | Config / evidence |
+|---|---|---|---|
+| Ruff | Python correctness linting (`F401`, `F811`, `F821`, `F841`) | PR diff gate, plus weekly full-tree audit | `pyproject.toml`, `.github/workflows/lint.yml` |
+| Pytest | Fast unit/integration boundaries, subsystem-specific tiers, prompt-envelope audit | PRs, pushes to `main`, merge queue, scheduled full suite | `pytest.ini`, `.github/workflows/tests.yml`, `.github/workflows/nightly.yml` |
+| CodeQL Advanced | Python, C/C++, and GitHub Actions code scanning | PRs, pushes to `main`, merge queue, weekly schedule | `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml` |
+| Workflow hardening | SHA-pinned third-party Actions, least-privilege permissions, command metadata linting | Every workflow change and every lint run | `.github/workflows/`, `.github/scripts/check_command_metadata.py` |
+| RAPTOR SCA PR gate | Dependency and supply-chain regressions introduced by a PR | Manifest / lockfile / workflow changes | `.github/workflows/sca-pr-gate.yml` |
+| RAPTOR SCA self-bump | Mechanical dependency hardening and safe upgrade proposals | Weekly schedule, manual run | `.github/workflows/sca-self-bump.yml` |
+| SCA compromise corpus | Whether known dependency compromises still trigger the expected signal | Weekly schedule, relevant PR changes | `test/data/sca-e2e/compromise-corpus/`, `.github/workflows/sca-compromise-check.yml` |
+| SCA calibration + stress corpus | Whether risk scoring and parser coverage drift over time | Weekly / monthly scheduled jobs | `packages/sca/data/calibration/`, `.github/workflows/refresh-sca-calibration.yml`, `.github/workflows/sca-stress-sweep.yml` |
+| Dataflow corpus | Precision / recall / FP-category tracking for validator behaviour | Developer-run benchmark and corpus tests | `core/dataflow/corpus/`, `core/dataflow/scripts/corpus-metrics` |
+
+Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
+
+---
+
 ## Using a different LLM
 
 RAPTOR has two separate model layers, and it is worth knowing how both work before you change anything.
@@ -359,6 +379,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 | `docs/ARCHITECTURE.md` | Technical architecture detail |
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
 | `docs/DEPENDENCIES.md` | External tools, versions, and licences |
+| `docs/security/self-assessment.md` | RAPTOR's own AppSec controls, workflows, and benchmark evidence |
 | `.claude/commands/oss-forensics.md` | OSS forensics investigation guide |
 | `tiers/personas/README.md` | Persona reference |
 

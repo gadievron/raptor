@@ -136,14 +136,12 @@ jobs:
         if: steps.changed.outputs.files != ''
         run: |
           source $VENV_PATH/bin/activate
-          # Same rule set as the full-tree audit below — F401 (unused
-          # import), F811 (redef of unused name), F821 (undefined name),
-          # F841 (unused local variable). Limited to the .py files the
-          # PR touches so pre-existing violations elsewhere don't block
-          # unrelated PRs. The weekly ``ruff-tree`` audit (below) is the
-          # safety net for tree-wide drift.
-          ruff check --select F401,F811,F821,F841 \
-            --output-format=github \
+          # Rule selection lives in root pyproject.toml. This job is
+          # limited to the .py files the PR touches so pre-existing
+          # violations elsewhere don't block unrelated PRs. The weekly
+          # ``ruff-tree`` audit (below) is the safety net for tree-wide
+          # drift.
+          ruff check --output-format=github \
             ${{ steps.changed.outputs.files }}
 
   # Full-tree audit (informational). Runs on ``push: main``,
@@ -185,12 +183,10 @@ jobs:
       - name: Run ruff (full tree)
         run: |
           source $VENV_PATH/bin/activate
-          # Full-tree pass. F401,F811,F821,F841 matches the PR-diff
-          # gate's rule selection. E501 (3,204 default-88 violations)
-          # deferred until a separate line-length-policy decision per
-          # notes/_judge/W14-E1-lint-ci-gate-design.md.
-          ruff check --select F401,F811,F821,F841 \
-            --output-format=github \
+          # Full-tree pass. Rule selection lives in root pyproject.toml.
+          # E501 remains deliberately out of scope until a separate
+          # line-length-policy decision is made.
+          ruff check --output-format=github \
             .
 
   # Slash-command metadata: enforces every .claude/commands/*.md has a

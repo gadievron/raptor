@@ -73,6 +73,12 @@ FILTERS: dict[str, list[str]] = {
     "ci_lint": [
         ".github/scripts/**",
         ".github/tests/**",
+        "README.md",
+        "docs/security/self-assessment.md",
+        "pyproject.toml",
+        ".github/codeql/**",
+        ".github/workflows/lint.yml",
+        ".github/workflows/codeql.yml",
         ".github/workflows/tests.yml",
         "core/security/prompt_envelope_audit.py",
     ],
