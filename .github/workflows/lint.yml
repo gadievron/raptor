@@ -160,8 +160,7 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           set -f  # disable globbing — $CHANGED_FILES needs word-split but not glob-expand
-          ruff check --select F401,F811,F821,F841 \
-            --output-format=github \
+          ruff check --output-format=github \
             $CHANGED_FILES
 
   # Full-tree audit (informational). Runs on ``push: main``,
@@ -203,12 +202,8 @@ jobs:
       - name: Run ruff (full tree)
         run: |
           source $VENV_PATH/bin/activate
-          # Full-tree pass. F401,F811,F821,F841 matches the PR-diff
-          # gate's rule selection. E501 (3,204 default-88 violations)
-          # deferred until a separate line-length-policy decision per
-          # notes/_judge/W14-E1-lint-ci-gate-design.md.
-          ruff check --select F401,F811,F821,F841 \
-            --output-format=github \
+          # Rule selection lives in root pyproject.toml.
+          ruff check --output-format=github \
             .
 
   # Slash-command metadata: enforces every .claude/commands/*.md has a
