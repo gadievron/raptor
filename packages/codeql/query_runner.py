@@ -205,6 +205,15 @@ class QueryRunner:
         from pathlib import Path
         return [str(Path(self.codeql_cli).resolve().parent)]
 
+    def _codeql_env(self) -> dict:
+        env = RaptorConfig.get_safe_env()
+        # Internal pid1-shim marker only: this authorises RAPTOR's own
+        # sandbox wrapper to dispatch CodeQL. The shim strips
+        # _RAPTOR_TRUSTED before exec'ing the target process, so this
+        # is not target-repo trust and is not equivalent to --trust-repo.
+        env["_RAPTOR_TRUSTED"] = "1"
+        return env
+
     def run_suite(
         self,
         database_path: Path,
@@ -354,6 +363,8 @@ class QueryRunner:
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+                env=self._codeql_env(),
+                strict_env=True,
             )
 
             success = result.returncode == 0
@@ -407,6 +418,8 @@ class QueryRunner:
                             output=str(codeql_cache),
                             tool_paths=self._sandbox_tool_paths(),
                             capture_output=True, text=True, timeout=120,
+                            env=self._codeql_env(),
+                            strict_env=True,
                         )
                         if dl.returncode == 0:
                             break
@@ -425,6 +438,8 @@ class QueryRunner:
                             audit_run_dir=str(out_dir),
                             capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+                            env=self._codeql_env(),
+                            strict_env=True,
                         )
                         success = result.returncode == 0
                     else:
@@ -570,6 +585,8 @@ class QueryRunner:
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+                env=self._codeql_env(),
+                strict_env=True,
             )
 
             success = result.returncode == 0
@@ -794,6 +811,8 @@ class QueryRunner:
                     audit_run_dir=str(out_dir),
                     capture_output=True, text=True,
                     timeout=180,
+                    env=self._codeql_env(),
+                    strict_env=True,
                 )
                 if install_proc.returncode != 0:
                     # Surface install failure at warning level so
@@ -828,6 +847,8 @@ class QueryRunner:
                 audit_run_dir=str(out_dir),
                 capture_output=True, text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+                env=self._codeql_env(),
+                strict_env=True,
             )
         except Exception as e:
             logger.warning(f"IRIS LocalFlowSource ({lang}) analyze raised: {e}")

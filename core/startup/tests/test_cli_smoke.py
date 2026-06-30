@@ -168,6 +168,16 @@ def test_agentic_accepts_threat_model_use_stale():
     )
 
 
+def test_agentic_accepts_codex_exec():
+    assert _argparse_accepted("agentic", "--repo", "./repo", "--codex-exec")
+
+
+def test_agentic_accepts_log_level_warning():
+    assert _argparse_accepted(
+        "agentic", "--repo", "./repo", "--log-level", "WARNING"
+    )
+
+
 def test_fuzz_accepts_duration():
     assert _argparse_accepted(
         "fuzz", "--binary", "./bin", "--duration", "60"

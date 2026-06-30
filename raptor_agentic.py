@@ -15,6 +15,7 @@ Complete end-to-end autonomous security testing:
 """
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -36,6 +37,36 @@ from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
+
+_CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _set_console_log_level(level: int, *, include_root: bool = False) -> None:
+    """Set operator-facing console verbosity without touching file audit logs."""
+    for handler in logger.logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            handler.setLevel(level)
+
+    if not include_root:
+        return
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if (
+            isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, logging.FileHandler)
+            and getattr(handler, "_raptor_root_handler", False)
+        ):
+            handler.setLevel(level)
+    root_logger.setLevel(level)
+
+
+def _configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
+    """Apply run-level console logging flags."""
+    if log_level:
+        _set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
+    elif verbose:
+        _set_console_log_level(logging.DEBUG)
 
 
 def _tuning_default(key: str) -> int:
@@ -1294,6 +1325,15 @@ Examples:
                             "Surfaces per-LLM-call detail (cache hits, retries, "
                             "per-call cost/duration). Useful for debugging "
                             "multi-model dispatches or schema validation failures.")
+    parser.add_argument(
+        "--log-level",
+        choices=_CONSOLE_LOG_LEVELS,
+        type=str.upper,
+        help=(
+            "Set console log level for this run. Use WARNING to hide INFO "
+            "sandbox/proxy chatter; overrides --verbose."
+        ),
+    )
 
     # Fuzzing integration (Phase 5: dynamic confirmation)
     parser.add_argument("--fuzz", action="store_true",
@@ -1316,6 +1356,13 @@ Examples:
              "With it, model-dependent defenses (envelope tags, datamarking, "
              "base64) are disabled; model-independent floor still holds. "
              "Logged in run metadata and flagged in the final report.",
+    )
+    parser.add_argument(
+        "--codex-exec",
+        action="store_true",
+        help="Use authenticated Codex CLI web-login state via `codex exec` "
+             "for Phase 4 analysis. PR2 bridge is analysis-only; exploit, "
+             "patch, consensus, judge, aggregate, and group LLM tasks are disabled.",
     )
     model_group = parser.add_argument_group(
         "multi-model analysis",
@@ -1423,6 +1470,9 @@ Examples:
 
     apply_cli_args(args, parser=parser)
 
+    if args.codex_exec and args.sequential:
+        parser.error("--codex-exec requires Phase 4 orchestration; remove --sequential")
+
     if args.threat_model_only:
         args.threat_model = True
     if args.threat_model:
@@ -1437,15 +1487,12 @@ Examples:
     if args.phase_timeout != RaptorConfig.DEFAULT_TIMEOUT:
         RaptorConfig.DEFAULT_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
 
-    # --verbose: drop the existing console StreamHandler from INFO to
-    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
-    # cost/duration) becomes visible. Doesn't change the file handler
-    # (already DEBUG) — only what the operator sees on stderr.
-    if getattr(args, "verbose", False):
-        import logging
-        for h in logger.logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-                h.setLevel(logging.DEBUG)
+    # Run-level console verbosity. File audit logging remains DEBUG;
+    # this only controls what the operator sees on stderr.
+    _configure_run_logging(
+        getattr(args, "log_level", None),
+        getattr(args, "verbose", False),
+    )
 
     # Propagate --trust-repo to every target-repo trust check so each
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
@@ -2458,13 +2505,14 @@ Examples:
     analysis = {}
     autonomous_out = None
     analysis_report = None
-    if not llm_env.llm_available:
+    if not llm_env.llm_available and not args.codex_exec:
         print("\n⚠️  Phase 3 skipped - No LLM provider available")
         print("    To enable autonomous analysis, either:")
         print("    1. Set ANTHROPIC_API_KEY environment variable, OR")
         print("    2. Set OPENAI_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY, OR")
         print("    3. Run Ollama locally (https://ollama.ai), OR")
-        print("    4. Run inside Claude Code (claude)")
+        print("    4. Run inside Claude Code (claude), OR")
+        print("    5. Run `python3 raptor.py doctor --codex-login` and pass --codex-exec")
         logger.warning("Phase 3 skipped - No LLM provider configured")
     else:
         autonomous_out = out_dir / "autonomous"
@@ -2513,7 +2561,7 @@ Examples:
             analysis_cmd.append("--no-annotations")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
-        if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+        if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
         rc, stdout, stderr = run_command_streaming(
@@ -2585,7 +2633,7 @@ Examples:
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
     orchestration_result = None
-    if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
+    if (llm_env.claude_code or llm_env.external_llm or args.codex_exec) and not args.sequential:
         print("\n" + "=" * 70)
         print("ANALYSING", flush=True)
         print("=" * 70)
@@ -2595,7 +2643,7 @@ Examples:
                 build_llm_config_from_flags, orchestrate,
             )
 
-            llm_config = build_llm_config_from_flags(
+            llm_config = None if args.codex_exec else build_llm_config_from_flags(
                 models=getattr(args, "model", []) or [],
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
@@ -2611,8 +2659,8 @@ Examples:
                 out_dir=out_dir,
                 max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
                 max_findings=args.max_findings,
-                no_exploits=args.no_exploits,
-                no_patches=args.no_patches,
+                no_exploits=args.no_exploits or args.codex_exec,
+                no_patches=args.no_patches or args.codex_exec,
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
@@ -2621,12 +2669,13 @@ Examples:
                 deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
                 allow_unreachable=getattr(args, "allow_unreachable", False),
+                use_codex_exec=args.codex_exec,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
     elif not llm_env.llm_available:
         print("\n  No LLM available. Findings prepared for manual review.")
-        print("  For automated analysis, set an API key or install Claude Code.")
+        print("  For automated analysis, set an API key, install Claude Code, or pass --codex-exec after Codex login.")
 
     # ========================================================================
     # POST-PASS: /validate (opt-in via --validate)
@@ -3196,6 +3245,8 @@ Examples:
             via = orch.get("analysis_model") or "external LLM"
         elif mode == "cc_fallback":
             via = "Claude Code (fallback)"
+        elif mode == "codex_exec":
+            via = "Codex exec"
         else:
             via = mode
         n = orch.get('findings_analysed', 0)
@@ -3220,6 +3271,8 @@ Examples:
         via = orch_phase.get("analysis_model") or "external LLM"
     elif mode == "cc_fallback":
         via = "Claude Code (fallback)"
+    elif mode == "codex_exec":
+        via = "Codex exec"
     else:
         via = None
 

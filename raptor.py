@@ -248,6 +248,12 @@ def _wants_help(args: list) -> bool:
     return "--help" in args or "-h" in args
 
 
+def _uses_codex_exec(script_path: Path, args: list) -> bool:
+    """True when the child uses Codex CLI auth instead of LLM SDK creds."""
+
+    return script_path.name == "raptor_agentic.py" and "--codex-exec" in args
+
+
 def _run_with_lifecycle(command: str, script_path: Path, args: list,
                         label: str) -> int:
     """Run a script with lifecycle start/complete/fail wrapping.
@@ -694,7 +700,11 @@ def _run_script(script_path: Path, args: list) -> int:
         # exists until Phase C); ``RAPTOR_LLM_SOCKET`` and
         # ``RAPTOR_LLM_TOKEN_FD`` direct the worker's SDK calls
         # through the dispatcher when present.
-        dispatcher = _get_or_start_dispatcher()
+        # Codex exec uses the Codex CLI's own authenticated session, not the
+        # HTTP LLM SDK credential dispatcher. Skipping dispatcher startup here
+        # avoids requiring httpx for Codex-only runs and keeps the fallback
+        # warning from looking like the actual failure.
+        dispatcher = None if _uses_codex_exec(script_path, args) else _get_or_start_dispatcher()
         if dispatcher is not None:
             from core.llm.dispatcher.spawn import spawn_worker
             proc = spawn_worker(

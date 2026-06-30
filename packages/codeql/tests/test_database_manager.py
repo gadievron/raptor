@@ -228,6 +228,8 @@ class TestStagingPromote:
                          env_vars={}, confidence=1.0, detected_files=[])
 
         def fake_sandbox_run(cmd, **kwargs):
+            assert kwargs["env"]["_RAPTOR_TRUSTED"] == "1"
+            assert kwargs["strict_env"] is True
             # Simulate codeql writing the DB to the staging path it was
             # given on the command line. cmd[3] is the staging path
             # (codeql, database, create, <staging>, ...).
