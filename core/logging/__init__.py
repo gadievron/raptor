@@ -28,6 +28,31 @@ _RESERVED_LOGRECORD_NAMES = frozenset({
     "process", "message", "asctime",
 })
 
+CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _raptor_logger() -> logging.Logger:
+    return logging.getLogger("raptor")
+
+
+def _is_console_handler(handler: logging.Handler) -> bool:
+    return (
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+    )
+
+
+def _raptor_console_handlers() -> list[logging.Handler]:
+    return [handler for handler in _raptor_logger().handlers if _is_console_handler(handler)]
+
+
+def _raptor_root_console_handlers() -> list[logging.Handler]:
+    return [
+        handler for handler in logging.getLogger().handlers
+        if _is_console_handler(handler)
+        and getattr(handler, "_raptor_root_handler", False)
+    ]
+
 
 class JSONFormatter(logging.Formatter):
     """Format log records as JSON for structured logging."""
@@ -193,10 +218,7 @@ class RaptorLogger:
         # but the file handler's eager initialisation has been a
         # source of bugs before — see the audit-trail filename
         # comment above).
-        if not any(
-            isinstance(h, logging.StreamHandler) and getattr(h, "_raptor_root_handler", False)
-            for h in root_logger.handlers
-        ):
+        if not _raptor_root_console_handlers():
             root_console = logging.StreamHandler(sys.stderr)
             root_console.setLevel(logging.INFO)
             root_console.setFormatter(console_formatter)
@@ -351,3 +373,28 @@ def get_logger(name: Optional[str] = None) -> "logging.Logger":
     # audit handlers attached to the base "raptor" logger.
     safe_name = name if name.startswith("raptor.") else f"raptor.{name}"
     return logging.getLogger(safe_name)
+
+
+def set_console_log_level(level: int, *, include_root: bool = False) -> None:
+    """Set operator-facing console verbosity without touching file audit logs."""
+    # Ensure RAPTOR handlers exist before mutating them.
+    RaptorLogger()
+
+    for handler in _raptor_console_handlers():
+        handler.setLevel(level)
+
+    if not include_root:
+        return
+
+    root_logger = logging.getLogger()
+    for handler in _raptor_root_console_handlers():
+        handler.setLevel(level)
+    root_logger.setLevel(level)
+
+
+def configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
+    """Apply run-level console logging flags."""
+    if log_level:
+        set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
+    elif verbose:
+        set_console_log_level(logging.DEBUG)
