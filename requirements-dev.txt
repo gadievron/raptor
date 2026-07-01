@@ -27,6 +27,18 @@ gcovr==8.6
 # running pytest without bs4 installed.
 beautifulsoup4==4.14.3
 
+# ZKPoX Tier 2/3 (packages/zkpox/{disclosure,anchor,envelope,prove}).
+# Optional at runtime — kept out of requirements.txt to preserve the
+# dependency-free Tier 0/1 import contract — but required here so the
+# disclosure / anchor / envelope / prove tests actually run in CI instead
+# of importorskip-ing. Tests keep their importorskip guards as
+# defense-in-depth for devs running pytest without these installed.
+# cryptography 45.0.4 carried GHSA-537c-gmf6-5ccf (High, CVSS 7.5): the
+# PyPI wheels statically link a vulnerable OpenSSL (OOB read → DoS).
+# Fixed in 48.0.1.
+cryptography==48.0.1
+cbor2==6.0.1
+
 # test for Z3 solver
 # Capped at 4.15.4.0 until the devcontainer base image moves to trixie:
 # z3-solver 4.15.5+ ships only manylinux_2_38_aarch64 wheels (glibc 2.38+),
