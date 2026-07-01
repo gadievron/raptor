@@ -15,7 +15,6 @@ Complete end-to-end autonomous security testing:
 """
 
 import argparse
-import logging
 import os
 import subprocess
 import sys
@@ -30,48 +29,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.json import load_json, save_json
 from core.config import RaptorConfig
-from core.logging import get_logger
+from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.run.safe_io import safe_run_mkdir
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
-
-_CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-
-
-def _raptor_logger() -> logging.Logger:
-    return logging.getLogger("raptor")
-
-
-def _set_console_log_level(level: int, *, include_root: bool = False) -> None:
-    """Set operator-facing console verbosity without touching file audit logs."""
-    for handler in _raptor_logger().handlers:
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-            handler.setLevel(level)
-
-    if not include_root:
-        return
-
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers:
-        if (
-            isinstance(handler, logging.StreamHandler)
-            and not isinstance(handler, logging.FileHandler)
-            and getattr(handler, "_raptor_root_handler", False)
-        ):
-            handler.setLevel(level)
-    root_logger.setLevel(level)
-
-
-def _configure_run_logging(log_level: Optional[str], verbose: bool) -> None:
-    """Apply run-level console logging flags."""
-    if log_level:
-        _set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
-    elif verbose:
-        _set_console_log_level(logging.DEBUG)
-
 
 def _tuning_default(key: str) -> int:
     from core.tuning import get_tuning
@@ -1331,7 +1295,7 @@ Examples:
                             "multi-model dispatches or schema validation failures.")
     parser.add_argument(
         "--log-level",
-        choices=_CONSOLE_LOG_LEVELS,
+        choices=CONSOLE_LOG_LEVELS,
         type=str.upper,
         help=(
             "Set console log level for this run. Use WARNING to hide INFO "
@@ -1483,7 +1447,7 @@ Examples:
 
     # Run-level console verbosity. File audit logging remains DEBUG;
     # this only controls what the operator sees on stderr.
-    _configure_run_logging(
+    configure_run_logging(
         getattr(args, "log_level", None),
         getattr(args, "verbose", False),
     )

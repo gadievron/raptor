@@ -18,36 +18,25 @@ import pytest
 
 def _apply_verbose_wiring() -> None:
     """Mirror the snippet at raptor_agentic.py:main when --verbose."""
-    from raptor_agentic import _configure_run_logging
-    _configure_run_logging(log_level=None, verbose=True)
-
-
-def _raptor_logger() -> logging.Logger:
-    return logging.getLogger("raptor")
+    from core.logging import configure_run_logging
+    configure_run_logging(log_level=None, verbose=True)
 
 
 def _console_handlers():
-    return [
-        h for h in _raptor_logger().handlers
-        if isinstance(h, logging.StreamHandler)
-        and not isinstance(h, logging.FileHandler)
-    ]
+    from core.logging import _raptor_console_handlers
+    return _raptor_console_handlers()
 
 
 def _file_handlers():
     return [
-        h for h in _raptor_logger().handlers
+        h for h in logging.getLogger("raptor").handlers
         if isinstance(h, logging.FileHandler)
     ]
 
 
 def _raptor_root_console_handlers():
-    return [
-        h for h in logging.getLogger().handlers
-        if isinstance(h, logging.StreamHandler)
-        and not isinstance(h, logging.FileHandler)
-        and getattr(h, "_raptor_root_handler", False)
-    ]
+    from core.logging import _raptor_root_console_handlers
+    return _raptor_root_console_handlers()
 
 
 class TestVerboseWiring:
@@ -88,7 +77,7 @@ class TestVerboseWiring:
             assert h.level == logging.DEBUG
 
     def test_log_level_warning_quiets_console_and_root_handlers(self):
-        from raptor_agentic import _configure_run_logging
+        from core.logging import configure_run_logging
 
         root_logger = logging.getLogger()
         root_before = root_logger.level
@@ -102,7 +91,7 @@ class TestVerboseWiring:
                 h.setLevel(logging.INFO)
             root_logger.setLevel(logging.INFO)
 
-            _configure_run_logging(log_level="WARNING", verbose=False)
+            configure_run_logging(log_level="WARNING", verbose=False)
 
             assert console, "expected at least one console StreamHandler"
             assert root_console, "expected RAPTOR root console StreamHandler"
@@ -115,3 +104,16 @@ class TestVerboseWiring:
             for h, level in zip(root_console, root_console_before):
                 h.setLevel(level)
             root_logger.setLevel(root_before)
+
+    def test_launcher_extracts_valid_agentic_log_level_without_consuming_args(self):
+        from raptor import _extract_agentic_log_level
+
+        args = ["--repo", "/tmp/target", "--log-level", "warning"]
+
+        assert _extract_agentic_log_level(args) == "WARNING"
+        assert args == ["--repo", "/tmp/target", "--log-level", "warning"]
+
+    def test_launcher_ignores_invalid_agentic_log_level_for_child_parser(self):
+        from raptor import _extract_agentic_log_level
+
+        assert _extract_agentic_log_level(["--log-level", "NOPE"]) is None

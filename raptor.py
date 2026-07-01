@@ -137,6 +137,28 @@ def _extract_and_strip_max_cost_usd(args: list) -> tuple[float | None, list]:
     return (cap, out)
 
 
+def _extract_agentic_log_level(args: list) -> str | None:
+    """Return a valid agentic --log-level value without consuming argv.
+
+    The child parser remains the source of truth for invalid values. This
+    early extraction is only so parent lifecycle/dispatcher console logs obey
+    the operator's requested verbosity before raptor_agentic.py starts.
+    """
+    from core.logging import CONSOLE_LOG_LEVELS
+
+    for i, arg in enumerate(args):
+        if arg == "--log-level" and i + 1 < len(args):
+            candidate = args[i + 1].upper()
+        elif arg.startswith("--log-level="):
+            candidate = arg.split("=", 1)[1].upper()
+        else:
+            continue
+        if candidate in CONSOLE_LOG_LEVELS:
+            return candidate
+        return None
+    return None
+
+
 def _rewrite_target_arg(args: list, old: str, new: str) -> list:
     """Return ``args`` with the --repo/--binary/--url value ``old`` replaced by
     ``new`` (both ``--flag value`` and ``--flag=value`` forms)."""
@@ -910,6 +932,11 @@ def mode_agentic(args: list) -> int:
     # to set the cc_trust + codeql_trust overrides in its own process.
     if _TRUST_REPO_SEEN and '--trust-repo' not in args:
         args = ['--trust-repo'] + args
+
+    log_level = _extract_agentic_log_level(args)
+    if log_level:
+        from core.logging import configure_run_logging
+        configure_run_logging(log_level=log_level, verbose=False)
 
     return _run_with_lifecycle("agentic", agentic_script, args,
                               "Starting full autonomous workflow (Semgrep + CodeQL)...")
