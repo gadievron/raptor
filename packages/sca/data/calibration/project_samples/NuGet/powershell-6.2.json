@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:43:30Z",
+    "fetched_at": "2026-07-01T09:53:42Z",
     "git_ref": "v6.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of powershell-6.2",
@@ -38,7 +38,7 @@
       "dep_name": "Newtonsoft.Json",
       "dep_version": "12.0.1",
       "ecosystem": "NuGet",
-      "epss": 0.02228,
+      "epss": 0.32908,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -49,7 +49,7 @@
       "finding_id": "sca:vuln:NuGet:Newtonsoft.Json:12.0.1:GHSA-5crp-9r3c-p9vr",
       "in_kev": false,
       "purl": "pkg:nuget/Newtonsoft.Json@12.0.1",
-      "raptor_risk_estimate": 28.362815538777472,
+      "raptor_risk_estimate": 39.17560711026815,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -58,8 +58,8 @@
         },
         "evidence": [
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/TestJsonCommand.cs:8",
-          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/ConvertToJsonCommand.cs:10",
+          "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/JsonObject.cs:13",
           "src/Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/Common/InvokeRestMethodCommand.Common.cs:8",
           "src/System.Management.Automation/engine/PSConfiguration.cs:9",
           "... (+5 more)"
@@ -71,10 +71,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.410669484,
+        "epss_multiplier": 0.567229524,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 28.362815538777472,
+        "final": 39.17560711026815,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -117,7 +117,7 @@
       "dep_name": "System.Data.SqlClient",
       "dep_version": "4.6.0",
       "ecosystem": "NuGet",
-      "epss": 0.00189,
+      "epss": 0.00747,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -128,7 +128,7 @@
       "finding_id": "sca:vuln:NuGet:System.Data.SqlClient:4.6.0:GHSA-8g2p-5pqh-5jmc",
       "in_kev": false,
       "purl": "pkg:nuget/System.Data.SqlClient@4.6.0",
-      "raptor_risk_estimate": 7.107808156677637,
+      "raptor_risk_estimate": 7.158372972172805,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -143,10 +143,10 @@
         "cvss_base": 57.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400264467,
+        "epss_multiplier": 0.403111941,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.107808156677637,
+        "final": 7.158372972172805,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -190,7 +190,7 @@
       "dep_name": "System.Data.SqlClient",
       "dep_version": "4.6.0",
       "ecosystem": "NuGet",
-      "epss": 0.00864,
+      "epss": 0.0118,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -201,7 +201,7 @@
       "finding_id": "sca:vuln:NuGet:System.Data.SqlClient:4.6.0:GHSA-98g6-xh36-x2p7",
       "in_kev": false,
       "purl": "pkg:nuget/System.Data.SqlClient@4.6.0",
-      "raptor_risk_estimate": 10.753462908293981,
+      "raptor_risk_estimate": 10.796415816080199,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -216,10 +216,10 @@
         "cvss_base": 86.99999999999999,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.403708992,
+        "epss_multiplier": 0.40532154,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.753462908293981,
+        "final": 10.796415816080199,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -265,7 +265,7 @@
       "dep_name": "System.Net.Http.WinHttpHandler",
       "dep_version": "4.5.2",
       "ecosystem": "NuGet",
-      "epss": 0.11122,
+      "epss": 0.16911,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -276,7 +276,7 @@
       "finding_id": "sca:vuln:NuGet:System.Net.Http.WinHttpHandler:4.5.2:GHSA-6xh7-4v2w-36q6",
       "in_kev": false,
       "purl": "pkg:nuget/System.Net.Http.WinHttpHandler@4.5.2",
-      "raptor_risk_estimate": 10.472242489884161,
+      "raptor_risk_estimate": 11.150588144550316,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -291,10 +291,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.45605556599999997,
+        "epss_multiplier": 0.485596833,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.472242489884161,
+        "final": 11.150588144550316,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
@@ -338,7 +338,7 @@
       "dep_name": "System.Text.Encodings.Web",
       "dep_version": "4.5.0",
       "ecosystem": "NuGet",
-      "epss": 0.02772,
+      "epss": 0.30315,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -349,7 +349,7 @@
       "finding_id": "sca:vuln:NuGet:System.Text.Encodings.Web:4.5.0:GHSA-ghhp-997w-qr28",
       "in_kev": false,
       "purl": "pkg:nuget/System.Text.Encodings.Web@4.5.0",
-      "raptor_risk_estimate": 12.405235917850524,
+      "raptor_risk_estimate": 16.62242964829112,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -364,10 +364,10 @@
         "cvss_base": 98.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.413445516,
+        "epss_multiplier": 0.553997445,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.405235917850524,
+        "final": 16.62242964829112,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.67849,
