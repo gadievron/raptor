@@ -41,9 +41,13 @@ logger = get_logger()
 _CONSOLE_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
+def _raptor_logger() -> logging.Logger:
+    return logging.getLogger("raptor")
+
+
 def _set_console_log_level(level: int, *, include_root: bool = False) -> None:
     """Set operator-facing console verbosity without touching file audit logs."""
-    for handler in logger.logger.handlers:
+    for handler in _raptor_logger().handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
             handler.setLevel(level)
 
