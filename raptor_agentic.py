@@ -37,6 +37,7 @@ from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
 
+
 def _tuning_default(key: str) -> int:
     from core.tuning import get_tuning
     return getattr(get_tuning(), key)
