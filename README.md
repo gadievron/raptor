@@ -61,7 +61,10 @@ cd raptor
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install Claude Code (required)
+# Install Claude Code
+npm install @anthropic-ai/claude-code
+
+# or globally if you want the `claude` command on PATH everywhere. YMMV
 npm install -g @anthropic-ai/claude-code
 
 # Install Semgrep (required for scanning)
