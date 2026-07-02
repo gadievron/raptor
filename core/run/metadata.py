@@ -537,8 +537,8 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
 #    file. Misleading.
 # Finalizing first preserves the data; status update is just the signal.
 
-def complete_run(output_dir: Path, extra: Dict[str, Any] = None,
-                 manifest: Dict[str, Any] = None) -> None:
+def complete_run(output_dir: Path, extra: Optional[Dict[str, Any]] = None,
+                 manifest: Optional[Dict[str, Any]] = None) -> None:
     """Update .raptor-run.json to status=completed.
 
     ``manifest`` merges end-of-run provenance into the manifest sealed at
@@ -652,7 +652,8 @@ def _snapshot_run_coverage(output_dir: Path) -> None:
         log.debug("_snapshot_run_coverage failed for %s", output_dir, exc_info=True)
 
 
-def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,
+def fail_run(output_dir: Path, error: Optional[str] = None,
+             extra: Optional[Dict[str, Any]] = None,
              record_timing: bool = True) -> None:
     """Update .raptor-run.json to status=failed."""
     extra = extra or {}
@@ -662,15 +663,16 @@ def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
 
 
-def cancel_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
+def cancel_run(output_dir: Path, extra: Optional[Dict[str, Any]] = None) -> None:
     """Update .raptor-run.json to status=cancelled."""
     _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_CANCELLED, extra)
 
 
 @contextlib.contextmanager
-def tracked_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
-                target: str = None):
+def tracked_run(output_dir: Path, command: str,
+                extra: Optional[Dict[str, Any]] = None,
+                target: Optional[str] = None):
     """Context manager for run lifecycle. Writes metadata automatically.
 
     Usage:
@@ -804,9 +806,10 @@ def generate_run_metadata(run_dir: Path) -> None:
 _TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED})
 
 
-def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
+def _update_status(output_dir: Path, status: str,
+                   extra: Optional[Dict[str, Any]] = None,
                    record_timing: bool = True,
-                   manifest: Dict[str, Any] = None) -> None:
+                   manifest: Optional[Dict[str, Any]] = None) -> None:
     """Update the status field in .raptor-run.json.
 
     When record_timing is True (default), also records end_timestamp and
