@@ -183,8 +183,10 @@ def _pid_alive(pid: int) -> bool:
     return "claude" in comm
 
 
-def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
-              target: str = None, target_identity: Dict[str, Any] = None) -> Path:
+def start_run(output_dir: Path, command: str,
+              extra: Optional[Dict[str, Any]] = None,
+              target: Optional[str] = None,
+              target_identity: Optional[Dict[str, Any]] = None) -> Path:
     """Write initial .raptor-run.json with status=running.
 
     Call this at the start of a command. Returns the output_dir (for chaining).
