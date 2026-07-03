@@ -104,8 +104,9 @@ def resolve_default_target() -> Optional[str]:
     return env or None
 
 
-def get_output_dir(command: str, target_name: str = "", explicit_out: str = None,
-                   target_path: str = None) -> Path:
+def get_output_dir(command: str, target_name: str = "",
+                   explicit_out: Optional[str] = None,
+                   target_path: Optional[str] = None) -> Path:
     """Resolve the output directory for a command run.
 
     Priority:
