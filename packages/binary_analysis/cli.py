@@ -32,6 +32,7 @@ from core.run.output import TargetMismatchError, get_output_dir
 from packages.binary_analysis.investigation import write_investigation
 from packages.binary_analysis.harness import generate_binary_harness
 from packages.binary_analysis.manifest import BinaryManifest
+from packages.binary_analysis.pipeline import map_result_payload
 from packages.binary_analysis.pipeline import analyse_blackbox_binary, append_runtime_evidence_to_run
 
 _COMMANDS = {
@@ -162,39 +163,7 @@ def _add_trace_args(parser: argparse.ArgumentParser, *, include_out: bool) -> No
 
 
 def _map_result_payload(result: Any, out_dir: Path) -> dict[str, Any]:
-    context = result.context_map
-    class_summary = (context.get("class_inventory") or {}).get("summary") or {}
-    return {
-        "mode": "map",
-        "target": result.manifest.binary_path,
-        "models": [],
-        "items": context.get("entry_points", []),
-        "failed_models": [],
-        "correlation": {
-            "summary": {
-                "entry_point_candidates": len(context.get("entry_points", [])),
-                "input_channels": len(result.input_channels),
-                "sensitive_import_candidates": len(context.get("sink_details", [])),
-                "security_surface_candidates": len(context.get("surface_details", [])),
-                "candidate_flows": len(context.get("candidate_flows", [])),
-                "fuzz_witnesses": len(result.fuzz.crashes),
-                "recovered_classes": int(class_summary.get("class_count", 0)),
-                "framework_callback_candidates": len(context.get("framework_callback_candidates", [])),
-                "decompiled_functions": int(
-                    (context.get("decompilations") or {}).get("coverage", {}).get("decompiled_functions", 0)
-                ),
-            },
-        },
-        "artifacts": {
-            "context_map": str(out_dir / "context-map.json"),
-            "binary_context_map": str(out_dir / "binary-context-map.json"),
-            "binary_manifest": str(out_dir / "binary-manifest.json"),
-            "binary_evidence": str(out_dir / "binary-evidence.json"),
-            "binary_decompilations": str(out_dir / "binary-decompilations.json"),
-            "binary_validation_handoff": str(out_dir / "binary-validation-handoff.json"),
-            "binary_graph": str(result.graph_path),
-        },
-    }
+    return map_result_payload(result, out_dir)
 
 
 def _print_map_summary(payload: dict[str, Any], output_path: Path) -> None:
@@ -270,13 +239,15 @@ def _run_active_phase(
     kind: str,
     cmd: list[str],
     output_dir: Path,
+    trusted: bool = False,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = output_dir / "stdout.log"
     stderr_path = output_dir / "stderr.log"
     try:
         env = RaptorConfig.get_safe_env()
-        env.setdefault("_RAPTOR_TRUSTED", "1")
+        if trusted:
+            env.setdefault("_RAPTOR_TRUSTED", "1")
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -395,6 +366,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                 active_phases.append(_run_active_phase(
                     kind="runtime",
                     output_dir=runtime_dir,
+                    trusted=True,
                     cmd=[
                         str(_repo_root() / "libexec" / "raptor-frida"),
                         "--target",
@@ -427,6 +399,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                 active_phases.append(_run_active_phase(
                     kind="fuzz",
                     output_dir=fuzz_dir,
+                    trusted=True,
                     cmd=[
                         sys.executable,
                         str(_repo_root() / "raptor_fuzzing.py"),
@@ -446,6 +419,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                 active_phases.append(_run_active_phase(
                     kind="fuzz_plan",
                     output_dir=fuzz_dir,
+                    trusted=True,
                     cmd=[
                         sys.executable,
                         str(_repo_root() / "raptor_fuzzing.py"),
@@ -570,6 +544,7 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
     phase = _run_active_phase(
         kind="parser_trace",
         output_dir=runtime_dir,
+        trusted=True,
         cmd=_frida_trace_command(
             target=str(binary),
             duration=args.duration,
@@ -619,13 +594,14 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
 
 
 def _run_fuzz(args: argparse.Namespace) -> int:
+    target = Path(args.target).expanduser().resolve()
     cmd = [
         sys.executable,
         str(_repo_root() / "raptor.py"),
         "fuzz",
         "--orchestrator",
         "--binary",
-        str(args.target),
+        str(target),
         *args.fuzz_args,
     ]
     return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
