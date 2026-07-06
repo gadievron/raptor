@@ -12,6 +12,9 @@ from typing import Any, Iterable
 
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 
+# Deliberately broader than core/function_taxonomy: ubiquitous functions
+# like read/fread/open are zero-signal as *sinks* but valid evidence that
+# a particular *input channel* exists (network, file, ipc, etc.).
 _IMPORT_CHANNELS: dict[str, tuple[str, ...]] = {
     "network": (
         "accept", "accept4", "recv", "recvfrom", "recvmsg",
