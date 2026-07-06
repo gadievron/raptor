@@ -7,11 +7,13 @@ Requires bs4 and requests — skipped if missing.
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 try:
     from packages.web.scanner import WebScanner
     from packages.web.models import WebFinding
+    from packages.web.discovery import DiscoveryResult
     HAS_WEB_DEPS = True
 except ImportError:
     HAS_WEB_DEPS = False
@@ -143,6 +145,59 @@ class TestWebScannerNoneLlm(unittest.TestCase):
 
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
+    def test_passive_approval_level_skips_injection(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                approval_level="passive",
+            )
+            scanner.fuzzer = MagicMock()
+
+            findings = scanner._phase_injection({
+                "discovered_urls": ["http://example.com/search?q=1"],
+                "discovered_parameters": ["q"],
+                "discovered_forms": [],
+            })
+
+            self.assertEqual(findings, [])
+            self.assertIn("injection_skipped", scanner._phases_completed)
+            scanner.fuzzer.fuzz_parameter.assert_not_called()
+
+    @patch("packages.web.ffuf.FfufRunner.run")
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_external_ffuf_discovery_seeds_discovery_urls(
+        self,
+        mock_client_cls,
+        mock_crawler_cls,
+        mock_ffuf_run,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                ffuf_config=SimpleNamespace(),
+            )
+            mock_ffuf_run.return_value = {
+                "tool": "ffuf",
+                "results": [{"url": "http://example.com/admin"}],
+            }
+            discovery = DiscoveryResult(urls=["http://example.com/"])
+
+            scanner._phase_external_discovery(discovery)
+
+            self.assertIn("http://example.com/admin", discovery.urls)
+            self.assertIn("external_discovery", scanner._phases_completed)
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
     def test_injection_finding_carries_verified_outcome_fields(
         self,
         mock_client_cls,
@@ -266,7 +321,13 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             self.assertTrue((out / "web-session-context.json").exists())
             self.assertTrue((out / "verified-outcomes.json").exists())
             self.assertTrue((out / "context-guard-report.json").exists())
+            self.assertTrue((out / "scope-receipt.json").exists())
+            self.assertTrue((out / "web-execution-policy.json").exists())
+            self.assertTrue((out / "web-tool-adapters.json").exists())
+            self.assertTrue((out / "web-evidence-ledger.json").exists())
             self.assertEqual(result["verified_outcomes"]["count"], 1)
+            self.assertEqual(result["execution_policy"]["approval_level"], "active")
+            self.assertEqual(result["evidence_ledger"]["confirmed_web_oracle_findings"], 1)
             self.assertEqual(result["context_guard"]["target_content_is_untrusted"], True)
 
     @patch("packages.web.scanner.WebCrawler")

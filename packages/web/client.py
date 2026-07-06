@@ -11,7 +11,7 @@ Handles HTTP requests with safety features:
 """
 
 import time
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, TYPE_CHECKING
 from urllib.parse import urlparse, urljoin
 
 import requests
@@ -35,18 +35,23 @@ _MAX_REQUEST_HISTORY = 1024
 
 logger = get_logger()
 
+if TYPE_CHECKING:
+    from packages.web.execution_policy import WebExecutionPolicy
+
 
 class WebClient:
     """Secure HTTP client for web application testing."""
 
     def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
-                 verify_ssl: bool = True, reveal_secrets: bool = False):
+                 verify_ssl: bool = True, reveal_secrets: bool = False,
+                 execution_policy: "WebExecutionPolicy | None" = None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
         self.verify_ssl = verify_ssl
         self.reveal_secrets = reveal_secrets
+        self.execution_policy = execution_policy
 
         # Session for cookie management
         self.session = requests.Session()
@@ -79,6 +84,13 @@ class WebClient:
         url = urljoin(self.base_url + '/', path)
         if not self._is_in_scope(url):
             raise ValueError(f"URL outside configured target scope: {url}")
+        if self.execution_policy:
+            self.execution_policy.authorize(
+                tool_id="raptor-http",
+                url=url,
+                risk="passive",
+                action="http_request",
+            )
         return url
 
     def _resolve_redirect(self, current_url: str, response: requests.Response) -> Optional[str]:
@@ -89,6 +101,13 @@ class WebClient:
         next_url = urljoin(current_url, location)
         if not self._is_in_scope(next_url):
             raise ValueError(f"Blocked redirect outside configured target scope: {next_url}")
+        if self.execution_policy:
+            self.execution_policy.authorize(
+                tool_id="raptor-http",
+                url=next_url,
+                risk="passive",
+                action="follow_redirect",
+            )
         return next_url
 
     def _rate_limit_wait(self) -> None:

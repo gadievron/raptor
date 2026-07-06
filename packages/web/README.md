@@ -35,6 +35,11 @@ python3 raptor.py web --url https://target.example.com \
 
 # Full pipeline: map the attack surface first, then validate findings after
 python3 raptor.py web --url https://target.example.com --understand --validate
+
+# Opt-in external content discovery and second-opinion validation
+python3 raptor.py web --url https://target.example.com \
+  --ffuf-wordlist /path/to/words.txt \
+  --validator nuclei
 ```
 
 ---
@@ -45,6 +50,18 @@ Seven phases run in sequence.
 
 ### Phase 0: Preflight
 Checks the target responds. Resets defense telemetry.
+
+Every run also creates a scope receipt. It records the exact origin RAPTOR is
+allowed to touch, the highest approved action level (`passive`, `active`, or
+`intrusive`), and any individually approved tools. The default is `active`,
+which preserves the current bounded scanner flow. Anything outside that origin
+is refused before the request or external tool runs.
+
+`passive` still allows same-origin discovery, crawling and passive checks, but
+skips the injection/fuzzing phase and blocks external active tools such as
+`ffuf` and `nuclei`. `active` is the normal scanner mode. `intrusive` is
+reserved for future adapters such as `sqlmap`, and is not needed for the
+current built-in flow.
 
 ### Phase 1: Authentication
 Four modes are supported:
@@ -71,6 +88,11 @@ Before crawling, the scanner tries to find things a link-follower would miss:
 
 ### Phase 3: Crawl
 Recursive HTML crawler seeded with Phase 2 results. Follows links, parses forms, extracts inline JS endpoints. Stays within the configured origin, rate-limits requests, and handles redirects without following them off-target.
+
+If `--ffuf-wordlist` is supplied, a narrow sandboxed `ffuf` pass runs between
+discovery and crawl. Any in-scope paths it finds are fed back into the crawler.
+The tool is represented through the same adapter and scope-receipt layer as the
+built-in client, so copied configs cannot quietly point it at another host.
 
 ### Phase 4: Passive checks
 
@@ -150,6 +172,11 @@ Output directory gets:
 - `context-guard-report.json` -- what context was allowed, blocked, redacted and treated as untrusted
 - `research_landscape.json` -- PortSwigger archive-derived coverage map and target-aware priorities
 - `defense-telemetry.json` -- LLM defense signals (injection hit rate, schema rejection rate)
+- `scope-receipt.json` -- operator-authorised target origin and approval level
+- `web-execution-policy.json` -- allowed/denied live actions and recent decisions
+- `web-tool-adapters.json` -- built-in and external web capabilities, risk and availability
+- `web-evidence-ledger.json` -- finding-by-finding baseline, attack, diff and replay context
+- `external-validator-results.json` -- opt-in second-opinion validator results, when used
 
 ---
 
@@ -197,6 +224,12 @@ That means `/agentic`, `/validate`, `/understand`, project reporting and future 
 
 `context-guard-report.json` records the context contract for the scan. It marks target HTTP content as untrusted, records same-origin scope enforcement, blocks off-scope URLs and target-supplied instructions, and makes it explicit that web evidence should not be treated as a replayable sandbox witness.
 
+`web-evidence-ledger.json` is the operator-friendly proof view. For each
+finding it keeps the baseline response, attack response, response diff, oracle
+signal, affected parameters and any external validator result. It also stores a
+structured replay hint, but makes it explicit that replaying a live target needs
+fresh authorisation.
+
 Every run also writes `research_landscape.json`. This is RAPTOR's explicit
 view of the modern web-testing landscape, distilled from the PortSwigger Top
 10 Web Hacking Techniques archive from 2006 through 2025. It maps recurring
@@ -229,8 +262,32 @@ Next.js/cache fingerprints push cache-chain assessment higher.
 |---|---|
 | `--understand` | Runs `/understand --map` before Phase 6, builds an adversarial context map of the target, and uses it to prioritise parameters for fuzzing |
 | `--validate` | Runs `/validate` on `needs_review` findings after Phase 6 to confirm exploitability and produce PoCs |
+| `--approval-level passive\|active\|intrusive` | Highest live action risk allowed by the scope receipt. Defaults to `active` |
+| `--approve-tool <id>` | Individually approve a tool that would otherwise be blocked by the approval level |
+| `--validator nuclei` | Run an opt-in external second-opinion validator after RAPTOR's own findings |
 
 Both require an interactive session. They are blocked in CI/CD per the Rule of Two: an agent with write access processing untrusted web content needs a human in the loop.
+
+External validators are not used as refuters. A `nuclei` match adds another
+piece of evidence; a `nuclei` no-match does not undo a live RAPTOR oracle that
+already saw a payload land.
+
+---
+
+## Regression packs
+
+The web scanner now has an offline regression harness:
+
+```bash
+python3 -m packages.web.benchmark \
+  --manifest packages/web/benchmarks/lab-regression.example.json \
+  --report-dir out/web-regression
+```
+
+The harness evaluates saved `web_scan_report.json` files against expected
+finding types or check IDs. It does not hit live targets in CI. That keeps the
+benchmark honest and makes it easy to see whether a scanner change genuinely
+improved coverage or just made more noise.
 
 ---
 

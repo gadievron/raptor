@@ -1,0 +1,26 @@
+{
+  "suite": "web-lab-regression",
+  "cases": [
+    {
+      "id": "burp-bounty-lab-command-injection",
+      "report": "burp-bounty-lab/web_scan_report.json",
+      "expected_findings": [
+        {
+          "vuln_type": "injection",
+          "min_count": 1
+        }
+      ]
+    },
+    {
+      "id": "juice-shop-baseline",
+      "report": "juice-shop/web_scan_report.json",
+      "expected_findings": [
+        {
+          "check_id": "V14.4.1",
+          "min_count": 1
+        }
+      ]
+    }
+  ]
+}
+

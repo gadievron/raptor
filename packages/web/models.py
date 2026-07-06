@@ -7,7 +7,7 @@ type that individual checks produce.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -44,6 +44,8 @@ class WebFinding:
     diff_summary: Optional[str] = None
     attack_vector: Optional[str] = None
     method: Optional[str] = None
+    affected_parameters: list[str] = field(default_factory=list)
+    oracle_signal: Optional[str] = None
     oracle: str = "web"
     reproducible: bool = False
 

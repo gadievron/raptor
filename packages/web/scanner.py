@@ -33,6 +33,9 @@ from packages.web.auth import AuthManager, AuthSession, AuthenticationError
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.discovery import Discoverer, DiscoveryResult
+from packages.web.evidence import build_web_evidence_ledger
+from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
+from packages.web.external_validators import ExternalValidatorRunner
 from packages.web.models import WebFinding
 from packages.web.checks import registry
 from packages.web.checks.base import CheckResult
@@ -41,6 +44,7 @@ from packages.web.research_landscape import (
     high_priority_theme_ids,
 )
 from packages.web.session_context import build_web_session_context
+from packages.web.tool_adapters import web_tool_adapter_report
 from packages.web.verified_outcomes import verified_outcomes_for_findings
 
 logger = get_logger()
@@ -97,6 +101,10 @@ class WebScanner:
         max_fuzz_forms: int = 5,
         run_understand: bool = False,
         run_validate: bool = False,
+        ffuf_config=None,
+        external_validators: Optional[List[str]] = None,
+        approval_level: str = "active",
+        approved_tools: Optional[List[str]] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.llm = llm
@@ -109,12 +117,20 @@ class WebScanner:
         self.max_fuzz_urls = max_fuzz_urls
         self.max_fuzz_params = max_fuzz_params
         self.max_fuzz_forms = max_fuzz_forms
+        self.ffuf_config = ffuf_config
+        self.external_validators = list(external_validators or [])
+        self.execution_policy = WebExecutionPolicy.for_target(
+            self.base_url,
+            approval_level=approval_level,
+            approved_tools=approved_tools or [],
+        )
 
         self.client = WebClient(
             base_url,
             verify_ssl=verify_ssl,
             reveal_secrets=reveal_secrets,
         )
+        self.client.execution_policy = self.execution_policy
         self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         from packages.web.fuzzer import WebFuzzer
         self.fuzzer = WebFuzzer(self.client, llm)
@@ -123,6 +139,8 @@ class WebScanner:
         self.session: Optional[AuthSession] = None
         self._phases_completed: List[str] = []
         self._finding_counter = 0
+        self._external_tool_results: List[dict] = []
+        self._external_validation_results: List[dict] = []
 
         logger.info(f"WebScanner initialised for {base_url}")
 
@@ -138,6 +156,7 @@ class WebScanner:
 
         self._phase_auth()
         discovery = self._phase_discovery()
+        self._phase_external_discovery(discovery)
         crawl_data = self._phase_crawl(discovery)
         all_findings.extend(self._phase_passive_checks(discovery, crawl_data))
 
@@ -155,6 +174,7 @@ class WebScanner:
         if self.run_validate:
             all_findings = self._phase_validate(all_findings)
 
+        self._phase_external_validation(all_findings)
         return self._phase_report(all_findings, discovery, crawl_data)
 
     def _phase_preflight(self) -> bool:
@@ -189,6 +209,13 @@ class WebScanner:
     def _phase_discovery(self) -> DiscoveryResult:
         logger.info("Phase 2: Discovery")
         result = Discoverer(self.client).discover(self.base_url)
+        self._write_discovery_artifact(result)
+        logger.info(f"Discovery stats: {result.stats()}")
+        self._phases_completed.append("discovery")
+        return result
+
+    def _write_discovery_artifact(self, result: DiscoveryResult) -> None:
+        """Persist the current discovery view, including external seeds."""
         save_json(self.out_dir / "discovery.json", {
             "stats": result.stats(),
             "urls": result.urls[:200],
@@ -198,9 +225,6 @@ class WebScanner:
             "has_openapi": result.openapi_spec is not None,
             "has_graphql": result.graphql_schema is not None,
         })
-        logger.info(f"Discovery stats: {result.stats()}")
-        self._phases_completed.append("discovery")
-        return result
 
     def _phase_crawl(self, discovery: DiscoveryResult) -> Dict:
         logger.info("Phase 3: Crawl")
@@ -211,6 +235,40 @@ class WebScanner:
         logger.info(f"Crawl stats: {crawl_results.get('stats', {})}")
         self._phases_completed.append("crawl")
         return crawl_results
+
+    def _phase_external_discovery(self, discovery: DiscoveryResult) -> None:
+        """Run opt-in external discovery tools and seed the crawl."""
+        if not self.ffuf_config:
+            return
+        logger.info("Phase 2a: External content discovery (ffuf)")
+        try:
+            from packages.web.ffuf import FfufRunner
+
+            self.execution_policy.authorize(
+                tool_id="ffuf",
+                url=self.base_url,
+                risk="active",
+                action="external_discovery",
+            )
+            result = FfufRunner(
+                self.base_url,
+                self.out_dir,
+                reveal_secrets=bool(getattr(self.client, "reveal_secrets", False)),
+            ).run(self.ffuf_config)
+            self._external_tool_results.append(result)
+            for entry in result.get("results", []):
+                url = entry.get("url")
+                if url and url not in discovery.urls:
+                    discovery.urls.append(url)
+            self._write_discovery_artifact(discovery)
+            self._phases_completed.append("external_discovery")
+        except Exception as e:
+            logger.warning(f"External discovery skipped: {e}")
+            self._external_tool_results.append({
+                "tool": "ffuf",
+                "status": "error",
+                "reason": str(e),
+            })
 
     def _phase_passive_checks(self, discovery: DiscoveryResult, crawl_data: dict = None) -> List[WebFinding]:
         logger.info("Phase 4: Passive security checks (unauthenticated)")
@@ -290,6 +348,17 @@ class WebScanner:
         context_map: Optional[dict] = None,
     ) -> List[WebFinding]:
         logger.info("Phase 6: Injection and fuzzing")
+        try:
+            self.execution_policy.authorize(
+                tool_id="raptor-web-oracle",
+                url=self.base_url,
+                risk="active",
+                action="injection_fuzzing",
+            )
+        except WebPolicyError as e:
+            logger.info(f"Phase 6: skipped by execution policy -- {e}")
+            self._phases_completed.append("injection_skipped")
+            return []
         fuzzer = self.fuzzer
         if not self.llm:
             logger.info("Phase 6: Running static fallback payloads -- no LLM available")
@@ -435,6 +504,8 @@ class WebScanner:
                 diff_summary=diff_summary or None,
                 attack_vector=attack_vectors[0] if attack_vectors else None,
                 method=methods[0] if methods else None,
+                affected_parameters=list(dict.fromkeys(params)),
+                oracle_signal=oracle_signal,
                 reproducible=False,
             ))
 
@@ -501,6 +572,27 @@ class WebScanner:
             logger.debug(f"Phase 7a: /validate failed: {e}")
 
         return findings
+
+    def _phase_external_validation(self, findings: List[WebFinding]) -> None:
+        """Run selected second-opinion validators against existing findings."""
+        if not self.external_validators:
+            return
+        logger.info(
+            "Phase 7b: External validation oracles (%s)",
+            ", ".join(self.external_validators),
+        )
+        runner = ExternalValidatorRunner(
+            base_url=self.base_url,
+            out_dir=self.out_dir,
+            policy=self.execution_policy,
+            reveal_secrets=bool(getattr(self.client, "reveal_secrets", False)),
+        )
+        self._external_validation_results = runner.run(findings, self.external_validators)
+        save_json(self.out_dir / "external-validator-results.json", {
+            "results": self._external_validation_results,
+            "note": "External validator no-match results are not refutations.",
+        })
+        self._phases_completed.append("external_validation")
 
     def _build_web_context_map(self, crawl_data: dict, discovery: DiscoveryResult) -> dict:
         research_landscape = assess_research_landscape(
@@ -695,6 +787,28 @@ class WebScanner:
         }
         save_json(self.out_dir / "verified-outcomes.json", verified_outcomes_dict)
 
+        execution_policy = self.execution_policy.report()
+        save_json(self.out_dir / "scope-receipt.json", execution_policy["scope_receipt"])
+        save_json(self.out_dir / "web-execution-policy.json", execution_policy)
+        selected_adapters = ["raptor-http", "raptor-crawler", "raptor-web-oracle"]
+        if self.ffuf_config:
+            selected_adapters.append("ffuf")
+        selected_adapters.extend(self.external_validators)
+        adapter_report = web_tool_adapter_report(selected_adapters)
+        save_json(self.out_dir / "web-tool-adapters.json", {"adapters": adapter_report})
+        save_json(self.out_dir / "external-tool-results.json", {
+            "discovery": self._external_tool_results,
+            "validators": self._external_validation_results,
+        })
+
+        evidence_ledger = build_web_evidence_ledger(
+            findings=findings,
+            request_history=list(getattr(self.client, "request_history", []) or []),
+            external_validation=self._external_validation_results,
+            execution_policy=execution_policy,
+        )
+        save_json(self.out_dir / "web-evidence-ledger.json", evidence_ledger)
+
         context_guard = build_web_context_guard_report(
             target=self.base_url,
             llm_enabled=self.llm is not None,
@@ -709,6 +823,11 @@ class WebScanner:
                 "web_session_context": str(self.out_dir / "web-session-context.json"),
                 "verified_outcomes": str(self.out_dir / "verified-outcomes.json"),
                 "research_landscape": str(self.out_dir / "research_landscape.json"),
+                "scope_receipt": str(self.out_dir / "scope-receipt.json"),
+                "execution_policy": str(self.out_dir / "web-execution-policy.json"),
+                "tool_adapters": str(self.out_dir / "web-tool-adapters.json"),
+                "external_tool_results": str(self.out_dir / "external-tool-results.json"),
+                "evidence_ledger": str(self.out_dir / "web-evidence-ledger.json"),
             },
         )
         save_json(self.out_dir / "context-guard-report.json", context_guard)
@@ -723,6 +842,11 @@ class WebScanner:
         by_sev: Dict[str, int] = {}
         for f in findings:
             by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+        discovery_summary = dict(discovery.stats())
+        discovery_summary.setdefault(
+            "total_pages",
+            crawl_data.get("stats", {}).get("total_pages", 0),
+        )
 
         result = {
             "target": self.base_url,
@@ -730,7 +854,7 @@ class WebScanner:
             "total_findings": len(findings),
             "total_vulnerabilities": len(findings),
             "auth_context": "authenticated" if (self.session and self.session.authenticated) else "unauthenticated",
-            "discovery": discovery.stats(),
+            "discovery": discovery_summary,
             "crawl": crawl_data.get("stats", {}),
             "findings_by_severity": by_sev,
             "phases_completed": self._phases_completed,
@@ -754,6 +878,26 @@ class WebScanner:
                 "count": len(verified_outcomes),
                 "oracle": "web",
                 "reproducible": False,
+            },
+            "execution_policy": {
+                "scope_receipt": str(self.out_dir / "scope-receipt.json"),
+                "approval_level": execution_policy["scope_receipt"]["approval_level"],
+                "allowed_origins": execution_policy["scope_receipt"]["allowed_origins"],
+                "allowed_actions": execution_policy["summary"]["allowed_actions"],
+                "denied_actions": execution_policy["summary"]["denied_actions"],
+            },
+            "tool_adapters": {
+                "artifact": str(self.out_dir / "web-tool-adapters.json"),
+                "selected": selected_adapters,
+            },
+            "external_tools": {
+                "discovery": self._external_tool_results,
+                "validators": self._external_validation_results,
+            },
+            "evidence_ledger": {
+                "artifact": str(self.out_dir / "web-evidence-ledger.json"),
+                "confirmed_web_oracle_findings": evidence_ledger["summary"]["confirmed_web_oracle_findings"],
+                "external_validator_runs": evidence_ledger["summary"]["external_validator_runs"],
             },
             "context_guard": {
                 "artifact": str(self.out_dir / "context-guard-report.json"),
@@ -831,6 +975,28 @@ Examples:
         "--no-llm",
         action="store_true",
         help="Disable LLM payload generation and use static fallback payloads",
+    )
+    parser.add_argument(
+        "--approval-level",
+        choices=["passive", "active", "intrusive"],
+        default="active",
+        help=(
+            "Highest live web action risk allowed by the scope receipt. "
+            "Default active keeps the current bounded scanner flow working."
+        ),
+    )
+    parser.add_argument(
+        "--approve-tool",
+        action="append",
+        default=[],
+        help="Explicitly approve one otherwise-blocked tool by adapter id.",
+    )
+    parser.add_argument(
+        "--validator",
+        action="append",
+        default=[],
+        choices=["nuclei"],
+        help="Run an opt-in external second-opinion validator after RAPTOR findings.",
     )
 
     ag = parser.add_argument_group("authentication")
@@ -954,6 +1120,10 @@ def main() -> int:
         max_fuzz_forms=args.max_fuzz_forms,
         run_understand=args.understand,
         run_validate=args.validate,
+        ffuf_config=build_ffuf_config(args),
+        external_validators=args.validator,
+        approval_level=args.approval_level,
+        approved_tools=args.approve_tool,
     )
 
     try:

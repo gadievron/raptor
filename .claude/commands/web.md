@@ -22,6 +22,10 @@ You are helping the user scan a web application for security vulnerabilities.
    python3 raptor.py web --url <url>
    ```
 
+   For a live target, RAPTOR writes a scope receipt and defaults to `active`
+   actions only. Use `--validator nuclei` for an opt-in second opinion, or
+   `--ffuf-wordlist <path>` to feed external content discovery into the crawl.
+
 3. **Analyze results**: After the scan:
    - Summarize vulnerabilities found (XSS, SQLi, CSRF, etc.)
    - Show severity ratings
@@ -40,15 +44,18 @@ Basic web scan:
 python3 raptor.py web --url https://example.com
 ```
 
-(Authenticated scanning is not currently supported by
-`raptor.py web`. Track future support via the web-
-scanner roadmap; for now, scan only unauthenticated
-endpoints.)
+Authenticated scanning is supported with `--auth-mode form`, `bearer`,
+`cookie`, or `basic`. MFA/SSO apps are best handled with a manually exported
+cookie or bearer token rather than pretending RAPTOR can magic its way through
+an MFA flow.
 
 ## Important Notes
 
 - Only scan applications you own or have permission to test
 - Web scanning looks for OWASP Top 10 vulnerabilities
 - Results are saved to `out/web_scan_<timestamp>/`
+- `scope-receipt.json` and `web-execution-policy.json` show what RAPTOR was allowed to touch
+- `web-evidence-ledger.json` shows the baseline/attack/diff chain behind each finding
+- External validator no-match results are not refutations
 
 Be ethical and responsible with security testing!

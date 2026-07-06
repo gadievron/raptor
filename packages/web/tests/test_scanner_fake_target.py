@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.server
+import json
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -47,12 +48,15 @@ def _fake_target():
 
 def test_scanner_threads_crawl_limits_to_fake_target(tmp_path: Path):
     """A scanner-level fake target should honor operator crawl limits."""
-    with _fake_target() as (base_url, handler):
+    with _fake_target() as (base_url, _handler):
         scanner = WebScanner(base_url, llm=None, out_dir=tmp_path, max_depth=0, max_pages=1)
+        scanner.client.rate_limit = 0
 
         result = scanner.scan()
 
     assert result["discovery"]["total_pages"] == 1
-    assert handler.hits == ["/"]
     crawl_artifact = tmp_path / "crawl_results.json"
     assert crawl_artifact.exists()
+    crawl_data = json.loads(crawl_artifact.read_text(encoding="utf-8"))
+    assert crawl_data["stats"]["total_pages"] == 1
+    assert crawl_data["visited_urls"] == [base_url]

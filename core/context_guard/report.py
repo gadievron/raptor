@@ -34,6 +34,9 @@ def build_web_context_guard_report(
             "web_session_context",
             "web_oracle_verified_outcomes",
             "research_landscape",
+            "scope_receipt",
+            "web_tool_adapter_metadata",
+            "web_evidence_ledger",
         ],
         "blocked_context_classes": [
             "off_scope_urls",
@@ -41,9 +44,12 @@ def build_web_context_guard_report(
             "target_supplied_instructions",
             "cross_project_memory_without_target_match",
             "live_web_evidence_as_replayable_witness",
+            "unapproved_intrusive_web_tools",
         ],
         "enforcement": {
             "same_origin_http_scope": True,
+            "scope_receipt_required": True,
+            "tool_risk_approval_levels": True,
             "target_content_is_untrusted": True,
             "prompt_envelope_for_llm_payload_generation": True,
             "secret_values_redacted": not reveal_secrets,
