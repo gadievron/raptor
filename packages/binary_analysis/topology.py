@@ -23,9 +23,10 @@ def _find_declared_artifact(bundle_root: Path, name: str) -> Path | None:
     for path in preferred:
         if path.is_file():
             return path
+    resolved_root = bundle_root.resolve()
     try:
         for path in bundle_root.rglob(name):
-            if path.is_file():
+            if path.is_file() and path.resolve().is_relative_to(resolved_root):
                 return path
     except OSError:
         return None

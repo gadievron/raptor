@@ -14,9 +14,12 @@ from __future__ import annotations
 import shlex
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.json import save_json
+
+if TYPE_CHECKING:
+    from .pipeline import BinaryAnalysisResult
 
 from .graph_store import BinaryGraphStore, graph_summary, query_edges
 from .topology import discover_sibling_artifacts
@@ -368,7 +371,7 @@ def _build_actions(
 
 
 def build_investigation(
-    result: Any,
+    result: BinaryAnalysisResult,
     out_dir: Path,
     *,
     active_phases: list[dict[str, Any]] | None = None,
@@ -521,7 +524,7 @@ def build_investigation(
             "not_a_claim": "This narrows the harness target; it does not prove attacker bytes traverse the path.",
         })
 
-    if any(item["category"] == "process_execution" for item in ranked_surfaces):
+    if any(item["category"] == "process_execution" and item.get("direct_callers", 0) > 0 for item in ranked_surfaces):
         hypotheses.append({
             "id": f"HYP-{len(hypotheses) + 1:03d}",
             "title": "Input data may reach process execution primitives",
@@ -803,7 +806,7 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
 
 
 def write_investigation(
-    result: Any,
+    result: BinaryAnalysisResult,
     out_dir: Path,
     *,
     active_phases: list[dict[str, Any]] | None = None,

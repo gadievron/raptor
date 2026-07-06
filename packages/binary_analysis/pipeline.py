@@ -9,6 +9,7 @@ their evidence strength.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -116,6 +117,23 @@ def _fn_id(prefix: str, fn: Any) -> str:
     name = getattr(fn, "name", "unknown")
     digest = hashlib.sha256(str(name).encode("utf-8", "surrogateescape")).hexdigest()[:12]
     return f"{prefix}-{digest}"
+
+
+def _sorted_functions(functions: list[Any]) -> tuple[list[int], list[Any]]:
+    valid = [fn for fn in functions if fn.address is not None and fn.size > 0]
+    valid.sort(key=lambda fn: int(fn.address))
+    addrs = [int(fn.address) for fn in valid]
+    return addrs, valid
+
+
+def _find_containing_function(address: int, sorted_addrs: list[int], sorted_fns: list[Any]) -> Any:
+    idx = bisect.bisect_right(sorted_addrs, address) - 1
+    if idx < 0:
+        return None
+    fn = sorted_fns[idx]
+    if int(fn.address) <= address < int(fn.address) + fn.size:
+        return fn
+    return None
 
 
 def _import_candidate_id(prefix: str, name: str) -> str:
@@ -281,10 +299,11 @@ def _runtime_input_flows(
     runtime_events: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
     channel_by_kind = {channel.kind: channel for channel in channels}
-    functions = [
+    raw_functions = [
         fn for fn in context.interesting_functions
         if fn.address is not None and fn.size > 0 and not _is_runtime_support_name(fn.name)
     ]
+    sorted_addrs, sorted_fns = _sorted_functions(raw_functions)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for event in runtime_events:
         kind = event_channel_kind(event)
@@ -299,10 +318,7 @@ def _runtime_input_flows(
                 caller_addr = int(caller, 16)
         except ValueError:
             continue
-        fn = next(
-            (item for item in functions if int(item.address) <= caller_addr < int(item.address) + item.size),
-            None,
-        )
+        fn = _find_containing_function(caller_addr, sorted_addrs, sorted_fns)
         if fn is None or kind not in channel_by_kind:
             continue
         key = (kind, _fn_id("BFN", fn))
@@ -369,10 +385,11 @@ def _runtime_parser_flows(
         for item in surface_details
         if isinstance(item, dict) and item.get("category") == "parser"
     }
-    functions = [
+    raw_functions = [
         fn for fn in context.interesting_functions
         if fn.address is not None and fn.size > 0 and not _is_runtime_support_name(fn.name)
     ]
+    sorted_addrs, sorted_fns = _sorted_functions(raw_functions)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     target_module_name = Path(manifest.binary_path).name
 
@@ -391,10 +408,7 @@ def _runtime_parser_flows(
                     address = int(str(frame.get("address") or ""), 16)
             except ValueError:
                 continue
-            function = next(
-                (item for item in functions if int(item.address) <= address < int(item.address) + item.size),
-                None,
-            )
+            function = _find_containing_function(address, sorted_addrs, sorted_fns)
             if function is None:
                 continue
             function_id = _fn_id("BFN", function)
@@ -420,10 +434,7 @@ def _runtime_parser_flows(
                 caller_addr = int(caller, 16)
         except ValueError:
             continue
-        fn = next(
-            (item for item in functions if int(item.address) <= caller_addr < int(item.address) + item.size),
-            None,
-        )
+        fn = _find_containing_function(caller_addr, sorted_addrs, sorted_fns)
         if fn is None:
             continue
         key = (str(parser_surface["id"]), _fn_id("BFN", fn))
@@ -1495,8 +1506,9 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 props=flow,
                 evidence_ids=flow.get("evidence_ids") or [],
             )
+    all_surface_nodes = {**surface_nodes, **sink_nodes}
     for flow in result.context_map.get("runtime_parser_flows", []):
-        surface_node = surface_nodes.get(flow["parser_surface_id"])
+        surface_node = all_surface_nodes.get(flow["parser_surface_id"])
         function_node = function_nodes.get(flow["function_id"])
         if surface_node and function_node:
             store.add_edge(
@@ -1522,7 +1534,7 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
                 confidence=edge.get("confidence") or "high",
                 props=edge,
             )
-        target_surface_node = surface_nodes.get(edge.get("target_surface") or "")
+        target_surface_node = all_surface_nodes.get(edge.get("target_surface") or "")
         if source_node and target_surface_node:
             store.add_edge(
                 snapshot_id,
@@ -1997,14 +2009,7 @@ def append_fuzz_evidence_to_run(
     with BinaryGraphStore(graph_path_for_run(out_dir)) as store:
         snapshot_id = store.latest_snapshot_id()
         if snapshot_id:
-            binary_node = store.add_node(
-                snapshot_id,
-                manifest.binary_sha256,
-                "binary",
-                manifest.binary_sha256,
-                name=Path(manifest.binary_path).name,
-                props=manifest.to_dict(),
-            )
+            binary_node = stable_node_id(manifest.binary_sha256, "binary", manifest.binary_sha256)
             for record in bundle.evidence:
                 store.add_evidence(snapshot_id, record)
             for crash in bundle.crashes:
@@ -2072,22 +2077,28 @@ def append_fuzz_evidence_to_run(
 
 
 def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[EvidenceRecord]:
-    return [
-        EvidenceRecord(
+    records: list[EvidenceRecord] = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("tier"):
+            continue
+        try:
+            tier = EvidenceTier(str(item["tier"]))
+        except ValueError:
+            logger.warning("skipping evidence record with unrecognised tier %r", item.get("tier"))
+            tier = EvidenceTier.HEURISTIC
+        records.append(EvidenceRecord(
             id=str(item.get("id") or ""),
             kind=str(item.get("kind") or ""),
             source=str(item.get("source") or ""),
             summary=str(item.get("summary") or ""),
-            tier=EvidenceTier(str(item.get("tier") or EvidenceTier.HEURISTIC.value)),
+            tier=tier,
             confidence=str(item.get("confidence") or "candidate"),
             reproducible=bool(item.get("reproducible")),
             tool=str(item.get("tool") or ""),
             location=item.get("location"),
             data=dict(item.get("data") or {}),
-        )
-        for item in items
-        if isinstance(item, dict) and item.get("id") and item.get("tier")
-    ]
+        ))
+    return records
 
 
 def _fuzz_bundle_from_payload(payload: Any) -> FuzzEvidenceBundle:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import plistlib
 import struct
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -187,6 +188,8 @@ def inspect_macho_slices(path: Path, binary_sha256: str) -> tuple[list[MachOSlic
                 sha256=_slice_sha256(path, int(offset), int(size)),
             ))
     elif magic in _THIN_MAGICS:
+        if len(header) < 12:
+            return [], []
         endian, bits = _THIN_MAGICS[magic]
         cpu_type, cpu_subtype = struct.unpack(f"{endian}II", header[4:12])
         slices.append(MachOSlice(
@@ -232,7 +235,7 @@ def _run_readonly_tool(argv: list[str]) -> str:
             timeout=10,
             check=False,
         )
-    except (OSError, Exception):
+    except (OSError, subprocess.SubprocessError):
         return ""
     return (result.stdout or "")[:_MAX_TOOL_OUTPUT] + (result.stderr or "")[:_MAX_TOOL_OUTPUT]
 

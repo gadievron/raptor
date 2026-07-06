@@ -222,8 +222,10 @@ def extract_parser_boundaries(
                 runtime_flows = runtime_parser_by_function.get(function_id, [])
                 tier = EvidenceTier.OBSERVED_RUNTIME if runtime_flows else EvidenceTier.XREF_BACKED
                 confidence = "confirmed" if runtime_flows else "candidate"
-                function = functions[function_id]
-                parser_surface = surfaces[str(parser_edge["target_surface"])]
+                function = functions.get(function_id)
+                parser_surface = surfaces.get(str(parser_edge.get("target_surface") or ""))
+                if function is None or parser_surface is None:
+                    continue
                 path_names = [str(functions[item].get("name") or item) for item in path]
                 record = make_evidence(
                     binary_sha256,

@@ -92,6 +92,7 @@ def merge_observed_channels(
     channels: list[InputChannel],
     runtime_events: Iterable[dict[str, Any]],
 ) -> tuple[list[InputChannel], list[EvidenceRecord]]:
+    channels = list(channels)
     by_kind = {channel.kind: channel for channel in channels}
     evidence: list[EvidenceRecord] = []
     observed: dict[str, list[dict[str, Any]]] = {}
