@@ -89,7 +89,14 @@ def load_fuzz_evidence(
     bundle = FuzzEvidenceBundle(summary=summary if isinstance(summary, dict) else {})
     target_matches = True
     if isinstance(summary, dict) and summary:
-        target_matches = not summary.get("target") or str(Path(summary["target"]).resolve()) == str(Path(target_path).resolve())
+        summary_target = summary.get("target")
+        if summary_target:
+            resolved = Path(summary_target)
+            if not resolved.is_absolute():
+                resolved = fuzz_dir / resolved
+            target_matches = str(resolved.resolve()) == str(Path(target_path).resolve())
+        else:
+            target_matches = True
         bundle.evidence.append(make_evidence(
             binary_sha256,
             kind="fuzz_campaign",
