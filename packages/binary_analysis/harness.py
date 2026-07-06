@@ -524,43 +524,43 @@ def generate_binary_harness(
         save_json(run_dir / "binary-checklist.json", checklist)
     graph_path = graph_path_for_run(run_dir)
     if graph_path.exists():
-        store = BinaryGraphStore(graph_path)
-        snapshot_id = store.latest_snapshot_id()
-        if snapshot_id:
-            store.add_artifact(snapshot_id, "binary_harness_spec", spec_path)
-            store.add_artifact(snapshot_id, "binary_harness_report", report_path)
-            for key in ("source", "build_script"):
-                if generated.get(key):
-                    store.add_artifact(snapshot_id, f"binary_harness_{key}", Path(generated[key]))
-            plan_node = store.add_node(
-                snapshot_id,
-                binary_sha256,
-                "harness_plan",
-                plan_id,
-                name=f"{spec['family']}:{ingress.get('name')}",
-                props=spec,
-                evidence_ids=list(ingress.get("evidence_ids") or []),
-            )
-            binary_node = stable_node_id(binary_sha256, "binary", binary_sha256)
-            ingress_node = stable_node_id(binary_sha256, "external_ingress", str(ingress.get("id") or ""))
-            store.add_edge(
-                snapshot_id,
-                binary_sha256,
-                "HAS_HARNESS_PLAN",
-                binary_node,
-                plan_node,
-                confidence="candidate",
-                evidence_ids=list(ingress.get("evidence_ids") or []),
-            )
-            store.add_edge(
-                snapshot_id,
-                binary_sha256,
-                "PLANNED_HARNESS_FOR",
-                plan_node,
-                ingress_node,
-                confidence="candidate",
-                evidence_ids=list(ingress.get("evidence_ids") or []),
-            )
+        with BinaryGraphStore(graph_path) as store:
+            snapshot_id = store.latest_snapshot_id()
+            if snapshot_id:
+                store.add_artifact(snapshot_id, "binary_harness_spec", spec_path)
+                store.add_artifact(snapshot_id, "binary_harness_report", report_path)
+                for key in ("source", "build_script"):
+                    if generated.get(key):
+                        store.add_artifact(snapshot_id, f"binary_harness_{key}", Path(generated[key]))
+                plan_node = store.add_node(
+                    snapshot_id,
+                    binary_sha256,
+                    "harness_plan",
+                    plan_id,
+                    name=f"{spec['family']}:{ingress.get('name')}",
+                    props=spec,
+                    evidence_ids=list(ingress.get("evidence_ids") or []),
+                )
+                binary_node = stable_node_id(binary_sha256, "binary", binary_sha256)
+                ingress_node = stable_node_id(binary_sha256, "external_ingress", str(ingress.get("id") or ""))
+                store.add_edge(
+                    snapshot_id,
+                    binary_sha256,
+                    "HAS_HARNESS_PLAN",
+                    binary_node,
+                    plan_node,
+                    confidence="candidate",
+                    evidence_ids=list(ingress.get("evidence_ids") or []),
+                )
+                store.add_edge(
+                    snapshot_id,
+                    binary_sha256,
+                    "PLANNED_HARNESS_FOR",
+                    plan_node,
+                    ingress_node,
+                    confidence="candidate",
+                    evidence_ids=list(ingress.get("evidence_ids") or []),
+                )
     return spec
 
 

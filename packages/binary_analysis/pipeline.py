@@ -111,7 +111,11 @@ def _address(value: Any) -> str:
 
 def _fn_id(prefix: str, fn: Any) -> str:
     address = getattr(fn, "address", None)
-    return f"{prefix}-{int(address or 0):x}"
+    if address:
+        return f"{prefix}-{int(address):x}"
+    name = getattr(fn, "name", "unknown")
+    digest = hashlib.sha256(str(name).encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
 
 
 def _import_candidate_id(prefix: str, name: str) -> str:
@@ -1147,7 +1151,11 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
 
 
 def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:
-    store = BinaryGraphStore(result.graph_path)
+    with BinaryGraphStore(result.graph_path) as store:
+        _ingest_graph_body(store, result, out_dir)
+
+
+def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, out_dir: Path) -> None:
     manifest = result.manifest
     snapshot_id = store.begin_snapshot(
         manifest.binary_sha256,
@@ -1672,7 +1680,6 @@ def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:
     ):
         if path.exists():
             store.add_artifact(snapshot_id, kind, path)
-    store.close()
 
 
 def analyse_blackbox_binary(
@@ -1974,22 +1981,7 @@ def append_fuzz_evidence_to_run(
     decompilations = load_json(out_dir / "binary-decompilations.json")
     if not isinstance(decompilations, dict):
         decompilations = {}
-    all_evidence = [
-        EvidenceRecord(
-            id=str(item.get("id") or ""),
-            kind=str(item.get("kind") or ""),
-            source=str(item.get("source") or ""),
-            summary=str(item.get("summary") or ""),
-            tier=EvidenceTier(str(item.get("tier") or EvidenceTier.HEURISTIC.value)),
-            confidence=str(item.get("confidence") or "candidate"),
-            reproducible=bool(item.get("reproducible")),
-            tool=str(item.get("tool") or ""),
-            location=item.get("location"),
-            data=dict(item.get("data") or {}),
-        )
-        for item in existing
-        if isinstance(item, dict) and item.get("id") and item.get("tier")
-    ]
+    all_evidence = _evidence_records_from_payload(existing)
     validation_handoff = build_validation_handoff(
         target_path=manifest.binary_path,
         binary_sha256=manifest.binary_sha256,
@@ -2002,81 +1994,80 @@ def append_fuzz_evidence_to_run(
         checklist["validation_handoff"] = validation_handoff
         save_json(out_dir / "binary-checklist.json", checklist)
 
-    store = BinaryGraphStore(graph_path_for_run(out_dir))
-    snapshot_id = store.latest_snapshot_id()
-    if snapshot_id:
-        binary_node = store.add_node(
-            snapshot_id,
-            manifest.binary_sha256,
-            "binary",
-            manifest.binary_sha256,
-            name=Path(manifest.binary_path).name,
-            props=manifest.to_dict(),
-        )
-        for record in bundle.evidence:
-            store.add_evidence(snapshot_id, record)
-        for crash in bundle.crashes:
-            crash_evidence_ids = [crash.evidence_id, *crash.replay_evidence_ids]
-            node = store.add_node(
+    with BinaryGraphStore(graph_path_for_run(out_dir)) as store:
+        snapshot_id = store.latest_snapshot_id()
+        if snapshot_id:
+            binary_node = store.add_node(
                 snapshot_id,
                 manifest.binary_sha256,
-                "crash_witness",
-                crash.id,
-                name=crash.id,
-                props=crash.to_dict(),
-                evidence_ids=crash_evidence_ids,
-            )
-            store.add_edge(
-                snapshot_id,
+                "binary",
                 manifest.binary_sha256,
-                "CRASHED_WITH",
-                binary_node,
-                node,
-                confidence="confirmed",
-                evidence_ids=crash_evidence_ids,
+                name=Path(manifest.binary_path).name,
+                props=manifest.to_dict(),
             )
-            for replay in crash.replays:
-                replay_evidence_id = str(replay.get("evidence_id") or "")
-                replay_binary = str(replay.get("binary") or "")
-                if not replay_evidence_id or not replay_binary:
-                    continue
-                replay_node = store.add_node(
+            for record in bundle.evidence:
+                store.add_evidence(snapshot_id, record)
+            for crash in bundle.crashes:
+                crash_evidence_ids = [crash.evidence_id, *crash.replay_evidence_ids]
+                node = store.add_node(
                     snapshot_id,
                     manifest.binary_sha256,
-                    "replay_binary",
-                    replay_binary,
-                    name=Path(replay_binary).name,
-                    props=replay,
-                    evidence_ids=[replay_evidence_id],
+                    "crash_witness",
+                    crash.id,
+                    name=crash.id,
+                    props=crash.to_dict(),
+                    evidence_ids=crash_evidence_ids,
                 )
                 store.add_edge(
                     snapshot_id,
                     manifest.binary_sha256,
-                    "REPLAYED_ON",
+                    "CRASHED_WITH",
+                    binary_node,
                     node,
-                    replay_node,
                     confidence="confirmed",
-                    evidence_ids=[replay_evidence_id],
+                    evidence_ids=crash_evidence_ids,
                 )
-        handoff_node = store.add_node(
-            snapshot_id,
-            manifest.binary_sha256,
-            "validation_handoff",
-            "binary-validation-handoff",
-            name="binary validation handoff",
-            props=validation_handoff,
-        )
-        store.add_edge(
-            snapshot_id,
-            manifest.binary_sha256,
-            "REQUIRES_VALIDATION",
-            binary_node,
-            handoff_node,
-            confidence="confirmed",
-        )
-        store.add_artifact(snapshot_id, "binary_fuzz_evidence", out_dir / "binary-fuzz-evidence.json")
-        store.add_artifact(snapshot_id, "binary_validation_handoff", out_dir / "binary-validation-handoff.json")
-    store.close()
+                for replay in crash.replays:
+                    replay_evidence_id = str(replay.get("evidence_id") or "")
+                    replay_binary = str(replay.get("binary") or "")
+                    if not replay_evidence_id or not replay_binary:
+                        continue
+                    replay_node = store.add_node(
+                        snapshot_id,
+                        manifest.binary_sha256,
+                        "replay_binary",
+                        replay_binary,
+                        name=Path(replay_binary).name,
+                        props=replay,
+                        evidence_ids=[replay_evidence_id],
+                    )
+                    store.add_edge(
+                        snapshot_id,
+                        manifest.binary_sha256,
+                        "REPLAYED_ON",
+                        node,
+                        replay_node,
+                        confidence="confirmed",
+                        evidence_ids=[replay_evidence_id],
+                    )
+            handoff_node = store.add_node(
+                snapshot_id,
+                manifest.binary_sha256,
+                "validation_handoff",
+                "binary-validation-handoff",
+                name="binary validation handoff",
+                props=validation_handoff,
+            )
+            store.add_edge(
+                snapshot_id,
+                manifest.binary_sha256,
+                "REQUIRES_VALIDATION",
+                binary_node,
+                handoff_node,
+                confidence="confirmed",
+            )
+            store.add_artifact(snapshot_id, "binary_fuzz_evidence", out_dir / "binary-fuzz-evidence.json")
+            store.add_artifact(snapshot_id, "binary_validation_handoff", out_dir / "binary-validation-handoff.json")
     return bundle
 
 
@@ -2305,89 +2296,124 @@ def append_runtime_evidence_to_run(
         validation_handoff=validation_handoff,
     )
     _write_report(result, out_dir)
-    store = BinaryGraphStore(result.graph_path)
-    snapshot_id = store.latest_snapshot_id()
-    if snapshot_id:
-        binary_node = stable_node_id(manifest.binary_sha256, "binary", manifest.binary_sha256)
-        function_nodes = {
-            item["id"]: stable_node_id(manifest.binary_sha256, "function", item["id"])
-            for item in context_map.get("interesting_functions", [])
-            if isinstance(item, dict) and item.get("id")
-        }
-        channel_nodes = {
-            channel.id: stable_node_id(manifest.binary_sha256, "input_channel", channel.id)
-            for channel in channels
-        }
-        surface_nodes = {
-            item["id"]: stable_node_id(manifest.binary_sha256, "surface", item["id"])
-            for item in context_map.get("surface_details", [])
-            if isinstance(item, dict) and item.get("id") and not item.get("is_sink")
-        }
-        ingress_nodes = {
-            item["id"]: stable_node_id(manifest.binary_sha256, "external_ingress", item["id"])
-            for item in context_map.get("external_ingress_candidates", [])
-            if isinstance(item, dict) and item.get("id")
-        }
-        for record in new_records:
-            store.add_evidence(snapshot_id, record)
-        for observation in context_map["runtime_observations"]:
-            node = store.add_node(
-                snapshot_id,
-                manifest.binary_sha256,
-                "runtime_observation",
-                observation["id"],
-                name=f"{observation['category']}:{observation['function']}",
-                props=observation,
-                evidence_ids=observation.get("evidence_ids") or [],
-            )
-            store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_RUNTIME", binary_node, node,
-                           confidence="confirmed", evidence_ids=observation.get("evidence_ids") or [])
-        for flow in runtime_input_flows:
-            if flow["channel_id"] in channel_nodes and flow["function_id"] in function_nodes:
-                store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_CALLSITE",
-                               channel_nodes[flow["channel_id"]], function_nodes[flow["function_id"]],
-                               confidence="confirmed", props=flow, evidence_ids=flow.get("evidence_ids") or [])
-        for flow in runtime_parser_flows:
-            if flow["parser_surface_id"] in surface_nodes and flow["function_id"] in function_nodes:
-                store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_PARSER_CALLSITE",
-                               function_nodes[flow["function_id"]], surface_nodes[flow["parser_surface_id"]],
-                               confidence="confirmed", props=flow, evidence_ids=flow.get("evidence_ids") or [])
-        for boundary in parser_boundaries:
-            node = store.add_node(
-                snapshot_id,
-                manifest.binary_sha256,
-                "parser_boundary",
-                boundary["id"],
-                name=boundary["boundary_function_name"],
-                address=boundary.get("address") or "",
-                props=boundary,
-                evidence_ids=boundary.get("evidence_ids") or [],
-            )
-            store.add_edge(snapshot_id, manifest.binary_sha256, "HAS_PARSER_BOUNDARY", binary_node, node,
-                           confidence=boundary.get("confidence") or "candidate", evidence_ids=boundary.get("evidence_ids") or [])
-            if boundary.get("ingress_id") in ingress_nodes:
-                store.add_edge(snapshot_id, manifest.binary_sha256, "PARSER_BOUNDARY_FOR_INGRESS",
-                               ingress_nodes[boundary["ingress_id"]], node,
-                               confidence=boundary.get("confidence") or "candidate",
-                               props=boundary.get("path") or {}, evidence_ids=boundary.get("evidence_ids") or [])
-            if boundary.get("boundary_function_id") in function_nodes:
-                store.add_edge(snapshot_id, manifest.binary_sha256, "BACKED_BY_FUNCTION", node,
-                               function_nodes[boundary["boundary_function_id"]],
+    with BinaryGraphStore(result.graph_path) as store:
+        snapshot_id = store.latest_snapshot_id()
+        if snapshot_id:
+            binary_node = stable_node_id(manifest.binary_sha256, "binary", manifest.binary_sha256)
+            function_nodes = {
+                item["id"]: stable_node_id(manifest.binary_sha256, "function", item["id"])
+                for item in context_map.get("interesting_functions", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            channel_nodes = {
+                channel.id: stable_node_id(manifest.binary_sha256, "input_channel", channel.id)
+                for channel in channels
+            }
+            surface_nodes = {
+                item["id"]: stable_node_id(manifest.binary_sha256, "surface", item["id"])
+                for item in context_map.get("surface_details", [])
+                if isinstance(item, dict) and item.get("id") and not item.get("is_sink")
+            }
+            ingress_nodes = {
+                item["id"]: stable_node_id(manifest.binary_sha256, "external_ingress", item["id"])
+                for item in context_map.get("external_ingress_candidates", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            for record in new_records:
+                store.add_evidence(snapshot_id, record)
+            for observation in context_map["runtime_observations"]:
+                node = store.add_node(
+                    snapshot_id,
+                    manifest.binary_sha256,
+                    "runtime_observation",
+                    observation["id"],
+                    name=f"{observation['category']}:{observation['function']}",
+                    props=observation,
+                    evidence_ids=observation.get("evidence_ids") or [],
+                )
+                store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_RUNTIME", binary_node, node,
+                               confidence="confirmed", evidence_ids=observation.get("evidence_ids") or [])
+            for flow in runtime_input_flows:
+                if flow["channel_id"] in channel_nodes and flow["function_id"] in function_nodes:
+                    store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_CALLSITE",
+                                   channel_nodes[flow["channel_id"]], function_nodes[flow["function_id"]],
+                                   confidence="confirmed", props=flow, evidence_ids=flow.get("evidence_ids") or [])
+            for flow in runtime_parser_flows:
+                if flow["parser_surface_id"] in surface_nodes and flow["function_id"] in function_nodes:
+                    store.add_edge(snapshot_id, manifest.binary_sha256, "OBSERVED_PARSER_CALLSITE",
+                                   function_nodes[flow["function_id"]], surface_nodes[flow["parser_surface_id"]],
+                                   confidence="confirmed", props=flow, evidence_ids=flow.get("evidence_ids") or [])
+            for boundary in parser_boundaries:
+                node = store.add_node(
+                    snapshot_id,
+                    manifest.binary_sha256,
+                    "parser_boundary",
+                    boundary["id"],
+                    name=boundary["boundary_function_name"],
+                    address=boundary.get("address") or "",
+                    props=boundary,
+                    evidence_ids=boundary.get("evidence_ids") or [],
+                )
+                store.add_edge(snapshot_id, manifest.binary_sha256, "HAS_PARSER_BOUNDARY", binary_node, node,
                                confidence=boundary.get("confidence") or "candidate", evidence_ids=boundary.get("evidence_ids") or [])
-            if boundary.get("parser_surface_id") in surface_nodes:
-                store.add_edge(snapshot_id, manifest.binary_sha256, "PARSER_BOUNDARY_CALLS_SURFACE", node,
-                               surface_nodes[boundary["parser_surface_id"]],
-                               confidence=boundary.get("confidence") or "candidate", evidence_ids=boundary.get("evidence_ids") or [])
-        store.add_artifact(snapshot_id, "binary_validation_handoff", out_dir / "binary-validation-handoff.json")
-        store.add_artifact(snapshot_id, "binary_context_map", out_dir / "binary-context-map.json")
-        for kind, path in (
-            ("parser_runtime_metadata", Path(runtime_dir) / "metadata.json"),
-            ("parser_runtime_events", Path(runtime_dir) / "events.jsonl"),
-        ):
-            if path.exists():
-                store.add_artifact(snapshot_id, kind, path)
-    store.close()
+                if boundary.get("ingress_id") in ingress_nodes:
+                    store.add_edge(snapshot_id, manifest.binary_sha256, "PARSER_BOUNDARY_FOR_INGRESS",
+                                   ingress_nodes[boundary["ingress_id"]], node,
+                                   confidence=boundary.get("confidence") or "candidate",
+                                   props=boundary.get("path") or {}, evidence_ids=boundary.get("evidence_ids") or [])
+                if boundary.get("boundary_function_id") in function_nodes:
+                    store.add_edge(snapshot_id, manifest.binary_sha256, "BACKED_BY_FUNCTION", node,
+                                   function_nodes[boundary["boundary_function_id"]],
+                                   confidence=boundary.get("confidence") or "candidate", evidence_ids=boundary.get("evidence_ids") or [])
+                if boundary.get("parser_surface_id") in surface_nodes:
+                    store.add_edge(snapshot_id, manifest.binary_sha256, "PARSER_BOUNDARY_CALLS_SURFACE", node,
+                                   surface_nodes[boundary["parser_surface_id"]],
+                                   confidence=boundary.get("confidence") or "candidate", evidence_ids=boundary.get("evidence_ids") or [])
+            store.add_artifact(snapshot_id, "binary_validation_handoff", out_dir / "binary-validation-handoff.json")
+            store.add_artifact(snapshot_id, "binary_context_map", out_dir / "binary-context-map.json")
+            for kind, path in (
+                ("parser_runtime_metadata", Path(runtime_dir) / "metadata.json"),
+                ("parser_runtime_events", Path(runtime_dir) / "events.jsonl"),
+            ):
+                if path.exists():
+                    store.add_artifact(snapshot_id, kind, path)
     return result
+
+
+def map_result_payload(result: BinaryAnalysisResult, out_dir: Path) -> dict[str, Any]:
+    context = result.context_map
+    class_summary = (context.get("class_inventory") or {}).get("summary") or {}
+    return {
+        "mode": "map",
+        "target": result.manifest.binary_path,
+        "models": [],
+        "items": context.get("entry_points", []),
+        "failed_models": [],
+        "correlation": {
+            "summary": {
+                "entry_point_candidates": len(context.get("entry_points", [])),
+                "input_channels": len(result.input_channels),
+                "sensitive_import_candidates": len(context.get("sink_details", [])),
+                "security_surface_candidates": len(context.get("surface_details", [])),
+                "candidate_flows": len(context.get("candidate_flows", [])),
+                "fuzz_witnesses": len(result.fuzz.crashes),
+                "recovered_classes": int(class_summary.get("class_count", 0)),
+                "framework_callback_candidates": len(context.get("framework_callback_candidates", [])),
+                "decompiled_functions": int(
+                    (context.get("decompilations") or {}).get("coverage", {}).get("decompiled_functions", 0)
+                ),
+            },
+        },
+        "artifacts": {
+            "context_map": str(out_dir / "context-map.json"),
+            "binary_context_map": str(out_dir / "binary-context-map.json"),
+            "binary_manifest": str(out_dir / "binary-manifest.json"),
+            "binary_evidence": str(out_dir / "binary-evidence.json"),
+            "binary_decompilations": str(out_dir / "binary-decompilations.json"),
+            "binary_validation_handoff": str(out_dir / "binary-validation-handoff.json"),
+            "binary_graph": str(result.graph_path),
+        },
+    }
 
 
 __all__ = [
@@ -2396,4 +2422,5 @@ __all__ = [
     "append_fuzz_evidence_to_run",
     "append_runtime_evidence_to_run",
     "graph_summary",
+    "map_result_payload",
 ]

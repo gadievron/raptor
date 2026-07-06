@@ -188,6 +188,12 @@ class BinaryGraphStore:
             self._conn.close()
             self._conn = None
 
+    def __enter__(self) -> "BinaryGraphStore":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     def __del__(self) -> None:
         try:
             self.close()

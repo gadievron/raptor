@@ -816,12 +816,11 @@ def write_investigation(
         render_investigation_report(investigation),
         encoding="utf-8",
     )
-    store = BinaryGraphStore(result.graph_path)
-    snapshot_id = store.latest_snapshot_id()
-    if snapshot_id:
-        store.add_artifact(snapshot_id, "binary_investigation", out_dir / "binary-investigation.json")
-        store.add_artifact(snapshot_id, "binary_investigation_report", report_path)
-    store.close()
+    with BinaryGraphStore(result.graph_path) as store:
+        snapshot_id = store.latest_snapshot_id()
+        if snapshot_id:
+            store.add_artifact(snapshot_id, "binary_investigation", out_dir / "binary-investigation.json")
+            store.add_artifact(snapshot_id, "binary_investigation_report", report_path)
     return investigation
 
 
