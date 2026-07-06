@@ -22,8 +22,9 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.config import RaptorConfig
 from core.json import load_json, save_json
 from core.run.metadata import complete_run, fail_run, start_run
 from core.run.output import TargetMismatchError, get_output_dir
@@ -65,8 +66,8 @@ def _normalise_argv(argv: Sequence[str]) -> list[str]:
 
 def _positive_int(value: str) -> int:
     number = int(value)
-    if number < 0:
-        raise argparse.ArgumentTypeError("must be >= 0")
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
     return number
 
 
@@ -274,7 +275,7 @@ def _run_active_phase(
     stdout_path = output_dir / "stdout.log"
     stderr_path = output_dir / "stderr.log"
     try:
-        env = os.environ.copy()
+        env = RaptorConfig.get_safe_env()
         env.setdefault("_RAPTOR_TRUSTED", "1")
         proc = subprocess.run(
             cmd,
@@ -495,7 +496,7 @@ def _run_runtime(args: argparse.Namespace) -> int:
         unsafe_attach=args.unsafe_attach,
         host=args.host,
         usb=args.usb,
-    ), env=os.environ.copy())
+    ), env=RaptorConfig.get_safe_env())
 
 
 def _frida_trace_command(
@@ -627,7 +628,7 @@ def _run_fuzz(args: argparse.Namespace) -> int:
         str(args.target),
         *args.fuzz_args,
     ]
-    return subprocess.call(cmd, env=os.environ.copy())
+    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
 
 
 def _run_harness(args: argparse.Namespace) -> int:
@@ -679,7 +680,7 @@ def _run_graph(args: argparse.Namespace) -> int:
         cmd.extend(["--tier", args.tier])
     if args.json:
         cmd.append("--json")
-    return subprocess.call(cmd, env=os.environ.copy())
+    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
 
 
 def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> int:
@@ -718,7 +719,7 @@ def _run_diagram(args: argparse.Namespace) -> int:
         cmd.append("--stdout")
     if args.force:
         cmd.append("--force")
-    return subprocess.call(cmd, env=os.environ.copy())
+    return subprocess.call(cmd, env=RaptorConfig.get_safe_env())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
