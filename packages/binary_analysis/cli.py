@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+sys.path.insert(0, os.environ.get("RAPTOR_DIR", str(Path(__file__).resolve().parents[2])))
 
 from core.config import RaptorConfig
 from core.json import load_json, save_json
@@ -162,9 +162,6 @@ def _add_trace_args(parser: argparse.ArgumentParser, *, include_out: bool) -> No
     parser.add_argument("--usb", action="store_true", help="Use the first USB-connected device")
 
 
-def _map_result_payload(result: Any, out_dir: Path) -> dict[str, Any]:
-    return map_result_payload(result, out_dir)
-
 
 def _print_map_summary(payload: dict[str, Any], output_path: Path) -> None:
     summary = payload["correlation"]["summary"]
@@ -219,7 +216,7 @@ def _run_map(args: argparse.Namespace) -> int:
     start_run(out_dir, "understand", target=str(target))
     try:
         result = _analyse_for_args(args, target, out_dir)
-        payload = _map_result_payload(result, out_dir)
+        payload = map_result_payload(result, out_dir)
         output_path = out_dir / "map-result.json"
         save_json(output_path, payload)
         complete_run(out_dir)
@@ -443,7 +440,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
                     ),
                 ))
 
-        payload = _map_result_payload(result, out_dir)
+        payload = map_result_payload(result, out_dir)
         payload["mode"] = "investigate"
         payload["artifacts"]["binary_investigation"] = str(out_dir / "binary-investigation.json")
         payload["artifacts"]["binary_investigation_report"] = str(out_dir / "binary-investigation-report.md")
@@ -570,7 +567,7 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
         )
         return 1
 
-    payload = _map_result_payload(result, run_dir)
+    payload = map_result_payload(result, run_dir)
     prior_payload = load_json(run_dir / "map-result.json")
     if isinstance(prior_payload, dict) and prior_payload.get("mode") == "investigate":
         payload["mode"] = "investigate"

@@ -71,14 +71,14 @@ def _evidence_ref(ingress: dict[str, Any]) -> dict[str, Any]:
 
 def _load_run(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     run_dir = Path(run_dir).resolve()
-    manifest = load_json(run_dir / "binary-manifest.json")
+    manifest_data = load_json(run_dir / "binary-manifest.json")
     context = load_json(run_dir / "context-map.json")
     investigation = load_json(run_dir / "binary-investigation.json")
-    if not isinstance(manifest, dict):
+    if not isinstance(manifest_data, dict):
         raise FileNotFoundError(f"missing binary-manifest.json in {run_dir}")
     if not isinstance(context, dict):
         raise FileNotFoundError(f"missing context-map.json in {run_dir}")
-    return manifest, context, investigation if isinstance(investigation, dict) else {}
+    return manifest_data, context, investigation if isinstance(investigation, dict) else {}
 
 
 def _select_ingress(
@@ -324,13 +324,13 @@ def generate_binary_harness(
 ) -> dict[str, Any]:
     """Write a binary harness plan and optional candidate source."""
     run_dir = Path(run_dir).resolve()
-    manifest, context, investigation = _load_run(run_dir)
+    manifest_data, context, investigation = _load_run(run_dir)
     ingress = _select_ingress(context, investigation, ingress_id)
     kind = str(ingress.get("kind") or "")
     platform = str(ingress.get("platform") or "generic")
-    target_path = str(manifest.get("binary_path") or context.get("target_path") or "")
-    target_kind = str(manifest.get("target_kind") or "")
-    binary_sha256 = str(manifest.get("binary_sha256") or "")
+    target_path = str(manifest_data.get("binary_path") or context.get("target_path") or "")
+    target_kind = str(manifest_data.get("target_kind") or "")
+    binary_sha256 = str(manifest_data.get("binary_sha256") or "")
     bound_function_id = str(ingress.get("bound_function_id") or "")
     linked_candidate_flows = [
         item for item in context.get("candidate_flows", [])
@@ -474,8 +474,8 @@ def generate_binary_harness(
             "binary_sha256": binary_sha256,
             "target_kind": target_kind,
             "platform": platform,
-            "arch": manifest.get("arch"),
-            "bits": manifest.get("bits"),
+            "arch": manifest_data.get("arch"),
+            "bits": manifest_data.get("bits"),
         },
         "ingress": _evidence_ref(ingress),
         "linked_evidence": {
@@ -498,7 +498,6 @@ def generate_binary_harness(
     }
     harness_dir.mkdir(parents=True, exist_ok=True)
     spec_path = harness_dir / "harness-spec.json"
-    save_json(spec_path, spec)
     report_path = harness_dir / "harness-report.md"
     report_path.write_text(render_harness_report(spec), encoding="utf-8")
     spec["artifacts"] = {

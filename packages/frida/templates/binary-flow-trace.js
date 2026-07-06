@@ -81,7 +81,7 @@ function hook(name, category, readArgs) {
       send(Object.assign({
         category: category,
         fn: name,
-        args: Object.assign({ ret: retval.toInt32() }, this.args || {}),
+        args: Object.assign({ ret: retval.isNull() ? 0 : retval.toUInt32() }, this.args || {}),
         tid: Process.getCurrentThreadId(),
       }, this.site || {}));
     },

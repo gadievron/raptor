@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ._symbols import symbol_base_name
+from ._symbols import strip_import_prefix
 from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
@@ -44,9 +44,10 @@ class SurfaceClassification:
 
 def classify_security_api(name: str) -> SurfaceClassification | None:
     raw = str(name or "")
-    base = symbol_base_name(raw)
+    stripped = strip_import_prefix(raw)
+    base = stripped.split(".")[-1]
 
-    if any(token in raw for token in ("NSLog", "CFLog", "os_log")):
+    if base in ("NSLog", "CFLog", "os_log", "os_log_impl"):
         return SurfaceClassification(raw, "surface", "logging", False,
                                      "Logging API worth reviewing, but not a format-string sink until the callsite proves a non-literal format.")
     if base in STRING_OVERFLOW_FUNCS or base in MEMORY_COPY_FUNCS:
@@ -68,29 +69,26 @@ def classify_security_api(name: str) -> SurfaceClassification | None:
         return SurfaceClassification(raw, "surface", "parser", False,
                                      "Parser/input API worth tracing, but not a consequence by itself.")
 
-    if any(token in raw for token in ("NSTask", "Foundation.Process")):
+    _raw_parts = stripped.replace(".", " ").replace(":", " ").split()
+    if any(token in _raw_parts for token in ("NSTask",)) or stripped.startswith("Foundation.Process"):
         return SurfaceClassification(raw, "sink", "process_execution", True,
                                      "Foundation process execution API.")
-    if any(token in raw for token in (
+    if any(stripped.startswith(prefix) for prefix in (
         "Foundation.JSONDecoder",
         "Foundation.JSONSerialization",
         "Foundation.PropertyList",
         "Foundation.Data.base64Encoded",
-        "inflate",
-        "CFXML",
-    )):
+    )) or base in ("inflate", "CFXML"):
         return SurfaceClassification(raw, "surface", "parser", False,
                                      "Structured-data parser surface.")
-    if any(token in raw for token in (
+    if any(stripped.startswith(prefix) for prefix in (
         "Foundation.Data.contentsOf",
         "Foundation.URL.fileURLWithPath",
         "Foundation.URL.absoluteString",
-        "CFURLCreateWithBytes",
-        "readlink",
-    )):
+    )) or base in ("CFURLCreateWithBytes", "readlink"):
         return SurfaceClassification(raw, "surface", "filesystem_or_url", False,
                                      "Filesystem/URL handling surface.")
-    if any(token in raw for token in ("SecTrust", "SecPolicy", "SecItem", "SecKeychain")):
+    if any(part.startswith(prefix) for part in _raw_parts for prefix in ("SecTrust", "SecPolicy", "SecItem", "SecKeychain")):
         return SurfaceClassification(raw, "surface", "security_boundary", False,
                                      "Security-framework boundary API.")
     return None

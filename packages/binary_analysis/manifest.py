@@ -155,7 +155,7 @@ class BinaryManifest:
                 AppBundleMetadata.from_dict(data["app_bundle"])
                 if isinstance(data.get("app_bundle"), dict) else None
             ),
-            evidence=[],
+            evidence=[],  # populated by pipeline after construction
         )
 
 

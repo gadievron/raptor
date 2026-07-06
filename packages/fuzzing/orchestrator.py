@@ -19,6 +19,8 @@ from core.logging import get_logger
 from packages.fuzzing.capability import CapabilityReport, probe as probe_capabilities
 from packages.fuzzing.target_detector import TargetInfo, detect as detect_target
 
+_BINARY_UNDERSTAND_KINDS = frozenset({"elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"})
+
 logger = get_logger()
 
 _EXECUTABLE_FUZZERS = {"afl", "libfuzzer"}
@@ -305,7 +307,7 @@ class FuzzingOrchestrator:
 
         # Optional pre-fuzz: binary-level adversarial analysis via radare2.
         # Mirrors what /understand --map does for source-level targets.
-        if binary_understand and plan.target.kind in ("elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"):
+        if binary_understand and plan.target.kind in _BINARY_UNDERSTAND_KINDS:
             if not plan.capabilities.radare2:
                 logger.info("Skipping radare2 binary analysis: radare2 not found")
             elif not plan.capabilities.has_r2pipe:
@@ -342,7 +344,7 @@ class FuzzingOrchestrator:
             raise RuntimeError(f"Fuzzer '{plan.fuzzer}' not yet wired into orchestrator.")
         if generated_corpus_info:
             result["generated_corpus"] = generated_corpus_info
-        if binary_understand and plan.target.kind in ("elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"):
+        if binary_understand and plan.target.kind in _BINARY_UNDERSTAND_KINDS:
             try:
                 from packages.binary_analysis import append_fuzz_evidence_to_run
 
@@ -503,14 +505,6 @@ class FuzzingOrchestrator:
                 coverage_features=result.stats.coverage_features,
                 corpus_size=result.stats.corpus_size,
             )
-            # Re-emit any crashes the streaming parser missed (e.g. via the
-            # crash directory glob in _parse_result)
-            for crash_path in result.crashes:
-                if not any(
-                    str(crash_path) in str(e)
-                    for e in []   # streaming events not tracked here
-                ):
-                    pass
         finally:
             telemetry.stop()
         return {
