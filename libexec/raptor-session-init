@@ -47,7 +47,7 @@ def write_env_file():
     )
 
     try:
-        Path(env_file).write_text(content)
+        Path(env_file).write_text(content, encoding="utf-8")
     except OSError:
         pass
 

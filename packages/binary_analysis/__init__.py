@@ -5,8 +5,6 @@ RAPTOR Binary Analysis Package
 Provides binary analysis capabilities including crash analysis, debugging, and disassembly.
 """
 
-from .crash_analyser import CrashAnalyser, CrashContext
-from .debugger import GDBDebugger
 from .radare2_understand import (
     BinaryContextMap,
     BinaryUnderstand,
@@ -31,6 +29,20 @@ from .pipeline import (
     append_fuzz_evidence_to_run,
     append_runtime_evidence_to_run,
 )
+
+
+def __getattr__(name):
+    if name == "CrashAnalyser":
+        from .crash_analyser import CrashAnalyser
+        return CrashAnalyser
+    if name == "CrashContext":
+        from .crash_analyser import CrashContext
+        return CrashContext
+    if name == "GDBDebugger":
+        from .debugger import GDBDebugger
+        return GDBDebugger
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     'CrashAnalyser',
