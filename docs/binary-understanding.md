@@ -155,7 +155,7 @@ The lower-level helper and its old positional form still work for tests and
 power users, but they are not the normal operator surface:
 
 ```bash
-_RAPTOR_TRUSTED=1 libexec/raptor-binary-understand /path/to/app out/binary-app
+_RAPTOR_TRUSTED=1 libexec/raptor-binary map /path/to/app --out out/binary-app
 ```
 
 ## Add runtime evidence
