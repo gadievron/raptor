@@ -45,6 +45,9 @@ def main() -> int:
     if args.tier and not args.evidence:
         p.error("--tier requires --evidence")
     db_path = Path(args.db) if args.db else graph_path_for_run(Path(args.run_dir))
+    if args.db and not db_path.is_file():
+        print(f"raptor-binary-graph-query: database not found: {db_path}", file=sys.stderr)
+        return 1
     if args.edges:
         payload = {"edges": query_edges(db_path, kind=args.kind)}
     elif args.evidence:
