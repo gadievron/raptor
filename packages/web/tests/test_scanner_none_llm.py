@@ -303,6 +303,7 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 attack_evidence="SQL syntax",
                 diff_summary="baseline HTTP 200/20 bytes; attack HTTP 500/128 bytes",
                 attack_vector="query_param",
+                oracle_signal="sqli_error:sql syntax",
                 method="GET",
             )
 

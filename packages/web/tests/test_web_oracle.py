@@ -129,6 +129,7 @@ def test_web_finding_maps_to_verified_outcome():
         attack_evidence="SQL syntax",
         diff_summary="baseline HTTP 200/10 bytes; attack HTTP 500/50 bytes",
         attack_vector="query_param",
+        oracle_signal="sqli_error:sql syntax",
         method="GET",
     )
 
@@ -141,3 +142,49 @@ def test_web_finding_maps_to_verified_outcome():
     assert data["reproducible"] is False
     assert data["evidence"]["payload"] == "' OR 1=1--"
     assert data["evidence"]["diff_summary"].startswith("baseline HTTP")
+    assert data["evidence"]["oracle_signal"] == "sqli_error:sql syntax"
+
+
+def test_passive_confirmed_web_finding_does_not_become_verified_outcome():
+    finding = WebFinding(
+        id="WEB-0002",
+        title="Missing Content-Security-Policy",
+        severity="medium",
+        confidence="high",
+        status="confirmed",
+        url="https://example.test/",
+        evidence="CSP header missing",
+        description="No CSP header was observed",
+        recommendation="Set a CSP header",
+        vuln_type="missing_security_header",
+        asvs_category="V14.4",
+        check_id="V14.4.1",
+        confirmed=True,
+        target_url="https://example.test/",
+    )
+
+    assert from_web_finding(finding) is None
+
+
+def test_confirmed_web_finding_without_oracle_signal_does_not_become_verified_outcome():
+    finding = WebFinding(
+        id="WEB-0003",
+        title="SQL Injection",
+        severity="high",
+        confidence="medium",
+        status="needs_review",
+        url="https://example.test/search",
+        evidence="confirmed",
+        description="SQLi",
+        recommendation="Use parameterised queries",
+        vuln_type="injection",
+        asvs_category="V5",
+        check_id="V5.2.1",
+        cwe_id="CWE-89",
+        confirmed=True,
+        target_url="https://example.test/search",
+        confirmation_payload="' OR 1=1--",
+        response_evidence="SQL syntax",
+    )
+
+    assert from_web_finding(finding) is None
