@@ -293,6 +293,7 @@ def _build_cost_gate():
 
 def _do_map(args: argparse.Namespace) -> dict:
     from packages.binary_analysis import analyse_blackbox_binary
+    from packages.binary_analysis.pipeline import map_result_payload
 
     target = Path(args.target).resolve()
     if not target.is_file():
@@ -312,39 +313,7 @@ def _do_map(args: argparse.Namespace) -> dict:
         constraint_file=Path(args.constraint_file).resolve() if args.constraint_file else None,
         compare_binary=Path(args.compare).resolve() if args.compare else None,
     )
-    context = result.context_map
-    class_summary = (context.get("class_inventory") or {}).get("summary") or {}
-    return {
-        "mode": "map",
-        "target": str(target),
-        "models": [],
-        "items": context.get("entry_points", []),
-        "failed_models": [],
-        "correlation": {
-            "summary": {
-                "entry_point_candidates": len(context.get("entry_points", [])),
-                "input_channels": len(result.input_channels),
-                "sensitive_import_candidates": len(context.get("sink_details", [])),
-                "security_surface_candidates": len(context.get("surface_details", [])),
-                "candidate_flows": len(context.get("candidate_flows", [])),
-                "fuzz_witnesses": len(result.fuzz.crashes),
-                "recovered_classes": int(class_summary.get("class_count", 0)),
-                "framework_callback_candidates": len(context.get("framework_callback_candidates", [])),
-                "decompiled_functions": int(
-                    (context.get("decompilations") or {}).get("coverage", {}).get("decompiled_functions", 0)
-                ),
-            },
-        },
-        "artifacts": {
-            "context_map": str(Path(args.out).resolve() / "context-map.json"),
-            "binary_context_map": str(Path(args.out).resolve() / "binary-context-map.json"),
-            "binary_manifest": str(Path(args.out).resolve() / "binary-manifest.json"),
-            "binary_evidence": str(Path(args.out).resolve() / "binary-evidence.json"),
-            "binary_decompilations": str(Path(args.out).resolve() / "binary-decompilations.json"),
-            "binary_validation_handoff": str(Path(args.out).resolve() / "binary-validation-handoff.json"),
-            "binary_graph": str(result.graph_path),
-        },
-    }
+    return map_result_payload(result, Path(args.out).resolve())
 
 
 def _do_hunt(args: argparse.Namespace) -> dict:
@@ -560,7 +529,7 @@ def _write_result(out_dir: Path, mode: str, payload: dict) -> Path:
             f"could not serialize result payload: {e}. "
             f"Adapter or substrate returned a non-JSON-native value."
         ) from None
-    path.write_text(serialized)
+    path.write_text(serialized, encoding="utf-8")
     return path
 
 
