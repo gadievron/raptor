@@ -14,10 +14,13 @@ the interface is exercised with attacker-controlled data.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -357,6 +360,8 @@ def recover_external_ingress(
                     address=address,
                 )
         if getattr(manifest, "target_kind", "") == "pe-dll":
+            if len(exports) > 200:
+                logger.warning("PE DLL has %d exports, truncating to 200", len(exports))
             for name in exports[:200]:
                 if name.split(".")[-1] in _PE_EXPORT_SKIP:
                     continue
@@ -398,6 +403,8 @@ def recover_external_ingress(
                     address=address,
                 )
     elif getattr(manifest, "target_kind", "") == "elf-linux":
+        if len(exports) > 200:
+            logger.warning("ELF shared object has %d exports, truncating to 200", len(exports))
         for name in exports[:200]:
             if name.split(".")[-1] in {"main", "_start"}:
                 continue
