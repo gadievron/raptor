@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ._symbols import symbol_base_name
 from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
@@ -41,17 +42,9 @@ class SurfaceClassification:
         }
 
 
-def _base(name: str) -> str:
-    raw = str(name or "")
-    for prefix in ("sym.imp.", "imp.", "__imp_", "_"):
-        if raw.startswith(prefix):
-            raw = raw[len(prefix):]
-    return raw.split(".")[-1]
-
-
 def classify_security_api(name: str) -> SurfaceClassification | None:
     raw = str(name or "")
-    base = _base(raw)
+    base = symbol_base_name(raw)
 
     if any(token in raw for token in ("NSLog", "CFLog", "os_log")):
         return SurfaceClassification(raw, "surface", "logging", False,

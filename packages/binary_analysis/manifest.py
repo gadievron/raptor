@@ -17,6 +17,7 @@ from core.binary.fingerprint import bucket_imports
 from core.hash import sha256_file
 from packages.fuzzing.target_detector import detect
 
+from ._symbols import strip_import_prefix
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 from .macho import AppBundleMetadata, MachOSlice, inspect_app_bundle, inspect_macho_slices, select_slice
 
@@ -159,11 +160,7 @@ class BinaryManifest:
 
 
 def _normalise_symbol(name: str) -> str:
-    name = str(name or "")
-    for prefix in ("sym.imp.", "imp.", "__imp_", "_"):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-    return name
+    return strip_import_prefix(name)
 
 
 def _iter_markers(path: Path, markers: Iterable[bytes]) -> set[bytes]:

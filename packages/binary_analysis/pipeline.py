@@ -18,6 +18,7 @@ from typing import Any, Optional
 from core.json import load_json, save_json
 from core.hash import sha256_file
 
+from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
@@ -111,14 +112,6 @@ def _address(value: Any) -> str:
 def _fn_id(prefix: str, fn: Any) -> str:
     address = getattr(fn, "address", None)
     return f"{prefix}-{int(address or 0):x}"
-
-
-def _symbol_base(name: str) -> str:
-    value = str(name or "")
-    for prefix in ("sym.imp.", "imp.", "__imp_", "_"):
-        if value.startswith(prefix):
-            value = value[len(prefix):]
-    return value.split(".")[-1]
 
 
 def _import_candidate_id(prefix: str, name: str) -> str:
@@ -368,7 +361,7 @@ def _runtime_parser_flows(
 ) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
     """Bind observed parser API callsites back to recovered functions."""
     parser_surfaces = {
-        _symbol_base(str(item.get("name") or "")): item
+        symbol_base_name(str(item.get("name") or "")): item
         for item in surface_details
         if isinstance(item, dict) and item.get("category") == "parser"
     }
@@ -410,7 +403,7 @@ def _runtime_parser_flows(
     for event in runtime_events:
         if str(event.get("category") or "") != "parser":
             continue
-        parser_name = _symbol_base(str(event.get("fn") or ""))
+        parser_name = symbol_base_name(str(event.get("fn") or ""))
         parser_surface = parser_surfaces.get(parser_name)
         caller = str(event.get("caller") or "")
         caller_offset = str(event.get("caller_offset") or "")
@@ -514,11 +507,11 @@ def _call_graph_edges(
         if not _is_runtime_support_name(fn.name)
     }
     functions_by_base = {
-        _symbol_base(name): fn
+        symbol_base_name(name): fn
         for name, fn in functions_by_name.items()
     }
     surfaces_by_base = {
-        _symbol_base(str(item.get("name") or "")): item
+        symbol_base_name(str(item.get("name") or "")): item
         for item in surface_details
         if isinstance(item, dict) and item.get("name")
     }
@@ -561,8 +554,8 @@ def _call_graph_edges(
         index += 1
         source_id = _fn_id("BFN", fn)
         for callee in fn.direct_callees:
-            target_fn = functions_by_name.get(str(callee)) or functions_by_base.get(_symbol_base(str(callee)))
-            target_surface = surfaces_by_base.get(_symbol_base(str(callee)))
+            target_fn = functions_by_name.get(str(callee)) or functions_by_base.get(symbol_base_name(str(callee)))
+            target_surface = surfaces_by_base.get(symbol_base_name(str(callee)))
             if target_fn is not None:
                 key = (source_id, "function", _fn_id("BFN", target_fn))
                 if key in seen:
@@ -693,9 +686,9 @@ def _context_map(
         if classification.is_sink:
             sink_details.append(item)
 
-    known_surface_names = {_symbol_base(item["name"]) for item in surface_details}
+    known_surface_names = {symbol_base_name(item["name"]) for item in surface_details}
     for import_name in manifest.imports:
-        if _symbol_base(import_name) in known_surface_names:
+        if symbol_base_name(import_name) in known_surface_names:
             continue
         classification = classify_security_api(import_name)
         if classification is None:
@@ -735,7 +728,7 @@ def _context_map(
             sink_details.append(item)
 
     candidate_flows: list[dict[str, Any]] = []
-    sink_by_name = {_symbol_base(item["name"]): item["id"] for item in sink_details}
+    sink_by_name = {symbol_base_name(item["name"]): item["id"] for item in sink_details}
     for fn in context.interesting_functions:
         if _is_runtime_support_name(fn.name):
             continue
