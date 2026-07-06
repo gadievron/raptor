@@ -10,6 +10,7 @@ their evidence strength.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -32,6 +33,8 @@ from .runtime_evidence import load_runtime_evidence
 from .surface_classification import classify_security_api
 from .topology import build_component_topology
 from .validation_handoff import build_validation_handoff
+
+logger = logging.getLogger(__name__)
 
 _RUNTIME_SUPPORT_PREFIXES = (
     "sym.___afl_",
@@ -1702,6 +1705,7 @@ def analyse_blackbox_binary(
             slice_arch=slice_arch,
         )
     except Exception as exc:
+        logger.warning("radare2 analysis failed for %s: %s", binary, exc, exc_info=True)
         context = BinaryContextMap(binary_path=binary)
         context.analysis_depth = "unavailable"
         context.notes.append(f"radare2 analysis unavailable: {exc}")
@@ -1760,6 +1764,7 @@ def analyse_blackbox_binary(
         try:
             compare_context = analyse_binary_context(Path(compare_binary), quick=True)
         except Exception:
+            logger.warning("radare2 analysis failed for comparison binary %s", compare_binary, exc_info=True)
             compare_context = BinaryContextMap(binary_path=Path(compare_binary).resolve())
         compare_manifest = build_manifest(Path(compare_binary), compare_context)
         diff = diff_manifests(compare_manifest, manifest)
