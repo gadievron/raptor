@@ -7,6 +7,7 @@ a cryptic failure six commands deep.
 
 Supported target kinds:
   - elf-linux      : Linux ELF binary (any arch)
+  - elf-kmod       : Linux kernel module (.ko)
   - macho          : macOS Mach-O binary
   - pe-exe         : Windows PE executable
   - pe-dll         : Windows DLL
@@ -97,7 +98,8 @@ def _detect_file(path: Path) -> TargetInfo:
     # Mach-O (macOS, including fat binaries)
     if magic[:4] in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
                      b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
-                     b"\xca\xfe\xba\xbe"):
+                     b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+                     b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"):
         return _detect_macho(path, magic, sys_platform)
 
     # PE (Windows): MZ header at offset 0
@@ -173,6 +175,24 @@ def _detect_elf(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
         if ei_class == 1 and arch == "unknown":
             arch = "32-bit"
 
+    if path.suffix.lower() == ".ko":
+        return TargetInfo(
+            path=path,
+            kind="elf-kmod",
+            arch=arch,
+            description=f"Linux kernel module ({arch})",
+            can_fuzz_here=False,
+            recommended_fuzzer="kafl-or-snapchange",
+            blockers=[
+                "Linux kernel modules need a kernel harness or snapshot fuzzing setup; "
+                "RAPTOR does not load or fuzz them in-process.",
+            ],
+            hints=[
+                "Recover ioctl/file_operations entry points first, then build a narrow "
+                "kernel harness or use kAFL/Snapchange.",
+            ],
+        )
+
     is_executable = path.stat().st_mode & 0o111 != 0
     can_fuzz = sys_platform == "Linux" and is_executable
 
@@ -194,7 +214,10 @@ def _detect_elf(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
 
 
 def _detect_macho(path: Path, magic: bytes, sys_platform: str) -> TargetInfo:
-    arch = "fat" if magic[:4] == b"\xca\xfe\xba\xbe" else "unknown"
+    arch = "fat" if magic[:4] in (
+        b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+    ) else "unknown"
     if magic[:4] in (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe"):
         arch = "32-bit"
     elif magic[:4] in (b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe"):
@@ -230,6 +253,7 @@ def _detect_pe(
     sys_platform: str,
 ) -> TargetInfo:
     """Windows PE: .exe, .dll, .sys, .ocx, etc."""
+    arch = _pe_arch(path)
     # Determine subtype from suffix and DLL flag
     kind = "pe-exe"
     description = "Windows PE executable"
@@ -248,8 +272,8 @@ def _detect_pe(
     has_wsl = sys_platform == "Linux" and shutil.which("cmd.exe") is not None
 
     info = TargetInfo(
-        path=path, kind=kind, arch="x86_64",
-        description=description,
+        path=path, kind=kind, arch=arch,
+        description=f"{description} ({arch})",
         can_fuzz_here=False,
         recommended_fuzzer=fuzzer,
     )
@@ -305,6 +329,31 @@ def _detect_pe(
             )
 
     return info
+
+
+def _pe_arch(path: Path) -> str:
+    """Read the PE COFF machine field rather than guessing x86_64."""
+    try:
+        with path.open("rb") as f:
+            dos = f.read(64)
+            if len(dos) < 64 or dos[:2] != b"MZ":
+                return "unknown"
+            pe_offset = int.from_bytes(dos[0x3C:0x40], "little")
+            f.seek(pe_offset)
+            header = f.read(6)
+    except OSError:
+        return "unknown"
+    if len(header) < 6 or header[:4] != b"PE\x00\x00":
+        return "unknown"
+    machine = int.from_bytes(header[4:6], "little")
+    return {
+        0x014C: "i386",
+        0x8664: "x86_64",
+        0x01C0: "arm",
+        0x01C4: "armv7",
+        0xAA64: "arm64",
+        0x0200: "ia64",
+    }.get(machine, f"machine_{machine:#x}")
 
 
 def _detect_rust_crate(crate_dir: Path) -> TargetInfo:

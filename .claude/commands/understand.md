@@ -18,6 +18,38 @@ It is a work in progress, remember that.
 
 If no mode flag is given, default to `--map`.
 
+### Compiled / black-box targets
+
+If `<target>` is a single ELF, Mach-O, PE, Java class/JAR, APK, .NET, Go or
+Rust artefact rather than a source tree, route `--map` through the binary
+substrate:
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR"
+```
+
+This writes the same `context-map.json` bridge artefact, plus
+`binary-manifest.json`, `binary-evidence.json`, `binary-checklist.json`,
+`binary-decompilations.json`, `binary-validation-handoff.json`,
+`binary-analysis-report.md` and `graph/binary-graph.sqlite`.
+
+The binary path is evidence-first by design:
+- import tables and xrefs are surfaced as candidates, not silently promoted to vulnerabilities
+- runtime evidence is only ingested from an explicit `/frida` run via `--runtime-dir`
+- fuzz witnesses are only ingested from an explicit `/fuzz` run via `--fuzz-dir`
+- SMT is only run against explicit conditions supplied in `--constraint-file`
+- no trust boundary or unchecked flow is invented when the binary evidence cannot prove it
+- Mach-O slices, app bundle metadata and Objective-C / Swift selectors are structure, not attacker-control claims
+
+For deeper evidence after the static map:
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR" \
+    --runtime-dir <frida-run-dir> --fuzz-dir <fuzz-run-dir> \
+    --constraint-file <conditions.json> --compare <older-binary> \
+    --slice-arch <arm64|x86_64> --max-decompile 50
+```
+
 ### Multi-model mode (opt-in)
 
 For `--hunt` and `--trace`, you can pass one or more `--model` flags to
@@ -37,6 +69,16 @@ rather than doing the analysis here. Without `--model`, or for `--map`
 / `--teach` regardless, follow the in-session workflow below.
 
 ## Execution
+
+**Mechanical binary map path (when `<resolved_target>` is a single compiled artefact):**
+
+```bash
+libexec/raptor-understand --map --target <resolved_target> --out "$OUTPUT_DIR"
+```
+
+This path does not use an LLM. It writes a `map-result.json` summary beside
+the binary evidence artefacts and keeps source-tree `/understand --map`
+unchanged.
 
 **Multi-model path (when `--model` is present with `--hunt` or `--trace`):**
 
@@ -199,5 +241,17 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | `variants.json` | `--hunt` | All pattern matches, taint status, root-cause groups |
 | `diagrams.md` | `--map`, `--trace` | Mermaid diagrams (auto-generated) |
 | *(none)* | `--teach` | Inline explanation — no file written |
+
+Binary `--map` also writes:
+
+| File | Contents |
+|------|----------|
+| `binary-manifest.json` | Content hash, format, architecture, import capabilities, runtime markers |
+| `binary-evidence.json` | Every mechanical observation with tier, tool and reproducibility |
+| `binary-checklist.json` | Address-stable function, class, callback and evidence handoff inventory |
+| `binary-decompilations.json` | Persisted pseudocode for the reviewed high-value functions |
+| `binary-validation-handoff.json` | What evidence exists and what is still missing before a finding can be promoted |
+| `binary-analysis-report.md` | One-screen operator summary and explicit non-claims |
+| `graph/binary-graph.sqlite` | Queryable binary graph memory |
 
 ---

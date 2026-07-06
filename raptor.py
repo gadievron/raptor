@@ -14,6 +14,7 @@ Usage:
 
 Available Modes:
     scan        - Static code analysis (Semgrep + CodeQL)
+    binary      - Black-box binary investigation and evidence collection
     fuzz        - Binary fuzzing with AFL++
     web         - Web application security testing
     agentic     - Full autonomous workflow
@@ -31,6 +32,9 @@ Examples:
 
     # Binary fuzzing
     python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+    # Black-box binary investigation
+    python3 raptor.py binary investigate /path/to/binary
 
     # Web scanning
     python3 raptor.py web --url https://example.com
@@ -881,6 +885,30 @@ def mode_fuzz(args: list) -> int:
                               "Starting binary fuzzing workflow...")
 
 
+def mode_binary(args: list) -> int:
+    """Run the black-box binary operator surface.
+
+    The binary CLI owns its own lifecycle for ``map`` and routes explicit
+    runtime / fuzz follow-on work to the existing Frida and fuzz entry points.
+    """
+    from core.config import RaptorConfig
+
+    wrapper = Path(__file__).parent / "libexec" / "raptor-binary"
+    if not wrapper.exists():
+        print(f"✗ Binary wrapper not found: {wrapper}", file=sys.stderr)
+        return 1
+    env = RaptorConfig.get_safe_env()
+    env["_RAPTOR_TRUSTED"] = "1"
+    try:
+        return subprocess.call([str(wrapper), *args], env=env)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+        return 130
+    except Exception as exc:
+        print(f"\n✗ Error running raptor-binary: {exc}", file=sys.stderr)
+        return 1
+
+
 def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
@@ -1074,6 +1102,7 @@ def _mode_help_scripts() -> dict:
     script_root = Path(__file__).parent
     return {
         'scan': script_root / "packages/static-analysis/scanner.py",
+        'binary': script_root / "packages/binary_analysis/cli.py",
         'fuzz': script_root / "raptor_fuzzing.py",
         'web': script_root / "packages/web/scanner.py",
         'agentic': script_root / "raptor_agentic.py",
@@ -1144,6 +1173,7 @@ _HELP_EPILOG = """
 Available Modes:
   scan        - Static code analysis with Semgrep
   sca         - Software Composition Analysis (deps + advisories + SBOM)
+  binary      - Black-box binary investigation and evidence collection
   fuzz        - Binary fuzzing with AFL++
   web         - Web application security testing
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
@@ -1161,6 +1191,9 @@ Examples:
 
   # Binary fuzzing
   python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+  # Black-box binary investigation
+  python3 raptor.py binary investigate /path/to/binary
 
   # Web scanning
   python3 raptor.py web --url https://example.com
@@ -1278,6 +1311,7 @@ def main():
     mode_handlers = {
         'scan': mode_scan,
         'sca': mode_sca,
+        'binary': mode_binary,
         'fuzz': mode_fuzz,
         'web': mode_web,
         'agentic': mode_agentic,

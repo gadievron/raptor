@@ -97,6 +97,21 @@ class RaptorRenderDiagramsForceTests(unittest.TestCase):
                 "# operator hand-edit\n",
             )
 
+    def test_stdout_renders_without_writing_or_clobbering(self):
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            _seed_minimal_inputs(out)
+            (out / "diagrams.md").write_text("# operator hand-edit\n", encoding="utf-8")
+
+            result = _run(str(out), "--stdout")
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("# Security Diagrams", result.stdout)
+            self.assertEqual(
+                (out / "diagrams.md").read_text(encoding="utf-8"),
+                "# operator hand-edit\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,8 +45,6 @@ from typing import List, Optional, Sequence
 
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 
-from .pipeline import run_sca
-
 logger = logging.getLogger(__name__)
 
 SUBCOMMANDS = ("fix", "check", "upgrade", "diff",
@@ -194,6 +192,8 @@ def _positional_to_target_flag(argv: List[str]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _run_analyse(argv: List[str]) -> int:
+    from .pipeline import run_sca
+
     args = _parse_analyse_args(argv)
     _configure_logging(args.verbose)
 

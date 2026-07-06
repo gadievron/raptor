@@ -15,6 +15,15 @@ MACHO_64_LE_MAGIC = b"\xcf\xfa\xed\xfe" + b"\x00" * 60
 PE_MAGIC = b"MZ" + b"\x00" * 60
 
 
+def _pe_fixture(machine: int) -> bytes:
+    data = bytearray(b"\x00" * 256)
+    data[:2] = b"MZ"
+    data[0x3C:0x40] = (0x80).to_bytes(4, "little")
+    data[0x80:0x84] = b"PE\x00\x00"
+    data[0x84:0x86] = machine.to_bytes(2, "little")
+    return bytes(data)
+
+
 class TestDetect(unittest.TestCase):
     def test_nonexistent_path_returns_unknown(self):
         info = detect(Path("/this/path/does/not/exist/raptor_probe"))
@@ -54,11 +63,12 @@ class TestDetect(unittest.TestCase):
 
     def test_pe_executable_detection(self):
         with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:
-            f.write(PE_MAGIC)
+            f.write(_pe_fixture(0x014C))
             tmp = Path(f.name)
         try:
             info = detect(tmp)
             self.assertEqual(info.kind, "pe-exe")
+            self.assertEqual(info.arch, "i386")
             self.assertEqual(info.recommended_fuzzer, "winafl")
             if platform.system() != "Windows":
                 self.assertFalse(info.can_fuzz_here)
@@ -67,26 +77,43 @@ class TestDetect(unittest.TestCase):
 
     def test_pe_dll_detection(self):
         with tempfile.NamedTemporaryFile(suffix=".dll", delete=False) as f:
-            f.write(PE_MAGIC)
+            f.write(_pe_fixture(0x8664))
             tmp = Path(f.name)
         try:
             info = detect(tmp)
             self.assertEqual(info.kind, "pe-dll")
+            self.assertEqual(info.arch, "x86_64")
         finally:
             os.unlink(tmp)
 
     def test_pe_sys_detection_provides_kernel_fuzzing_hints(self):
         """Windows kernel drivers must produce clear, actionable guidance."""
         with tempfile.NamedTemporaryFile(suffix=".sys", delete=False) as f:
-            f.write(PE_MAGIC)
+            f.write(_pe_fixture(0xAA64))
             tmp = Path(f.name)
         try:
             info = detect(tmp)
             self.assertEqual(info.kind, "pe-sys")
+            self.assertEqual(info.arch, "arm64")
             self.assertIn("kernel driver", info.description.lower())
             # Must mention the available approaches
             text = " ".join(info.hints + info.blockers).lower()
             self.assertTrue("kafl" in text or "snapchange" in text or "ioctl" in text)
+        finally:
+            os.unlink(tmp)
+
+    def test_linux_kernel_module_is_not_treated_as_a_user_mode_campaign(self):
+        with tempfile.NamedTemporaryFile(suffix=".ko", delete=False) as f:
+            f.write(ELF_MAGIC)
+            f.write(b"\x00" * 1024)
+            tmp = Path(f.name)
+        try:
+            tmp.chmod(0o755)
+            info = detect(tmp)
+            self.assertEqual(info.kind, "elf-kmod")
+            self.assertFalse(info.can_fuzz_here)
+            self.assertIn("kernel module", info.description.lower())
+            self.assertTrue(any("harness" in item.lower() for item in info.hints))
         finally:
             os.unlink(tmp)
 

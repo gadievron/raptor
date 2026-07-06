@@ -142,6 +142,20 @@ class TestBinaryUnderstand(unittest.TestCase):
         finally:
             tmp.unlink()
 
+    def test_entry_point_recovery_does_not_promote_main_suffix_methods(self):
+        understand = BinaryUnderstand.__new__(BinaryUnderstand)
+        ctx = BinaryContextMap(binary_path=Path("./sample"))
+        ctx.interesting_functions = [
+            FunctionInfo(name="main", address=0x1000),
+            FunctionInfo(name="SentryRequestOperation.main", address=0x1100),
+            FunctionInfo(name="SentryThread.isMain", address=0x1200),
+            FunctionInfo(name="SentryNSError.domain", address=0x1300),
+        ]
+
+        understand._extract_entry_points(ctx)
+
+        self.assertEqual([item.name for item in ctx.entry_points], ["main"])
+
     @patch("packages.binary_analysis.radare2_understand.probe_capability")
     def test_init_raises_for_missing_binary(self, mock_probe):
         mock_probe.return_value = {"available": True, "decompiler": "pdc",
@@ -174,6 +188,23 @@ class TestBinaryUnderstand(unittest.TestCase):
                 {"name": "main", "offset": 0x401000, "size": 100, "type": "fcn"},
                 {"name": "process_request", "offset": 0x401200, "size": 250, "type": "fcn"},
                 {"name": "sym.imp.strcpy", "offset": 0x402000, "size": 16, "type": "imp"},
+            ]),
+            "icj": json.dumps([
+                {
+                    "classname": "Example.AppDelegate",
+                    "addr": 0x500000,
+                    "lang": "objc",
+                    "super": ["NSObject"],
+                    "methods": [
+                        {
+                            "name": "applicationDidFinishLaunching:",
+                            "flag": "method.Example.AppDelegate.applicationDidFinishLaunching:",
+                            "lang": "objc",
+                            "addr": 0x401200,
+                        },
+                    ],
+                    "fields": [{"name": "helper", "kind": "var", "addr": 0x500100}],
+                },
             ]),
             "izj": json.dumps([
                 {"string": "GET / HTTP/1.0\r\n\r\n"},
@@ -227,6 +258,13 @@ class TestBinaryUnderstand(unittest.TestCase):
             # dangerous_sinks should include strcpy
             sink_names = [f.name for f in ctx.dangerous_sinks]
             self.assertTrue(any("strcpy" in n for n in sink_names))
+
+            self.assertEqual(len(ctx.classes), 1)
+            self.assertEqual(ctx.classes[0].name, "Example.AppDelegate")
+            self.assertEqual(
+                ctx.classes[0].methods[0].bound_function_name,
+                "process_request",
+            )
 
             # heuristic prioritisation should rank process_request highly
             self.assertTrue(any(

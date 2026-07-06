@@ -125,12 +125,11 @@ class FuzzingOrchestrator:
                     "WinAFL target detection is available, but RAPTOR does "
                     "not orchestrate WinAFL campaigns yet."
                 )
-        elif kind == "pe-sys":
+        elif kind in ("pe-sys", "elf-kmod"):
             plan.fuzzer = None
             plan.blockers.append(
-                "Windows kernel drivers require snapshot fuzzing infrastructure "
-                "(kAFL or Snapchange) which RAPTOR does not orchestrate yet. "
-                "Use the static analysis pipeline (/codeql, /scan) on the source instead."
+                "Kernel drivers require a harness or snapshot fuzzing infrastructure "
+                "(kAFL or Snapchange) which RAPTOR does not orchestrate yet."
             )
         elif kind in ("source-c", "source-cpp"):
             plan.needs_harness = True
@@ -306,14 +305,14 @@ class FuzzingOrchestrator:
 
         # Optional pre-fuzz: binary-level adversarial analysis via radare2.
         # Mirrors what /understand --map does for source-level targets.
-        if binary_understand and plan.target.kind in ("elf-linux", "macho", "pe-exe", "pe-dll"):
+        if binary_understand and plan.target.kind in ("elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"):
             if not plan.capabilities.radare2:
                 logger.info("Skipping radare2 binary analysis: radare2 not found")
             elif not plan.capabilities.has_r2pipe:
                 logger.info("Skipping radare2 binary analysis: Python r2pipe module not installed")
             else:
                 try:
-                    from packages.binary_analysis import analyse_binary_context
+                    from packages.binary_analysis import analyse_blackbox_binary
                     decompiler = "r2ghidra" if plan.capabilities.has_r2ghidra else "pdc"
                     logger.info("=" * 70)
                     logger.info("BINARY CONTEXT ANALYSIS (radare2)")
@@ -321,16 +320,16 @@ class FuzzingOrchestrator:
                     logger.info(f"radare2: {plan.capabilities.radare2}")
                     logger.info(f"decompiler: {decompiler}")
                     logger.info(f"output: {out_dir / 'binary-context-map.json'}")
-                    ctx_map = analyse_binary_context(
+                    binary_result = analyse_blackbox_binary(
                         plan.target.path,
-                        out_path=out_dir / "binary-context-map.json",
+                        out_dir=out_dir,
                         llm=self.llm,
                     )
                     logger.info(
-                        "radare2 binary-context-map written: "
-                        f"{len(ctx_map.entry_points)} entry points, "
-                        f"{len(ctx_map.dangerous_sinks)} sinks, "
-                        f"{len(ctx_map.fuzz_priorities)} prioritised functions"
+                        "binary evidence map written: "
+                        f"{len(binary_result.context_map.get('entry_points', []))} entry point candidates, "
+                        f"{len(binary_result.context_map.get('sink_details', []))} sinks, "
+                        f"{len(binary_result.context_map.get('candidate_flows', []))} candidate flows"
                     )
                 except Exception as e:
                     logger.warning(f"Binary understand failed (non-fatal): {e}")
@@ -343,6 +342,22 @@ class FuzzingOrchestrator:
             raise RuntimeError(f"Fuzzer '{plan.fuzzer}' not yet wired into orchestrator.")
         if generated_corpus_info:
             result["generated_corpus"] = generated_corpus_info
+        if binary_understand and plan.target.kind in ("elf-linux", "elf-kmod", "macho", "pe-exe", "pe-dll", "pe-sys"):
+            try:
+                from packages.binary_analysis import append_fuzz_evidence_to_run
+
+                bundle = append_fuzz_evidence_to_run(
+                    plan.target.path,
+                    out_dir=out_dir,
+                    fuzz_dir=out_dir,
+                )
+                if bundle is not None:
+                    logger.info(
+                        "binary graph updated with fuzz evidence: "
+                        f"{len(bundle.crashes)} crash witnesses"
+                    )
+            except Exception as e:
+                logger.warning(f"Binary fuzz evidence append failed (non-fatal): {e}")
         return result
 
     def _prepare_corpus(

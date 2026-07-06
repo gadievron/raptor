@@ -65,6 +65,7 @@ from core.function_taxonomy import (  # noqa: E402
     STRING_OVERFLOW_FUNCS as _T_STROVF,
     TOCTOU_FUNCS as _T_TOCTOU,
 )
+from .surface_classification import classify_security_api
 
 # Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
@@ -101,6 +102,10 @@ class FunctionInfo:
     is_exported: bool = False
     is_entry: bool = False
     calls_dangerous: List[str] = field(default_factory=list)
+    # Direct callees recovered from radare2's call graph. These are retained
+    # so higher layers can recover narrow parser boundaries behind framework
+    # callbacks without re-running radare2 or inventing taint.
+    direct_callees: List[str] = field(default_factory=list)
     # Transitive-call reachability — sinks reachable within N hops via
     # the call graph. calls_dangerous is the depth=1 subset; this is
     # the union over all depths up to max_depth. Populated by
@@ -115,6 +120,61 @@ class FunctionInfo:
 
 
 @dataclass
+class RecoveredMethodInfo:
+    """A method recovered from Objective-C / Swift class metadata.
+
+    The metadata proves that a selector or method symbol exists in the
+    compiled artefact. It does not prove that the method is reachable from an
+    attacker-controlled event. ``bound_function_*`` is only filled when the
+    method address exactly matches a recovered function start.
+    """
+
+    name: str
+    address: int
+    language: str = ""
+    flag: str = ""
+    is_class_method: bool = False
+    bound_function_address: Optional[int] = None
+    bound_function_name: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "address": hex(self.address) if self.address is not None else None,
+            "language": self.language,
+            "flag": self.flag,
+            "is_class_method": self.is_class_method,
+            "bound_function_address": (
+                hex(self.bound_function_address)
+                if self.bound_function_address is not None else None
+            ),
+            "bound_function_name": self.bound_function_name,
+        }
+
+
+@dataclass
+class RecoveredClassInfo:
+    """A class-like metadata record recovered from the binary."""
+
+    name: str
+    address: int
+    language: str = ""
+    superclasses: List[str] = field(default_factory=list)
+    methods: List[RecoveredMethodInfo] = field(default_factory=list)
+    fields: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "address": hex(self.address) if self.address is not None else None,
+            "language": self.language,
+            "superclasses": list(self.superclasses),
+            "methods": [method.to_dict() for method in self.methods],
+            "fields": [dict(item) for item in self.fields],
+        }
+
+
+@dataclass
 class BinaryContextMap:
     """Adversarial context for a binary, parallel to source-level context-map.json."""
 
@@ -122,6 +182,8 @@ class BinaryContextMap:
     arch: str = ""
     bits: int = 0
     binary_format: str = ""     # 'elf', 'mach-o', 'pe'
+    image_base: int = 0
+    analysis_depth: str = "full"
 
     entry_points: List[FunctionInfo] = field(default_factory=list)
     dangerous_sinks: List[FunctionInfo] = field(default_factory=list)
@@ -144,9 +206,13 @@ class BinaryContextMap:
     imports: List[str] = field(default_factory=list)
     exports: List[str] = field(default_factory=list)
     strings_sample: List[str] = field(default_factory=list)
+    classes: List[RecoveredClassInfo] = field(default_factory=list)
 
     fuzz_priorities: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    decompiler: str = ""
+    decompilation_limit: int = 0
+    decompilation_attempted: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         def fn_dict(f: FunctionInfo, prefix: str = "FN") -> Dict[str, Any]:
@@ -164,6 +230,7 @@ class BinaryContextMap:
                 "is_exported": f.is_exported,
                 "is_entry": f.is_entry,
                 "calls_dangerous": f.calls_dangerous,
+                "direct_callees": f.direct_callees,
                 "transitively_reaches_dangerous":
                     f.transitively_reaches_dangerous,
                 "transitive_distance": f.transitive_distance,
@@ -178,6 +245,8 @@ class BinaryContextMap:
             "arch": self.arch,
             "bits": self.bits,
             "binary_format": self.binary_format,
+            "image_base": hex(self.image_base) if self.image_base else "",
+            "analysis_depth": self.analysis_depth,
             "entry_points": entry_points,
             "dangerous_sinks": sink_details,
             "sink_details": sink_details,
@@ -205,8 +274,12 @@ class BinaryContextMap:
             "imports": self.imports,
             "exports": self.exports,
             "strings_sample": self.strings_sample[:50],
+            "classes": [item.to_dict() for item in self.classes],
             "fuzz_priorities": self.fuzz_priorities,
             "notes": self.notes,
+            "decompiler": self.decompiler,
+            "decompilation_limit": self.decompilation_limit,
+            "decompilation_attempted": self.decompilation_attempted,
         }
 
     def write(self, out_path: Path) -> Path:
@@ -253,13 +326,14 @@ def probe_capability() -> Dict[str, Any]:
 class BinaryUnderstand:
     """Drive radare2 to produce an adversarial context map for a binary."""
 
-    def __init__(self, binary_path: Path, llm=None) -> None:
+    def __init__(self, binary_path: Path, llm=None, slice_arch: Optional[str] = None) -> None:
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
             raise FileNotFoundError(f"Binary not found: {binary_path}")
         if not self.binary.is_file():
             raise ValueError(f"Path is not a file: {binary_path}")
         self.llm = llm
+        self.slice_arch = slice_arch
         self.cap = probe_capability()
         if not self.cap["available"]:
             raise RuntimeError(
@@ -267,6 +341,22 @@ class BinaryUnderstand:
                 "'brew install radare2' (macOS) or 'apt install radare2' (Linux). "
                 "Then: 'pip install r2pipe'."
             )
+
+    def _r2_open_flags(self) -> list[str]:
+        flags = ["-2"]
+        if not self.slice_arch:
+            return flags
+        mapping = {
+            "arm64": ("arm", "64"),
+            "aarch64": ("arm", "64"),
+            "x86_64": ("x86", "64"),
+            "amd64": ("x86", "64"),
+            "i386": ("x86", "32"),
+        }
+        selected = mapping.get(self.slice_arch)
+        if selected:
+            flags.extend(["-a", selected[0], "-b", selected[1]])
+        return flags
 
     @staticmethod
     def _cmd_t(r2, command: str, timeout_s: float) -> str:
@@ -334,6 +424,9 @@ class BinaryUnderstand:
     _T_QUERY = 60.0         # ij / iij / iEj / aflj / izj
     _T_XREF = 30.0          # axffj per function (cheap in-memory lookup)
     _T_CALLGRAPH = 90.0     # aflcj — full call graph as JSON (one-shot)
+    _MAX_CLASSES = 4096
+    _MAX_METHODS_PER_CLASS = 512
+    _MAX_FIELDS_PER_CLASS = 256
 
     # Transitive-call BFS hop limit. The motivating CVE pattern is
     # "parser builds struct → 2-3 internal helpers → strcpy" — depth
@@ -413,6 +506,9 @@ class BinaryUnderstand:
         # analyse() calls would serialise end-to-end).
         r2 = None
         ctx = BinaryContextMap(binary_path=self.binary)
+        ctx.analysis_depth = "metadata_only" if quick else "full"
+        ctx.decompiler = str(self.cap.get("decompiler") or "")
+        ctx.decompilation_limit = max_decompile
         _saved_env: Dict[str, Optional[str]] = {}
         try:
             # mkdtemp inside the try — pre-fix this ran outside, so
@@ -435,7 +531,7 @@ class BinaryUnderstand:
                 logger.info(
                     f"radare2 analysis: opening {self.binary} (sandboxed)"
                 )
-                r2 = r2pipe.open(str(self.binary), flags=["-2"])  # -2: silence stderr
+                r2 = r2pipe.open(str(self.binary), flags=self._r2_open_flags())  # -2: silence stderr
                 # Wrapper has spawned + read env. Restore parent env
                 # now so concurrent analyse() callers can proceed.
                 for k, v in _saved_env.items():
@@ -457,6 +553,7 @@ class BinaryUnderstand:
                 self._extract_metadata(r2, ctx)
                 self._extract_imports_exports(r2, ctx)
                 self._extract_functions(r2, ctx)
+                self._extract_classes(r2, ctx)
                 self._extract_entry_points(ctx)
                 self._extract_strings(r2, ctx, limit=max_strings)
                 self._tag_dangerous_callers(r2, ctx)
@@ -517,6 +614,7 @@ class BinaryUnderstand:
             ctx.bits = int(bin_info.get("bits", 0) or 0)
             fmt = str(bin_info.get("bintype", "")).lower()
             ctx.binary_format = fmt
+            ctx.image_base = int(bin_info.get("baddr", 0) or 0)
         except Exception as e:
             logger.debug(f"metadata extraction failed: {e}")
 
@@ -580,13 +678,131 @@ class BinaryUnderstand:
             elif size >= 8:
                 ctx.interesting_functions.append(info)
 
+    def _extract_classes(self, r2, ctx: BinaryContextMap) -> None:
+        """Recover Objective-C / Swift class metadata via ``icj``.
+
+        This is metadata recovery, not control-flow recovery. We retain a
+        bounded inventory for operators and later graph consumers, and only
+        bind a method to a function when the start address matches exactly.
+        """
+        try:
+            raw_classes = json.loads(self._cmd_t(r2, "icj", self._T_QUERY) or "[]")
+        except Exception as e:
+            logger.debug(f"class metadata extraction failed: {e}")
+            return
+        if not isinstance(raw_classes, list):
+            return
+
+        by_addr = {
+            int(fn.address): fn
+            for fn in ctx.interesting_functions
+            if fn.address is not None
+        }
+        classes: List[RecoveredClassInfo] = []
+        capped_classes = len(raw_classes) > self._MAX_CLASSES
+        capped_methods = False
+        capped_fields = False
+        for raw in raw_classes[:self._MAX_CLASSES]:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("classname") or raw.get("name") or "")
+            if not name:
+                continue
+            methods: List[RecoveredMethodInfo] = []
+            seen_methods: set[tuple[str, int]] = set()
+            raw_methods = raw.get("methods") or []
+            if isinstance(raw_methods, list):
+                capped_methods = capped_methods or len(raw_methods) > self._MAX_METHODS_PER_CLASS
+                for method_raw in raw_methods[:self._MAX_METHODS_PER_CLASS]:
+                    if not isinstance(method_raw, dict):
+                        continue
+                    method_name = str(method_raw.get("name") or "")
+                    if not method_name:
+                        continue
+                    try:
+                        method_addr = int(method_raw.get("addr") or 0)
+                    except (TypeError, ValueError):
+                        method_addr = 0
+                    key = (method_name, method_addr)
+                    if key in seen_methods:
+                        continue
+                    seen_methods.add(key)
+                    bound = by_addr.get(method_addr)
+                    methods.append(RecoveredMethodInfo(
+                        name=method_name,
+                        address=method_addr,
+                        language=str(method_raw.get("lang") or raw.get("lang") or ""),
+                        flag=str(method_raw.get("flag") or ""),
+                        is_class_method="class" in (method_raw.get("flags") or []),
+                        bound_function_address=(bound.address if bound else None),
+                        bound_function_name=(bound.name if bound else ""),
+                    ))
+            fields: List[Dict[str, Any]] = []
+            raw_fields = raw.get("fields") or []
+            if isinstance(raw_fields, list):
+                capped_fields = capped_fields or len(raw_fields) > self._MAX_FIELDS_PER_CLASS
+                for field_raw in raw_fields[:self._MAX_FIELDS_PER_CLASS]:
+                    if not isinstance(field_raw, dict):
+                        continue
+                    field_name = str(field_raw.get("name") or "")
+                    if not field_name:
+                        continue
+                    field: Dict[str, Any] = {
+                        "name": field_name,
+                        "kind": str(field_raw.get("kind") or ""),
+                    }
+                    if field_raw.get("type"):
+                        field["type"] = str(field_raw["type"])
+                    try:
+                        field["address"] = hex(int(field_raw.get("addr") or 0))
+                    except (TypeError, ValueError):
+                        field["address"] = ""
+                    fields.append(field)
+            try:
+                class_addr = int(raw.get("addr") or 0)
+            except (TypeError, ValueError):
+                class_addr = 0
+            raw_superclasses = raw.get("super") or []
+            if not isinstance(raw_superclasses, list):
+                raw_superclasses = []
+            classes.append(RecoveredClassInfo(
+                name=name,
+                address=class_addr,
+                language=str(raw.get("lang") or ""),
+                superclasses=[str(item) for item in raw_superclasses if item],
+                methods=methods,
+                fields=fields,
+            ))
+        if capped_classes or capped_methods or capped_fields:
+            limits = []
+            if capped_classes:
+                limits.append(f"{self._MAX_CLASSES} classes")
+            if capped_methods:
+                limits.append(f"{self._MAX_METHODS_PER_CLASS} methods per class")
+            if capped_fields:
+                limits.append(f"{self._MAX_FIELDS_PER_CLASS} fields per class")
+            ctx.notes.append(
+                f"Class inventory capped at {', '.join(limits)}; "
+                "rerun with a narrower slice or inspect radare2 icj output directly."
+            )
+        ctx.classes = classes
+
     def _extract_entry_points(self, ctx: BinaryContextMap) -> None:
         for fn in ctx.interesting_functions:
-            base = fn.name.split(".")[-1]
-            if base in _ENTRY_POINT_HINTS or any(
-                base.endswith(suffix)
-                for suffix in ("main", "init", "Main", "Init", "Entry")
-            ):
+            base = fn.name
+            for prefix in ("sym.", "entry.", "fcn."):
+                if base.startswith(prefix):
+                    base = base[len(prefix):]
+            if base.startswith("_"):
+                base = base[1:]
+            # Keep this deliberately exact. A suffix rule such as
+            # ``*Main`` turns ordinary methods like ``isMain`` or
+            # ``SentryRequestOperation.main`` into fake external entry
+            # points. Format-specific ingress recovery lives above this
+            # layer now (AppDelegate/XPC callbacks, PE exports/driver
+            # dispatchers, ELF exported APIs), so this low-level list only
+            # records conventional process entry symbols.
+            if base in _ENTRY_POINT_HINTS:
                 fn.is_entry = True
                 ctx.entry_points.append(fn)
 
@@ -625,6 +841,9 @@ class BinaryUnderstand:
 
         def _match_dangerous(name: str) -> Optional[str]:
             base = name.split(".")[-1]
+            classification = classify_security_api(name)
+            if classification is None or not classification.is_sink:
+                return None
             if name in dangerous_exact or base in _DANGEROUS_IMPORTS:
                 return base
             for substr in _DANGEROUS_MACOS_SUBSTRINGS:
@@ -644,7 +863,12 @@ class BinaryUnderstand:
             except Exception:
                 refs = []
             called = set()
+            direct_callees = set(fn.direct_callees)
             for ref in refs:
+                if str(ref.get("type") or "").upper() == "CALL":
+                    target_name = str(ref.get("name") or ref.get("refname") or "")
+                    if target_name:
+                        direct_callees.add(target_name)
                 target_name = str(ref.get("name") or ref.get("refname") or "")
                 if not target_name:
                     continue
@@ -652,6 +876,7 @@ class BinaryUnderstand:
                 if hit:
                     called.add(hit)
             fn.calls_dangerous = sorted(called)
+            fn.direct_callees = sorted(direct_callees)
 
         # Tag dangerous sinks from the imported-functions bucket.
         # Pre-PR this walked interesting_functions filtering on
@@ -731,6 +956,19 @@ class BinaryUnderstand:
                     if target:
                         this_callees.add(str(target))
             callees[name] = this_callees
+
+        # Keep the direct adjacency on the function records. The higher-level
+        # binary pipeline uses this to recover bounded ingress -> parser paths.
+        # This is still only xref-backed structure; it does not imply that any
+        # attacker-controlled bytes traverse the edge.
+        by_name = {fn.name: fn for fn in ctx.interesting_functions}
+        for name, called_set in callees.items():
+            fn = by_name.get(name)
+            if fn is not None:
+                fn.direct_callees = sorted({
+                    *fn.direct_callees,
+                    *(str(item) for item in called_set),
+                })
 
         # Build reverse map (called → set of callers) for the BFS.
         # Also build a name-suffix index so we can match
@@ -844,6 +1082,7 @@ class BinaryUnderstand:
             seen_addrs.add(fn.address)
 
         for fn in candidates[:limit]:
+            ctx.decompilation_attempted += 1
             try:
                 src = self._cmd_t(
                     r2, f"{decompile_cmd} @ {fn.address}", self._T_DECOMPILE,
@@ -1009,6 +1248,7 @@ def analyse_binary_context(
     max_decompile: int = 20,
     max_strings: int = 100,
     quick: bool = False,
+    slice_arch: Optional[str] = None,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
@@ -1023,7 +1263,10 @@ def analyse_binary_context(
     faster on typical binaries. ``dangerous_sinks`` and
     ``interesting_functions`` come back empty.
     """
-    analyser = BinaryUnderstand(binary_path, llm=llm)
+    if slice_arch is None:
+        analyser = BinaryUnderstand(binary_path, llm=llm)
+    else:
+        analyser = BinaryUnderstand(binary_path, llm=llm, slice_arch=slice_arch)
     context = analyser.analyse(
         max_decompile=max_decompile,
         max_strings=max_strings,

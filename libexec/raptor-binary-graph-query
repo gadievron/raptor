@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Read-only query surface for black-box binary graph memory."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+if not (os.environ.get("CLAUDECODE") or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.binary_analysis.graph_store import (
+    graph_path_for_run,
+    graph_summary,
+    query_edges,
+    query_evidence,
+)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="raptor-binary-graph-query")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--db", help="Path to binary-graph.sqlite")
+    src.add_argument("--run-dir", help="Binary understand output directory")
+    p.add_argument("--edges", action="store_true", help="List graph edges")
+    p.add_argument("--evidence", action="store_true", help="List evidence records")
+    p.add_argument("--kind", help="Filter edges by kind")
+    p.add_argument("--tier", help="Filter evidence records by tier")
+    p.add_argument("--json", action="store_true", help="Emit JSON")
+    args = p.parse_args()
+    if args.edges and args.evidence:
+        p.error("--edges and --evidence are mutually exclusive")
+    if args.kind and not args.edges:
+        p.error("--kind requires --edges")
+    if args.tier and not args.evidence:
+        p.error("--tier requires --evidence")
+    db_path = Path(args.db) if args.db else graph_path_for_run(Path(args.run_dir))
+    if args.edges:
+        payload = {"edges": query_edges(db_path, kind=args.kind)}
+    elif args.evidence:
+        payload = {"evidence": query_evidence(db_path, tier=args.tier)}
+    else:
+        payload = graph_summary(db_path)
+    if args.json or args.edges or args.evidence:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    if not payload.get("exists"):
+        print(f"Binary graph: not found ({db_path})")
+        return 1
+    print(f"Binary graph: {payload['path']}")
+    latest = payload.get("latest_snapshot") or {}
+    if latest:
+        print(f"Target: {latest.get('binary_path', '')}")
+        print(f"SHA-256: {latest.get('binary_sha256', '')}")
+    print("Nodes:")
+    for kind, count in sorted((payload.get("nodes") or {}).items()):
+        print(f"  {kind}: {count}")
+    print("Edges:")
+    for kind, count in sorted((payload.get("edges") or {}).items()):
+        print(f"  {kind}: {count}")
+    print("Evidence:")
+    for tier, count in sorted((payload.get("evidence") or {}).items()):
+        print(f"  {tier}: {count}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""Multi-model dispatch entry point for /understand --hunt and --trace.
+"""Dispatch entry point for /understand.
 
 Usage:
+    libexec/raptor-understand --map --target /path/to/binary --out /tmp/run
+
     libexec/raptor-understand --hunt "pattern" --target /code \\
         --model claude-opus-4-7 --model gpt-5
 
     libexec/raptor-understand --trace traces.json --target /code \\
         --model claude-opus-4-7
 
-This is the libexec shim. It does NOT replace the existing skill-based
-``/understand`` flow — it's only invoked when the user passes ``--model``
-(opting into the Python multi-model path). Without ``--model``, the
-skill markdown handles the request in-session via Claude Code's tools.
+This is the libexec shim. Source-tree ``--map`` still lives in the skill-based
+flow because it is a full in-session investigation. A single compiled
+artefact can be mapped mechanically here: the binary substrate writes its
+evidence-backed context map, graph and ledger without asking an LLM to guess.
+``--hunt`` and ``--trace`` remain the multi-model Python path.
 
-Output is written to ``<out>/hunt-result.json`` or ``<out>/trace-result.json``
-plus a small ``summary`` printed to stdout for the operator/skill to
-relay. Returns non-zero exit status on dispatch errors so the skill
-can detect failure.
+Output is written to ``<out>/map-result.json``, ``<out>/hunt-result.json`` or
+``<out>/trace-result.json`` plus a small summary printed to stdout for the
+operator/skill to relay. Returns non-zero exit status on dispatch errors so
+the skill can detect failure.
 """
 
 from __future__ import annotations
@@ -87,11 +90,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="raptor-understand",
         description=(
-            "Multi-model dispatch for /understand --hunt and --trace. "
-            "Skill-based modes (--map, --teach) are NOT handled here."
+            "Mechanical binary --map dispatch plus multi-model "
+            "/understand --hunt and --trace."
         ),
     )
     mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--map", action="store_true",
+        help="Map a single compiled artefact through the black-box binary substrate.",
+    )
     mode.add_argument(
         "--hunt", metavar="PATTERN",
         help="Pattern to hunt for. The pattern is sent verbatim to each model.",
@@ -106,14 +113,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p.add_argument(
-        "--target", required=True, metavar="REPO_PATH",
-        help="Target repository to analyse (must be an existing directory).",
+        "--target", required=True, metavar="TARGET_PATH",
+        help="Target repository for --hunt/--trace, or compiled artefact for --map.",
     )
     p.add_argument(
         "--model", action="append", default=[], metavar="MODEL",
-        required=True, type=_nonempty_str,
+        type=_nonempty_str,
         help=(
-            "Model to dispatch to (repeatable). At least one required. "
+            "Model to dispatch to (repeatable). Required for --hunt/--trace. "
             "Multiple --model entries activate multi-model correlation."
         ),
     )
@@ -160,6 +167,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "C/C++ source, otherwise llm. Has no effect on --trace."
         ),
     )
+    p.add_argument("--quick", action="store_true", help="For binary --map: skip full radare2 auto-analysis and xrefs.")
+    p.add_argument("--max-decompile", type=_positive_int, default=20, help="For binary --map: maximum functions to decompile and persist (default: 20).")
+    p.add_argument("--decompile-all", action="store_true", help="For binary --map: persist decompiler output for every recovered function (slow on large binaries).")
+    p.add_argument("--slice-arch", help="For binary --map: deeply analyse this Mach-O slice (for example arm64 or x86_64).")
+    p.add_argument("--runtime-dir", help="For binary --map: existing /frida run directory to ingest.")
+    p.add_argument("--fuzz-dir", help="For binary --map: existing /fuzz run directory to ingest.")
+    p.add_argument("--constraint-file", help="For binary --map: JSON file with explicit SMT path conditions.")
+    p.add_argument("--compare", help="For binary --map: older compiled artefact to compare against.")
     return p
 
 
@@ -274,6 +289,62 @@ def _build_cost_gate():
 # ---------------------------------------------------------------------------
 # Mode handlers
 # ---------------------------------------------------------------------------
+
+
+def _do_map(args: argparse.Namespace) -> dict:
+    from packages.binary_analysis import analyse_blackbox_binary
+
+    target = Path(args.target).resolve()
+    if not target.is_file():
+        raise FileNotFoundError(
+            f"binary --map target is not a file: {target}. "
+            "Source-tree --map still runs through the in-session /understand workflow."
+        )
+
+    result = analyse_blackbox_binary(
+        target,
+        out_dir=Path(args.out).resolve(),
+        quick=bool(args.quick),
+        max_decompile=(1_000_000 if args.decompile_all else args.max_decompile),
+        slice_arch=args.slice_arch,
+        runtime_dir=Path(args.runtime_dir).resolve() if args.runtime_dir else None,
+        fuzz_dir=Path(args.fuzz_dir).resolve() if args.fuzz_dir else None,
+        constraint_file=Path(args.constraint_file).resolve() if args.constraint_file else None,
+        compare_binary=Path(args.compare).resolve() if args.compare else None,
+    )
+    context = result.context_map
+    class_summary = (context.get("class_inventory") or {}).get("summary") or {}
+    return {
+        "mode": "map",
+        "target": str(target),
+        "models": [],
+        "items": context.get("entry_points", []),
+        "failed_models": [],
+        "correlation": {
+            "summary": {
+                "entry_point_candidates": len(context.get("entry_points", [])),
+                "input_channels": len(result.input_channels),
+                "sensitive_import_candidates": len(context.get("sink_details", [])),
+                "security_surface_candidates": len(context.get("surface_details", [])),
+                "candidate_flows": len(context.get("candidate_flows", [])),
+                "fuzz_witnesses": len(result.fuzz.crashes),
+                "recovered_classes": int(class_summary.get("class_count", 0)),
+                "framework_callback_candidates": len(context.get("framework_callback_candidates", [])),
+                "decompiled_functions": int(
+                    (context.get("decompilations") or {}).get("coverage", {}).get("decompiled_functions", 0)
+                ),
+            },
+        },
+        "artifacts": {
+            "context_map": str(Path(args.out).resolve() / "context-map.json"),
+            "binary_context_map": str(Path(args.out).resolve() / "binary-context-map.json"),
+            "binary_manifest": str(Path(args.out).resolve() / "binary-manifest.json"),
+            "binary_evidence": str(Path(args.out).resolve() / "binary-evidence.json"),
+            "binary_decompilations": str(Path(args.out).resolve() / "binary-decompilations.json"),
+            "binary_validation_handoff": str(Path(args.out).resolve() / "binary-validation-handoff.json"),
+            "binary_graph": str(result.graph_path),
+        },
+    }
 
 
 def _do_hunt(args: argparse.Namespace) -> dict:
@@ -501,7 +572,10 @@ def _print_summary(payload: dict, output_path: Path) -> None:
     summary = (payload.get("correlation") or {}).get("summary", {})
 
     print(f"Mode: {mode}")
-    print(f"Models: {', '.join(payload['models'])}")
+    if payload["models"]:
+        print(f"Models: {', '.join(payload['models'])}")
+    elif mode == "map":
+        print("Models: none (mechanical binary substrate)")
     print(f"Items: {len(items)}")
     if failed:
         print(f"Failed models: {', '.join(failed)}")
@@ -539,7 +613,12 @@ def _print_summary(payload: dict, output_path: Path) -> None:
 
 
 def main() -> int:
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()
+    if not args.map and not args.model:
+        parser.error("--model is required for --hunt and --trace")
+    if args.map and args.model:
+        parser.error("--model is not used for binary --map")
 
     try:
         # Path resolution can raise ValueError on NUL bytes in the
@@ -552,7 +631,9 @@ def main() -> int:
         # dispatch reads this env var via core.trajectories.auto;
         # unset → no-op.
         os.environ["RAPTOR_TRAJECTORY_DIR"] = str(out_dir)
-        if args.hunt is not None:
+        if args.map:
+            payload = _do_map(args)
+        elif args.hunt is not None:
             payload = _do_hunt(args)
         else:
             payload = _do_trace(args)
