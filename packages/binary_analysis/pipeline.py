@@ -991,6 +991,8 @@ def _context_map(
             [record.id for record in runtime_records],
         ),
         "runtime_input_flows": runtime_input_flows,
+        # Patched by the caller after external_ingress recovery (depends on
+        # this context_map, so can't be computed here).
         "runtime_parser_flows": [],
         "call_graph_edges": [],
         "parser_boundary_candidates": [],
