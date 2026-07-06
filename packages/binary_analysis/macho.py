@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import plistlib
 import struct
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from core.sandbox import run_trusted
 
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
 
@@ -224,14 +225,14 @@ def _find_app_bundle(path: Path) -> Optional[Path]:
 
 def _run_readonly_tool(argv: list[str]) -> str:
     try:
-        result = subprocess.run(
+        result = run_trusted(
             argv,
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, Exception):
         return ""
     return (result.stdout or "")[:_MAX_TOOL_OUTPUT] + (result.stderr or "")[:_MAX_TOOL_OUTPUT]
 
