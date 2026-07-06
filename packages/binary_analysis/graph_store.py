@@ -317,7 +317,7 @@ class BinaryGraphStore:
 def graph_summary(path: Path) -> dict[str, Any]:
     if not Path(path).exists():
         return {"exists": False, "path": str(path)}
-    with open_graph(path) as conn:
+    with graph_connection(path) as conn:
         latest = conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return {"exists": True, "path": str(path), "nodes": {}, "edges": {}, "evidence": {}}
@@ -356,7 +356,7 @@ def graph_summary(path: Path) -> dict[str, Any]:
 def query_edges(path: Path, *, kind: Optional[str] = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
-    with open_graph(path) as conn:
+    with graph_connection(path) as conn:
         latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return []
@@ -393,7 +393,7 @@ def query_edges(path: Path, *, kind: Optional[str] = None) -> list[dict[str, Any
 def query_evidence(path: Path, *, tier: Optional[str] = None) -> list[dict[str, Any]]:
     if not Path(path).exists():
         return []
-    with open_graph(path) as conn:
+    with graph_connection(path) as conn:
         latest = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
         if latest is None:
             return []
