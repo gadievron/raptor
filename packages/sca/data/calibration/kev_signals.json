@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-30T08:55:39Z",
+    "fetched_at": "2026-07-07T09:22:53Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -11337,6 +11337,13 @@
       "date_added": "2026-05-20",
       "kev": true,
       "product": "Defender",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
+    "CVE-2026-45659": {
+      "date_added": "2026-07-01",
+      "kev": true,
+      "product": "SharePoint Server",
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
