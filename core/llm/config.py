@@ -832,6 +832,16 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge", "aggregate"}
 
 
+def get_configured_models() -> List[Dict]:
+    """Return all model entries from the operator's config file."""
+    return _get_configured_models()
+
+
+def model_config_from_entry(entry: Dict) -> 'ModelConfig':
+    """Build a ModelConfig from a config-file entry dict."""
+    return _model_config_from_entry(entry)
+
+
 def resolve_model_roles(
     primary_model: Optional['ModelConfig'] = None,
     fallback_models: Optional[List['ModelConfig']] = None,

@@ -193,15 +193,22 @@ def _resolve_target_and_out(args: argparse.Namespace) -> tuple[Path, Path] | Non
     return target, out_dir
 
 
-def _analyse_for_args(args: argparse.Namespace, target: Path, out_dir: Path) -> Any:
+def _analyse_for_args(
+    args: argparse.Namespace,
+    target: Path,
+    out_dir: Path,
+    *,
+    runtime_dir: Path | None = None,
+    fuzz_dir: Path | None = None,
+) -> Any:
     return analyse_blackbox_binary(
         target,
         out_dir=out_dir,
         quick=bool(args.quick),
         max_decompile=(1_000_000 if args.decompile_all else args.max_decompile),
         slice_arch=args.slice_arch,
-        runtime_dir=Path(args.runtime_dir).expanduser().resolve() if args.runtime_dir else None,
-        fuzz_dir=Path(args.fuzz_dir).expanduser().resolve() if args.fuzz_dir else None,
+        runtime_dir=runtime_dir or (Path(args.runtime_dir).expanduser().resolve() if args.runtime_dir else None),
+        fuzz_dir=fuzz_dir or (Path(args.fuzz_dir).expanduser().resolve() if args.fuzz_dir else None),
         constraint_file=Path(args.constraint_file).expanduser().resolve() if args.constraint_file else None,
         compare_binary=Path(args.compare).expanduser().resolve() if args.compare else None,
     )
@@ -251,6 +258,7 @@ def _run_active_phase(
             text=True,
             env=env,
             check=False,
+            timeout=3600,
         )
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
@@ -355,6 +363,8 @@ def _run_investigate(args: argparse.Namespace) -> int:
     try:
         # Always map first. Agentic follow-on work needs a mechanical view of
         # the artefact before it decides whether runtime or fuzzing is sensible.
+        resolved_runtime_dir: Path | None = None
+        resolved_fuzz_dir: Path | None = None
         result = _analyse_for_args(args, target, out_dir)
         if args.runtime or args.active:
             runtime_dir = out_dir / "runtime"
@@ -377,8 +387,8 @@ def _run_investigate(args: argparse.Namespace) -> int:
                     ],
                 ))
                 if active_phases[-1]["status"] == "completed":
-                    args.runtime_dir = str(runtime_dir)
-                    result = _analyse_for_args(args, target, out_dir)
+                    resolved_runtime_dir = runtime_dir
+                    result = _analyse_for_args(args, target, out_dir, runtime_dir=resolved_runtime_dir)
             else:
                 active_phases.append(_skipped_phase(
                     "runtime",
@@ -410,8 +420,12 @@ def _run_investigate(args: argparse.Namespace) -> int:
                     ],
                 ))
                 if active_phases[-1]["status"] == "completed":
-                    args.fuzz_dir = str(fuzz_dir)
-                    result = _analyse_for_args(args, target, out_dir)
+                    resolved_fuzz_dir = fuzz_dir
+                    result = _analyse_for_args(
+                        args, target, out_dir,
+                        runtime_dir=resolved_runtime_dir,
+                        fuzz_dir=resolved_fuzz_dir,
+                    )
             elif suitability.get("should_run_fuzz_plan"):
                 active_phases.append(_run_active_phase(
                     kind="fuzz_plan",

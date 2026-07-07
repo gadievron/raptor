@@ -29,27 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Module-level lock serialising the os.environ mutation + r2pipe.open()
-# critical section inside BinaryUnderstand.analyse(). Concurrent
-# analyse() calls would otherwise race: thread A sets R2PIPE_R2 /
-# OUTPUT_DIR / R2_TARGET_DIR, thread B clobbers them with its own
-# values before A's r2pipe.open() completes spawning the wrapper, and
-# A's wrapper reads B's env (wrong target dir → r2 fails to find
-# binary). The lock is held only across the env-set-and-spawn window;
-# after r2pipe.open() returns, the wrapper has its own env copy and
-# the parent can mutate freely. Sequential callers (the only callers
-# today) pay no cost — uncontended acquire is ~100ns.
-_ANALYSE_ENV_LOCK = threading.Lock()
-
-logger = logging.getLogger(__name__)
-
-
-# Function-name categories are now hoisted to core.function_taxonomy so
-# they're a single source of truth shared with packages/exploit_
-# feasibility. See that module's docstring for the curation policy
-# (in particular, why ubiquitous functions like malloc / printf / read
-# are deliberately NOT in this fuzz-priority composition).
-from core.function_taxonomy import (  # noqa: E402
+from core.function_taxonomy import (
     ALLOC_FUNCS as _T_ALLOC,
     ENTRY_POINT_HINTS as _ENTRY_POINT_HINTS,
     EXEC_FUNCS as _T_EXEC,
@@ -66,6 +46,20 @@ from core.function_taxonomy import (  # noqa: E402
     TOCTOU_FUNCS as _T_TOCTOU,
 )
 from .surface_classification import classify_security_api
+
+# Module-level lock serialising the os.environ mutation + r2pipe.open()
+# critical section inside BinaryUnderstand.analyse(). Concurrent
+# analyse() calls would otherwise race: thread A sets R2PIPE_R2 /
+# OUTPUT_DIR / R2_TARGET_DIR, thread B clobbers them with its own
+# values before A's r2pipe.open() completes spawning the wrapper, and
+# A's wrapper reads B's env (wrong target dir → r2 fails to find
+# binary). The lock is held only across the env-set-and-spawn window;
+# after r2pipe.open() returns, the wrapper has its own env copy and
+# the parent can mutate freely. Sequential callers (the only callers
+# today) pay no cost — uncontended acquire is ~100ns.
+_ANALYSE_ENV_LOCK = threading.Lock()
+
+logger = logging.getLogger(__name__)
 
 # Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
@@ -245,7 +239,7 @@ class BinaryContextMap:
             "arch": self.arch,
             "bits": self.bits,
             "binary_format": self.binary_format,
-            "image_base": hex(self.image_base) if self.image_base else "",
+            "image_base": hex(self.image_base) if self.image_base is not None else "",
             "analysis_depth": self.analysis_depth,
             "entry_points": entry_points,
             "dangerous_sinks": sink_details,
@@ -285,7 +279,7 @@ class BinaryContextMap:
     def write(self, out_path: Path) -> Path:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(self.to_dict(), indent=2, default=str))
+        out_path.write_text(json.dumps(self.to_dict(), indent=2, default=str), encoding="utf-8")
         return out_path
 
 
@@ -641,7 +635,7 @@ class BinaryUnderstand:
         try:
             fns = json.loads(self._cmd_t(r2, "aflj", self._T_QUERY) or "[]")
         except Exception as e:
-            logger.debug(f"function list failed: {e}")
+            logger.warning("function list extraction failed: %s", e)
             return
 
         for raw in fns:
@@ -651,17 +645,18 @@ class BinaryUnderstand:
             # r2 versions disagree on the address field name. Newer
             # versions return 'addr', older ones 'offset'. Some return
             # 'minaddr'. Take whichever is non-zero.
-            addr = (
-                raw.get("addr")
-                or raw.get("offset")
-                or raw.get("minaddr")
-                or 0
-            )
+            addr = raw.get("addr")
+            if addr is None:
+                addr = raw.get("offset")
+            if addr is None:
+                addr = raw.get("minaddr")
+            if addr is None:
+                addr = 0
             size = int(raw.get("size", 0) or 0)
             is_imported = name.startswith(("sym.imp.", "imp."))
             info = FunctionInfo(
                 name=name,
-                address=int(addr or 0),
+                address=int(addr),
                 size=size,
                 type=str(raw.get("type", "fcn")),
                 is_imported=is_imported,
@@ -688,7 +683,7 @@ class BinaryUnderstand:
         try:
             raw_classes = json.loads(self._cmd_t(r2, "icj", self._T_QUERY) or "[]")
         except Exception as e:
-            logger.debug(f"class metadata extraction failed: {e}")
+            logger.warning("class metadata extraction failed: %s", e)
             return
         if not isinstance(raw_classes, list):
             return
@@ -841,10 +836,10 @@ class BinaryUnderstand:
 
         def _match_dangerous(name: str) -> Optional[str]:
             base = name.split(".")[-1]
-            classification = classify_security_api(name)
-            if classification is None or not classification.is_sink:
-                return None
             if name in dangerous_exact or base in _DANGEROUS_IMPORTS:
+                return base
+            classification = classify_security_api(name)
+            if classification is not None and classification.is_sink:
                 return base
             for substr in _DANGEROUS_MACOS_SUBSTRINGS:
                 if substr in name:

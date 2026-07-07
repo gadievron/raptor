@@ -156,7 +156,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_binary_evidence_tier ON evidence(snapshot_id, tier);
             """
         )
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+    conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),
@@ -167,6 +167,7 @@ class BinaryGraphStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._conn: Optional[sqlite3.Connection] = None
+        self._batch_depth: int = 0
 
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -176,12 +177,34 @@ class BinaryGraphStore:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         conn = self._get_conn()
+        if self._batch_depth > 0:
+            yield conn
+            return
         try:
             yield conn
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+
+    @contextmanager
+    def batch(self) -> Iterator["BinaryGraphStore"]:
+        """Batch multiple operations into a single transaction.
+
+        Defers per-operation commits until the batch exits, reducing
+        overhead when ingesting many nodes/edges."""
+        conn = self._get_conn()
+        self._batch_depth += 1
+        try:
+            yield self
+            if self._batch_depth == 1:
+                conn.commit()
+        except Exception:
+            if self._batch_depth == 1:
+                conn.rollback()
+            raise
+        finally:
+            self._batch_depth -= 1
 
     def close(self) -> None:
         if self._conn is not None:

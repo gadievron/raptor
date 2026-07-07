@@ -21,7 +21,7 @@ identifies the narrow parser/protocol boundary behind them.
 from __future__ import annotations
 
 import hashlib
-import json
+
 import re
 import shlex
 from pathlib import Path
@@ -52,7 +52,26 @@ def _slug(value: str) -> str:
 
 
 def _c_string(value: str) -> str:
-    return json.dumps(str(value))
+    out = ['"']
+    for ch in str(value):
+        if ch == '"':
+            out.append('\\"')
+        elif ch == '\\':
+            out.append('\\\\')
+        elif ch == '\n':
+            out.append('\\n')
+        elif ch == '\r':
+            out.append('\\r')
+        elif ch == '\t':
+            out.append('\\t')
+        elif ch == '\0':
+            out.append('\\0')
+        elif 0x20 <= ord(ch) <= 0x7e:
+            out.append(ch)
+        else:
+            out.append(f'\\x{ord(ch):02x}')
+    out.append('"')
+    return ''.join(out)
 
 
 def _evidence_ref(ingress: dict[str, Any]) -> dict[str, Any]:

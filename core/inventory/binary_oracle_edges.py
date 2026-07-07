@@ -191,6 +191,67 @@ def _save_cached_index(cache_file: Path, idx: BinaryEdgeIndex) -> None:
         logger.debug("binary_oracle_edges: cache write failed: %s", e)
 
 
+def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
+    """Try to read call edges from an existing binary graph store.
+
+    Returns None if no graph store is found or it has no CALLS edges.
+    This avoids re-running r2 when /understand --map has already mapped
+    the binary."""
+    try:
+        from packages.binary_analysis.graph_store import graph_path_for_run, query_edges
+    except ImportError:
+        return None
+    raptor_dir = Path(os.environ.get("RAPTOR_DIR", ""))
+    search_dirs = [binary_path.parent]
+    if raptor_dir.is_dir():
+        out_dir = raptor_dir / "out"
+        if out_dir.is_dir():
+            search_dirs.append(out_dir)
+        active = raptor_dir / ".active"
+        if active.is_symlink() or active.exists():
+            try:
+                project_dir = active.resolve()
+                if project_dir.is_dir():
+                    search_dirs.append(project_dir)
+            except OSError:
+                pass
+    for d in search_dirs:
+        try:
+            children = list(d.iterdir()) if d.is_dir() else []
+        except OSError:
+            continue
+        for sub in children:
+            if not sub.is_dir():
+                continue
+            gpath = graph_path_for_run(sub)
+            if not gpath.is_file():
+                continue
+            raw_edges = query_edges(gpath, kind="CALLS")
+            if not raw_edges:
+                continue
+            edges = []
+            callees: set[str] = set()
+            for e in raw_edges:
+                src = e.get("source") or {}
+                tgt = e.get("target") or {}
+                caller = src.get("name", "")
+                callee = tgt.get("name", "")
+                if caller and callee:
+                    edges.append(BinaryCallEdge(caller=caller, callee=callee))
+                    callees.add(callee)
+            if edges:
+                logger.info(
+                    "binary_oracle_edges: reused %d edges from graph store %s",
+                    len(edges), gpath,
+                )
+                return BinaryEdgeIndex(
+                    binary_path=str(binary_path),
+                    edges=edges,
+                    callees=callees,
+                )
+    return None
+
+
 def extract_direct_call_edges(
     binary_path: Path,
     *,
@@ -208,10 +269,14 @@ def extract_direct_call_edges(
     A cache hit returns near-instantly; a miss runs the full r2
     extraction and persists the result. Pass False to force re-extract
     (test scenarios, debugging cache staleness)."""
+    binary_path = Path(binary_path)
+    if use_cache:
+        from_graph = _try_graph_store(binary_path)
+        if from_graph is not None:
+            return from_graph
     if not shutil.which("r2"):
         logger.info("binary_oracle_edges: r2 not found; skipping")
         return BinaryEdgeIndex(binary_path=str(binary_path))
-    binary_path = Path(binary_path)
     if not binary_path.is_file():
         return BinaryEdgeIndex(binary_path=str(binary_path))
 

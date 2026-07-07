@@ -611,25 +611,12 @@ def _call_graph_edges(
     return edges
 
 
-def _context_map(
+def _build_entry_points(
     manifest: BinaryManifest,
     context: BinaryContextMap,
-    channels: list[InputChannel],
-    runtime_events: list[dict[str, Any]],
-    runtime_records: list[EvidenceRecord],
-    fuzz: FuzzEvidenceBundle,
-    constraints: Optional[dict[str, Any]],
-    graph_path: Path,
-    static_records: list[EvidenceRecord],
-    decompilations: dict[str, Any],
-    runtime_input_flows: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[EvidenceRecord]]:
-    generated_evidence: list[EvidenceRecord] = []
-    class_inventory_evidence_ids = [
-        record.id for record in static_records
-        if record.kind == "class_metadata_inventory"
-    ]
-    entry_points = []
+) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
+    entry_points: list[dict[str, Any]] = []
+    evidence: list[EvidenceRecord] = []
     for fn in context.entry_points:
         if _is_runtime_support_name(fn.name):
             continue
@@ -645,7 +632,7 @@ def _context_map(
             location=f"{manifest.binary_path}@{_address(fn.address)}",
             data={"name": fn.name, "address": _address(fn.address), "size": fn.size},
         )
-        generated_evidence.append(record)
+        evidence.append(record)
         entry_points.append({
             "id": _fn_id("BEP", fn),
             "name": fn.name,
@@ -660,9 +647,17 @@ def _context_map(
             "evidence_note": "Name-based entry point recovery; not proof of attacker control.",
             "evidence_ids": [record.id],
         })
+    return entry_points, evidence
 
-    surface_details = []
-    sink_details = []
+
+def _build_surfaces_and_sinks(
+    manifest: BinaryManifest,
+    context: BinaryContextMap,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[EvidenceRecord]]:
+    surface_details: list[dict[str, Any]] = []
+    sink_details: list[dict[str, Any]] = []
+    evidence: list[EvidenceRecord] = []
+
     for fn in context.dangerous_sinks:
         classification = classify_security_api(fn.name)
         if classification is None:
@@ -679,7 +674,7 @@ def _context_map(
             location=f"{manifest.binary_path}@{_address(fn.address)}",
             data={"name": fn.name, "address": _address(fn.address), "size": fn.size},
         )
-        generated_evidence.append(record)
+        evidence.append(record)
         item = {
             "id": _fn_id("BSINK", fn),
             "name": fn.name,
@@ -720,7 +715,7 @@ def _context_map(
             location=manifest.binary_path,
             data={"name": import_name, "category": classification.category, "role": classification.role},
         )
-        generated_evidence.append(record)
+        evidence.append(record)
         item = {
             "id": _import_candidate_id("BSINK-IMP" if classification.is_sink else "BSURF", import_name),
             "name": import_name,
@@ -742,7 +737,16 @@ def _context_map(
         if classification.is_sink:
             sink_details.append(item)
 
+    return surface_details, sink_details, evidence
+
+
+def _build_candidate_flows(
+    manifest: BinaryManifest,
+    context: BinaryContextMap,
+    sink_details: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[EvidenceRecord]]:
     candidate_flows: list[dict[str, Any]] = []
+    evidence: list[EvidenceRecord] = []
     sink_by_name = {symbol_base_name(item["name"]): item["id"] for item in sink_details}
     for fn in context.interesting_functions:
         if _is_runtime_support_name(fn.name):
@@ -763,7 +767,7 @@ def _context_map(
                 location=f"{manifest.binary_path}@{_address(fn.address)}",
                 data={"source_function": fn.name, "sink": sink_name, "relationship": "calls"},
             )
-            generated_evidence.append(record)
+            evidence.append(record)
             candidate_flows.append({
                 "id": f"BCFLOW-{len(candidate_flows) + 1:03d}",
                 "source_function": _fn_id("BFN", fn),
@@ -796,7 +800,7 @@ def _context_map(
                     "distance": fn.transitive_distance,
                 },
             )
-            generated_evidence.append(record)
+            evidence.append(record)
             candidate_flows.append({
                 "id": f"BCFLOW-{len(candidate_flows) + 1:03d}",
                 "source_function": _fn_id("BFN", fn),
@@ -809,6 +813,36 @@ def _context_map(
                 "evidence_note": "Call-graph reachability only; no taint or boundary proof.",
                 "evidence_ids": [record.id],
             })
+    return candidate_flows, evidence
+
+
+def _context_map(
+    manifest: BinaryManifest,
+    context: BinaryContextMap,
+    channels: list[InputChannel],
+    runtime_events: list[dict[str, Any]],
+    runtime_records: list[EvidenceRecord],
+    fuzz: FuzzEvidenceBundle,
+    constraints: Optional[dict[str, Any]],
+    graph_path: Path,
+    static_records: list[EvidenceRecord],
+    decompilations: dict[str, Any],
+    runtime_input_flows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[EvidenceRecord]]:
+    generated_evidence: list[EvidenceRecord] = []
+    class_inventory_evidence_ids = [
+        record.id for record in static_records
+        if record.kind == "class_metadata_inventory"
+    ]
+
+    entry_points, ep_evidence = _build_entry_points(manifest, context)
+    generated_evidence.extend(ep_evidence)
+
+    surface_details, sink_details, surf_evidence = _build_surfaces_and_sinks(manifest, context)
+    generated_evidence.extend(surf_evidence)
+
+    candidate_flows, flow_evidence = _build_candidate_flows(manifest, context, sink_details)
+    generated_evidence.extend(flow_evidence)
 
     class_inventory: list[dict[str, Any]] = []
     framework_callback_candidates: list[dict[str, Any]] = []
@@ -1162,8 +1196,97 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
 
 
 def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:
-    with BinaryGraphStore(result.graph_path) as store:
+    with BinaryGraphStore(result.graph_path) as store, store.batch():
         _ingest_graph_body(store, result, out_dir)
+
+
+_STATUS_MAP = {
+    "binary_entry_point_candidate": "entry_point",
+    "binary_sink_candidate": "sink",
+    "binary_surface_candidate": "flow_step",
+}
+
+
+def _synthesise_annotations(result: BinaryAnalysisResult, out_dir: Path) -> None:
+    try:
+        from core.annotations.models import Annotation
+        from core.annotations.storage import write_annotation
+    except ImportError:
+        return
+    ann_dir = out_dir / "annotations"
+    binary_file = Path(result.manifest.binary_path).name
+    count = 0
+
+    for ep in result.context_map.get("entry_points", []):
+        if not ep.get("name"):
+            continue
+        ann = Annotation(
+            file=binary_file,
+            function=ep["name"],
+            body=ep.get("evidence_note", ""),
+            metadata={
+                "status": "entry_point",
+                "source": "llm",
+                "evidence_tier": ep.get("evidence_tier", ""),
+            },
+        )
+        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
+            count += 1
+
+    for sink in result.context_map.get("sink_details", []):
+        if not sink.get("name"):
+            continue
+        status = _STATUS_MAP.get(sink.get("type", ""), "flow_step")
+        ann = Annotation(
+            file=binary_file,
+            function=sink["name"],
+            body=sink.get("evidence_note", ""),
+            metadata={
+                "status": status,
+                "source": "llm",
+                "category": sink.get("category", ""),
+                "evidence_tier": sink.get("evidence_tier", ""),
+            },
+        )
+        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
+            count += 1
+
+    for boundary in result.context_map.get("boundary_details", []):
+        boundary_name = boundary.get("name") or boundary.get("id", "")
+        if not boundary_name:
+            continue
+        ann = Annotation(
+            file=binary_file,
+            function=boundary_name,
+            body=boundary.get("description", ""),
+            metadata={
+                "status": "trust_boundary",
+                "source": "llm",
+                "evidence_tier": boundary.get("evidence_tier", ""),
+            },
+        )
+        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
+            count += 1
+
+    for ingress in result.context_map.get("external_ingress_candidates", []):
+        if not ingress.get("name"):
+            continue
+        ann = Annotation(
+            file=binary_file,
+            function=ingress["name"],
+            body=ingress.get("evidence_note", ""),
+            metadata={
+                "status": "entry_point",
+                "source": "llm",
+                "kind": ingress.get("kind", ""),
+                "evidence_tier": ingress.get("evidence_tier", ""),
+            },
+        )
+        if write_annotation(ann_dir, ann, overwrite="respect-manual"):
+            count += 1
+
+    if count:
+        logger.info("synthesised %d annotations in %s", count, ann_dir)
 
 
 def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, out_dir: Path) -> None:
@@ -1936,7 +2059,11 @@ def analyse_blackbox_binary(
     if diff is not None:
         save_json(out_dir / "binary-diff.json", diff)
     _write_report(result, out_dir)
-    _ingest_graph(result, out_dir)
+    try:
+        _ingest_graph(result, out_dir)
+    except Exception:
+        logger.warning("graph ingest failed; JSON artifacts are intact", exc_info=True)
+    _synthesise_annotations(result, out_dir)
     return result
 
 
@@ -2006,7 +2133,7 @@ def append_fuzz_evidence_to_run(
         checklist["validation_handoff"] = validation_handoff
         save_json(out_dir / "binary-checklist.json", checklist)
 
-    with BinaryGraphStore(graph_path_for_run(out_dir)) as store:
+    with BinaryGraphStore(graph_path_for_run(out_dir)) as store, store.batch():
         snapshot_id = store.latest_snapshot_id()
         if snapshot_id:
             binary_node = stable_node_id(manifest.binary_sha256, "binary", manifest.binary_sha256)
@@ -2085,7 +2212,7 @@ def _evidence_records_from_payload(items: list[dict[str, Any]]) -> list[Evidence
             tier = EvidenceTier(str(item["tier"]))
         except ValueError:
             logger.warning("skipping evidence record with unrecognised tier %r", item.get("tier"))
-            tier = EvidenceTier.HEURISTIC
+            continue
         records.append(EvidenceRecord(
             id=str(item.get("id") or ""),
             kind=str(item.get("kind") or ""),
@@ -2307,7 +2434,7 @@ def append_runtime_evidence_to_run(
         validation_handoff=validation_handoff,
     )
     _write_report(result, out_dir)
-    with BinaryGraphStore(result.graph_path) as store:
+    with BinaryGraphStore(result.graph_path) as store, store.batch():
         snapshot_id = store.latest_snapshot_id()
         if snapshot_id:
             binary_node = stable_node_id(manifest.binary_sha256, "binary", manifest.binary_sha256)
@@ -2323,7 +2450,7 @@ def append_runtime_evidence_to_run(
             surface_nodes = {
                 item["id"]: stable_node_id(manifest.binary_sha256, "surface", item["id"])
                 for item in context_map.get("surface_details", [])
-                if isinstance(item, dict) and item.get("id") and not item.get("is_sink")
+                if isinstance(item, dict) and item.get("id")
             }
             ingress_nodes = {
                 item["id"]: stable_node_id(manifest.binary_sha256, "external_ingress", item["id"])
@@ -2391,6 +2518,22 @@ def append_runtime_evidence_to_run(
     return result
 
 
+def _load_investigation_summary(out_dir: Path) -> dict[str, Any]:
+    inv_path = out_dir / "binary-investigation.json"
+    if not inv_path.is_file():
+        return {}
+    data = load_json(inv_path)
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "ranked_surfaces": data.get("ranked_surfaces", [])[:10],
+        "ranked_ingress": data.get("ranked_ingress", [])[:10],
+        "hypotheses": data.get("hypotheses", []),
+        "priority_queue": data.get("priority_queue", []),
+        "summary": data.get("summary", {}),
+    }
+
+
 def map_result_payload(result: BinaryAnalysisResult, out_dir: Path) -> dict[str, Any]:
     context = result.context_map
     class_summary = (context.get("class_inventory") or {}).get("summary") or {}
@@ -2422,8 +2565,10 @@ def map_result_payload(result: BinaryAnalysisResult, out_dir: Path) -> dict[str,
             "binary_evidence": str(out_dir / "binary-evidence.json"),
             "binary_decompilations": str(out_dir / "binary-decompilations.json"),
             "binary_validation_handoff": str(out_dir / "binary-validation-handoff.json"),
+            "binary_investigation": str(out_dir / "binary-investigation.json"),
             "binary_graph": str(result.graph_path),
         },
+        "investigation": _load_investigation_summary(out_dir),
     }
 
 
