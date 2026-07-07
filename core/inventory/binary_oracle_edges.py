@@ -226,12 +226,15 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
             gpath = graph_path_for_run(sub)
             if not gpath.is_file():
                 continue
-            raw_edges = query_edges(gpath, kind="CALLS")
+            _CALL_KINDS = {"CALLS", "CALLS_FUNCTION", "CALLS_SURFACE"}
+            raw_edges = query_edges(gpath, kind=None)
             if not raw_edges:
                 continue
             edges = []
             callees: set[str] = set()
             for e in raw_edges:
+                if e.get("kind") not in _CALL_KINDS:
+                    continue
                 src = e.get("source") or {}
                 tgt = e.get("target") or {}
                 caller = src.get("name", "")
