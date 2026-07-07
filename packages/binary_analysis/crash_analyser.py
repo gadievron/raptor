@@ -929,7 +929,7 @@ class CrashAnalyser:
                     context.function_name = func_part
                     
                     # Extract source location if available
-                    if " at " in line and ".c:" in line or ".cpp:" in line:
+                    if " at " in line and (".c:" in line or ".cpp:" in line):
                         source_part = line.split(" at ")[1].split()[0].strip()
                         context.source_location = source_part
                         logger.info(f"✓ Source location extracted from backtrace: {source_part}")
@@ -1040,7 +1040,7 @@ class CrashAnalyser:
                     addr_start = line.index("0x")
                     addr_end = addr_start + 18  # Allow for longer addresses
                     addr_part = line[addr_start:addr_end].split()[0]
-                    if addr_part.startswith("0x"):
+                    if is_valid_hex_address(addr_part):
                         context.crash_address = addr_part
                 crash_instruction_found = True
                 logger.debug(f"Found crash instruction: {context.crash_instruction}")
@@ -1259,10 +1259,11 @@ class CrashAnalyser:
         except (OSError, subprocess.SubprocessError):
             info["aslr_enabled"] = "unknown"
             
-        # Check if binary has stack canaries
+        # Check if binary has stack canaries via symbol table (not objdump -d
+        # which disassembles the entire binary and can OOM on large inputs)
         try:
             result = _run_trusted(
-                ["objdump", "-d", str(self.binary)],
+                ["nm", "-D", str(self.binary)],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -1615,32 +1616,30 @@ class CrashAnalyser:
             logger.info("✓ Enhanced stack trace from ASan")
             
         # Store ASan output in binary_info for LLM analysis
-        context.binary_info["asan_output"] = asan_output[:2000]  # Truncate if too long
-        """Heuristically classify crash type based on available information."""
-        # Simple heuristics based on signal and crash info
+        context.binary_info["asan_output"] = asan_output[:2000]
+        if not context.crash_type:
+            context.crash_type = self._classify_crash_type(context)
+
+    @staticmethod
+    def _classify_crash_type(context: "CrashContext") -> str:
+        """Heuristically classify crash type from signal, registers, and stack."""
         if context.signal == "11":  # SIGSEGV
             if "rsp" in context.registers and "rip" in context.registers:
                 rsp = context.registers.get("rsp", "")
-
                 if rsp and "0x00000" in rsp:
                     return "null_deref"
-                elif "call" in context.crash_instruction.lower():
+                elif context.crash_instruction and "call" in context.crash_instruction.lower():
                     return "call_to_invalid_address"
                 else:
                     return "memory_access_violation"
-
         elif context.signal == "06":  # SIGABRT
-            if "malloc" in context.stack_trace or "free" in context.stack_trace:
+            if context.stack_trace and ("malloc" in context.stack_trace or "free" in context.stack_trace):
                 return "heap_corruption"
-            else:
-                return "assertion_failure"
-
+            return "assertion_failure"
         elif context.signal == "04":  # SIGILL
             return "invalid_instruction"
-
         elif context.signal == "08":  # SIGFPE
             return "arithmetic_error"
-
         elif context.signal == "05":  # SIGTRAP
             if context.crash_instruction and ("int3" in context.crash_instruction.lower() or "breakpoint" in context.crash_instruction.lower()):
                 return "debug_breakpoint"
@@ -1648,30 +1647,20 @@ class CrashAnalyser:
                 return "assertion_failure"
             elif context.stack_trace and ("sanitizer" in context.stack_trace.lower() or "asan" in context.stack_trace.lower()):
                 return "sanitizer_violation"
-            elif "__chk_fail" in context.stack_trace or "buffer overflow" in str(context.registers):
+            elif context.stack_trace and ("__chk_fail" in context.stack_trace or "buffer overflow" in str(context.registers)):
                 return "stack_buffer_overflow"
-            else:
-                return "trap_signal"
-
+            return "trap_signal"
         elif context.signal == "07":  # SIGBUS
             return "bus_error"
-
-        elif context.signal == "10":  # SIGUSR1
+        elif context.signal in ("10", "12"):  # SIGUSR1/SIGUSR2
             return "user_signal"
-
-        elif context.signal == "12":  # SIGUSR2
-            return "user_signal"
-
         elif context.signal == "13":  # SIGPIPE
             return "broken_pipe"
-
         elif context.signal == "14":  # SIGALRM
             return "alarm_timeout"
-
         elif context.signal == "15":  # SIGTERM
             return "termination_signal"
 
-        # Fallback classification based on crash instruction or stack trace
         if context.crash_instruction:
             instr = context.crash_instruction.lower()
             if "div" in instr and ("zero" in instr or "/ 0" in instr):
@@ -1680,7 +1669,6 @@ class CrashAnalyser:
                 return "debug_breakpoint"
             elif "call" in instr and ("0x0" in instr or "null" in instr):
                 return "call_to_null"
-
         if context.stack_trace:
             trace = context.stack_trace.lower()
             if "sanitizer" in trace or "asan" in trace:
@@ -1689,5 +1677,4 @@ class CrashAnalyser:
                 return "assertion_failure"
             elif "malloc" in trace or "free" in trace:
                 return "heap_issue"
-
         return "unknown_crash_type"

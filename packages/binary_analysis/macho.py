@@ -13,6 +13,7 @@ from __future__ import annotations
 import plistlib
 import struct
 import subprocess
+import xml.parsers.expat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -275,7 +276,7 @@ def inspect_app_bundle(path: Path, binary_sha256: str) -> tuple[Optional[AppBund
     try:
         with plist_path.open("rb") as handle:
             info = plistlib.load(handle)
-    except (OSError, plistlib.InvalidFileException):
+    except (OSError, plistlib.InvalidFileException, xml.parsers.expat.ExpatError):
         return None, []
     if not isinstance(info, dict):
         return None, []

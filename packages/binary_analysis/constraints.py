@@ -11,10 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+import logging
+
 from core.json import load_json
-from packages.exploit_feasibility.smt_path import validate_path
 
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+
+logger = logging.getLogger(__name__)
 
 
 def validate_constraint_file(
@@ -28,6 +31,11 @@ def validate_constraint_file(
     conditions = payload.get("conditions")
     if not isinstance(conditions, list) or not conditions:
         raise ValueError(f"constraint file has no conditions list: {path}")
+    try:
+        from packages.exploit_feasibility.smt_path import validate_path
+    except ImportError:
+        logger.debug("z3/smt_path not available; skipping constraint validation")
+        return payload, []
     profile = str(payload.get("profile") or "uint64")
     result = validate_path(
         conditions,

@@ -670,7 +670,7 @@ def test_constraint_file_only_checks_explicit_conditions(tmp_path: Path) -> None
         "conditions": ["declared_len > 2147483647"],
     }))
     with patch(
-        "packages.binary_analysis.constraints.validate_path",
+        "packages.exploit_feasibility.smt_path.validate_path",
         return_value={"feasible": True, "model": {"declared_len": 2147483648}},
     ) as mocked:
         result, evidence = validate_constraint_file(path, binary_sha256="b" * 64)
@@ -691,3 +691,125 @@ def test_append_fuzz_evidence_rejects_wrong_binary_binding(tmp_path: Path) -> No
         analyse_blackbox_binary(binary, out_dir=out)
 
     assert append_fuzz_evidence_to_run(other, out_dir=out) is None
+
+
+# -------------------------------------------------------------------
+# graph_store.batch()
+# -------------------------------------------------------------------
+
+def test_graph_store_batch_commits_once(tmp_path):
+    """batch() defers commits until context exit."""
+    from packages.binary_analysis.graph_store import BinaryGraphStore
+
+    store = BinaryGraphStore(tmp_path / "test.db")
+    with store, store.batch():
+        snap_id = store.begin_snapshot("abc123", "/fake", tmp_path)
+        store.add_node(snap_id, "abc123", "function", "fn1", name="main")
+        store.add_node(snap_id, "abc123", "function", "fn2", name="helper")
+    summary = graph_summary(tmp_path / "test.db")
+    assert summary["nodes"]["function"] == 2
+
+
+def test_graph_store_batch_rollback_on_error(tmp_path):
+    """batch() rolls back on exception."""
+    from packages.binary_analysis.graph_store import BinaryGraphStore
+
+    store = BinaryGraphStore(tmp_path / "test.db")
+    try:
+        with store, store.batch():
+            snap_id = store.begin_snapshot("abc123", "/fake", tmp_path)
+            store.add_node(snap_id, "abc123", "function", "fn1", name="main")
+            raise RuntimeError("deliberate")
+    except RuntimeError:
+        pass
+    summary = graph_summary(tmp_path / "test.db")
+    assert summary.get("nodes", {}).get("function", 0) == 0
+
+
+# -------------------------------------------------------------------
+# _load_investigation_summary
+# -------------------------------------------------------------------
+
+def test_load_investigation_summary_missing_file(tmp_path):
+    from packages.binary_analysis.pipeline import _load_investigation_summary
+
+    assert _load_investigation_summary(tmp_path) == {}
+
+
+def test_load_investigation_summary_truncates_ranked(tmp_path):
+    from packages.binary_analysis.pipeline import _load_investigation_summary
+
+    data = {
+        "ranked_surfaces": [{"id": str(i)} for i in range(20)],
+        "ranked_ingress": [{"id": str(i)} for i in range(15)],
+        "hypotheses": [{"h": 1}],
+        "priority_queue": [],
+        "summary": {"total": 20},
+    }
+    (tmp_path / "binary-investigation.json").write_text(json.dumps(data))
+    result = _load_investigation_summary(tmp_path)
+    assert len(result["ranked_surfaces"]) == 10
+    assert len(result["ranked_ingress"]) == 10
+    assert result["hypotheses"] == [{"h": 1}]
+
+
+# -------------------------------------------------------------------
+# _synthesise_annotations skips nameless entries
+# -------------------------------------------------------------------
+
+def test_synthesise_annotations_skips_nameless(tmp_path):
+    """Entries without a name should be silently skipped, not crash."""
+    from packages.binary_analysis.pipeline import _synthesise_annotations
+
+    binary = tmp_path / "sample"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 100)
+    manifest = build_manifest(binary)
+    ctx = BinaryContextMap(binary_path=str(binary), arch="x86", bits=64, binary_format="elf")
+    ctx_dict = ctx.to_dict()
+    ctx_dict["entry_points"] = [{"name": ""}, {"name": "main", "evidence_note": "entry"}]
+    ctx_dict["sink_details"] = [{"evidence_note": "no name"}]
+
+    result = type("R", (), {
+        "manifest": manifest,
+        "context_map": ctx_dict,
+    })()
+    _synthesise_annotations(result, tmp_path)
+    ann_dir = tmp_path / "annotations"
+    if ann_dir.exists():
+        files = list(ann_dir.rglob("*.md"))
+        for f in files:
+            content = f.read_text()
+            assert "main" in content or "entry" in content
+
+
+# -------------------------------------------------------------------
+# _c_string edge cases
+# -------------------------------------------------------------------
+
+def test_c_string_null_byte():
+    from packages.binary_analysis.harness import _c_string
+
+    assert _c_string("a\x00b") == '"a\\0b"'
+
+
+def test_c_string_non_ascii():
+    from packages.binary_analysis.harness import _c_string
+
+    result = _c_string("café")
+    assert result.startswith('"')
+    assert result.endswith('"')
+    assert "\\x" in result
+
+
+def test_c_string_empty():
+    from packages.binary_analysis.harness import _c_string
+
+    assert _c_string("") == '""'
+
+
+def test_c_string_backslash_and_quotes():
+    from packages.binary_analysis.harness import _c_string
+
+    result = _c_string('a"b\\c')
+    assert '\\"' in result
+    assert '\\\\' in result

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
-from packages.frida import parse_events
-from packages.frida.evidence import discover_evidence
-
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+
+logger = logging.getLogger(__name__)
 
 
 def load_runtime_evidence(
@@ -22,6 +22,12 @@ def load_runtime_evidence(
     Runtime observation is opt-in: callers pass a run directory produced by
     `/frida`. This function never silently spawns or attaches to binaries.
     """
+    try:
+        from packages.frida import parse_events
+        from packages.frida.evidence import discover_evidence
+    except ImportError:
+        logger.debug("packages.frida not available; skipping runtime evidence")
+        return [], []
     events: list[dict[str, Any]] = []
     records: list[EvidenceRecord] = []
     matches = discover_evidence([Path(runtime_dir)], target_path=target_path)

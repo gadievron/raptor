@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from core.json import load_json
 from packages.fuzzing.crash_collector import CrashCollector
 
 from .evidence import EvidenceRecord, EvidenceTier, make_evidence
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -127,7 +130,11 @@ def load_fuzz_evidence(
     except (FileNotFoundError, OSError):
         return bundle
     for crash in crashes:
-        digest = sha256_file(crash.input_file)
+        try:
+            digest = sha256_file(crash.input_file)
+        except OSError:
+            logger.warning("crash input disappeared: %s", crash.input_file)
+            continue
         record = make_evidence(
             binary_sha256,
             kind="fuzz_crash",
