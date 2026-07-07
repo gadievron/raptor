@@ -813,3 +813,37 @@ def test_c_string_backslash_and_quotes():
     result = _c_string('a"b\\c')
     assert '\\"' in result
     assert '\\\\' in result
+
+
+# -------------------------------------------------------------------
+# Corrupt / truncated binary input
+# -------------------------------------------------------------------
+
+def test_pipeline_handles_empty_binary(tmp_path):
+    """A zero-byte file should not crash the pipeline."""
+    binary = _write_binary(tmp_path / "empty", b"")
+    ctx = BinaryContextMap(binary_path=str(binary), arch="unknown", bits=0, binary_format="unknown")
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=tmp_path / "out")
+    assert result.manifest.binary_sha256 != ""
+    assert result.context_map is not None
+
+
+def test_pipeline_handles_truncated_elf(tmp_path):
+    """A truncated ELF (just magic bytes) should produce a valid result."""
+    binary = _write_binary(tmp_path / "truncated", b"\x7fELF")
+    ctx = BinaryContextMap(binary_path=str(binary), arch="unknown", bits=0, binary_format="elf")
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=tmp_path / "out")
+    assert result.manifest.size_bytes == 4
+    assert result.manifest.binary_format == "elf"
+
+
+def test_pipeline_handles_random_bytes(tmp_path):
+    """Non-binary random data should not crash the pipeline."""
+    binary = _write_binary(tmp_path / "random", bytes(range(256)))
+    ctx = BinaryContextMap(binary_path=str(binary), arch="unknown", bits=0, binary_format="unknown")
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=tmp_path / "out")
+    assert result is not None
+    assert (tmp_path / "out" / "binary-manifest.json").is_file()

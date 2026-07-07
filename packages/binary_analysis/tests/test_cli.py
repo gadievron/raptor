@@ -7,16 +7,41 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from packages.binary_analysis.cli import _build_parser, _normalise_argv, _print_report, main
-from packages.binary_analysis.fuzz_evidence import FuzzEvidenceBundle
 from packages.binary_analysis.manifest import BinaryManifest
+from packages.binary_analysis.pipeline import BinaryAnalysisResult
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-binary"
+
+
+def _make_result(
+    binary: Path,
+    context_map: dict,
+    *,
+    graph_path: Path | None = None,
+) -> BinaryAnalysisResult:
+    manifest = BinaryManifest(
+        schema_version=1,
+        binary_path=str(binary),
+        binary_sha256="a" * 64,
+        size_bytes=binary.stat().st_size,
+        executable=True,
+        target_kind="elf",
+        arch="x86",
+        bits=64,
+        binary_format="elf",
+    )
+    return BinaryAnalysisResult(
+        manifest=manifest,
+        context_map=context_map,
+        evidence=[],
+        input_channels=[],
+        graph_path=graph_path or binary.parent / "graph" / "binary-graph.sqlite",
+    )
 
 
 def test_normalise_defaults_bare_path_to_investigate() -> None:
@@ -88,21 +113,15 @@ def test_map_writes_operator_result_and_lifecycle(tmp_path: Path, capsys) -> Non
     binary.write_bytes(b"\x7fELF" + b"\x00" * 32)
     binary.chmod(0o755)
     out = tmp_path / "out"
-    result = SimpleNamespace(
-        manifest=SimpleNamespace(binary_path=str(binary)),
-        context_map={
-            "entry_points": [{"id": "BEP-1", "name": "main"}],
-            "sink_details": [],
-            "surface_details": [],
-            "candidate_flows": [],
-            "framework_callback_candidates": [],
-            "class_inventory": {"summary": {"class_count": 0}},
-            "decompilations": {"coverage": {"decompiled_functions": 0}},
-        },
-        input_channels=[],
-        fuzz=FuzzEvidenceBundle(),
-        graph_path=out / "graph" / "binary-graph.sqlite",
-    )
+    result = _make_result(binary, {
+        "entry_points": [{"id": "BEP-1", "name": "main"}],
+        "sink_details": [],
+        "surface_details": [],
+        "candidate_flows": [],
+        "framework_callback_candidates": [],
+        "class_inventory": {"summary": {"class_count": 0}},
+        "decompilations": {"coverage": {"decompiled_functions": 0}},
+    }, graph_path=out / "graph" / "binary-graph.sqlite")
 
     with (
         patch("packages.binary_analysis.cli.analyse_blackbox_binary", return_value=result),
@@ -144,7 +163,7 @@ def test_trace_parser_refreshes_existing_investigation_run(tmp_path: Path, capsy
     (run_dir / "binary-investigation.json").write_text(json.dumps({
         "active_phases": [{"kind": "runtime", "status": "completed"}],
     }))
-    result = SimpleNamespace(
+    result = BinaryAnalysisResult(
         manifest=manifest,
         context_map={
             "entry_points": [],
@@ -157,8 +176,8 @@ def test_trace_parser_refreshes_existing_investigation_run(tmp_path: Path, capsy
             "class_inventory": {"summary": {"class_count": 0}},
             "decompilations": {"coverage": {"decompiled_functions": 0}},
         },
+        evidence=[],
         input_channels=[],
-        fuzz=FuzzEvidenceBundle(),
         graph_path=run_dir / "graph" / "binary-graph.sqlite",
     )
     phase = {
@@ -238,27 +257,21 @@ def test_investigate_active_does_not_fuzz_whole_app_without_harness_boundary(tmp
     binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)
     binary.chmod(0o755)
     out = tmp_path / "out"
-    result = SimpleNamespace(
-        manifest=SimpleNamespace(binary_path=str(binary)),
-        context_map={
-            "entry_points": [],
-            "sink_details": [],
-            "surface_details": [],
-            "candidate_flows": [],
-            "framework_callback_candidates": [],
-            "class_inventory": {"summary": {"class_count": 0}},
-            "decompilations": {"coverage": {"decompiled_functions": 0}},
-            "fuzz_suitability": {
-                "strategy": "extract_harness_from_ingress",
-                "reason": "Whole GUI process is not a sensible fuzz boundary.",
-                "direct_campaign_recommended": False,
-                "should_run_fuzz_plan": False,
-            },
+    result = _make_result(binary, {
+        "entry_points": [],
+        "sink_details": [],
+        "surface_details": [],
+        "candidate_flows": [],
+        "framework_callback_candidates": [],
+        "class_inventory": {"summary": {"class_count": 0}},
+        "decompilations": {"coverage": {"decompiled_functions": 0}},
+        "fuzz_suitability": {
+            "strategy": "extract_harness_from_ingress",
+            "reason": "Whole GUI process is not a sensible fuzz boundary.",
+            "direct_campaign_recommended": False,
+            "should_run_fuzz_plan": False,
         },
-        input_channels=[],
-        fuzz=FuzzEvidenceBundle(),
-        graph_path=out / "graph" / "binary-graph.sqlite",
-    )
+    }, graph_path=out / "graph" / "binary-graph.sqlite")
     investigation = {
         "status": "static_only",
         "summary": {
@@ -295,29 +308,23 @@ def test_investigate_active_does_not_try_frida_against_driver_file(tmp_path: Pat
     binary.write_bytes(b"MZ" + b"\x00" * 32)
     binary.chmod(0o755)
     out = tmp_path / "out"
-    result = SimpleNamespace(
-        manifest=SimpleNamespace(binary_path=str(binary)),
-        context_map={
-            "entry_points": [],
-            "sink_details": [],
-            "surface_details": [],
-            "candidate_flows": [],
-            "framework_callback_candidates": [],
-            "class_inventory": {"summary": {"class_count": 0}},
-            "decompilations": {"coverage": {"decompiled_functions": 0}},
-            "fuzz_suitability": {
-                "strategy": "snapshot_or_ioctl_harness",
-                "runtime_strategy": "kernel_harness_required",
-                "runtime_reason": "Drivers need a kernel harness.",
-                "reason": "Drivers need a snapshot or IOCTL harness.",
-                "direct_campaign_recommended": False,
-                "should_run_fuzz_plan": False,
-            },
+    result = _make_result(binary, {
+        "entry_points": [],
+        "sink_details": [],
+        "surface_details": [],
+        "candidate_flows": [],
+        "framework_callback_candidates": [],
+        "class_inventory": {"summary": {"class_count": 0}},
+        "decompilations": {"coverage": {"decompiled_functions": 0}},
+        "fuzz_suitability": {
+            "strategy": "snapshot_or_ioctl_harness",
+            "runtime_strategy": "kernel_harness_required",
+            "runtime_reason": "Drivers need a kernel harness.",
+            "reason": "Drivers need a snapshot or IOCTL harness.",
+            "direct_campaign_recommended": False,
+            "should_run_fuzz_plan": False,
         },
-        input_channels=[],
-        fuzz=FuzzEvidenceBundle(),
-        graph_path=out / "graph" / "binary-graph.sqlite",
-    )
+    }, graph_path=out / "graph" / "binary-graph.sqlite")
     investigation = {
         "status": "static_only",
         "summary": {

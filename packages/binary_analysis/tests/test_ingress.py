@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Optional
 
 from packages.binary_analysis.fuzz_suitability import assess_fuzz_suitability
 from packages.binary_analysis.ingress import recover_external_ingress
+from packages.binary_analysis.macho import AppBundleMetadata
+from packages.binary_analysis.manifest import BinaryManifest
 from packages.binary_analysis.topology import build_component_topology
 
 
@@ -16,11 +18,23 @@ def _write_binary(path: Path, data: bytes) -> Path:
     return path
 
 
-def _manifest(path: Path, *, target_kind: str, exports: list[str] | None = None, app_bundle=None):
-    return SimpleNamespace(
+def _manifest(
+    path: Path,
+    *,
+    target_kind: str,
+    exports: Optional[list[str]] = None,
+    app_bundle: Optional[AppBundleMetadata] = None,
+) -> BinaryManifest:
+    return BinaryManifest(
+        schema_version=1,
         binary_path=str(path),
         binary_sha256="a" * 64,
+        size_bytes=path.stat().st_size,
+        executable=True,
         target_kind=target_kind,
+        arch="x86",
+        bits=64,
+        binary_format=target_kind.split("-")[0] if "-" in target_kind else target_kind,
         exports=list(exports or []),
         app_bundle=app_bundle,
     )
@@ -40,14 +54,11 @@ def test_macos_callback_ingress_drives_harness_extraction_not_whole_app_fuzz(tmp
     manifest = _manifest(
         binary,
         target_kind="macho",
-        app_bundle=SimpleNamespace(
+        app_bundle=AppBundleMetadata(
             bundle_path=str(tmp_path / "Demo.app"),
+            info_plist_path=str(tmp_path / "Demo.app" / "Contents" / "Info.plist"),
             url_schemes=["demo"],
-            document_types=[],
             identifier="com.example.demo",
-            privileged_executables=[],
-            helper_tools=[],
-            xpc_services=[],
         ),
     )
     context = {
