@@ -2,8 +2,10 @@
 
 import os
 import platform
+import struct
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from packages.fuzzing.target_detector import detect, TargetInfo
@@ -13,6 +15,19 @@ from packages.fuzzing.target_detector import detect, TargetInfo
 ELF_MAGIC = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + b"\x02\x00" + b"\x3e\x00" + b"\x00" * 32
 MACHO_64_LE_MAGIC = b"\xcf\xfa\xed\xfe" + b"\x00" * 60
 PE_MAGIC = b"MZ" + b"\x00" * 60
+
+
+def _fat_macho_fixture(magic: bytes, *, is_64: bool) -> bytes:
+    endian = ">" if magic in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf") else "<"
+    entry_size = 32 if is_64 else 20
+    payload = bytearray(b"\x00" * 0x140)
+    payload[:8] = magic + struct.pack(f"{endian}I", 1)
+    if is_64:
+        payload[8:8 + entry_size] = struct.pack(f"{endian}IIQQII", 0x0100000C, 0, 0x100, 0x20, 0, 0)
+    else:
+        payload[8:8 + entry_size] = struct.pack(f"{endian}IIIII", 0x0100000C, 0, 0x100, 0x20, 0)
+    payload[0x100:0x120] = b"arm64-slice" + b"\x00" * 21
+    return bytes(payload)
 
 
 def _pe_fixture(machine: int) -> bytes:
@@ -60,6 +75,53 @@ class TestDetect(unittest.TestCase):
             self.assertEqual(info.arch, "64-bit")
         finally:
             os.unlink(tmp)
+
+    def test_all_fat_macho_variants_are_detected(self):
+        for magic, is_64 in (
+            (b"\xca\xfe\xba\xbe", False),
+            (b"\xbe\xba\xfe\xca", False),
+            (b"\xca\xfe\xba\xbf", True),
+            (b"\xbf\xba\xfe\xca", True),
+        ):
+            with self.subTest(magic=magic.hex()):
+                with tempfile.NamedTemporaryFile(delete=False) as f:
+                    f.write(_fat_macho_fixture(magic, is_64=is_64))
+                    tmp = Path(f.name)
+                try:
+                    tmp.chmod(0o755)
+                    info = detect(tmp)
+                    self.assertEqual(info.kind, "macho")
+                    self.assertEqual(info.arch, "fat")
+                finally:
+                    os.unlink(tmp)
+
+    def test_java_class_magic_is_not_mislabelled_as_fat_macho(self):
+        with tempfile.NamedTemporaryFile(suffix=".class", delete=False) as f:
+            f.write(b"\xca\xfe\xba\xbe\x00\x00\x00\x34" + b"\x00" * 64)
+            tmp = Path(f.name)
+        try:
+            info = detect(tmp)
+            self.assertEqual(info.kind, "java-class")
+            self.assertIn("java", info.description.lower())
+        finally:
+            os.unlink(tmp)
+
+    def test_jar_and_apk_archives_are_recognised_for_binary_intake(self):
+        for suffix, members, expected in (
+            (".jar", {"META-INF/MANIFEST.MF": b"Manifest-Version: 1.0\n", "Demo.class": b"\xca\xfe\xba\xbe"}, "java-archive"),
+            (".apk", {"AndroidManifest.xml": b"<manifest/>", "classes.dex": b"dex\n035\x00"}, "apk"),
+        ):
+            with self.subTest(suffix=suffix):
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                    tmp = Path(f.name)
+                try:
+                    with zipfile.ZipFile(tmp, "w") as zf:
+                        for name, body in members.items():
+                            zf.writestr(name, body)
+                    info = detect(tmp)
+                    self.assertEqual(info.kind, expected)
+                finally:
+                    os.unlink(tmp)
 
     def test_pe_executable_detection(self):
         with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as f:

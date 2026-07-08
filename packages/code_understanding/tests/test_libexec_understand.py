@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -110,6 +111,22 @@ class TestArgparse:
         assert (out / "map-result.json").exists()
         assert (out / "context-map.json").exists()
         assert (out / "binary-manifest.json").exists()
+
+    def test_map_binary_detection_accepts_all_fat_macho_variants_and_java(self, env, tmp_path, monkeypatch):
+        monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+        module = runpy.run_path(str(LIBEXEC), run_name="raptor_understand_test")
+        is_binary_file = module["_is_binary_file"]
+        fixtures = {
+            "fat32-be": b"\xca\xfe\xba\xbe\x00\x00\x00\x01\x01\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x20" + b"\x00" * 288,
+            "fat32-le": b"\xbe\xba\xfe\xca\x01\x00\x00\x00\x0c\x00\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x20\x00\x00\x00" + b"\x00" * 288,
+            "fat64-be": b"\xca\xfe\xba\xbf\x00\x00\x00\x01\x01\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x00" * 280,
+            "fat64-le": b"\xbf\xba\xfe\xca\x01\x00\x00\x00\x0c\x00\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x00" * 280,
+            "java": b"\xca\xfe\xba\xbe\x00\x00\x00\x34" + b"\x00" * 64,
+        }
+        for name, data in fixtures.items():
+            path = tmp_path / name
+            path.write_bytes(data)
+            assert is_binary_file(path), name
 
     def test_map_rejects_model_flag(self, env, tmp_path):
         binary = tmp_path / "sample"

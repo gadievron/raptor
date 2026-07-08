@@ -12,6 +12,9 @@ Supported target kinds:
   - pe-exe         : Windows PE executable
   - pe-dll         : Windows DLL
   - pe-sys         : Windows kernel driver (.sys)
+  - java-class     : Java class file
+  - java-archive   : Java JAR archive
+  - apk            : Android APK archive
   - source-c       : C/C++ source files (need harness)
   - source-cpp     : C++ source files (need harness)
   - rust-crate     : Rust crate (Cargo.toml present)
@@ -24,11 +27,34 @@ from __future__ import annotations
 import logging
 import platform
 import shutil
+import struct
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
+
+_THIN_MACHO_MAGICS = {
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+}
+_FAT_MACHO_MAGICS = {
+    b"\xca\xfe\xba\xbe": (">", False),
+    b"\xbe\xba\xfe\xca": ("<", False),
+    b"\xca\xfe\xba\xbf": (">", True),
+    b"\xbf\xba\xfe\xca": ("<", True),
+}
+_KNOWN_MACHO_CPU_TYPES = {
+    7,
+    12,
+    18,
+    0x01000007,
+    0x0100000C,
+    0x01000012,
+}
 
 
 @dataclass
@@ -95,16 +121,29 @@ def _detect_file(path: Path) -> TargetInfo:
     if magic[:4] == b"\x7fELF":
         return _detect_elf(path, magic, sys_platform)
 
-    # Mach-O (macOS, including fat binaries)
-    if magic[:4] in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
-                     b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
-                     b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
-                     b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"):
+    # Mach-O (macOS, including fat binaries). 0xCAFEBABE is also the
+    # Java class-file magic, so only call it fat Mach-O when the header
+    # has a structurally valid architecture table.
+    if magic[:4] in _THIN_MACHO_MAGICS or _looks_like_fat_macho(path, magic):
         return _detect_macho(path, magic, sys_platform)
 
     # PE (Windows): MZ header at offset 0
     if magic[:2] == b"MZ":
         return _detect_pe(path, magic, suffix, sys_platform)
+
+    if magic[:4] == b"\xca\xfe\xba\xbe":
+        return TargetInfo(
+            path=path,
+            kind="java-class",
+            description="Java class file",
+            can_fuzz_here=False,
+            hints=["Use /binary or /understand --map for intake; JVM harnessing is not orchestrated yet."],
+        )
+
+    if magic[:4] == b"PK\x03\x04":
+        archive = _detect_zip_artifact(path)
+        if archive is not None:
+            return archive
 
     # Source code by extension
     if suffix in (".c", ".h"):
@@ -136,6 +175,63 @@ def _detect_file(path: Path) -> TargetInfo:
         description=f"Unrecognised file format. Magic: {magic[:8].hex()}",
         hints=["Run 'file <path>' for more info."],
     )
+
+
+def _looks_like_fat_macho(path: Path, magic: bytes) -> bool:
+    spec = _FAT_MACHO_MAGICS.get(magic[:4])
+    if spec is None or len(magic) < 28:
+        return False
+    endian, is_64 = spec
+    try:
+        count = struct.unpack(f"{endian}I", magic[4:8])[0]
+    except struct.error:
+        return False
+    if count < 1 or count > 64:
+        return False
+    entry_size = 32 if is_64 else 20
+    if len(magic) < 8 + entry_size:
+        return False
+    try:
+        values = struct.unpack(
+            f"{endian}IIQQII" if is_64 else f"{endian}IIIII",
+            magic[8:8 + entry_size],
+        )
+    except struct.error:
+        return False
+    cpu_type, _cpu_subtype, offset, size = values[:4]
+    if cpu_type not in _KNOWN_MACHO_CPU_TYPES:
+        return False
+    header_size = 8 + (count * entry_size)
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return False
+    return int(offset) >= header_size and int(size) > 0 and int(offset) + int(size) <= file_size
+
+
+def _detect_zip_artifact(path: Path) -> Optional[TargetInfo]:
+    try:
+        with zipfile.ZipFile(path) as zf:
+            members = set(zf.namelist()[:10000])
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        return None
+    if "AndroidManifest.xml" in members and any(name.endswith(".dex") for name in members):
+        return TargetInfo(
+            path=path,
+            kind="apk",
+            description="Android APK archive",
+            can_fuzz_here=False,
+            hints=["Use /binary or /understand --map for intake; APK runtime harnessing is not orchestrated yet."],
+        )
+    if "META-INF/MANIFEST.MF" in members and any(name.endswith(".class") for name in members):
+        return TargetInfo(
+            path=path,
+            kind="java-archive",
+            description="Java JAR archive",
+            can_fuzz_here=False,
+            hints=["Use /binary or /understand --map for intake; JVM harnessing is not orchestrated yet."],
+        )
+    return None
 
 
 def _detect_directory(path: Path) -> TargetInfo:

@@ -68,7 +68,11 @@ def test_manifest_records_runtime_markers_without_claiming_reachability(tmp_path
 
 
 def test_fat_macho_magic_is_not_mislabelled_as_java(tmp_path: Path) -> None:
-    binary = _write_binary(tmp_path / "fat-macho", b"\xca\xfe\xba\xbe" + b"\x00" * 64)
+    payload = bytearray(b"\x00" * 0x140)
+    payload[:8] = b"\xca\xfe\xba\xbe" + struct.pack(">I", 1)
+    payload[8:28] = struct.pack(">IIIII", 0x0100000C, 0, 0x100, 0x20, 0)
+    payload[0x100:0x120] = b"arm64-slice" + b"\x00" * 21
+    binary = _write_binary(tmp_path / "fat-macho", bytes(payload))
     ctx = BinaryContextMap(binary_path=binary, arch="fat", bits=64, binary_format="mach0")
 
     manifest = build_manifest(binary, ctx)

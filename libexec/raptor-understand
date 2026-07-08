@@ -291,25 +291,25 @@ def _build_cost_gate():
 # ---------------------------------------------------------------------------
 
 
-_BINARY_SIGNATURES = {
-    b"\x7fELF": "elf",
-    b"MZ": "pe",
-    b"\xfe\xed\xfa\xce": "macho",
-    b"\xfe\xed\xfa\xcf": "macho",
-    b"\xce\xfa\xed\xfe": "macho",
-    b"\xcf\xfa\xed\xfe": "macho",
-    b"\xca\xfe\xba\xbe": "macho_fat",
+_BINARY_TARGET_KINDS = {
+    "elf-linux",
+    "elf-kmod",
+    "macho",
+    "pe-exe",
+    "pe-dll",
+    "pe-sys",
+    "java-class",
+    "java-archive",
+    "apk",
 }
 
 
 def _is_binary_file(path: Path) -> bool:
     if not path.is_file():
         return False
-    try:
-        header = path.read_bytes()[:4]
-    except OSError:
-        return False
-    return any(header.startswith(sig) for sig in _BINARY_SIGNATURES)
+    from packages.fuzzing.target_detector import detect
+
+    return detect(path).kind in _BINARY_TARGET_KINDS
 
 
 def _do_map(args: argparse.Namespace) -> dict:

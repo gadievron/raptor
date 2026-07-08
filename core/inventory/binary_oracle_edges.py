@@ -198,8 +198,15 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
     This avoids re-running r2 when /understand --map has already mapped
     the binary."""
     try:
-        from packages.binary_analysis.graph_store import graph_path_for_run, query_edges
+        from packages.binary_analysis.graph_store import (
+            graph_path_for_run,
+            graph_summary,
+            query_edges,
+        )
     except ImportError:
+        return None
+    requested_sha256 = _content_hash(binary_path)
+    if not requested_sha256:
         return None
     raptor_dir = Path(os.environ.get("RAPTOR_DIR", ""))
     search_dirs = [binary_path.parent]
@@ -226,8 +233,20 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
             gpath = graph_path_for_run(sub)
             if not gpath.is_file():
                 continue
-            _CALL_KINDS = {"CALLS", "CALLS_FUNCTION", "CALLS_SURFACE"}
-            raw_edges = query_edges(gpath, kind=None)
+            try:
+                summary = graph_summary(gpath)
+                latest = summary.get("latest_snapshot") or {}
+                if latest.get("binary_sha256") != requested_sha256:
+                    continue
+                _CALL_KINDS = {"CALLS", "CALLS_FUNCTION", "CALLS_SURFACE"}
+                raw_edges = query_edges(gpath, kind=None)
+            except Exception as exc:  # noqa: BLE001 - best-effort cache reuse only
+                logger.debug(
+                    "binary_oracle_edges: ignoring unreadable graph store %s: %s",
+                    gpath,
+                    exc,
+                )
+                continue
             if not raw_edges:
                 continue
             edges = []
@@ -240,7 +259,11 @@ def _try_graph_store(binary_path: Path) -> Optional[BinaryEdgeIndex]:
                 caller = src.get("name", "")
                 callee = tgt.get("name", "")
                 if caller and callee:
-                    edges.append(BinaryCallEdge(caller=caller, callee=callee))
+                    edges.append(BinaryCallEdge(
+                        caller=caller,
+                        callee=callee,
+                        binary_path=str(binary_path),
+                    ))
                     callees.add(callee)
             if edges:
                 logger.info(
