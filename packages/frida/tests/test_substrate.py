@@ -252,6 +252,44 @@ def test_drcov_comma_in_module_path(tmp_path: Path):
 
 class TestSandboxedMain:
 
+    def test_python_runtime_prefixes_are_allowlisted(self, tmp_path):
+        """Framework/venv Python roots must be readable for inner re-exec."""
+        from unittest.mock import MagicMock, patch as mock_patch
+        import packages.frida.sandboxed as sandboxed
+
+        framework_prefix = tmp_path / "Python.framework" / "Versions" / "3.14"
+        base_prefix = tmp_path / "base-python"
+        framework_prefix.mkdir(parents=True)
+        base_prefix.mkdir()
+
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        mock_run = MagicMock(return_value=fake_result)
+        runtime_paths = [
+            str(framework_prefix.resolve()),
+            str(base_prefix.resolve()),
+        ]
+
+        with mock_patch.object(sandboxed, "sys") as mock_sys, \
+             mock_patch("packages.frida.sandboxed._find_frida_site",
+                        return_value=None), \
+             mock_patch(
+                 "core.sandbox.python_paths.python_runtime_tool_paths",
+                 return_value=runtime_paths), \
+             mock_patch.dict("packages.frida.sandboxed.os.environ",
+                             {"RAPTOR_DIR": ""}, clear=False), \
+             mock_patch("core.sandbox.run", mock_run):
+            mock_sys.argv = [
+                "sandboxed", "--out", "/tmp/run", "--",
+                "python3", "-m", "packages.frida.cli", "--target", "1234",
+            ]
+            rc = sandboxed.main()
+
+        assert rc == 0
+        tool_paths = mock_run.call_args[1]["tool_paths"]
+        assert str(framework_prefix.resolve()) in tool_paths
+        assert str(base_prefix.resolve()) in tool_paths
+
     def test_spawn_mode_passes_block_network(self):
         """--spawn → sandbox_run called with block_network=True."""
         from unittest.mock import MagicMock, patch as mock_patch

@@ -103,6 +103,7 @@ Once inside, just say "hi" to get started, or jump straight to a command.
 | `/agentic` | Full autonomous workflow: scan, validate, exploit, patch | Stable |
 | `/scan` | Static analysis with Semgrep and CodeQL | Stable |
 | `/understand` | Map attack surface, trace data flows, hunt vulnerability variants | Stable |
+| `/binary` | Black-box binary investigation, runtime evidence, graph queries and handoff | Beta |
 | `/validate` | Multi-stage exploitability validation pipeline (Stages 0-F) | Stable |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
@@ -141,6 +142,34 @@ With `--threat-model`, RAPTOR runs the map first, creates `threat-model.json` an
 Findings that clear validation get exploit PoCs and patches generated. A cross-finding analysis runs at the end to find shared root causes and attack chains.
 
 `/validate` runs this same pipeline as a standalone step if you already have findings from a previous scan.
+
+For a compiled artefact, `/binary <path>` now runs an evidence-first
+investigation rather than dumping a pile of raw reverse-engineering artefacts
+on the operator. Underneath it still builds the SHA-256-bound manifest,
+evidence ledger, context map, checklist and SQLite graph from file metadata,
+imports and radare2 xrefs. Mach-O apps also get slice inventory, bundle
+metadata and Objective-C / Swift class selectors; high-value pseudocode is
+persisted rather than disappearing inside the run. PE DLL exports, Windows
+driver dispatchers and Linux kernel-module ioctl handlers are handled as
+their own ingress candidates too, with PE architecture read from the COFF
+header rather than guessed. The investigation layer then queries that graph,
+ranks external ingress before generic sink leads, discovers declared
+helper/sibling binaries, and writes a compact report split into facts,
+structural inferences and unproven hypotheses. Frida observations, fuzz crash
+witnesses, explicit Z3 checks and binary diffs can then add stronger evidence
+later. RAPTOR also keeps the internal call graph needed to recover bounded
+ingress-to-parser candidates, so an app callback can be narrowed to the
+internal function that actually calls `XML_Parse`, `d2i_X509`,
+`jpeg_read_header` or another real parser surface without pretending that is
+taint proof. `/binary trace-parser <run-dir>` is the explicit dynamic follow-on:
+it runs the narrow Frida parser trace, then refreshes the same context map,
+handoff, graph and investigation report in place. `/binary investigate --active` maps first and only launches a real
+fuzz campaign when a concrete harness boundary exists; app, DLL and driver
+targets get a harness or snapshot step instead. `/binary harness` writes an
+evidence-backed harness spec for the chosen ingress and only emits candidate
+source when the ABI or IOCTL contract is explicit. It does not blag its way from “`memcpy` exists” to “this is
+exploitable”: imports, selectors and call edges stay candidates until
+something mechanical proves more. See `docs/binary-understanding.md`.
 
 ---
 

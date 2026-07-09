@@ -5,6 +5,12 @@ Called automatically by Claude Code on session start (via .claude/settings.json)
 Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
 the startup banner in .startup-output.
 
+The banner is also printed to stdout on purpose: Claude Code attaches
+SessionStart stdout to the conversation before the first user message, so the
+assistant can render the banner directly without spending a second turn
+reading .startup-output back from disk. The file remains as a fallback for
+older Claude Code versions and direct/manual callers.
+
 No project env vars are set — the .active symlink is the only source of truth.
 """
 import os
@@ -41,7 +47,7 @@ def write_env_file():
     )
 
     try:
-        Path(env_file).write_text(content)
+        Path(env_file).write_text(content, encoding="utf-8")
     except OSError:
         pass
 

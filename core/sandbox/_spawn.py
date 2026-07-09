@@ -1223,6 +1223,13 @@ def run_sandboxed(
                         }
                 else:
                     exec_env = os.environ.copy()
+                    if strict_env:
+                        from core.config import RaptorConfig
+                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                        exec_env = {
+                            k: v for k, v in exec_env.items()
+                            if k not in _dangerous
+                        }
                 # bounded fork count via RLIMIT_NPROC (prlimit).
                 if nproc_limit and nproc_limit > 0:
                     import resource
@@ -1231,14 +1238,20 @@ def run_sandboxed(
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
                         warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
+                import resource as _resource
+                try:
+                    _soft_nofile = _resource.getrlimit(_resource.RLIMIT_NOFILE)[0]
+                except (ValueError, OSError):
+                    _soft_nofile = 1024
+                _keep_fds = {status_w}
+                for _fd in range(3, min(_soft_nofile, 65536)):
+                    if _fd not in _keep_fds:
+                        try:
+                            os.close(_fd)
+                        except OSError:
+                            pass
                 try:
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
-                    # exec_env is from a RAPTOR caller — either an
-                    # explicit env arg with DANGEROUS_ENV_VARS
-                    # strip applied (lines 1015-1019), or an inherit
-                    # of the caller's env on the no-env-supplied
-                    # path. Either way the caller is trusted (RAPTOR
-                    # owns the sandbox spawn surface).
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
                     # Target (or a dep) not reachable in the sandboxed view

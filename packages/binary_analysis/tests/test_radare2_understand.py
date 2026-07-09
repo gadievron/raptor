@@ -132,15 +132,26 @@ class TestBinaryUnderstand(unittest.TestCase):
         mock_probe.return_value = {"available": False, "decompiler": None,
                                     "has_r2pipe": False, "has_r2ghidra": False,
                                     "r2_bin": None}
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"\x7fELF" + b"\x00" * 60)
-            tmp = Path(f.name)
-        try:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / "sample.elf"
+            tmp.write_bytes(b"\x7fELF" + b"\x00" * 60)
             with self.assertRaises(RuntimeError) as ctx:
                 BinaryUnderstand(tmp)
             self.assertIn("radare2 not available", str(ctx.exception))
-        finally:
-            tmp.unlink()
+
+    def test_entry_point_recovery_does_not_promote_main_suffix_methods(self):
+        understand = BinaryUnderstand.__new__(BinaryUnderstand)
+        ctx = BinaryContextMap(binary_path=Path("./sample"))
+        ctx.interesting_functions = [
+            FunctionInfo(name="main", address=0x1000),
+            FunctionInfo(name="SentryRequestOperation.main", address=0x1100),
+            FunctionInfo(name="SentryThread.isMain", address=0x1200),
+            FunctionInfo(name="SentryNSError.domain", address=0x1300),
+        ]
+
+        understand._extract_entry_points(ctx)
+
+        self.assertEqual([item.name for item in ctx.entry_points], ["main"])
 
     @patch("packages.binary_analysis.radare2_understand.probe_capability")
     def test_init_raises_for_missing_binary(self, mock_probe):
@@ -175,6 +186,23 @@ class TestBinaryUnderstand(unittest.TestCase):
                 {"name": "process_request", "offset": 0x401200, "size": 250, "type": "fcn"},
                 {"name": "sym.imp.strcpy", "offset": 0x402000, "size": 16, "type": "imp"},
             ]),
+            "icj": json.dumps([
+                {
+                    "classname": "Example.AppDelegate",
+                    "addr": 0x500000,
+                    "lang": "objc",
+                    "super": ["NSObject"],
+                    "methods": [
+                        {
+                            "name": "applicationDidFinishLaunching:",
+                            "flag": "method.Example.AppDelegate.applicationDidFinishLaunching:",
+                            "lang": "objc",
+                            "addr": 0x401200,
+                        },
+                    ],
+                    "fields": [{"name": "helper", "kind": "var", "addr": 0x500100}],
+                },
+            ]),
             "izj": json.dumps([
                 {"string": "GET / HTTP/1.0\r\n\r\n"},
                 {"string": "/usr/bin/test"},
@@ -197,13 +225,11 @@ class TestBinaryUnderstand(unittest.TestCase):
             return ""
         fake_r2.cmd.side_effect = cmd_response
 
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"\x7fELF" + b"\x00" * 60)
-            tmp = Path(f.name)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / "sample.elf"
+            tmp.write_bytes(b"\x7fELF" + b"\x00" * 60)
 
-        try:
             with patch.dict("sys.modules", {"r2pipe": MagicMock()}) as mock_modules:
-                # Replace the imported r2pipe.open()
                 mock_modules["r2pipe"].open = MagicMock(return_value=fake_r2)
 
                 bu = BinaryUnderstand(tmp)
@@ -214,26 +240,27 @@ class TestBinaryUnderstand(unittest.TestCase):
             self.assertEqual(ctx.binary_format, "elf")
             self.assertIn("sym.imp.strcpy", ctx.imports)
 
-            # process_request should be flagged as calling strcpy
             process_req = next(
                 f for f in ctx.interesting_functions if f.name == "process_request"
             )
             self.assertIn("strcpy", process_req.calls_dangerous)
 
-            # main should be in entry_points
             entry_names = [f.name for f in ctx.entry_points]
             self.assertIn("main", entry_names)
 
-            # dangerous_sinks should include strcpy
             sink_names = [f.name for f in ctx.dangerous_sinks]
             self.assertTrue(any("strcpy" in n for n in sink_names))
 
-            # heuristic prioritisation should rank process_request highly
+            self.assertEqual(len(ctx.classes), 1)
+            self.assertEqual(ctx.classes[0].name, "Example.AppDelegate")
+            self.assertEqual(
+                ctx.classes[0].methods[0].bound_function_name,
+                "process_request",
+            )
+
             self.assertTrue(any(
                 p["function"] == "process_request" for p in ctx.fuzz_priorities
             ))
-        finally:
-            tmp.unlink()
 
     @patch("packages.binary_analysis.radare2_understand.BinaryUnderstand")
     def test_analyse_binary_context_writes_shared_artifact(self, mock_understand):
@@ -260,12 +287,10 @@ class TestSandboxWiring(unittest.TestCase):
         """Build a BinaryUnderstand against a real on-disk ELF stub so
         the constructor's `is_file()` + `exists()` checks pass without
         needing to mock them."""
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False, suffix="-stub", prefix="r2-wiring-",
-        )
-        tmp.write(b"\x7fELF" + b"\x00" * 60)
-        tmp.close()
-        self.addCleanup(lambda p=tmp.name: Path(p).unlink(missing_ok=True))
+        td = tempfile.mkdtemp(prefix="r2-wiring-")
+        self.addCleanup(lambda: __import__('shutil').rmtree(td, ignore_errors=True))
+        tmp_path = Path(td) / "stub.elf"
+        tmp_path.write_bytes(b"\x7fELF" + b"\x00" * 60)
         # probe_capability is checked in __init__; patch it to look
         # available so we don't need real radare2 binary on the CI host.
         with patch(
@@ -274,7 +299,7 @@ class TestSandboxWiring(unittest.TestCase):
                           "r2_version": "5.0", "has_r2pipe": True,
                           "has_r2ghidra": False, "decompiler": "pdc"},
         ):
-            return BinaryUnderstand(Path(tmp.name), llm=None)
+            return BinaryUnderstand(tmp_path, llm=None)
 
     @patch("packages.binary_analysis.radare2_understand.logger")
     def test_analyse_sets_r2pipe_r2_to_wrapper(self, _mock_logger):
@@ -437,19 +462,17 @@ class TestTransitiveCallers(unittest.TestCase):
     directly call any dangerous import."""
 
     def _make_understand(self):
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False, suffix="-stub", prefix="r2-trans-",
-        )
-        tmp.write(b"\x7fELF" + b"\x00" * 60)
-        tmp.close()
-        self.addCleanup(lambda p=tmp.name: Path(p).unlink(missing_ok=True))
+        td = tempfile.mkdtemp(prefix="r2-trans-")
+        self.addCleanup(lambda: __import__('shutil').rmtree(td, ignore_errors=True))
+        tmp_path = Path(td) / "stub.elf"
+        tmp_path.write_bytes(b"\x7fELF" + b"\x00" * 60)
         with patch(
             "packages.binary_analysis.radare2_understand.probe_capability",
             return_value={"available": True, "r2_path": "/usr/bin/radare2",
                           "r2_version": "5.0", "has_r2pipe": True,
                           "has_r2ghidra": False, "decompiler": "pdc"},
         ):
-            return BinaryUnderstand(Path(tmp.name), llm=None)
+            return BinaryUnderstand(tmp_path, llm=None)
 
     def _ctx_with(self, interesting_names, sinks_with_callers):
         """Build a BinaryContextMap with the given interesting fns

@@ -34,8 +34,42 @@ function safeStr(ptr, maxLen) {
   }
 }
 
-function emit(category, fn, args) {
-  send({ category: category, fn: fn, args: args, tid: Process.getCurrentThreadId() });
+function callsite(context, returnAddress) {
+  let backtrace = [];
+  let moduleInfo = {};
+  try {
+    backtrace = Thread.backtrace(context, Backtracer.ACCURATE)
+      .slice(0, 8)
+      .map(addr => addr.toString());
+  } catch (_e) {
+    backtrace = [];
+  }
+  try {
+    const module = returnAddress ? Process.findModuleByAddress(returnAddress) : null;
+    if (module !== null) {
+      moduleInfo = {
+        caller_module: module.name,
+        caller_module_base: module.base.toString(),
+        caller_offset: returnAddress.sub(module.base).toString(),
+      };
+    }
+  } catch (_e) {
+    moduleInfo = {};
+  }
+  return {
+    caller: returnAddress ? returnAddress.toString() : null,
+    backtrace: backtrace,
+    ...moduleInfo,
+  };
+}
+
+function emit(category, fn, args, site) {
+  send(Object.assign({
+    category: category,
+    fn: fn,
+    args: args,
+    tid: Process.getCurrentThreadId(),
+  }, site || {}));
 }
 
 // Resolve a symbol from any loaded module. Frida 17 removed the
@@ -65,9 +99,10 @@ function hook(name, category, argHandler) {
       } catch (e) {
         this.captured = { _err: String(e) };
       }
+      this.site = callsite(this.context, this.returnAddress);
     },
     onLeave: function (retval) {
-      emit(category, name, Object.assign({ ret: retval.toInt32() }, this.captured));
+      emit(category, name, Object.assign({ ret: retval.toInt32() }, this.captured), this.site);
     },
   });
 }
@@ -89,7 +124,9 @@ hook('exit',   'process', a => ({ status: a[0].toInt32() }));
 hook('connect', 'network', a => ({ fd: a[0].toInt32() }));
 hook('bind',    'network', a => ({ fd: a[0].toInt32() }));
 hook('accept',  'network', a => ({ fd: a[0].toInt32() }));
+hook('recv',    'network', a => ({ fd: a[0].toInt32(), count: a[2].toInt32() }));
+hook('recvfrom','network', a => ({ fd: a[0].toInt32(), count: a[2].toInt32() }));
 
 send({ _meta: 'api-trace loaded', hooks: ['open', 'openat', 'read', 'write', 'close',
                                           'fork', 'execve', 'exit',
-                                          'connect', 'bind', 'accept'] });
+                                          'connect', 'bind', 'accept', 'recv', 'recvfrom'] });

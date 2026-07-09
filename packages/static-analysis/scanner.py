@@ -631,6 +631,10 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
     #     falls back to Landlock-only. Workflow proceeds; debug-
     #     level diagnostic only.
     tool_paths = _compute_python_tool_paths(cmd)
+    from core.sandbox.python_paths import python_runtime_tool_paths
+    for p in python_runtime_tool_paths():
+        if p not in tool_paths:
+            tool_paths.append(p)
     sandbox_kwargs = {}
     if fake_home:
         sandbox_kwargs["fake_home"] = True

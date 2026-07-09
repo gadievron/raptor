@@ -121,6 +121,11 @@ def main() -> int:
         pypath_parts.append(frida_site)
         tool_paths.append(frida_site)
 
+    from core.sandbox.python_paths import python_runtime_tool_paths
+    for p in python_runtime_tool_paths():
+        if p not in tool_paths:
+            tool_paths.append(p)
+
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": os.environ.get("HOME", "/tmp"),
