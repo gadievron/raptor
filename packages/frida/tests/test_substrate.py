@@ -254,7 +254,6 @@ class TestSandboxedMain:
 
     def test_python_runtime_prefixes_are_allowlisted(self, tmp_path):
         """Framework/venv Python roots must be readable for inner re-exec."""
-        from types import SimpleNamespace
         from unittest.mock import MagicMock, patch as mock_patch
         import packages.frida.sandboxed as sandboxed
 
@@ -266,22 +265,24 @@ class TestSandboxedMain:
         fake_result = MagicMock()
         fake_result.returncode = 0
         mock_run = MagicMock(return_value=fake_result)
-        mock_sys = SimpleNamespace(
-            argv=[
-                "sandboxed", "--out", "/tmp/run", "--",
-                "python3", "-m", "packages.frida.cli", "--target", "1234",
-            ],
-            executable="/usr/bin/python3",
-            prefix=str(framework_prefix),
-            base_prefix=str(base_prefix),
-        )
+        runtime_paths = [
+            str(framework_prefix.resolve()),
+            str(base_prefix.resolve()),
+        ]
 
-        with mock_patch("packages.frida.sandboxed.sys", mock_sys), \
+        with mock_patch.object(sandboxed, "sys") as mock_sys, \
              mock_patch("packages.frida.sandboxed._find_frida_site",
                         return_value=None), \
+             mock_patch(
+                 "core.sandbox.python_paths.python_runtime_tool_paths",
+                 return_value=runtime_paths), \
              mock_patch.dict("packages.frida.sandboxed.os.environ",
                              {"RAPTOR_DIR": ""}, clear=False), \
              mock_patch("core.sandbox.run", mock_run):
+            mock_sys.argv = [
+                "sandboxed", "--out", "/tmp/run", "--",
+                "python3", "-m", "packages.frida.cli", "--target", "1234",
+            ]
             rc = sandboxed.main()
 
         assert rc == 0

@@ -601,6 +601,7 @@ from .probes import (
     check_seatbelt_available, check_unshare_engages,
 )
 from .profiles import DEFAULT_PROFILE, PROFILES, _SANDBOX_KWARGS
+from .python_paths import python_runtime_tool_paths
 from .seccomp import check_seccomp_available
 
 # Re-exports for private symbols some tests / callers depend on.
@@ -637,6 +638,7 @@ def __getattr__(name):
 __all__ = [
     # Context manager and convenience wrappers
     "sandbox", "run", "run_trusted", "run_untrusted", "run_untrusted_networked",
+    "python_runtime_tool_paths",
     # CLI surface
     "add_cli_args", "apply_cli_args", "disable_from_cli", "set_cli_profile",
     # Availability probes (exposed for the startup banner)

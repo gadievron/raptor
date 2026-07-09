@@ -27,29 +27,6 @@ from pathlib import Path
 _KNOWN_PYTHON_PREFIXES = ("/usr/", "/opt/", "/home/", "/nix/")
 
 
-def _python_runtime_paths() -> list[str]:
-    """Return trusted Python runtime roots needed for re-exec.
-
-    ``libexec/raptor-frida`` launches this module with ``python3`` and
-    then asks the sandbox to launch another ``python3`` for the actual
-    CLI.  Framework-style installs (Homebrew/Xcode/pyenv on macOS) keep
-    the interpreter's shared library outside the system read baseline,
-    so the inner interpreter cannot even start unless its prefix is
-    explicitly readable.  ``base_prefix`` matters for virtualenvs,
-    where the venv prefix and the runtime prefix are different.
-    """
-    paths: list[str] = []
-    for prefix in (getattr(sys, "prefix", ""), getattr(sys, "base_prefix", "")):
-        if not isinstance(prefix, str) or not prefix:
-            continue
-        resolved = os.path.realpath(prefix)
-        if not os.path.isabs(resolved) or not os.path.isdir(resolved):
-            continue
-        if resolved not in paths:
-            paths.append(resolved)
-    return paths
-
-
 def _find_frida_site() -> str | None:
     """Locate frida's site-packages directory.
 
@@ -144,9 +121,10 @@ def main() -> int:
         pypath_parts.append(frida_site)
         tool_paths.append(frida_site)
 
-    for python_runtime_path in _python_runtime_paths():
-        if python_runtime_path not in tool_paths:
-            tool_paths.append(python_runtime_path)
+    from core.sandbox.python_paths import python_runtime_tool_paths
+    for p in python_runtime_tool_paths():
+        if p not in tool_paths:
+            tool_paths.append(p)
 
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
