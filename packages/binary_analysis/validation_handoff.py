@@ -7,6 +7,7 @@ does not manufacture verdicts from imports or decompiler output.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -82,13 +83,13 @@ def build_validation_handoff(
         next_actions.append({
             "kind": "fuzz_replay",
             "why": "A concrete harness boundary exists, so a campaign can produce replayable crash witnesses.",
-            "command": f"/binary fuzz {target_path} --duration 60",
+            "command": f"/binary fuzz {shlex.quote(str(target_path))} --duration 60",
         })
     elif fuzz_suitability.get("should_run_fuzz_plan"):
         next_actions.append({
             "kind": "fuzz_plan",
             "why": "Check the host and input mode before committing to a whole-target campaign.",
-            "command": f"/binary fuzz {target_path} --plan-only",
+            "command": f"/binary fuzz {shlex.quote(str(target_path))} --plan-only",
         })
     else:
         next_actions.append({

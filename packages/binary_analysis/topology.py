@@ -74,8 +74,13 @@ def discover_sibling_artifacts(manifest: Any) -> list[dict[str, Any]]:
             kind="helper_tool",
             declared_by="Contents/Library/HelperTools",
         )
+    resolved_bundle = bundle_root.resolve()
     for xpc_name in bundle.xpc_services:
+        if os.sep in xpc_name or xpc_name in (".", "..") or ".." in xpc_name.split("/"):
+            continue
         xpc_root = bundle_root / "Contents" / "XPCServices" / xpc_name
+        if not xpc_root.resolve().is_relative_to(resolved_bundle):
+            continue
         candidate = None
         macos_dir = xpc_root / "Contents" / "MacOS"
         if macos_dir.is_dir():
