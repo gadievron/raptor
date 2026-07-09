@@ -663,12 +663,11 @@ class EgressProxy:
         if self._loop is not None and self._loop.is_running():
             async def _close():
                 srv.close()
-                await srv.wait_closed()
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     _close(), self._loop,
                 )
-                future.result(timeout=5.0)
+                future.result(timeout=2.0)
             except Exception:
                 pass
         import os as _os

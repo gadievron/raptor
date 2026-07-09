@@ -125,10 +125,6 @@ class TestProxyBridge:
     def test_bring_up_loopback_in_netns(self):
         """bring_up_loopback works inside a fresh netns (requires
         CAP_NET_ADMIN in a user-ns)."""
-        from core.sandbox.probes import check_net_available
-        if not check_net_available():
-            pytest.skip("network namespace unavailable")
-
         script = (
             "import os, socket, struct\n"
             "os.unshare(0x40000000 | 0x10000000)\n"  # NEWUSER | NEWNET
@@ -144,6 +140,11 @@ class TestProxyBridge:
             capture_output=True, text=True, timeout=10,
             env={"PYTHONPATH": str(RAPTOR_DIR), "PATH": os.environ["PATH"]},
         )
+        if result.returncode != 0 and "PermissionError" in result.stderr:
+            pytest.skip(
+                "SIOCSIFFLAGS denied — kernel or seccomp blocks "
+                "CAP_NET_ADMIN inside user namespaces"
+            )
         assert result.returncode == 0, result.stderr
         assert "OK" in result.stdout
 
