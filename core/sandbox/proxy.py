@@ -503,6 +503,9 @@ class EgressProxy:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._server: Optional[asyncio.AbstractServer] = None
         self.port: int = 0
+        self._unix_servers: dict = {}
+        self._unix_lock = threading.Lock()
+        self._unix_tasks: set = set()
 
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -614,6 +617,86 @@ class EgressProxy:
                     "egress proxy: hostname gate returned to "
                     "ENFORCING mode (no audit-mode sandbox active)"
                 )
+
+    def bind_unix(self, path: str) -> None:
+        """Start an additional asyncio Unix socket server at *path*.
+
+        Reuses ``_handle_client`` — the CONNECT protocol is transport-
+        agnostic (StreamReader/StreamWriter work identically over TCP
+        and Unix sockets). Multiple Unix sockets can be active at once
+        (one per concurrent netns-enforced sandbox).
+
+        Thread-safe: schedules server creation on the proxy's event
+        loop and blocks until it is ready.
+        """
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("proxy event loop not running")
+
+        import os as _os
+        old_umask = _os.umask(0o077)
+        try:
+            async def _bind():
+                srv = await asyncio.start_unix_server(
+                    self._handle_unix_client, path=path,
+                )
+                with self._unix_lock:
+                    self._unix_servers[path] = srv
+                return srv
+
+            future = asyncio.run_coroutine_threadsafe(_bind(), self._loop)
+            future.result(timeout=_PROXY_CONNECT_TIMEOUT_S)
+        finally:
+            _os.umask(old_umask)
+        logger.info("egress proxy: unix socket bound at %s", path)
+
+    def unbind_unix(self, path: str) -> None:
+        """Stop the Unix socket server at *path* and unlink the file.
+
+        Thread-safe. Idempotent — no-op if *path* was never bound or
+        was already unbound.
+        """
+        with self._unix_lock:
+            srv = self._unix_servers.pop(path, None)
+        if srv is None:
+            return
+
+        if self._loop is not None and self._loop.is_running():
+            async def _close():
+                srv.close()
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    _close(), self._loop,
+                )
+                future.result(timeout=2.0)
+            except Exception:
+                pass
+        import os as _os
+        try:
+            _os.unlink(path)
+        except OSError:
+            pass
+        logger.info("egress proxy: unix socket unbound at %s", path)
+
+    async def _handle_unix_client(
+        self, reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Wrapper for Unix socket connections.
+
+        Delegates to ``_handle_client``. The only difference: Unix
+        socket peers have no IP address, so the loopback-only peer
+        check in ``_handle_client`` sees ``peername=None`` — we
+        override the extra-info so it reports ``("unix", 0)`` instead
+        of failing the non-loopback rejection.
+        """
+        task = asyncio.current_task()
+        if task is not None:
+            self._unix_tasks.add(task)
+        try:
+            await self._handle_client(reader, writer)
+        finally:
+            if task is not None:
+                self._unix_tasks.discard(task)
 
     def is_host_allowed(self, host: str) -> bool:
         """Check if a host is in the allowlist (case-insensitive)."""
@@ -882,6 +965,13 @@ class EgressProxy:
         """
         if self._loop is None:
             return
+        with self._unix_lock:
+            unix_paths = list(self._unix_servers.keys())
+        for p in unix_paths:
+            try:
+                self.unbind_unix(p)
+            except Exception:
+                pass
         if drain_timeout > 0 and self._server is not None and self._loop.is_running():
             async def _graceful():
                 try:
@@ -892,14 +982,29 @@ class EgressProxy:
                     )
                 except (asyncio.TimeoutError, RuntimeError):
                     pass
+                stale = [t for t in self._unix_tasks if not t.done()]
+                for t in stale:
+                    t.cancel()
+                if stale:
+                    await asyncio.gather(*stale, return_exceptions=True)
                 self._loop.stop()
             try:
                 asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
             except RuntimeError:
-                # Loop stopped between is_running() and submit. Close
-                # the unawaited coroutine to suppress the
-                # "never awaited" warning.
                 _graceful().close()
+            return
+        if self._loop is not None and self._loop.is_running():
+            async def _cancel_unix():
+                stale = [t for t in self._unix_tasks if not t.done()]
+                for t in stale:
+                    t.cancel()
+                if stale:
+                    await asyncio.gather(*stale, return_exceptions=True)
+                self._loop.stop()
+            try:
+                asyncio.run_coroutine_threadsafe(_cancel_unix(), self._loop)
+            except RuntimeError:
+                pass
             return
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -989,13 +1094,20 @@ class EgressProxy:
 
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter) -> None:
-        peer = writer.get_extra_info("peername") or ("?", 0)
-        client_ip = peer[0] if peer else "?"
+        peer = writer.get_extra_info("peername")
+        # Unix socket peers: peername is "" (empty string) or None.
+        if peer is None or peer == "" or peer == b"":
+            client_ip = "unix"
+        elif isinstance(peer, tuple):
+            client_ip = peer[0] if peer else "?"
+        else:
+            client_ip = str(peer) or "unix"
 
-        # Additional belt-and-braces: reject any inbound connection that
-        # isn't from loopback (shouldn't happen — we bind to 127.0.0.1 —
-        # but if it did, bail).
-        if client_ip not in ("127.0.0.1", "::1"):
+        # Belt-and-braces: reject any inbound connection that isn't
+        # from loopback or a unix socket. Unix socket connections have
+        # no peer IP — they're trusted because bind_unix() restricts
+        # the socket file to mode 0600.
+        if client_ip not in ("127.0.0.1", "::1", "unix"):
             logger.warning(f"egress proxy: rejecting non-loopback peer {client_ip}")
             writer.close()
             return

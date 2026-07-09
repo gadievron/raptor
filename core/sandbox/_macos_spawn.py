@@ -217,6 +217,14 @@ def run_sandboxed(cmd: List[str], *,
                   # profile). macOS sandbox-exec doesn't use mount-ns;
                   # accepted + ignored for signature parity.
                   skip_mount_ns=False,  # noqa: ARG001
+                  # proxy_unix_socket / proxy_forwarder_port: Linux-only
+                  # — used by _spawn to fork a TCP-to-Unix relay inside
+                  # the child's empty netns for proxy enforcement on
+                  # kernels with Landlock ABI < 4. macOS uses sandbox-
+                  # exec network rules instead; accepted + ignored for
+                  # signature parity.
+                  proxy_unix_socket=None,  # noqa: ARG001
+                  proxy_forwarder_port=None,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
