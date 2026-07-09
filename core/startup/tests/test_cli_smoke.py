@@ -77,7 +77,7 @@ def test_help_lists_available_modes():
 
 
 @pytest.mark.parametrize(
-    "mode", ["scan", "fuzz", "web", "agentic", "codeql", "analyze"]
+    "mode", ["scan", "binary", "fuzz", "web", "agentic", "codeql", "analyze"]
 )
 def test_help_lists_each_mode(mode: str):
     """Each documented mode appears somewhere in the help output."""
@@ -203,6 +203,7 @@ def test_fuzz_accepts_export_seed_corpus_without_binary():
 # (sca/doctor render bespoke usage text, not an argparse "usage:" line.)
 _HELP_MARKER = {
     "scan": "usage:",
+    "binary": "raptor-binary",
     "fuzz": "usage:",
     "web": "usage:",
     "agentic": "usage:",

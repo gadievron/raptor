@@ -10,10 +10,12 @@ Turn `/understand` and `/validate` JSON outputs into Mermaid diagrams. Instead o
 ## Usage
 
 ```
-/diagram <out-dir> [--target <name>] [--type context-map|flow-trace|attack-tree|attack-paths|all]
+/diagram <out-dir> [--target <name>] [--stdout] [--force]
 ```
 
-Omit `--type` to render everything in the directory.
+It renders everything it can find in the directory. Use `--stdout` for a
+read-only preview, or `--force` if you really do want to overwrite an existing
+`diagrams.md`.
 
 ## What gets rendered
 
@@ -25,6 +27,10 @@ Omit `--type` to render everything in the directory.
 | `attack-tree.json` | flowchart TD | Knowledge graph with nodes styled by status (confirmed/disproven/exploring/unexplored) |
 | `attack-paths.json` | flowchart TD per path | Step chain with proximity score (0–10) and blocker annotations |
 
+Black-box binary `context-map.json` files also render xref-backed candidate call
+edges as dotted grey edges labelled `candidate`. They are deliberately not
+drawn as unchecked flows because a binary xref is not taint proof.
+
 ## Examples
 
 ```
@@ -33,9 +39,6 @@ Omit `--type` to render everything in the directory.
 
 # Include a target name in the header
 /diagram .out/exploitability-validation-20240101/ --target myapp
-
-# Just the flow traces
-/diagram .out/code-understanding-20240101/ --type flow-trace
 
 # Print to stdout
 /diagram .out/code-understanding-20240101/ --stdout
@@ -48,7 +51,7 @@ Writes `diagrams.md` into the target directory next to the existing JSON files. 
 ## Execution
 
 ```bash
-libexec/raptor-render-diagrams <out-dir> [--target <name>]
+libexec/raptor-render-diagrams <out-dir> [--target <name>] [--stdout] [--force]
 ```
 
 Parse `$ARGS` for `<out-dir>` and `--target`, then run the command. Show the output path.

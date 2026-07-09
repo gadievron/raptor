@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render Mermaid diagrams from JSON outputs in a directory.
 
-Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force]
+Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force] [--stdout]
 """
 import sys
 from pathlib import Path
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force]",
+        print("Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force] [--stdout]",
               file=sys.stderr)
         sys.exit(1)
 
@@ -34,6 +34,7 @@ def main():
     # (commit a94fd36b) which had the protection but was never the
     # live entry point.
     force = "--force" in sys.argv
+    stdout = "--stdout" in sys.argv
     target = None
     if "--target" in sys.argv:
         idx = sys.argv.index("--target")
@@ -67,8 +68,10 @@ def main():
 
     # Pre-flight overwrite check — render_and_write writes to
     # out_dir/diagrams.md unconditionally; refuse here unless --force.
+    # ``--stdout`` is read-only and must not care whether a previous
+    # diagrams.md exists.
     default_out = out_dir / "diagrams.md"
-    if default_out.exists() and not force:
+    if default_out.exists() and not force and not stdout:
         print(
             f"ERROR: {default_out} already exists. Pass --force to overwrite.",
             file=sys.stderr,
@@ -76,9 +79,12 @@ def main():
         sys.exit(1)
 
     try:
-        from packages.diagram import render_and_write
-        output_file = render_and_write(out_dir, target=target)
-        print(f"Diagrams: {output_file}")
+        from packages.diagram import render_and_write, render_directory
+        if stdout:
+            print(render_directory(out_dir, target=target), end="")
+        else:
+            output_file = render_and_write(out_dir, target=target)
+            print(f"Diagrams: {output_file}")
     except Exception as e:
         print(f"Diagram error: {e}", file=sys.stderr)
         sys.exit(1)

@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.json import load_json, save_json
 from core.config import RaptorConfig
-from core.logging import get_logger
+from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.run.safe_io import safe_run_mkdir
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
@@ -1294,6 +1294,15 @@ Examples:
                             "Surfaces per-LLM-call detail (cache hits, retries, "
                             "per-call cost/duration). Useful for debugging "
                             "multi-model dispatches or schema validation failures.")
+    parser.add_argument(
+        "--log-level",
+        choices=CONSOLE_LOG_LEVELS,
+        type=str.upper,
+        help=(
+            "Set console log level for this run. Use WARNING to hide INFO "
+            "sandbox/proxy chatter; overrides --verbose."
+        ),
+    )
 
     # Fuzzing integration (Phase 5: dynamic confirmation)
     parser.add_argument("--fuzz", action="store_true",
@@ -1437,15 +1446,12 @@ Examples:
     if args.phase_timeout != RaptorConfig.DEFAULT_TIMEOUT:
         RaptorConfig.DEFAULT_TIMEOUT = args.phase_timeout if args.phase_timeout > 0 else None
 
-    # --verbose: drop the existing console StreamHandler from INFO to
-    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
-    # cost/duration) becomes visible. Doesn't change the file handler
-    # (already DEBUG) — only what the operator sees on stderr.
-    if getattr(args, "verbose", False):
-        import logging
-        for h in logger.logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-                h.setLevel(logging.DEBUG)
+    # Run-level console verbosity. File audit logging remains DEBUG;
+    # this only controls what the operator sees on stderr.
+    configure_run_logging(
+        getattr(args, "log_level", None),
+        getattr(args, "verbose", False),
+    )
 
     # Propagate --trust-repo to every target-repo trust check so each
     # in-process consumer (cc_trust, codeql_trust, build_detector, ...)

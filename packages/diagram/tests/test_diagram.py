@@ -325,6 +325,44 @@ class TestContextMap:
         out = gen_context_map(CONTEXT_MAP_FULL)
         assert ".->" in out or "-.->" in out
 
+    def test_blackbox_binary_candidate_flows_are_labelled_as_candidates(self):
+        data = {
+            "meta": {"analysis_mode": "blackbox_binary"},
+            "entry_points": [
+                {
+                    "id": "BEP-1000",
+                    "name": "main",
+                    "file": "/tmp/target",
+                    "address": "0x1000",
+                    "auth_required": None,
+                },
+            ],
+            "sink_details": [
+                {
+                    "id": "BSINK-2000",
+                    "operation": "sym.imp.memcpy",
+                    "file": "/tmp/target",
+                    "address": "0x2000",
+                },
+            ],
+            "interesting_functions": [
+                {"id": "BFN-1000", "name": "main", "address": "0x1000"},
+                {"id": "BFN-1100", "name": "parse", "address": "0x1100"},
+            ],
+            "candidate_flows": [
+                {"source_function": "BFN-1000", "sink": "BSINK-2000", "relationship": "calls"},
+                {"source_function": "BFN-1100", "sink": "BSINK-2000", "relationship": "may_reach"},
+            ],
+        }
+        out = gen_context_map(data)
+        assert "Candidate Call Edges (xref-backed, not taint proof)" in out
+        assert 'BEP-1000 -. "calls candidate" .-> BSINK-2000' in out
+        assert 'BFN-1100 -. "may_reach candidate" .-> BSINK-2000' in out
+        assert "classDef candidate" in out
+        assert "main [PUBLIC]" not in out
+        assert "target@0x1000" in out
+        assert "target@0x2000" in out
+
     def test_public_endpoint_labelled(self):
         out = gen_context_map(CONTEXT_MAP_FULL)
         assert "PUBLIC" in out

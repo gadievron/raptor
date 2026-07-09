@@ -184,6 +184,7 @@ def test_e2e_autodetect_finds_binary(_synthetic_target_built) -> None:
     assert counts["classified"] == 12
 
 
+@pytest.mark.slow
 def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     """The shared ``reach_chokepoint`` helper that both /agentic and
     /codeql use: from a finding-shaped input through to the suppression

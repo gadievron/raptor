@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-06-23T08:57:53Z",
+    "fetched_at": "2026-07-07T09:22:55Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 6655,
+    "modules_scanned": 6664,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -17415,6 +17415,12 @@
         "exploit_linux/http/apache_hugegraph_gremlin_rce"
       ]
     },
+    "CVE-2024-27822": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_osx/local/packagekit_zshenv_privesc"
+      ]
+    },
     "CVE-2024-27956": {
       "has_msf_module": true,
       "module_paths": [
@@ -18178,6 +18184,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_multi/http/pgadmin_query_tool_authenticated"
+      ]
+    },
+    "CVE-2025-29927": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/nextjs_middleware_auth_bypass"
       ]
     },
     "CVE-2025-30004": {
@@ -19091,6 +19103,12 @@
         "exploit_multi/http/xerte_unauthenticated_mediaupload"
       ]
     },
+    "CVE-2026-41264": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_multi/http/flowise_auth_rce_cve_2026_41264"
+      ]
+    },
     "CVE-2026-41459": {
       "has_msf_module": true,
       "module_paths": [
@@ -19109,6 +19127,12 @@
         "exploit_multi/http/cpanel_whm_auth_bypass_rce"
       ]
     },
+    "CVE-2026-42208": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_scanner/http/litellm_proxy_sqli"
+      ]
+    },
     "CVE-2026-4257": {
       "has_msf_module": true,
       "module_paths": [
@@ -19125,6 +19149,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/local/cve_2026_43500_dirty_frag"
+      ]
+    },
+    "CVE-2026-45087": {
+      "has_msf_module": true,
+      "module_paths": [
+        "exploit_linux/http/dalfox_server_rce_cve_2026_45087"
       ]
     },
     "CVE-2026-46333": {

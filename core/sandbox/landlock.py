@@ -490,7 +490,7 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
                 # TRUNCATE on ABI v3+, since truncate is a file op;
                 # REFER isn't applicable to files at all).
                 dev_access = WRITE_FILE
-                if _get_landlock_abi() >= 3:
+                if _abi >= 3:
                     dev_access |= TRUNCATE
                 # READ_FILE only if we're restricting reads (otherwise
                 # reads to dev files work via the read-everywhere

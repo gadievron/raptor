@@ -969,11 +969,16 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
             readable_paths,
         )
 
+    _preexec_readable = list(effective_read_paths or []) if effective_read_paths else None
+    if _preexec_readable is not None:
+        for _tp in (tool_paths or []):
+            if _tp and _tp not in _preexec_readable:
+                _preexec_readable.append(_tp)
     preexec = _make_preexec_fn(effective_limits, writable_paths=writable_paths,
                                allowed_tcp_ports=allowed_tcp_ports,
                                seccomp_profile=seccomp_profile,
                                seccomp_block_udp=seccomp_block_udp,
-                               readable_paths=effective_read_paths)
+                               readable_paths=_preexec_readable)
 
     # Host-fingerprint persona — opt-in. Built once per sandbox() context
     # and reused across every run() call inside it. Cleanup happens in
@@ -1687,6 +1692,10 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                     (audit_run_dir or output)
                     if nonlocal_audit_mode else None
                 )
+                _mac_readable = list(effective_read_paths or [])
+                for _tp in (tool_paths or []):
+                    if _tp and _tp not in _mac_readable:
+                        _mac_readable.append(_tp)
                 result = _macos_mod.run_sandboxed(
                     cmd,
                     target=target, output=output,
@@ -1694,7 +1703,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                     nproc_limit=nproc_limit,
                     limits=effective_limits,
                     writable_paths=writable_paths or [],
-                    readable_paths=effective_read_paths or [],
+                    readable_paths=_mac_readable,
                     allowed_tcp_ports=list(allowed_tcp_ports)
                         if allowed_tcp_ports else None,
                     # Linux-only kwargs accepted for signature parity
@@ -1785,6 +1794,12 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             False if _skip_mount_ns
                             else restrict_reads
                         )
+                        if _skip_mount_ns and restrict_reads:
+                            logger.warning(
+                                "skip_mount_ns=True forces restrict_reads=False "
+                                "(Landlock cannot enumerate all system dirs "
+                                "without mount-ns). Writes are still restricted."
+                            )
                         result = _spawn_mod.run_sandboxed(
                             cmd,
                             target=target, output=output,
@@ -2031,14 +2046,19 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             _wp = list(writable_paths or [])
                             if "/tmp" not in _wp:
                                 _wp.append("/tmp")
+                            _la_readable = (
+                                list(effective_read_paths)
+                                if effective_read_paths else None
+                            )
+                            if _la_readable is not None:
+                                for _tp in (tool_paths or []):
+                                    if _tp and _tp not in _la_readable:
+                                        _la_readable.append(_tp)
                             _ll_preexec = _la_make_landlock(
                                 _wp,
                                 list(allowed_tcp_ports)
                                     if allowed_tcp_ports else None,
-                                readable_paths=(
-                                    list(effective_read_paths)
-                                    if effective_read_paths else None
-                                ),
+                                readable_paths=_la_readable,
                             )
                             _sc_preexec = _la_make_seccomp(
                                 seccomp_profile,
@@ -2061,7 +2081,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                                         else None
                                     ),
                                     writable_paths=writable_paths or [],
-                                    readable_paths=effective_read_paths or [],
+                                    readable_paths=_la_readable or effective_read_paths or [],
                                     allowed_tcp_ports=(
                                         list(allowed_tcp_ports)
                                         if allowed_tcp_ports else None
@@ -2118,7 +2138,7 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
                             _dk["pass_fds"] = (
                                 tuple(_dk.get("pass_fds") or ()) + (_death_r,)
                             )
-                            _denv = dict(_dk.get("env") or os.environ)
+                            _denv = dict(_dk.get("env") if _dk.get("env") is not None else os.environ)
                             _denv["_RAPTOR_DEATH_FD"] = str(_death_r)
                             _dk["env"] = _denv
                             result = subprocess.run(full_cmd, **_dk)
@@ -2149,7 +2169,8 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
         # I2-(a) for why this matters.
         result.sandbox_info["mount_ns_active"] = bool(use_mount)
-        result.sandbox_info["restrict_reads"] = bool(restrict_reads)
+        _eff_restrict_reads = restrict_reads and not (_skip_mount_ns and use_mount)
+        result.sandbox_info["restrict_reads"] = bool(_eff_restrict_reads)
         # Observe nonce — only present when sandbox(observe=True)
         # actually engaged audit mode at spawn time; absent under
         # plain audit and absent when observe was requested but
@@ -2524,15 +2545,22 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
             "output= so Landlock actually engages. Pass a read-only target "
             "dir and/or a writable output dir."
         )
-    # Guard against silent misuse — the contract fixes these.
-    for forbidden in ("block_network", "allowed_tcp_ports", "strict_env"):
-        if forbidden in kwargs:
-            raise TypeError(
-                f"run_untrusted() does not accept {forbidden}= — it always "
-                f"runs with block_network=True, no TCP allowlist, and "
-                f"strict_env=True env-stripping. Use sandbox() directly "
-                f"for varied network or env policy."
-            )
+    _UNTRUSTED_ALLOWED_KWARGS = frozenset({
+        "env", "cwd", "timeout", "capture_output", "text",
+        "stdin", "input", "start_new_session", "pass_fds",
+        "caller_label",
+        "audit", "audit_verbose", "audit_run_dir",
+        "observe", "exclude_tmp_baseline",
+        "tool_paths",
+    })
+    rejected = set(kwargs.keys()) - _UNTRUSTED_ALLOWED_KWARGS
+    if rejected:
+        raise TypeError(
+            f"run_untrusted() does not accept {sorted(rejected)} — "
+            f"isolation policy (network, profile, writable_paths, "
+            f"namespace controls) is fixed. Use sandbox() directly "
+            f"for varied policy."
+        )
     # Default stdin to DEVNULL for untrusted code. If the parent's stdin
     # is the operator's TTY (common for interactive RAPTOR use) and the
     # sandboxed target reads stdin, the target gets a live channel to
@@ -2624,14 +2652,21 @@ def run_untrusted_networked(
             "the egress allowlist is mandatory; callers wanting unrestricted "
             "network should use sandbox() directly."
         )
-    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy", "strict_env"):
-        if forbidden in kwargs:
-            raise TypeError(
-                f"run_untrusted_networked() does not accept {forbidden}= — "
-                f"the network policy is fixed to egress-proxy-only on port "
-                f"443 and strict_env=True env-stripping is mandatory. Use "
-                f"sandbox() directly for varied network or env policy."
-            )
+    _NETWORKED_ALLOWED_KWARGS = frozenset({
+        "env", "cwd", "timeout", "capture_output", "text",
+        "stdin", "input", "start_new_session", "pass_fds",
+        "caller_label",
+        "audit", "audit_verbose", "audit_run_dir",
+        "observe", "exclude_tmp_baseline",
+        "tool_paths",
+    })
+    rejected = set(kwargs.keys()) - _NETWORKED_ALLOWED_KWARGS
+    if rejected:
+        raise TypeError(
+            f"run_untrusted_networked() does not accept {sorted(rejected)} — "
+            f"network and isolation policy is fixed to egress-proxy-only. "
+            f"Use sandbox() directly for varied policy."
+        )
     if "stdin" not in kwargs and "input" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
     if "start_new_session" not in kwargs:

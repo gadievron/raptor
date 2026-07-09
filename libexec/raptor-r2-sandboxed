@@ -78,7 +78,7 @@ _RC_WRAPPER_BINARY_MISSING = 104
 
 # ─── trust-marker check (libexec convention) ───────────────
 # Inline before any RAPTOR import (matches raptor-run-sandboxed,
-# raptor-binary-understand) so a malicious PYTHONPATH can't hijack
+# raptor-binary) so a malicious PYTHONPATH can't hijack
 # core.* imports before the check fires. This script is invoked
 # indirectly by r2pipe (via R2PIPE_R2 env), not by humans directly;
 # unguarded invocation typically means a caller misconfiguration.

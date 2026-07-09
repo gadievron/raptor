@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:39:53Z",
+    "fetched_at": "2026-07-01T09:51:31Z",
     "git_ref": "4.2.7",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of django",
@@ -34,7 +34,7 @@
       "dep_name": "black",
       "dep_version": "23.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00023,
+      "epss": 0.00572,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -45,7 +45,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-3936-cmfr-pm3m",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 4.914704909073764,
+      "raptor_risk_estimate": 4.94917706242146,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -60,10 +60,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39941736899999997,
+        "epss_multiplier": 0.402218916,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 4.914704909073764,
+        "final": 4.94917706242146,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -104,7 +104,7 @@
       "dep_name": "black",
       "dep_version": "23.3.0",
       "ecosystem": "PyPI",
-      "epss": 0.00081,
+      "epss": 0.00971,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -115,7 +115,7 @@
       "finding_id": "sca:vuln:PyPI:black:23.3.0:GHSA-fj7x-q9j7-g6q6",
       "in_kev": false,
       "purl": "pkg:pypi/black@23.3.0",
-      "raptor_risk_estimate": 18.81909990589183,
+      "raptor_risk_estimate": 19.032928498222788,
       "reachability": {
         "confidence": {
           "level": "low",
@@ -130,10 +130,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399713343,
+        "epss_multiplier": 0.404255013,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 18.81909990589183,
+        "final": 19.032928498222788,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 0.6817,
@@ -172,7 +172,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.0012,
+      "epss": 0.01479,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -183,7 +183,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-5rjg-fvgr-3xxf",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 27.61987666548209,
+      "raptor_risk_estimate": 28.098839629812463,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -202,10 +202,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39991235999999997,
+        "epss_multiplier": 0.406847337,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 27.61987666548209,
+        "final": 28.098839629812463,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -247,7 +247,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.07521,
+      "epss": 0.01939,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -258,7 +258,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-cx63-2mw6-8hw5",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 25.02583553558943,
+      "raptor_risk_estimate": 23.397111073159593,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -277,10 +277,10 @@
         "cvss_base": 88.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.437679663,
+        "epss_multiplier": 0.409194717,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 25.02583553558943,
+        "final": 23.397111073159593,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -323,7 +323,7 @@
       "dep_name": "setuptools",
       "dep_version": "40.8.0",
       "ecosystem": "PyPI",
-      "epss": 0.00513,
+      "epss": 0.02617,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -334,7 +334,7 @@
       "finding_id": "sca:vuln:PyPI:setuptools:40.8.0:GHSA-r9hx-vwmv-q579",
       "in_kev": false,
       "purl": "pkg:pypi/setuptools@40.8.0",
-      "raptor_risk_estimate": 13.602406863656247,
+      "raptor_risk_estimate": 13.965777460406247,
       "reachability": {
         "confidence": {
           "level": "high",
@@ -353,10 +353,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401917839,
+        "epss_multiplier": 0.412654551,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.602406863656247,
+        "final": 13.965777460406247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

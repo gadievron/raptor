@@ -110,7 +110,7 @@ class GDBDebugger:
             # the chmod failure isn't fatal.
             pass
         try:
-            script_file.write_text(gdb_script)
+            script_file.write_text(gdb_script, encoding="utf-8")
         except BaseException:
             script_file.unlink(missing_ok=True)
             raise

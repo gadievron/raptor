@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-23T08:57:53Z",
+    "fetched_at": "2026-07-07T09:22:53Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -10787,6 +10787,13 @@
       "ransomware_use": false,
       "vendor": "Array Networks "
     },
+    "CVE-2025-67038": {
+      "date_added": "2026-06-23",
+      "kev": true,
+      "product": "EDS5000",
+      "ransomware_use": false,
+      "vendor": "Lantronix"
+    },
     "CVE-2025-68461": {
       "date_added": "2026-02-20",
       "kev": true,
@@ -10885,6 +10892,13 @@
       "ransomware_use": false,
       "vendor": "Google"
     },
+    "CVE-2026-12569": {
+      "date_added": "2026-06-25",
+      "kev": true,
+      "product": "Windchill and FlexPLM",
+      "ransomware_use": false,
+      "vendor": "PTC"
+    },
     "CVE-2026-1281": {
       "date_added": "2026-01-29",
       "kev": true,
@@ -10959,6 +10973,13 @@
       "date_added": "2026-05-14",
       "kev": true,
       "product": "Catalyst SD-WAN",
+      "ransomware_use": false,
+      "vendor": "Cisco"
+    },
+    "CVE-2026-20230": {
+      "date_added": "2026-06-25",
+      "kev": true,
+      "product": "Unified Communications Manager",
       "ransomware_use": false,
       "vendor": "Cisco"
     },
@@ -11176,7 +11197,7 @@
       "date_added": "2026-04-22",
       "kev": true,
       "product": "Defender",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "Microsoft"
     },
     "CVE-2026-34197": {
@@ -11192,6 +11213,27 @@
       "product": "Acrobat and Reader",
       "ransomware_use": false,
       "vendor": "Adobe"
+    },
+    "CVE-2026-34908": {
+      "date_added": "2026-06-23",
+      "kev": true,
+      "product": "UniFi OS",
+      "ransomware_use": false,
+      "vendor": "Ubiquiti"
+    },
+    "CVE-2026-34909": {
+      "date_added": "2026-06-23",
+      "kev": true,
+      "product": "UniFi OS",
+      "ransomware_use": false,
+      "vendor": "Ubiquiti"
+    },
+    "CVE-2026-34910": {
+      "date_added": "2026-06-23",
+      "kev": true,
+      "product": "UniFi OS",
+      "ransomware_use": false,
+      "vendor": "Ubiquiti"
     },
     "CVE-2026-34926": {
       "date_added": "2026-05-21",
@@ -11298,6 +11340,13 @@
       "ransomware_use": false,
       "vendor": "Microsoft"
     },
+    "CVE-2026-45659": {
+      "date_added": "2026-07-01",
+      "kev": true,
+      "product": "SharePoint Server",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-48027": {
       "date_added": "2026-05-27",
       "kev": true,
@@ -11311,6 +11360,13 @@
       "product": "cPanel Plugin",
       "ransomware_use": false,
       "vendor": "LiteSpeed"
+    },
+    "CVE-2026-48558": {
+      "date_added": "2026-06-29",
+      "kev": true,
+      "product": "SimpleHelp",
+      "ransomware_use": false,
+      "vendor": "SimpleHelp "
     },
     "CVE-2026-48907": {
       "date_added": "2026-06-16",

@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-06-01T11:40:12Z",
+    "fetched_at": "2026-07-01T09:51:44Z",
     "git_ref": "v3.2.0",
     "license": "MIT (RAPTOR-generated scan output)",
     "name": "RAPTOR SCA scan of spring-boot",
@@ -40,7 +40,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00141,
+      "epss": 0.0077,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -51,7 +51,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-4h8f-2wvx-gg5w",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 10.65001977547125,
+      "raptor_risk_estimate": 10.7354763421125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -68,10 +68,79 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400019523,
+        "epss_multiplier": 0.40322931,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.65001977547125,
+        "final": 10.7354763421125,
+        "kev_multiplier": 1.0,
+        "parser_confidence": 0.95,
+        "reachability_multiplier": 1.0,
+        "ssvc_automatable_multiplier": 1.0,
+        "version_match_confidence": 0.95
+      },
+      "severity": "medium",
+      "ssvc_automatable": null,
+      "ssvc_exploitation": null
+    },
+    {
+      "advisory": {
+        "aliases": [
+          "CVE-2025-14813"
+        ],
+        "fixed_versions": [
+          "1.80.2",
+          "1.81.1",
+          "1.84"
+        ],
+        "id": "GHSA-574f-3g2m-x479",
+        "modified": "2026-06-30T20:00:18.869683+00:00",
+        "published": "2026-04-17T18:31:50+00:00",
+        "references": [
+          "https://nvd.nist.gov/vuln/detail/CVE-2025-14813",
+          "https://github.com/bcgit/bc-java/commit/b42574345414e4b7c8051b16fa1fafe01c29871f",
+          "https://github.com/bcgit/bc-java/commit/701686cb0184cd9ae103c801b3581fdf95c6d4f3",
+          "https://security.access.redhat.com/data/csaf/v2/vex/2025/cve-2025-14813.json",
+          "https://github.com/bcgit/bc-java/wiki/CVE%E2%80%902025%E2%80%9014813"
+        ],
+        "severity": null,
+        "summary": "Bouncy Castle for Java GOST 28147 CTR mode reuses keystream after 255 blocks"
+      },
+      "cvss_score": null,
+      "dep_name": "org.bouncycastle:bcprov-jdk18on",
+      "dep_version": "1.76",
+      "ecosystem": "Maven",
+      "epss": 0.00313,
+      "exploit_evidence": {
+        "edb_ids": [],
+        "github_poc_urls": [],
+        "has_any": false,
+        "kev_listed": false,
+        "msf_modules": []
+      },
+      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-574f-3g2m-x479",
+      "in_kev": false,
+      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
+      "raptor_risk_estimate": 7.236195163949998,
+      "reachability": {
+        "confidence": {
+          "level": "medium",
+          "numeric": 0.7,
+          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
+        },
+        "evidence": [
+          "LoaderSignedJarTestApplication.java:21"
+        ],
+        "verdict": "imported"
+      },
+      "risk_components": {
+        "calibration_status": "validated_v1",
+        "cvss_base": 40.0,
+        "cvss_source": "severity_label",
+        "depth_multiplier": 1.0,
+        "epss_multiplier": 0.40089723899999996,
+        "exploit_evidence_multiplier": 1.0,
+        "exposure_multiplier": 0.5,
+        "final": 7.236195163949998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -109,7 +178,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00121,
+      "epss": 0.00505,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -120,7 +189,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-67mf-3cr5-8w23",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.218510207149999,
+      "raptor_risk_estimate": 7.253880120749999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -137,10 +206,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399917463,
+        "epss_multiplier": 0.401877015,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.218510207149999,
+        "final": 7.253880120749999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -182,7 +251,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00259,
+      "epss": 0.011,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -193,7 +262,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-8xfc-gm6g-vgpv",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.58136818255125,
+      "raptor_risk_estimate": 9.684007711124998,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -210,10 +279,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400621677,
+        "epss_multiplier": 0.4049133,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.58136818255125,
+        "final": 9.684007711124998,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -248,7 +317,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00022,
+      "epss": 0.00527,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -259,7 +328,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-c3fc-8qff-9hwx",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.2093914013,
+      "raptor_risk_estimate": 7.255906522049999,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -276,10 +345,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399412266,
+        "epss_multiplier": 0.401989281,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 7.2093914013,
+        "final": 7.255906522049999,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -320,7 +389,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00094,
+      "epss": 0.00753,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -331,7 +400,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-m44j-cfrm-g8qc",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 9.561230819632499,
+      "raptor_risk_estimate": 9.64165822668375,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -348,77 +417,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.39977968199999997,
+        "epss_multiplier": 0.403142559,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.561230819632499,
-        "kev_multiplier": 1.0,
-        "parser_confidence": 0.95,
-        "reachability_multiplier": 1.0,
-        "ssvc_automatable_multiplier": 1.0,
-        "version_match_confidence": 0.95
-      },
-      "severity": "medium",
-      "ssvc_automatable": null,
-      "ssvc_exploitation": null
-    },
-    {
-      "advisory": {
-        "aliases": [
-          "CVE-2026-5598"
-        ],
-        "fixed_versions": [
-          "1.84"
-        ],
-        "id": "GHSA-p93r-85wp-75v3",
-        "modified": "2026-05-05T16:09:17.707462+00:00",
-        "published": "2026-04-17T18:31:50+00:00",
-        "references": [
-          "https://nvd.nist.gov/vuln/detail/CVE-2026-5598",
-          "https://github.com/bcgit/bc-java/commit/8692e6b2b191fc4aafa32545c7a78bdb9bf110c5",
-          "https://github.com/bcgit/bc-java/commit/94abbd56413dfdac651fd878bc60253871ef5e87",
-          "https://github.com/bcgit/bc-java",
-          "https://github.com/bcgit/bc-java/wiki/CVE-2026-5598"
-        ],
-        "severity": null,
-        "summary": "Bouncy Castle Has Covert Timing Channel Vulnerability"
-      },
-      "cvss_score": null,
-      "dep_name": "org.bouncycastle:bcprov-jdk18on",
-      "dep_version": "1.76",
-      "ecosystem": "Maven",
-      "epss": 0.00022,
-      "exploit_evidence": {
-        "edb_ids": [],
-        "github_poc_urls": [],
-        "has_any": false,
-        "kev_listed": false,
-        "msf_modules": []
-      },
-      "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-p93r-85wp-75v3",
-      "in_kev": false,
-      "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 7.2093914013,
-      "reachability": {
-        "confidence": {
-          "level": "medium",
-          "numeric": 0.7,
-          "reason": "Java imports under 'org.bouncycastle' from 1 non-test file(s) (heuristic match)"
-        },
-        "evidence": [
-          "LoaderSignedJarTestApplication.java:21"
-        ],
-        "verdict": "imported"
-      },
-      "risk_components": {
-        "calibration_status": "validated_v1",
-        "cvss_base": 40.0,
-        "cvss_source": "severity_label",
-        "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399412266,
-        "exploit_evidence_multiplier": 1.0,
-        "exposure_multiplier": 0.5,
-        "final": 7.2093914013,
+        "final": 9.64165822668375,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -460,7 +462,7 @@
       "dep_name": "org.bouncycastle:bcprov-jdk18on",
       "dep_version": "1.76",
       "ecosystem": "Maven",
-      "epss": 0.00142,
+      "epss": 0.00901,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -471,7 +473,7 @@
       "finding_id": "sca:vuln:Maven:org.bouncycastle:bcprov-jdk18on:1.76:GHSA-v435-xc8x-wvr9",
       "in_kev": false,
       "purl": "pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76",
-      "raptor_risk_estimate": 10.650155636467499,
+      "raptor_risk_estimate": 10.75327413262125,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -488,10 +490,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.400024626,
+        "epss_multiplier": 0.403897803,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 10.650155636467499,
+        "final": 10.75327413262125,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -530,7 +532,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 0.00442,
+      "epss": 0.00583,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -541,7 +543,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-cm59-pr5q-cw85",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 14.133750626384998,
+      "raptor_risk_estimate": 14.159076037177499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -549,9 +551,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleRSocketApplication.java:18",
-          "SampleFlywayApplication.java:20",
-          "SampleJettySslApplication.java:18"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -560,10 +562,10 @@
         "cvss_base": 78.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.401555526,
+        "epss_multiplier": 0.402275049,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 14.133750626384998,
+        "final": 14.159076037177499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -603,7 +605,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 0.0039,
+      "epss": 0.00358,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -614,7 +616,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-rc42-6c7j-7h5r",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 13.2189998125125,
+      "raptor_risk_estimate": 13.213620638152499,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -622,9 +624,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleRSocketApplication.java:18",
-          "SampleFlywayApplication.java:20",
-          "SampleJettySslApplication.java:18"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -633,10 +635,10 @@
         "cvss_base": 73.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40129017,
+        "epss_multiplier": 0.40112687399999997,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.2189998125125,
+        "final": 13.213620638152499,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -675,7 +677,7 @@
       "dep_name": "org.springframework.boot:spring-boot",
       "dep_version": "@project.version@",
       "ecosystem": "Maven",
-      "epss": 9e-05,
+      "epss": 0.00136,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -686,7 +688,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework.boot:spring-boot:@project.version@:GHSA-wwpq-f5c3-7hvx",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework.boot/spring-boot@@project.version@",
-      "raptor_risk_estimate": 12.6143394691125,
+      "raptor_risk_estimate": 12.6348107277,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -694,9 +696,9 @@
           "reason": "Java imports under 'org.springframework.boot' from 1548 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "SampleRSocketApplication.java:18",
-          "SampleFlywayApplication.java:20",
-          "SampleJettySslApplication.java:18"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -705,10 +707,10 @@
         "cvss_base": 70.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399345927,
+        "epss_multiplier": 0.399994008,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 12.6143394691125,
+        "final": 12.6348107277,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -748,7 +750,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.01514,
+      "epss": 0.00631,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -759,7 +761,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4gc7-5j7h-4qph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 9.734534185357498,
+      "raptor_risk_estimate": 9.626768782586248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -767,9 +769,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -778,10 +780,10 @@
         "cvss_base": 53.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.407025942,
+        "epss_multiplier": 0.40251999299999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 9.734534185357498,
+        "final": 9.626768782586248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -822,7 +824,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.00083,
+      "epss": 0.00351,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -833,7 +835,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-4wp7-92pw-q264",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 5.59163279607375,
+      "raptor_risk_estimate": 5.61076386652875,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -841,9 +843,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -852,10 +854,10 @@
         "cvss_base": 31.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.399723549,
+        "epss_multiplier": 0.401091153,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 5.59163279607375,
+        "final": 5.61076386652875,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -896,7 +898,7 @@
       "dep_name": "org.springframework:spring-context",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.20519,
+      "epss": 0.05413,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -907,7 +909,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-context:@spring-framework.version@:GHSA-g5mm-vmx4-3rg7",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-context@@spring-framework.version@",
-      "raptor_risk_estimate": 17.05753621659375,
+      "raptor_risk_estimate": 14.448659679281247,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -915,9 +917,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -926,10 +928,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.504008457,
+        "epss_multiplier": 0.426922539,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 17.05753621659375,
+        "final": 14.448659679281247,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -970,7 +972,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.02166,
+      "epss": 0.02831,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -981,7 +983,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-4487-x383-qpph",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 13.887887660437498,
+      "raptor_risk_estimate": 14.002736256843749,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -989,9 +991,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1000,10 +1002,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.41035309799999997,
+        "epss_multiplier": 0.413746593,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.887887660437498,
+        "final": 14.002736256843749,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1044,7 +1046,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.00155,
+      "epss": 0.02837,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1055,7 +1057,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-8crv-49fr-2h6j",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 13.540578596718749,
+      "raptor_risk_estimate": 14.003772484781248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1063,9 +1065,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1074,10 +1076,10 @@
         "cvss_base": 75.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40009096499999997,
+        "epss_multiplier": 0.413777211,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 13.540578596718749,
+        "final": 14.003772484781248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1118,7 +1120,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.90996,
+      "epss": 0.35681,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1129,7 +1131,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-g8hw-794c-4j9g",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 22.993670589764996,
+      "raptor_risk_estimate": 15.478519582196249,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1137,9 +1139,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1148,10 +1150,10 @@
         "cvss_base": 59.00000000000001,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.8636525879999999,
+        "epss_multiplier": 0.581380143,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 22.993670589764996,
+        "final": 15.478519582196249,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1193,7 +1195,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.01918,
+      "epss": 0.0257,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1204,7 +1206,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-pgf9-h69p-pcgf",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 15.875665251854995,
+      "raptor_risk_estimate": 16.004783858325,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1212,9 +1214,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1223,10 +1225,10 @@
         "cvss_base": 86.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.40908755399999996,
+        "epss_multiplier": 0.41241470999999996,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 15.875665251854995,
+        "final": 16.004783858325,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1267,7 +1269,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.01176,
+      "epss": 0.03279,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1278,7 +1280,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-rcpf-vj53-7h2m",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 11.88798871065,
+      "raptor_risk_estimate": 12.202760217131248,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1286,9 +1288,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1297,10 +1299,10 @@
         "cvss_base": 65.0,
         "cvss_source": "numeric",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.405301128,
+        "epss_multiplier": 0.416032737,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.88798871065,
+        "final": 12.202760217131248,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,
@@ -1338,7 +1340,7 @@
       "dep_name": "org.springframework:spring-core",
       "dep_version": "@spring-framework.version@",
       "ecosystem": "Maven",
-      "epss": 0.46306,
+      "epss": 0.11779,
       "exploit_evidence": {
         "edb_ids": [],
         "github_poc_urls": [],
@@ -1349,7 +1351,7 @@
       "finding_id": "sca:vuln:Maven:org.springframework:spring-core:@spring-framework.version@:GHSA-wv88-pf73-x22p",
       "in_kev": false,
       "purl": "pkg:maven/org.springframework/spring-core@@spring-framework.version@",
-      "raptor_risk_estimate": 11.4725712999,
+      "raptor_risk_estimate": 8.29231867785,
       "reachability": {
         "confidence": {
           "level": "medium",
@@ -1357,9 +1359,9 @@
           "reason": "Java imports under 'org.springframework' from 2265 non-test file(s) (heuristic match)"
         },
         "evidence": [
-          "ProjectController.java:20",
-          "ProjectController.java:22",
-          "GraphQlRSocketController.java:25"
+          "Changelog.java:21",
+          "ChangelogWriter.java:39",
+          "Difference.java:18"
         ],
         "verdict": "imported"
       },
@@ -1368,10 +1370,10 @@
         "cvss_base": 40.0,
         "cvss_source": "severity_label",
         "depth_multiplier": 1.0,
-        "epss_multiplier": 0.635599518,
+        "epss_multiplier": 0.459408237,
         "exploit_evidence_multiplier": 1.0,
         "exposure_multiplier": 0.5,
-        "final": 11.4725712999,
+        "final": 8.29231867785,
         "kev_multiplier": 1.0,
         "parser_confidence": 0.95,
         "reachability_multiplier": 1.0,

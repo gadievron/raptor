@@ -373,6 +373,45 @@ def test_cache_round_trips_edges_under_build_id(tmp_path, monkeypatch) -> None:
     assert _load_cached_index(cache_file, "/tmp/binA") is None
 
 
+def test_graph_store_reuse_requires_matching_binary_sha_and_keeps_requested_path(
+    tmp_path, monkeypatch,
+) -> None:
+    """Graph reuse must be byte-bound and must not crash on BinaryCallEdge."""
+    import hashlib
+    from core.inventory.binary_oracle_edges import _try_graph_store
+    from packages.binary_analysis.graph_store import BinaryGraphStore, graph_path_for_run
+
+    root = tmp_path / "raptor"
+    binary = tmp_path / "target"
+    binary.write_bytes(b"\x7fELF target bytes")
+    requested_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    monkeypatch.setenv("RAPTOR_DIR", str(root))
+
+    wrong_run = root / "out" / "a-wrong"
+    wrong_store = BinaryGraphStore(graph_path_for_run(wrong_run))
+    wrong_snapshot = wrong_store.begin_snapshot("0" * 64, "/tmp/wrong", wrong_run)
+    wrong_src = wrong_store.add_node(wrong_snapshot, "0" * 64, "function", "wrong-src", name="wrong")
+    wrong_dst = wrong_store.add_node(wrong_snapshot, "0" * 64, "function", "wrong-dst", name="wrong_callee")
+    wrong_store.add_edge(wrong_snapshot, "0" * 64, "CALLS_FUNCTION", wrong_src, wrong_dst)
+    wrong_store.close()
+
+    assert _try_graph_store(binary) is None
+
+    right_run = root / "out" / "b-right"
+    right_store = BinaryGraphStore(graph_path_for_run(right_run))
+    right_snapshot = right_store.begin_snapshot(requested_sha, str(binary), right_run)
+    right_src = right_store.add_node(right_snapshot, requested_sha, "function", "main", name="main")
+    right_dst = right_store.add_node(right_snapshot, requested_sha, "function", "leaf", name="leaf")
+    right_store.add_edge(right_snapshot, requested_sha, "CALLS_FUNCTION", right_src, right_dst)
+    right_store.close()
+
+    reused = _try_graph_store(binary)
+    assert reused is not None
+    assert [(edge.caller, edge.callee, edge.binary_path) for edge in reused.edges] == [
+        ("main", "leaf", str(binary)),
+    ]
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(
     shutil.which("r2") is None,
