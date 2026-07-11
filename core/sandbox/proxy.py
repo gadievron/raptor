@@ -966,6 +966,10 @@ class EgressProxy:
         """
         if self._loop is None:
             return
+        # Suppress logging before teardown — tunnels completing during the
+        # drain window would otherwise hit "I/O operation on closed file"
+        # when the interpreter has already closed stderr/stdout.
+        logger.disabled = True
         with self._unix_lock:
             unix_paths = list(self._unix_servers.keys())
         for p in unix_paths:
