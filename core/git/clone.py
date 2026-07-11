@@ -10,7 +10,8 @@ Two entry points:
     not reachable from a depth-1 clone of HEAD, so progressive-fetch
     cascades use this.
 
-Both wrap their ``git`` subprocess in ``core.sandbox.run_untrusted``:
+Both wrap their ``git`` subprocess in ``core.sandbox.run_untrusted_networked``
+(network calls) and ``core.sandbox.run_untrusted`` (local-only calls):
 
   - the egress proxy pinned to the small set of hostnames the URL
     allowlist permits (github.com / gitlab.com plus the known
@@ -295,7 +296,7 @@ def clone_repository(
     # braces — symmetric posture with the rest of the codebase.
     logger.info("git clone: %s -> %s", redact_url_secrets_only(url), target)
     try:
-        from core.sandbox import run_untrusted
+        from core.sandbox import run_untrusted_networked
     except ImportError:
         raise RuntimeError(
             "core.sandbox unavailable - git clone refuses to run "
@@ -303,13 +304,13 @@ def clone_repository(
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    proc = run_untrusted(
+    proc = run_untrusted_networked(
         cmd,
         target=str(target.parent),
         output=str(target.parent),
         env=get_safe_git_env(),
-        use_egress_proxy=True,
         proxy_hosts=_proxy_hosts_for_git(),
+        fake_home=True,
         timeout=RaptorConfig.GIT_CLONE_TIMEOUT,
         capture_output=True,
         text=True,
@@ -371,7 +372,7 @@ def fetch_commit(
         )
 
     try:
-        from core.sandbox import run_untrusted
+        from core.sandbox import run_untrusted, run_untrusted_networked
     except ImportError:
         raise RuntimeError(
             "core.sandbox unavailable - git fetch refuses to run "
@@ -384,22 +385,13 @@ def fetch_commit(
     timeout = RaptorConfig.GIT_CLONE_TIMEOUT
 
     # ``output`` is the sandbox's writable allowlist. Use ``repo_dir.parent``
-    # to match ``clone_repository``: with ``fake_home=True`` (the
-    # ``run_untrusted`` default), the sandbox materialises ``{output}/.home/``
-    # for the child's HOME. Passing ``repo_dir`` directly would put that
-    # ``.home/`` *inside* the repo, polluting the caller's working tree.
-    # The parent directory is one level wider but matches clone semantics
-    # exactly — ``.home/`` ends up sibling to ``repo_dir``.
+    # to match ``clone_repository``: ``fake_home=True`` materialises
+    # ``{output}/.home/`` for the child's HOME. Passing ``repo_dir``
+    # directly would put ``.home/`` *inside* the repo, polluting the
+    # caller's working tree.
     sandbox_target = str(repo_dir.parent)
 
     def _run(cmd: list, *, network: bool):
-        # ``git init`` and ``git remote`` are local-only; the sandbox
-        # still runs them through ``run_untrusted`` for env hygiene.
-        # The egress proxy is only engaged for the fetch step — local
-        # ops have no need for it. NB: ``use_egress_proxy=True`` MUST be
-        # paired with ``proxy_hosts`` for the proxy to start; passing
-        # ``proxy_hosts`` alone is a no-op (the sandbox keeps
-        # ``block_network=True`` and the child has no network at all).
         kwargs = dict(
             target=sandbox_target,
             output=sandbox_target,
@@ -409,8 +401,8 @@ def fetch_commit(
             text=True,
         )
         if network:
-            kwargs["use_egress_proxy"] = True
-            kwargs["proxy_hosts"] = proxy_hosts
+            return run_untrusted_networked(
+                cmd, proxy_hosts=proxy_hosts, fake_home=True, **kwargs)
         return run_untrusted(cmd, **kwargs)
 
     is_repo = (repo_dir / ".git").exists()
@@ -478,7 +470,7 @@ def ls_remote(
     """Run ``git ls-remote --heads --tags`` against ``url``.
 
     Read-only operation that returns the refs the remote advertises.
-    Sandbox-routed via ``run_untrusted`` with the egress proxy pinned
+    Sandbox-routed via ``run_untrusted_networked`` with the egress proxy pinned
     to ``proxy_hosts``. Caller supplies the allowlist because consumers
     of this helper cover wider forge sets than the github/gitlab pair
     ``clone_repository`` accepts (cve_diff's agent uses it to probe
@@ -589,7 +581,7 @@ def ls_remote(
         )
 
     try:
-        from core.sandbox import run_untrusted
+        from core.sandbox import run_untrusted_networked
     except ImportError:
         raise RuntimeError(
             "core.sandbox unavailable - git ls-remote refuses to run "
@@ -597,8 +589,8 @@ def ls_remote(
         )
 
     # ``ls-remote`` doesn't write to the host filesystem, but
-    # ``run_untrusted`` requires a non-empty ``output`` so Landlock
-    # engages and ``fake_home`` has somewhere to materialise.
+    # ``run_untrusted_networked`` requires a non-empty ``output`` so
+    # Landlock engages and ``fake_home`` has somewhere to materialise.
     # An ephemeral temp dir gives the sandbox a writable scratch
     # area that's discarded as soon as we leave the with-block.
     with tempfile.TemporaryDirectory(prefix="raptor-ls-remote-") as td:
@@ -620,13 +612,13 @@ def ls_remote(
         logger.info("git ls-remote: %s (allowlist=%s)",
                      redact_secrets(url),
                      ",".join(sorted(allowed_lower)))
-        proc = run_untrusted(
+        proc = run_untrusted_networked(
             ["git", "ls-remote", "--heads", "--tags", url],
             target=td,
             output=td,
             env=get_safe_git_env(),
-            use_egress_proxy=True,
             proxy_hosts=proxy_host_list,
+            fake_home=True,
             timeout=timeout,
             capture_output=True,
             text=True,

@@ -156,7 +156,7 @@ def test_run_redacts_authenticated_ffuf_options_from_logs(
         output_path.write_text(json.dumps({"results": []}), encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
     bearer = "Authorization: Bearer " + "a" * 32
     cookie = "session=" + "b" * 32
 
@@ -240,7 +240,7 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
         )
         return SimpleNamespace(returncode=0, stderr=None)
 
-    monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
 
     runner = FfufRunner("https://example.test", tmp_path)
     result = runner.run(FfufConfig(wordlist=wordlist, path_template="FUZZ"))
@@ -248,7 +248,6 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
     assert captured["cmd"][0] == "ffuf"
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
-    assert captured["kwargs"]["use_egress_proxy"] is True
     assert captured["kwargs"]["proxy_hosts"] == ["example.test"]
     assert captured["kwargs"]["caller_label"] == "web-ffuf"
     assert result["returncode"] == 0
@@ -290,7 +289,7 @@ def test_run_limits_embedded_report_results_but_keeps_raw_count(
         )
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
+    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", fake_run)
 
     runner = FfufRunner("https://example.test", tmp_path)
     result = runner.run(FfufConfig(wordlist=wordlist, report_limit=2))
