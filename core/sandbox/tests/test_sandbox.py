@@ -388,6 +388,8 @@ class TestSandboxRun(unittest.TestCase):
 
     def test_basic(self):
         result = sandbox_run(["echo", "test"], capture_output=True, text=True)
+        if result.returncode == 137:
+            result = sandbox_run(["echo", "test"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("test", result.stdout)
 

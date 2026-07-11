@@ -966,10 +966,10 @@ class EgressProxy:
         """
         if self._loop is None:
             return
-        # Suppress logging before teardown — tunnels completing during the
-        # drain window would otherwise hit "I/O operation on closed file"
-        # when the interpreter has already closed stderr/stdout.
-        logger.disabled = True
+        # Suppress CLOSE logging during teardown — tunnels completing
+        # during the drain window would otherwise hit "I/O operation on
+        # closed file" when the interpreter has already closed stderr.
+        self._stopping = True
         with self._unix_lock:
             unix_paths = list(self._unix_servers.keys())
         for p in unix_paths:
@@ -1571,10 +1571,11 @@ class EgressProxy:
             event.update(result=result, reason=reason,
                          bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
                          duration=time.monotonic() - t_start)
-            logger.info(
-                "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
-                host, port, total["c2u"], total["u2c"],
-            )
+            if not self._stopping:
+                logger.info(
+                    "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
+                    host, port, total["c2u"], total["u2c"],
+                )
 
     async def _relay(self, src: asyncio.StreamReader,
                      dst: asyncio.StreamWriter,
@@ -1705,7 +1706,6 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
 def _reset_for_tests() -> None:
     """Tear down the singleton. Test-only."""
     global _instance
-    logger.disabled = False
     with _lock:
         if _instance is not None:
             _instance.stop()
