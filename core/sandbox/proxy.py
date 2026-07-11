@@ -506,6 +506,7 @@ class EgressProxy:
         self._unix_servers: dict = {}
         self._unix_lock = threading.Lock()
         self._unix_tasks: set = set()
+        self._client_tasks: set = set()
 
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -987,6 +988,9 @@ class EgressProxy:
                     t.cancel()
                 if stale:
                     await asyncio.gather(*stale, return_exceptions=True)
+                for task in list(self._client_tasks):
+                    task.cancel()
+                self._client_tasks.clear()
                 self._loop.stop()
             try:
                 asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
@@ -1046,7 +1050,7 @@ class EgressProxy:
             asyncio.set_event_loop(self._loop)
             self._server = self._loop.run_until_complete(
                 asyncio.start_server(
-                    self._handle_client,
+                    self._on_client_connected,
                     host="127.0.0.1",     # loopback ONLY
                     port=0,               # ephemeral
                     reuse_address=False,
@@ -1073,14 +1077,9 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            # Pre-fix `self._loop.close()` raised AttributeError if
-            # `new_event_loop()` itself raised at the top of the try
-            # (rare — under heavy fd pressure / sandbox configs that
-            # blocked the loop's internal pipe creation). `self._loop`
-            # was still None from the constructor, so `.close()` on
-            # None crashed the finally and masked the original error.
-            # Same for `_server` which is also None until `start_server`
-            # completes — guard both.
+            for task in list(self._client_tasks):
+                task.cancel()
+            self._client_tasks.clear()
             if self._server is not None and self._loop is not None:
                 self._server.close()
                 try:
@@ -1091,6 +1090,13 @@ class EgressProxy:
                 self._loop.close()
 
     # ----- async CONNECT handler -----
+
+    def _on_client_connected(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    ) -> None:
+        task = asyncio.ensure_future(self._handle_client(reader, writer))
+        self._client_tasks.add(task)
+        task.add_done_callback(self._client_tasks.discard)
 
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter) -> None:

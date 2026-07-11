@@ -100,10 +100,15 @@ def _build_fresh(sha_dir: Path, build_o0: Path, build_o2: Path) -> None:
     if src.exists():
         shutil.rmtree(src)
     logger.info("zlib: cloning %s → %s", ZLIB_URL, src)
-    if not clone_repository(ZLIB_URL, src, depth=None):
+    if not clone_repository(ZLIB_URL, src, depth=1):
         raise RuntimeError(f"zlib: clone failed for {ZLIB_URL}")
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", ZLIB_SHA),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", ZLIB_SHA),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
         env=get_safe_git_env(), check=True, timeout=60,
     )
 

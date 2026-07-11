@@ -74,8 +74,8 @@ class _LibsodiumDriver:
 
 
 def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
-    """Clone (full history so the tag can be checked out) → autogen →
-    configure × 2 → build × 2 → ``make check`` on the O0 build."""
+    """Clone (shallow, tag-only) → autogen → configure × 2 → build × 2
+    → run the single target test binary on the O0 coverage build."""
     tag_dir.mkdir(parents=True, exist_ok=True)
     src = tag_dir / "src"
 
@@ -84,11 +84,17 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
 
     if src.exists():
         shutil.rmtree(src)
-    logger.info("libsodium: cloning %s → %s", LIBSODIUM_URL, src)
-    if not clone_repository(LIBSODIUM_URL, src, depth=None):
+    logger.info("libsodium: cloning %s (tag %s) → %s",
+                LIBSODIUM_URL, LIBSODIUM_TAG, src)
+    if not clone_repository(LIBSODIUM_URL, src, depth=1):
         raise RuntimeError(f"libsodium: clone failed for {LIBSODIUM_URL}")
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", LIBSODIUM_TAG),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", LIBSODIUM_TAG),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
         env=get_safe_git_env(), check=True, timeout=60,
     )
 
@@ -112,11 +118,12 @@ def _build_fresh(tag_dir: Path, build_o0: Path, build_o2: Path) -> None:
         # libsodium's test binaries (the only artifacts with realistic
         # --gc-sections DCE on a libsodium-linked executable) are only
         # produced by ``make check`` — plain ``make`` builds just the
-        # static archive. Run check on BOTH configs to materialise the
-        # test binaries.
+        # static archive. ``TESTS=`` builds the check_PROGRAMS targets
+        # without executing them; only the O0 coverage path needs to
+        # actually run the target binary (below).
         subprocess.run(["make", "-j4"], cwd=build_dir,
                        env=env, check=True, timeout=600)
-        subprocess.run(["make", "check"], cwd=build_dir,
+        subprocess.run(["make", "check", "TESTS="], cwd=build_dir,
                        env=env, check=True, timeout=900)
         if target_only:
             # Reset gcov counters and run ONLY the classifier target

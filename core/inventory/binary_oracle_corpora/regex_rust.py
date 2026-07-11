@@ -102,11 +102,17 @@ def _build_and_run(tag_dir: Path, target_dir: Path, profdata: Path) -> None:
 
     if src.exists():
         shutil.rmtree(src)
-    logger.info("regex-rust: cloning %s → %s", REGEX_URL, src)
-    if not clone_repository(REGEX_URL, src, depth=None):
+    logger.info("regex-rust: cloning %s (tag %s) → %s",
+                REGEX_URL, REGEX_TAG, src)
+    if not clone_repository(REGEX_URL, src, depth=1):
         raise RuntimeError(f"regex-rust: clone failed for {REGEX_URL}")
     subprocess.run(
-        safe_git_command("-C", str(src), "checkout", REGEX_TAG),
+        safe_git_command("-C", str(src), "fetch", "--depth", "1",
+                         "origin", REGEX_TAG),
+        env=get_safe_git_env(), check=True, timeout=60,
+    )
+    subprocess.run(
+        safe_git_command("-C", str(src), "checkout", "FETCH_HEAD"),
         env=get_safe_git_env(), check=True, timeout=60,
     )
 
