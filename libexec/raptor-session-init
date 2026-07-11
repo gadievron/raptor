@@ -51,6 +51,9 @@ def write_env_file():
     except OSError:
         pass
 
+    # Set in current process so the doctor check doesn't false-alarm.
+    os.environ["RAPTOR_DIR"] = repo_root
+
 
 def generate_banner():
     """Generate the startup banner and write to .startup-output."""
