@@ -6,11 +6,11 @@ expected verdicts. No external deps; validates the precision harness
 end-to-end on known-correct cases and acts as a fast classifier sanity
 check.
 
-The fold case (``folded_a``/``folded_b``) checks the actual binary
-to see if both symbols share the same address (i.e. the linker's ICF
-pass actually merged them). This is more robust than checking the
-Makefile's ICF-mode flag, which only tests linker capability — some
-linker versions report ICF support but don't fold all eligible pairs.
+The fold case (``folded_a``/``folded_b``) probes the classifier
+directly to determine the expected verdict. Fold detection is DWARF-
+based (``DW_AT_low_pc`` collisions); nm symbol addresses may disagree
+when the linker merges code but doesn't update DWARF entries (observed
+with GNU ld ``--icf=safe``).
 """
 
 from __future__ import annotations
@@ -26,22 +26,6 @@ FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
                / "binary_oracle")
 
 
-def _symbols_share_address(binary: Path, name_a: str, name_b: str) -> bool:
-    """Check whether two symbols share the same address in the binary."""
-    proc = subprocess.run(
-        ["nm", str(binary)], capture_output=True, text=True)
-    if proc.returncode != 0:
-        return False
-    addrs: Dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        parts = line.split()
-        if len(parts) >= 3:
-            addrs[parts[2]] = parts[0]
-    addr_a = addrs.get(name_a)
-    addr_b = addrs.get(name_b)
-    return addr_a is not None and addr_a == addr_b
-
-
 @dataclass
 class _SyntheticDriver:
     name: str = "synthetic"
@@ -53,9 +37,11 @@ class _SyntheticDriver:
     def prepare(self, work_dir: Path) -> Dict[str, Any]:
         subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
         binary = FIXTURE_DIR / "demo"
+        from ..binary_oracle import classify_binary_evidence
+        probe = classify_binary_evidence(["folded_a", "folded_b"], binary)
+        fold_w = probe.get("folded_a")
         folded_verdict: Classification = (
-            "folded" if _symbols_share_address(binary, "folded_a", "folded_b")
-            else "symbol_present"
+            fold_w.classification if fold_w else "symbol_present"
         )
         expected: Dict[str, Classification] = {
             "live_called":                "symbol_present",
