@@ -1242,10 +1242,10 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
         if fake_home_env:
             kwargs["env"] = {**kwargs["env"], **fake_home_env}
 
-        # The pid1 shim requires _RAPTOR_TRUSTED to run.  Only inject
-        # on the unshare path (where the shim is used); the shim strips
-        # it before exec'ing the target so it never leaks.
-        if need_unshare:
+        # The pid1 shim requires _RAPTOR_TRUSTED to run.  Only inject on
+        # the unshare path (where the shim is used); the shim strips it
+        # before exec'ing the target so it never leaks.
+        if use_sandbox and not use_seatbelt and (block_network or use_mount or restrict_reads):
             kwargs["env"].setdefault("_RAPTOR_TRUSTED", "1")
 
         # Force FD close at fork. Python defaults close_fds=True on POSIX
