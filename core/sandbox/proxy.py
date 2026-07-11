@@ -507,6 +507,7 @@ class EgressProxy:
         self._unix_lock = threading.Lock()
         self._unix_tasks: set = set()
         self._client_tasks: set = set()
+        self._stopping = False
 
         self._thread = threading.Thread(
             target=self._run_loop,
