@@ -6,9 +6,11 @@ expected verdicts. No external deps; validates the precision harness
 end-to-end on known-correct cases and acts as a fast classifier sanity
 check.
 
-The fold case (``folded_a``/``folded_b``) depends on whether an ICF-
-capable linker is available; the driver asks the fixture's Makefile
-which mode it built in and adjusts the expected verdict accordingly.
+The fold case (``folded_a``/``folded_b``) checks the actual binary
+to see if both symbols share the same address (i.e. the linker's ICF
+pass actually merged them). This is more robust than checking the
+Makefile's ICF-mode flag, which only tests linker capability — some
+linker versions report ICF support but don't fold all eligible pairs.
 """
 
 from __future__ import annotations
@@ -24,6 +26,22 @@ FIXTURE_DIR = (Path(__file__).resolve().parents[1] / "tests" / "fixtures"
                / "binary_oracle")
 
 
+def _symbols_share_address(binary: Path, name_a: str, name_b: str) -> bool:
+    """Check whether two symbols share the same address in the binary."""
+    proc = subprocess.run(
+        ["nm", str(binary)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        return False
+    addrs: Dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            addrs[parts[2]] = parts[0]
+    addr_a = addrs.get(name_a)
+    addr_b = addrs.get(name_b)
+    return addr_a is not None and addr_a == addr_b
+
+
 @dataclass
 class _SyntheticDriver:
     name: str = "synthetic"
@@ -33,15 +51,11 @@ class _SyntheticDriver:
     mode: Literal["synthetic"] = "synthetic"
 
     def prepare(self, work_dir: Path) -> Dict[str, Any]:
-        # Build the fixture (idempotent — make checks timestamps).
         subprocess.run(["make", "-s", "demo"], cwd=FIXTURE_DIR, check=True)
         binary = FIXTURE_DIR / "demo"
-        icf_mode = subprocess.run(
-            ["make", "-s", "print-icf-mode"], cwd=FIXTURE_DIR,
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
         folded_verdict: Classification = (
-            "folded" if icf_mode != "none" else "symbol_present"
+            "folded" if _symbols_share_address(binary, "folded_a", "folded_b")
+            else "symbol_present"
         )
         expected: Dict[str, Classification] = {
             "live_called":                "symbol_present",

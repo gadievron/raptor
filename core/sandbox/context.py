@@ -2597,6 +2597,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
         )
     _UNTRUSTED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
         "stdin", "input", "start_new_session", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir",
@@ -2704,6 +2705,7 @@ def run_untrusted_networked(
         )
     _NETWORKED_ALLOWED_KWARGS = frozenset({
         "env", "cwd", "timeout", "capture_output", "text",
+        "encoding", "errors",
         "stdin", "input", "start_new_session", "pass_fds",
         "caller_label",
         "audit", "audit_verbose", "audit_run_dir",
