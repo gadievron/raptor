@@ -704,13 +704,13 @@ def _render_one_vuln(
 
     detail = (primary.details if primary else "") or ""
     if detail:
+        from core.security.prompt_envelope import _strip_autofetch_markup
         clipped = detail.strip()
         if len(clipped) > _DETAIL_TRUNCATE:
             clipped = clipped[:_DETAIL_TRUNCATE].rstrip() + (
                 f"… (truncated; see findings.json `{f.finding_id}`)"
             )
-        # Advisory detail is the largest attacker-influenced text in the
-        # report; sanitise it before rendering.
+        clipped = _strip_autofetch_markup(clipped)
         clipped = escape_nonprintable(clipped)
         bullets.append("\n<details><summary>Advisory detail</summary>\n\n"
                        f"{clipped}\n\n</details>")

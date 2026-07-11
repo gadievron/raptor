@@ -787,3 +787,42 @@ def test_supply_chain_without_escalation_has_no_escalated_bullet() -> None:
         supply_chain_findings=[sc],
     )
     assert "Escalated:" not in md
+
+
+# ---------------------------------------------------------------------------
+# Advisory detail sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestAdvisoryDetailSanitization:
+    """Advisory detail must strip autofetch markup, not just escape
+    control characters."""
+
+    def test_autofetch_image_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+
+        malicious = "Details: ![beacon](http://evil.com/x.png) overflow"
+        result = _strip_autofetch_markup(malicious)
+        assert "http://evil.com" not in result
+        assert "![" not in result
+
+    def test_autofetch_iframe_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+
+        malicious = "Info: <iframe src='http://evil.com'></iframe>"
+        result = _strip_autofetch_markup(malicious)
+        assert "<iframe" not in result
+
+    def test_normal_detail_preserved(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+
+        normal = "Buffer overflow in memcpy when input exceeds 256 bytes."
+        result = _strip_autofetch_markup(normal)
+        assert "Buffer overflow" in result
+
+    def test_source_uses_strip_autofetch(self):
+        source = Path(__file__).resolve().parents[1] / "report.py"
+        content = source.read_text()
+        assert "_strip_autofetch_markup" in content, (
+            "report.py must call _strip_autofetch_markup on advisory detail"
+        )

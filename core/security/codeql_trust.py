@@ -48,10 +48,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import logging
+
 try:
     import yaml
 except ImportError:  # pragma: no cover — yaml is a hard dep elsewhere
     yaml = None
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +377,9 @@ def _scan_codeql_config(path: Path) -> FileScan:
 def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
     """Pure scan: returns (scans, any_blocking). Cached because
     filesystem state for a given resolved path doesn't change within a
-    session. Side-effect-free so cache hits don't suppress operator-
-    visible warnings (rendered in the caller)."""
+    session. The pack-file-cap warning fires inside this function
+    (once per path, on the uncached call); cache hits suppress it,
+    which is fine — the cap condition is stable for a given path."""
     target = Path(resolved_path)
     # Skip RAPTOR's own repo — RAPTOR ships codeql packs under
     # packages/llm_analysis/codeql_packs/ that would always flag
@@ -403,6 +408,14 @@ def _scan_cached(resolved_path: str) -> Tuple[Tuple[FileScan, ...], bool]:
                 break
     except OSError:
         pass
+
+    if len(pack_files) >= _MAX_PACK_FILES:
+        _logger.warning(
+            "CodeQL trust: pack-file scan capped at %d files in %s — "
+            "additional pack files were NOT inspected. A malicious pack "
+            "beyond the cap would bypass the trust gate.",
+            _MAX_PACK_FILES, target,
+        )
 
     config_path = target / ".github" / "codeql" / "codeql-config.yml"
     if _path_present(config_path):

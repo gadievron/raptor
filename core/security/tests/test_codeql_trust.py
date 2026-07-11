@@ -405,3 +405,51 @@ class TestCombined:
         assert "..." in out
         # Doesn't dump the full 400+ chars
         assert long_extractor not in out
+
+
+# ---------------------------------------------------------------------------
+# Pack-file cap warning
+# ---------------------------------------------------------------------------
+
+
+class TestPackFileCapWarning:
+    """The pack-file walker caps at _MAX_PACK_FILES. Verify a warning is
+    emitted so operators know additional files were NOT inspected."""
+
+    @pytest.mark.slow
+    def test_warning_emitted_when_cap_reached(self, tmp_path, caplog):
+        import logging
+
+        from core.security.codeql_trust import _scan_cached, _MAX_PACK_FILES
+
+        _scan_cached.cache_clear()
+
+        for i in range(_MAX_PACK_FILES + 5):
+            d = tmp_path / f"pkg{i:04d}"
+            d.mkdir()
+            (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
+
+        with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
+            _scan_cached(str(tmp_path.resolve()))
+
+        assert any("capped at" in rec.message for rec in caplog.records), (
+            "Expected a warning about the pack-file cap being reached"
+        )
+        assert str(_MAX_PACK_FILES) in caplog.text
+
+    def test_no_warning_below_cap(self, tmp_path, caplog):
+        import logging
+
+        from core.security.codeql_trust import _scan_cached
+
+        _scan_cached.cache_clear()
+
+        for i in range(2):
+            d = tmp_path / f"pkg{i}"
+            d.mkdir()
+            (d / "qlpack.yml").write_text(f"name: test/pkg{i}\nversion: 1.0.0\n")
+
+        with caplog.at_level(logging.WARNING, logger="core.security.codeql_trust"):
+            _scan_cached(str(tmp_path.resolve()))
+
+        assert not any("capped at" in rec.message for rec in caplog.records)

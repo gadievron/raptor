@@ -537,6 +537,17 @@ def _render_passthrough(block: UntrustedBlock, nonce: str, profile: ModelDefense
     kind = _safe_label(block.kind) or "content"
     origin_field = _safe_label(block.origin) if block.origin else ""
     origin = f" (from {origin_field})" if origin_field else ""
+    # _safe_label neutralizes --- in kind/origin but _content_for_envelope
+    # does not neutralize --- in the content body. A standalone ---
+    # line in attacker content would visually close the passthrough
+    # boundary, letting subsequent content escape the envelope.
+    rendered = re.sub(
+        r'(?m)^([ \t]*)-{3,}([ \t]*)$',
+        lambda m: m.group(1) + '-‐-'
+        + '-' * max(0, len(m.group(0).strip()) - 3)
+        + m.group(2),
+        rendered,
+    )
     return f'--- {kind}{origin} ---\n{rendered}\n---'
 
 
