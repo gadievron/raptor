@@ -290,7 +290,7 @@ def family_of(model_id: str) -> Family:
         if needle.startswith(stem + "/"):
             return family
     for stem, family in _MODEL_STEMS:
-        if needle.startswith(stem + "-"):
+        if needle == stem or needle.startswith(stem + "-"):
             return family
     return "unknown"
 

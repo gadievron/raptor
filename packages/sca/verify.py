@@ -271,15 +271,20 @@ def _verdict(
         r for r in delta.new
         if severity_rank(r.get("severity", "info")) >= floor
     ]
+    not_cleared = [
+        r for r in delta.persistent
+        if severity_rank(r.get("severity", "info")) >= floor
+    ]
     summary = {
         "resolved": len(delta.resolved),
         "new": len(delta.new),
         "regressing_above_threshold": len(triggering),
+        "persistent_above_threshold": len(not_cleared),
         "suppression_added": len(delta.suppression_added),
         "suppression_lifted": len(delta.suppression_lifted),
         "severity_threshold": severity_floor,
     }
-    exit_code = 1 if triggering else 0
+    exit_code = 1 if triggering or not_cleared else 0
     return summary, exit_code
 
 

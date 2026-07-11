@@ -227,6 +227,28 @@ def _scan_module(
                              ast.ClassDef)):
             continue
         if _is_main_guard(node) or _is_type_checking_guard(node):
+            for else_stmt in getattr(node, "orelse", []):
+                if isinstance(else_stmt, (ast.FunctionDef,
+                                          ast.AsyncFunctionDef,
+                                          ast.ClassDef)):
+                    continue
+                for call in _find_suspicious_calls(else_stmt):
+                    yield ImportTimeFinding(
+                        dependency=_project_host_dep(manifests, path, target),
+                        detail=(
+                            f"`{_rel(path, target)}:{call.lineno}` runs "
+                            f"`{_render_call(call)}` at import time "
+                            f"(else-branch of guard)"
+                        ),
+                        path=path,
+                        line=call.lineno,
+                        severity="medium",
+                        confidence=Confidence(
+                            "medium",
+                            reason="suspicious call in else-branch of "
+                            "main/TYPE_CHECKING guard",
+                        ),
+                    )
             continue
         if _is_constant_assignment(node):
             continue

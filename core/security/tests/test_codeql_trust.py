@@ -453,3 +453,30 @@ class TestPackFileCapWarning:
             _scan_cached(str(tmp_path.resolve()))
 
         assert not any("capped at" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Regression: scalar string values in packs dict silently dropped
+# ---------------------------------------------------------------------------
+
+
+class TestScalarPackValue:
+    def test_scalar_string_pack_ref_detected(self, tmp_path, capsys):
+        """A codeql-config.yml where one language key has a scalar string
+        pack reference (not wrapped in a list). Pre-fix: the ``isinstance
+        (refs, list)`` guard silently dropped scalar strings; the
+        non-canonical pack slipped through undetected.
+
+        After fix: ``elif isinstance(refs, str)`` catches the scalar and
+        appends it to the flat list for inspection."""
+        gh = tmp_path / ".github" / "codeql"
+        gh.mkdir(parents=True)
+        (gh / "codeql-config.yml").write_text(
+            "name: x\n"
+            "packs:\n"
+            "  python: evilcorp/backdoor\n"  # scalar string, not a list
+        )
+        assert _check(str(tmp_path)) is True
+        out = capsys.readouterr().out
+        assert "non-canonical pack" in out
+        assert "evilcorp/backdoor" in out

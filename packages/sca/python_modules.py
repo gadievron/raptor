@@ -39,6 +39,13 @@ from core.json import JsonCache, TTL_FOREVER
 
 logger = logging.getLogger(__name__)
 
+_TTL_TRANSIENT = 3600
+
+
+class _TransientResolutionError(Exception):
+    pass
+
+
 # Hard cap on wheel size we'll touch. Anything bigger is a heavyweight
 # package (PyTorch, TensorFlow) where the .dist-info we actually need
 # is still tiny — but the cap defends against absurdly-sized index
@@ -70,9 +77,11 @@ def resolve_modules(
       - the wheel parses cleanly but has no ``top_level.txt`` entry,
       - any HTTP error along the way.
 
-    Caches a successful result forever. Caches a None forever too —
-    a release without a wheel today won't grow one tomorrow, since
-    PyPI versions are immutable.
+    Caches a successful result forever. Caches an immutable ``None``
+    (no wheel / no top_level.txt) forever too — a release without a
+    wheel today won't grow one tomorrow, since PyPI versions are
+    immutable. Transient failures (HTTP errors, range not supported)
+    use a short TTL so retries can succeed on subsequent runs.
     """
     if cache is not None:
         cache_key = f"python_modules/{dist_name}/{version}"
@@ -80,10 +89,15 @@ def resolve_modules(
         if cached is not None:
             return tuple(cached) if cached else None
 
-    modules = _resolve_modules_uncached(
-        dist_name, version, http=http,
-        max_wheel_bytes=max_wheel_bytes,
-    )
+    try:
+        modules = _resolve_modules_uncached(
+            dist_name, version, http=http,
+            max_wheel_bytes=max_wheel_bytes,
+        )
+    except _TransientResolutionError:
+        if cache is not None:
+            cache.put(cache_key, [], ttl_seconds=_TTL_TRANSIENT)
+        return None
     if cache is not None:
         cache.put(cache_key, list(modules) if modules else [],
                   ttl_seconds=TTL_FOREVER)
@@ -99,7 +113,7 @@ def _resolve_modules_uncached(
         meta = http.get_json(pypi_url, retries=0)
     except HttpError as e:
         logger.debug("python_modules: pypi metadata fetch failed: %s", e)
-        return None
+        raise _TransientResolutionError(str(e)) from e
 
     wheel = _pick_smallest_wheel(meta.get("urls", []), max_wheel_bytes)
     if wheel is None:
@@ -116,7 +130,11 @@ def _resolve_modules_uncached(
             if not top_level_paths:
                 return None
             raw = zf.read(top_level_paths[0])
-    except (zipfile.BadZipFile, HttpError, _RangeNotSupported) as e:
+    except (HttpError, _RangeNotSupported) as e:
+        logger.debug("python_modules: wheel parse failed for %s %s: %s",
+                     dist_name, version, e)
+        raise _TransientResolutionError(str(e)) from e
+    except zipfile.BadZipFile as e:
         logger.debug("python_modules: wheel parse failed for %s %s: %s",
                      dist_name, version, e)
         return None

@@ -173,7 +173,7 @@ _ENV_SHELL_RE = re.compile(
 )
 # Mask-line shape that legitimately consumes a secret in a run block.
 _MASK_RE = re.compile(
-    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*'
+    r'echo\s+"?::add-mask::\$\{\{\s*secrets\.([A-Za-z_][A-Za-z0-9_]*)'
 )
 # ``${{ steps.<id>.outputs.<name> }}`` — a downstream reference to
 # a previous step's output.  Used in both ``with:`` inputs and
@@ -1006,7 +1006,6 @@ def _scan_one_step(
         # SAME body (a body that masks ONE secret can still leak
         # another via redirect) — but skip emitting a ``run_block``
         # finding so the mask line itself isn't a FP.
-        is_masked = bool(_MASK_RE.search(run_body))
         # Strip bash full-line comments before scanning for
         # ``$VAR`` references — a comment explaining what the body
         # does or why the secret-handling pattern is safe must not
@@ -1017,6 +1016,9 @@ def _scan_one_step(
         # avoid; the FP-shape we close here is the common "docstring-
         # like full-line comment block at top of run body".
         scan_body = _strip_bash_full_line_comments(run_body)
+        masked_secrets = {
+            m.group(1) for m in _MASK_RE.finditer(scan_body)
+        }
         # Check whether the body references a secret literal,
         # a secret-tainted env var, or a tainted prior-step output.
         secret_refs_in_body: List[str] = []
@@ -1038,7 +1040,10 @@ def _scan_one_step(
             bound = job_ctx.secret_bound_outputs.get(step_id, {})
             if out_name in bound:
                 secret_refs_in_body.append(bound[out_name])
-        if secret_refs_in_body and not is_masked:
+        unmasked_refs = [
+            s for s in secret_refs_in_body if s not in masked_secrets
+        ]
+        if unmasked_refs:
             severity = (
                 "high"
                 if _is_truthy_run_body_egress(scan_body)
@@ -1048,10 +1053,10 @@ def _scan_one_step(
                 dependency=dep, workflow_path=workflow_path,
                 job_id=job_id, step_index=step_index,
                 sink_kind="run_block",
-                secret_names=tuple(sorted(set(secret_refs_in_body))),
+                secret_names=tuple(sorted(set(unmasked_refs))),
                 detail=(
                     f"``run:`` block references secret(s) "
-                    f"{sorted(set(secret_refs_in_body))!r} outside "
+                    f"{sorted(set(unmasked_refs))!r} outside "
                     f"the standard echo-with-mask form"
                 ),
                 severity=severity,

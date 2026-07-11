@@ -296,3 +296,62 @@ def test_e2e_sbom_overrides_target_discovery(tmp_path: Path) -> None:
     assert "should-not-appear" not in components, (
         f"manifest discovery ran despite --sbom; got {components}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: scoped npm packages with raw @ in purl
+# ---------------------------------------------------------------------------
+
+def test_parse_npm_scoped_with_raw_at_in_purl(tmp_path: Path) -> None:
+    """``pkg:npm/@angular/core@16.0.0`` — the raw ``@`` in the scope
+    field caused the purl parser to split on the wrong ``@``,
+    mis-assigning version to part of the name.
+
+    After fix: the parser handles both raw ``@`` and percent-encoded
+    ``%40`` forms identically."""
+    sbom = _write_cyclonedx(tmp_path / "sbom.json", [
+        {
+            "type": "library",
+            "name": "@angular/core",
+            "version": "16.0.0",
+            "purl": "pkg:npm/@angular/core@16.0.0",
+        },
+    ])
+    deps, warnings = parse_cyclonedx(sbom)
+    assert warnings == []
+    assert len(deps) == 1
+    assert deps[0].name == "@angular/core"
+    assert deps[0].version == "16.0.0"
+    assert deps[0].ecosystem == "npm"
+
+
+def test_parse_npm_scoped_with_encoded_at_in_purl(tmp_path: Path) -> None:
+    """``pkg:npm/%40angular/core@16.0.0`` — the percent-encoded form
+    must decode identically to the raw-``@`` form."""
+    sbom = _write_cyclonedx(tmp_path / "sbom.json", [
+        {
+            "type": "library",
+            "name": "@angular/core",
+            "version": "16.0.0",
+            "purl": "pkg:npm/%40angular/core@16.0.0",
+        },
+    ])
+    deps, _ = parse_cyclonedx(sbom)
+    assert deps[0].name == "@angular/core"
+    assert deps[0].version == "16.0.0"
+
+
+def test_parse_npm_scoped_no_version(tmp_path: Path) -> None:
+    """``pkg:npm/@scope/name`` (no version segment) — the parser must
+    not crash and should set version to None."""
+    sbom = _write_cyclonedx(tmp_path / "sbom.json", [
+        {
+            "type": "library",
+            "name": "@scope/name",
+            "purl": "pkg:npm/@scope/name",
+        },
+    ])
+    deps, _ = parse_cyclonedx(sbom)
+    assert len(deps) == 1
+    assert deps[0].name == "@scope/name"
+    assert deps[0].version is None

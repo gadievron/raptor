@@ -275,3 +275,53 @@ def test_partial_fetch_minimises_bytes_pulled():
         f"pulled {total_bytes[0]} of {len(wheel)} — Range fetch did "
         f"not actually save bytes"
     )
+
+
+def test_http_error_cached_with_short_ttl_not_forever(tmp_path: Path):
+    """HTTP errors must be cached with a short TTL (_TTL_TRANSIENT=3600s)
+    so that subsequent runs can retry.
+
+    Pre-fix: HttpErrors were cached with TTL_FOREVER, permanently
+    poisoning the cache — a transient 503 from PyPI would mean the
+    package NEVER resolved again until the cache was manually cleared.
+
+    After fix: transient failures use _TTL_TRANSIENT; after expiry the
+    cache returns None (cache miss) and the resolver retries the network
+    call."""
+    import time
+    from unittest.mock import patch
+
+    from core.http import HttpError
+    from core.json import JsonCache
+
+    cache = JsonCache(root=tmp_path / "cache")
+    call_count = [0]
+
+    class _AlwaysFails:
+        """Always raises HttpError — we only need to verify the cache
+        expires and retries the network."""
+        def get_json(self, url, *a, **kw):
+            call_count[0] += 1
+            raise HttpError("upstream 503")
+        def request(self, *a, **kw):
+            raise AssertionError("should not be reached on error path")
+
+    http = _AlwaysFails()
+    # First call: HttpError -> returns None, cached with short TTL.
+    result = resolve_modules("myapp", "9.9.9", http=http, cache=cache)
+    assert result is None
+    assert call_count[0] == 1
+
+    # Immediately after: cache still holds the transient entry.
+    result2 = resolve_modules("myapp", "9.9.9", http=http, cache=cache)
+    assert result2 is None
+    # The short-TTL cache hit means no new network call.
+    assert call_count[0] == 1
+
+    # Fast-forward time past _TTL_TRANSIENT (3600s) so the entry expires.
+    from packages.sca.python_modules import _TTL_TRANSIENT
+    with patch.object(time, "time", return_value=time.time() + _TTL_TRANSIENT + 1):
+        # Cache entry expired -> resolver retries network.
+        resolve_modules("myapp", "9.9.9", http=http, cache=cache)
+    # The retry hit the network (call_count incremented).
+    assert call_count[0] == 2

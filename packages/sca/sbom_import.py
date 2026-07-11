@@ -193,8 +193,7 @@ def _component_to_dep(
 # on the (eco, name, version) triple.
 _PURL_RE = re.compile(
     r"^pkg:(?P<type>[A-Za-z0-9.+-]+)"
-    r"/(?P<path>[^@?#]+)"
-    r"(?:@(?P<version>[^?#]+))?"
+    r"/(?P<path_and_version>[^?#]+)"
     r"(?:[?#].*)?$"
 )
 
@@ -216,8 +215,14 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
             type_lc, purl,
         )
         return None
-    path = m.group("path")
-    version = m.group("version")
+    path_and_version = m.group("path_and_version")
+    last_at = path_and_version.rfind("@")
+    if last_at > 0:
+        path = path_and_version[:last_at]
+        version: Optional[str] = path_and_version[last_at + 1:]
+    else:
+        path = path_and_version
+        version = None
 
     # Maven uses ``pkg:maven/<group>/<artifact>@<version>`` — recombine
     # group + artifact with ``:`` (SCA's canonical Maven name).
@@ -228,9 +233,8 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
         # Go modules: ``pkg:golang/<host>/<owner>/<repo>@<version>``
         # → the FULL path is the import path; keep it intact.
         name = path
-    elif ecosystem == "npm" and path.startswith("%40"):
-        # URL-encoded ``@scope/name`` — decode the leading ``@``.
-        name = "@" + path[3:]
+    elif ecosystem == "npm" and (path.startswith("%40") or path.startswith("@")):
+        name = "@" + path[3:] if path.startswith("%40") else path
     else:
         # Single-segment ecosystems (PyPI, Cargo, RubyGems, NuGet,
         # Packagist) — name is the trailing path component.

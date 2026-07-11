@@ -321,6 +321,8 @@ def _scan_codeql_config(path: Path) -> FileScan:
             for refs in packs.values():
                 if isinstance(refs, list):
                     flat.extend(str(r) for r in refs if isinstance(r, str))
+                elif isinstance(refs, str):
+                    flat.append(refs)
         elif isinstance(packs, list):
             flat = [str(r) for r in packs if isinstance(r, str)]
         for ref in flat:
