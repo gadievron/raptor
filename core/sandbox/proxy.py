@@ -1705,6 +1705,7 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
 def _reset_for_tests() -> None:
     """Tear down the singleton. Test-only."""
     global _instance
+    logger.disabled = False
     with _lock:
         if _instance is not None:
             _instance.stop()
