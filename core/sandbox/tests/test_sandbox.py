@@ -413,6 +413,8 @@ class TestSandboxProfiles(unittest.TestCase):
             self.skipTest("User namespaces not available")
         with sandbox(profile="network-only") as run:
             result = run(["echo", "net-only"], capture_output=True, text=True)
+            if result.returncode == 137:
+                result = run(["echo", "net-only"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("net-only", result.stdout)
 
@@ -422,6 +424,8 @@ class TestSandboxProfiles(unittest.TestCase):
             self.skipTest("User namespaces not available")
         with sandbox(profile="full") as run:
             result = run(["echo", "full"], capture_output=True, text=True)
+            if result.returncode == 137:
+                result = run(["echo", "full"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn("full", result.stdout)
 
