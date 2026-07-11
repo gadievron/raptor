@@ -103,7 +103,9 @@ def _fallback_compare(a: str, b: str) -> int:
         # pre similar.
         # Convention: assign small integers to release/pre/post categories.
         # cat: 0 = .devN, 1 = preN.devN, 2 = preN, 3 = release, 4 = postN
-        if dev is not None and pre is None:
+        if post is not None and dev is not None:
+            cat = 4  # post+dev: between post(N-1) and postN
+        elif dev is not None and pre is None:
             cat = 0
         elif pre is not None and dev is not None:
             cat = 1
@@ -115,11 +117,20 @@ def _fallback_compare(a: str, b: str) -> int:
             cat = 3
         # within-category subkey
         pre_label_order = {"a": 0, "b": 1, "rc": 2}
+        # PEP 440: 1.0.post1.dev1 sorts between post0 and post1.
+        # Encode as (post - 1, dev) so the dev release sits below
+        # its full post release in a numeric compare.
+        if post is not None and dev is not None:
+            post_key = post - 1
+            dev_key = dev
+        else:
+            post_key = post or 0
+            dev_key = dev or 0
         sub = (
             pre_label_order.get(pre[0]) if pre else None,
             pre[1] if pre else None,
-            post or 0,
-            dev or 0,
+            post_key,
+            dev_key,
         )
         return (cat, sub)
     ka = keyof(pa)

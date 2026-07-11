@@ -122,7 +122,7 @@ def _best_match(
         if w.arch == "any" and w.os == "any":
             candidates.append(w)
             continue
-        if w.arch != pair.arch:
+        if w.arch != pair.arch and w.arch != "any":
             continue
         # OS-family check. macOS / Windows tags don't satisfy a
         # Linux project pair and vice-versa. The platform_matrix

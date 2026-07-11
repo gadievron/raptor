@@ -245,6 +245,9 @@ def _resolve_local_dep_management(deps: List[Dependency]) -> None:
         inherited = managed_version.get(d.name)
         if inherited:
             d.version = inherited
+            if ":" in d.name:
+                g, a = d.name.split(":", 1)
+                d.purl = f"pkg:maven/{g}/{a}@{inherited}"
 
 
 # ---------------------------------------------------------------------------

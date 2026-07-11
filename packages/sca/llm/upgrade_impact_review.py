@@ -295,5 +295,10 @@ def _import_patterns(dep: Dependency) -> List[re.Pattern]:
         patterns.append(re.compile(rf"\buse\s+{re.escape(name.replace('-', '_'))}"))
     elif dep.ecosystem == "RubyGems":
         patterns.append(re.compile(rf"\brequire\s+['\"]({re.escape(name)})"))
+    elif dep.ecosystem == "NuGet":
+        patterns.append(re.compile(rf"\busing\s+{re.escape(name)}\b"))
+    elif dep.ecosystem == "Packagist":
+        ns = name.replace("/", "\\\\")
+        patterns.append(re.compile(rf"\buse\s+{re.escape(ns)}"))
 
     return patterns

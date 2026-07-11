@@ -106,6 +106,13 @@ def parse(path: Path) -> List[Dependency]:
     for ref in _extract_services(data, label="top-level services"):
         refs.append(ref)
 
+    default_block = data.get("default")
+    if isinstance(default_block, dict):
+        for ref in _extract_image(default_block, label="default"):
+            refs.append(ref)
+        for ref in _extract_services(default_block, label="default services"):
+            refs.append(ref)
+
     # Per-job sweep: skip reserved keys. A "job" is any other
     # top-level mapping whose value is itself a dict.
     for job_name, job in data.items():
@@ -220,6 +227,8 @@ def _split_image_ref(ref: str) -> tuple:
     if value materialises."""
     if "@" in ref:
         name, _, digest = ref.rpartition("@")
+        if ":" in name.rsplit("/", 1)[-1]:
+            name = name.rsplit(":", 1)[0]
         return name, digest if digest else None
     last_slash = ref.rfind("/")
     rest = ref[last_slash + 1:] if last_slash >= 0 else ref

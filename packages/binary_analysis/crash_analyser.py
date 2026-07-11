@@ -497,7 +497,7 @@ class CrashAnalyser:
         elif signal in ["13", "sigpipe", "broken pipe"]:
             return "broken_pipe"
             
-        elif signal in ["10", "sigbus", "bus error"]:
+        elif signal in ["7", "07", "sigbus", "bus error"]:
             return "bus_error"
             
         # Function name based classification

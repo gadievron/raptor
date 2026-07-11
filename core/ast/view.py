@@ -76,6 +76,7 @@ _CALL_GRAPH_DISPATCH: dict[str, Callable] = {
     "python": extract_call_graph_python,
     "javascript": extract_call_graph_javascript,
     "typescript": extract_call_graph_javascript,
+    "tsx": extract_call_graph_javascript,
     "java": extract_call_graph_java,
     "go": extract_call_graph_go,
     "c": extract_call_graph_c,
@@ -325,7 +326,7 @@ def _ts_grammar_module(language: str):
         if language == "cpp":
             import tree_sitter_cpp as m
             return m
-        if language in ("javascript", "typescript"):
+        if language in ("javascript", "typescript", "tsx"):
             import tree_sitter_javascript as m
             return m
         if language == "java":

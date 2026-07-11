@@ -133,7 +133,7 @@ def main(
             # ``False`` = explicit 404; ``None`` = couldn't tell. Both
             # are sufficient cause to escalate to Review since the
             # operator should investigate before installing.
-            if exists is False:
+            if exists is not True:
                 seed_metadata_unverifiable = True
 
     # Transitive surface — what does installing this dep actually pull

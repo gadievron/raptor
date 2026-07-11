@@ -349,6 +349,9 @@ def _classify(
     spdx: str,
     policy: LicensePolicy,
 ) -> Optional[LicenseFinding]:
+    if " WITH " in spdx:
+        base = spdx.split(" WITH ", 1)[0].strip()
+        return _classify(dep, base, policy)
     if spdx in policy.deny:
         return _deny_finding(dep, spdx)
     if spdx in policy.warn:

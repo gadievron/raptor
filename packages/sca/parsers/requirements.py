@@ -82,7 +82,7 @@ _PIP_OPTION_PREFIXES = (
     "--python-version",
     "--implementation",
     "--abi",
-    "--editable",     # alias for -e; bare flag is rare but tolerated
+    "--editable=",    # only the bare-flag form; --editable <spec> is handled below
 )
 
 # Lines that begin with this hash form are pure comments — anywhere else

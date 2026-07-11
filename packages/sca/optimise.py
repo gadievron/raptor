@@ -636,7 +636,7 @@ def _pin_bare_package_json(
             return f"{m.group(1)}{plan.target}{m.group(3)}"
         return m.group(0)
 
-    new_text = pat.sub(_replace, text, count=1)
+    new_text = pat.sub(_replace, text)
     if not rewrote:
         return text, False, "no wildcard/empty spec found"
     return new_text, True, None

@@ -64,7 +64,7 @@ _ARCHIVE_URLS: Dict[str, str] = {
     "NuGet": "https://api.nuget.org/v3-flatcontainer/{name_lower}/{version}/{name_lower}.{version}.nupkg",
     "Maven": "https://repo.maven.apache.org/maven2/{group_path}/{artifact}/{version}/{artifact}-{version}-sources.jar",
     "Gradle": "https://repo.maven.apache.org/maven2/{group_path}/{artifact}/{version}/{artifact}-{version}-sources.jar",
-    "Composer": "https://repo.packagist.org/p2/{name_lower}.json",
+    "Packagist": "https://repo.packagist.org/p2/{name_lower}.json",
 }
 
 # Maven sources jar unavailable → fall back to binary jar (degraded signal).
@@ -160,7 +160,7 @@ def _download_and_extract(
 ) -> Optional[Dict[str, str]]:
     """Fetch archive → dict of {relative_path: text_content}."""
     # Composer: resolve the actual archive URL from packagist metadata.
-    if dep.ecosystem == "Composer":
+    if dep.ecosystem == "Packagist":
         return _download_composer(dep, http)
 
     url = _archive_url(dep)
@@ -178,14 +178,18 @@ def _download_and_extract(
             logger.debug("sca.llm.version_diff: trying Maven binary jar fallback")
             data = _fetch(fallback, http)
 
-    # PyPI: sdist may not exist → fall back to smallest wheel.
+    # PyPI: sdist may not exist → fall back to smallest wheel (a zip).
+    is_wheel = False
     if data is None and dep.ecosystem == "PyPI":
         data = _fetch_pypi_wheel(dep, http)
+        if data is not None:
+            is_wheel = True
 
     if data is None:
         return None
 
-    return _extract_text_files(data, dep.ecosystem)
+    eco = "NuGet" if is_wheel else dep.ecosystem  # wheel is a zip
+    return _extract_text_files(data, eco)
 
 
 def _fetch(url: str, http: HttpClient) -> Optional[bytes]:
@@ -305,7 +309,7 @@ def _extract_text_files(
     try:
         if ecosystem in ("npm", "PyPI", "Cargo", "RubyGems"):
             _extract_tar(data, files)
-        elif ecosystem in ("Go", "NuGet", "Maven", "Gradle", "Composer"):
+        elif ecosystem in ("Go", "NuGet", "Maven", "Gradle", "Packagist"):
             _extract_zip(data, files)
         else:
             _extract_tar(data, files)

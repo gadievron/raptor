@@ -97,6 +97,8 @@ class CratesClient:
         if self._cache is not None:
             cached = self._cache.try_get(cache_key, ttl_seconds=self._ttl)
             if cached is not MISSING:
+                if cached is None:
+                    return None
                 return list(cached) if cached else []
         if self._offline:
             return None

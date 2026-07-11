@@ -86,7 +86,9 @@ def test_clean_dep_returns_zero(tmp_path: Path, capsys) -> None:
     StubHttp doesn't model registry responses, and an unknown registry
     URL would otherwise trigger the seed-metadata-unverifiable warning.
     """
-    http = StubHttp()
+    http = StubHttp(gets={
+        "https://registry.npmjs.org/@types/node/20.10.5": {"name": "@types/node"},
+    })
     cache = JsonCache(root=tmp_path)
     rc = review.main(
         ["npm", "@types/node", "20.10.5",
@@ -114,7 +116,9 @@ def test_lowercase_ecosystem_canonicalised(tmp_path: Path, capsys) -> None:
     """Lowercase ecosystem is canonicalised to the OSV-accepted form
     so the OSV query actually returns advisories.
     """
-    http = StubHttp()
+    http = StubHttp(gets={
+        "https://pypi.org/pypi/requests/2.31.0/json": {"info": {"name": "requests"}},
+    })
     cache = JsonCache(root=tmp_path)
     rc = review.main(
         ["pypi", "requests", "2.31.0", "--no-transitive"],

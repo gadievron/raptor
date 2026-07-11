@@ -87,6 +87,8 @@ class EpssClient:
         if uncached and not self._offline:
             for chunk in _chunked(uncached, _BATCH_SIZE):
                 fetched = self._fetch_chunk(chunk)
+                if fetched is None:
+                    continue
                 # Cache every requested CVE — even ones without coverage,
                 # using a sentinel so we don't refetch a known no-data row.
                 for cve in chunk:
@@ -108,7 +110,7 @@ class EpssClient:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_chunk(self, cves: List[str]) -> Dict[str, float]:
+    def _fetch_chunk(self, cves: List[str]) -> Optional[Dict[str, float]]:
         url = f"{EPSS_URL}?cve={','.join(cves)}"
         try:
             payload = self._http.get_json(url)
@@ -116,7 +118,7 @@ class EpssClient:
             logger.warning(
                 "core.cve.epss: chunk fetch failed (%s); leaving CVEs unresolved", e,
             )
-            return {}
+            return None
         return _parse_response(payload)
 
     @staticmethod

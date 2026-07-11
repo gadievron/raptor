@@ -246,6 +246,8 @@ def _split_image_ref(ref: str) -> tuple:
     ``core.oci.image_ref`` if a fourth consumer surfaces."""
     if "@" in ref:
         name, _, digest = ref.rpartition("@")
+        if ":" in name.rsplit("/", 1)[-1]:
+            name = name.rsplit(":", 1)[0]
         return name, digest if digest else None
     last_slash = ref.rfind("/")
     rest = ref[last_slash + 1:] if last_slash >= 0 else ref

@@ -455,7 +455,7 @@ def _walk_gha_workflows(
         r"^\s*os:\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
     )
 
-    for wf in workflows_dir.glob("*.yml"):
+    for wf in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
         try:
             text = wf.read_text(encoding="utf-8", errors="replace")
         except OSError:
