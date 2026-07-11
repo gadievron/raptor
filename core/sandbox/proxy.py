@@ -988,8 +988,11 @@ class EgressProxy:
                     t.cancel()
                 if stale:
                     await asyncio.gather(*stale, return_exceptions=True)
-                for task in list(self._client_tasks):
-                    task.cancel()
+                stale_clients = [t for t in self._client_tasks if not t.done()]
+                for t in stale_clients:
+                    t.cancel()
+                if stale_clients:
+                    await asyncio.gather(*stale_clients, return_exceptions=True)
                 self._client_tasks.clear()
                 self._loop.stop()
             try:
