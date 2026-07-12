@@ -308,10 +308,10 @@ def _verdict_for_pair(
             reason=reason,
         )
     return CompatVerdict(
-        pair=pair, verdict="arch_gap",
+        pair=pair, verdict="variant_mismatch",
         reason=(
-            f"{wm.name}=={wm.version} has no wheel compatible "
-            f"with {pair.as_str()}"
+            f"{wm.name}=={wm.version} has {pair.arch} wheels "
+            f"but none compatible with {pair.as_str()}"
         ),
     )
 

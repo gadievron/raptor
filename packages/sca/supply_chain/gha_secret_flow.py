@@ -611,6 +611,10 @@ def _value_is_tainted(value: str, job_ctx: "_JobContext") -> Optional[str]:
         var = env_m.group(1)
         if var in job_ctx.secret_bound_env:
             return job_ctx.secret_bound_env[var]
+    for env_m in _ENV_TEMPLATE_RE.finditer(value):
+        var = env_m.group(1)
+        if var in job_ctx.secret_bound_env:
+            return job_ctx.secret_bound_env[var]
     for out_m in _STEPS_OUTPUT_RE.finditer(value):
         step_id = out_m.group(1)
         out_name = out_m.group(2)
@@ -1034,6 +1038,12 @@ def _scan_one_step(
                 secret_refs_in_body.append(
                     job_ctx.secret_bound_env[var],
                 )
+        for m in _ENV_TEMPLATE_RE.finditer(scan_body):
+            var = m.group(1)
+            if var in job_ctx.secret_bound_env:
+                secret_refs_in_body.append(
+                    job_ctx.secret_bound_env[var],
+                )
         for sm in _STEPS_OUTPUT_RE.finditer(scan_body):
             step_id = sm.group(1)
             out_name = sm.group(2)
@@ -1067,14 +1077,14 @@ def _scan_one_step(
         # propagated taint at their sinks.  No finding here — the
         # laundering step itself isn't the sink.
         for key, value in _extract_redirected_writes(
-            run_body, "GITHUB_ENV",
+            scan_body, "GITHUB_ENV",
         ):
             source = _value_is_tainted(value, job_ctx)
             if source is not None:
                 job_ctx.secret_bound_env[key] = source
         if step_id_str:
             for key, value in _extract_redirected_writes(
-                run_body, "GITHUB_OUTPUT",
+                scan_body, "GITHUB_OUTPUT",
             ):
                 source = _value_is_tainted(value, job_ctx)
                 if source is not None:

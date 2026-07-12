@@ -313,13 +313,6 @@ def main(argv: Sequence[str]) -> int:
         else:
             patch_path = res
 
-    if args.apply:
-        from .patch_apply import apply_patch_to_target
-        rc = apply_patch_to_target(target, patch_path,
-                                    caller_label="raptor-sca fix --harden")
-        if rc != 0:
-            return rc
-
     if args.self_test:
         rc = _run_self_test(
             target=target, out_dir=out_dir, patch_path=patch_path,
@@ -330,6 +323,13 @@ def main(argv: Sequence[str]) -> int:
             allow_major_without_review=args.allow_major_without_review,
             allow_degraded=args.allow_degraded,
         )
+        if rc != 0:
+            return rc
+
+    if args.apply:
+        from .patch_apply import apply_patch_to_target
+        rc = apply_patch_to_target(target, patch_path,
+                                    caller_label="raptor-sca fix --harden")
         if rc != 0:
             return rc
 
@@ -1579,7 +1579,8 @@ def _write_report(
     lines.append("| Status | Count |")
     lines.append("|---|---|")
     for status in (
-        "promoted", "degraded_safety", "review_required", "up_to_date",
+        "promoted", "degraded_safety", "downgraded_safety",
+        "review_required", "up_to_date",
         "skipped_loose_pin", "unsupported_manifest",
         "library_floor_raise_unsupported",
         "no_versions", "registry_unsupported",
@@ -1645,6 +1646,22 @@ def _write_report(
                 f"- **{c.ecosystem}:{c.name}** "
                 f"`{c.from_version or '*'}` → `{c.to_version}` "
                 f"in `{c.manifest}` — residuals: {residuals}"
+            )
+        lines.append("")
+
+    if "downgraded_safety" in by_status:
+        lines.append("## Downgraded safety (bounded downgrade to clean version)")
+        lines.append("")
+        lines.append("No fully-safe version exists at or above the current pin. "
+                     "Harden performed a bounded downgrade to the highest clean "
+                     "version within the recorded floor corridor. Apply with "
+                     "`--allow-degraded` if the version regression is acceptable.")
+        lines.append("")
+        for c in by_status["downgraded_safety"]:
+            lines.append(
+                f"- **{c.ecosystem}:{c.name}** "
+                f"`{c.from_version or '*'}` → `{c.to_version}` "
+                f"in `{c.manifest}` — {c.detail}"
             )
         lines.append("")
 

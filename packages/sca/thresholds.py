@@ -82,7 +82,10 @@ def evaluate(
             if sev_floor is not None and rank >= sev_floor:
                 fails.append(f"[{sev}] {desc}")
                 continue
-            if cfg.fail_on_kev and row.get("sca", {}).get("in_kev"):
+            sca = row.get("sca", {})
+            if not isinstance(sca, dict):
+                sca = {}
+            if cfg.fail_on_kev and sca.get("in_kev"):
                 fails.append(f"[KEV] {desc}")
         elif vuln_type.startswith("sca:supply_chain:"):
             if sc_floor is not None and rank >= sc_floor:

@@ -215,6 +215,13 @@ def _rule_definition(rule_id: str) -> Dict[str, Any]:
     }
 
 
+def _safe_start_line(val: "Any") -> int:
+    try:
+        return max(int(val or 1), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def _row_to_result(
     row: Dict[str, Any], target: Path, idx: int,
 ) -> "tuple[Dict[str, Any] | None, Dict[str, Any] | None]":
@@ -268,7 +275,7 @@ def _row_to_result(
         "locations": [{
             "physicalLocation": {
                 "artifactLocation": {"uri": rel},
-                "region": {"startLine": max(int(row.get("line") or 1), 1)},
+                "region": {"startLine": _safe_start_line(row.get("line"))},
             },
         }],
         "partialFingerprints": {

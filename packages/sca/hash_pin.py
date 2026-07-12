@@ -8,8 +8,8 @@ Composer git) currently get a warning; those handlers can drop in here.
 Auth strategy: use ``git ls-remote <repo> <ref>`` rather than the
 GitHub REST API. ``ls-remote`` works against public repos without any
 token, side-stepping the design's noted 60 req/hour unauthenticated
-rate limit. When a token IS available (``GITHUB_TOKEN`` env), we do
-inject it into the URL — useful for private repos and gives a
+rate limit. When a token IS available (``GITHUB_TOKEN`` env), we pass
+it via ``http.extraheader`` — useful for private repos and gives a
 modest speedup on large monorepos.
 
 The rewriter is line-based, idempotent (already-SHA refs are skipped),
@@ -113,7 +113,6 @@ def hash_pin_workflows(
         changes.extend(file_changes)
         skipped.extend(file_skipped)
         if file_changes:
-            changed_files.append(wf_path)
             if write:
                 from ._atomic import atomic_write_text
                 try:
@@ -121,6 +120,10 @@ def hash_pin_workflows(
                 except OSError as e:
                     logger.warning("sca.hash_pin: cannot write %s: %s",
                                     wf_path, e)
+                else:
+                    changed_files.append(wf_path)
+            else:
+                changed_files.append(wf_path)
     return HashPinResult(changed_files, changes, skipped)
 
 
@@ -160,10 +163,13 @@ def _rewrite_file(
             continue
         # Replace ``@<ref>`` with ``@<sha>``; keep the original ref as a
         # trailing comment so operators can audit + roll back.
+        trailing = (m.group('trailing') or '').strip()
         replacement = (
             f"{m.group('prefix')}{owner}/{repo}{sub}@{sha}  "
             f"# was {ref}"
         )
+        if trailing:
+            replacement += f"  {trailing}"
         # Preserve any original trailing newline.
         suffix = "\n" if raw.endswith("\n") else ""
         new_line = replacement + suffix

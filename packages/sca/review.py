@@ -553,7 +553,9 @@ def _render_review_markdown(
         buf.write(
             "## Recommendation\n\n"
             "Do not install. Block-class signal present "
-            "(KEV-listed CVE, unfixable critical, or near-typosquat).\n"
+            "(KEV-listed CVE, unfixable critical, high-EPSS critical, "
+            "multiple criticals, near-typosquat, high-severity "
+            "slopsquat, or compound supply-chain red flags).\n"
         )
     elif verdict == _VERDICT_REVIEW:
         buf.write(

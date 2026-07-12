@@ -174,6 +174,9 @@ def _build_dep(
         return None
     image = image.strip()
 
+    if image.startswith("./") or image.startswith("../"):
+        return None
+
     name, version = _split_image_ref(image)
     if not name:
         return None
@@ -193,10 +196,13 @@ def _build_dep(
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
-            "high",
+            "high" if version else "medium",
             reason=(
                 f"docker-compose service {service_name!r} pinned to "
                 f"{image}"
+            ) if version else (
+                f"docker-compose service {service_name!r} references "
+                f"{image} with no tag (implicitly :latest)"
             ),
         ),
         source_kind="compose",

@@ -235,9 +235,12 @@ def _parse_purl(purl: str) -> Optional[Tuple[str, str, Optional[str]]]:
         name = path
     elif ecosystem == "npm" and (path.startswith("%40") or path.startswith("@")):
         name = "@" + path[3:] if path.startswith("%40") else path
+    elif ecosystem == "Packagist" and "/" in path:
+        # Composer/Packagist names are ``vendor/package`` (two-segment).
+        name = path
     else:
-        # Single-segment ecosystems (PyPI, Cargo, RubyGems, NuGet,
-        # Packagist) — name is the trailing path component.
+        # Single-segment ecosystems (PyPI, Cargo, RubyGems, NuGet)
+        # — name is the trailing path component.
         name = path.rsplit("/", 1)[-1]
 
     return (ecosystem, name, version)

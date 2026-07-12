@@ -189,7 +189,10 @@ def check_unpinned(deps: List[Dependency]) -> List[HygieneFinding]:
         # Maven exception: see docstring.
         if d.ecosystem == "Maven" and d.version is None:
             continue
-        if d.pin_style in _UNPINNED or d.version is None:
+        if d.pin_style in _UNPINNED or (
+            d.version is None
+            and d.pin_style not in {PinStyle.GIT, PinStyle.PATH}
+        ):
             out.append(_finding(
                 kind="unpinned_dependency",
                 dep=d,

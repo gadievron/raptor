@@ -29,6 +29,7 @@ is caught — that's exactly when a torn write would otherwise happen.
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 from typing import Union
 
@@ -64,7 +65,7 @@ def atomic_write_bytes(
     # preserve hint, not a security boundary. Worst case under a
     # racing chmod we apply the pre-race mode and the operator re-
     # runs the chmod.
-    preserve_mode: int = 0o644
+    preserve_mode: int | None = None
     try:
         import stat as _stat
         preserve_mode = _stat.S_IMODE(path.stat().st_mode)
@@ -77,7 +78,11 @@ def atomic_write_bytes(
     # PID suffix avoids collision when concurrent runs target the same
     # path (e.g. parallel CI matrix jobs, two operators on a shared
     # filesystem).
-    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        _host = socket.gethostname()
+    except OSError:
+        _host = "unknown"
+    tmp = path.with_name(f"{path.name}.tmp.{_host}.{os.getpid()}")
 
     try:
         # O_CREAT|O_WRONLY|O_TRUNC matches the semantics of write_text.
@@ -86,11 +91,12 @@ def atomic_write_bytes(
         fd = os.open(
             tmp,
             os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-            preserve_mode,
+            preserve_mode if preserve_mode is not None else 0o644,
         )
         try:
             try:
-                os.fchmod(fd, preserve_mode)
+                if preserve_mode is not None:
+                    os.fchmod(fd, preserve_mode)
             except (OSError, AttributeError):
                 # Windows + a handful of mounted filesystems don't
                 # honour fchmod — the O_CREAT mode argument already

@@ -529,7 +529,8 @@ def _materialise_pin_changes(
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                     skipped_reason=f"cannot read manifest: {e}",
                 ))
             continue
@@ -546,13 +547,15 @@ def _materialise_pin_changes(
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                 ))
             else:
                 out.append(UpgradeChange(
                     ecosystem=plan.ecosystem, name=plan.name,
                     old_version=plan.installed, new_version=plan.target,
-                    manifest=plan.manifest, advisory_ids=(),
+                    manifest=plan.manifest,
+                    advisory_ids=tuple(plan.advisory_ids),
                     skipped_reason=reason or "rewriter found no match",
                 ))
 

@@ -85,10 +85,11 @@ def rewrite_dockerfile_arg(
         try:
             _atomic_write(path, new_text)
         except OSError as e:
-            # I/O failure on write — convert every successful edit
+            # I/O failure on write — convert every applied edit
             # to a failure (we couldn't actually persist).
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 

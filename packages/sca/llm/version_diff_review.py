@@ -363,6 +363,11 @@ def _extract_zip(data: bytes, out: Dict[str, str]) -> None:
                 continue
             parts = Path(info.filename).parts
             rel = "/".join(parts[1:]) if len(parts) > 1 else info.filename
+            if "@v" in rel:
+                rel = "/".join(
+                    seg.partition("@")[0] if "@v" in seg else seg
+                    for seg in rel.split("/")
+                )
             out[rel] = content
 
 

@@ -495,7 +495,10 @@ def _version_publish_check(
     # package, which is the classic account-takeover pattern.
     # Without this filter the report drowns in Info-level entries
     # for every actively-maintained dep.
-    if not meta.is_dormant:
+    is_dormant = False
+    if meta.latest_publish and meta.second_latest_publish:
+        is_dormant = (meta.latest_publish - meta.second_latest_publish).days >= dormant_threshold
+    if not is_dormant:
         return []
     sev = "medium"                          # only fires when dormant now
     dormant_detail = ""
@@ -796,7 +799,7 @@ def _low_bus_factor_check(
              for m in meta.maintainers if m.get("name")}
     if len(names) != 1:
         return []
-    sole = meta.maintainers[0].get("name", "unknown")
+    sole = next((m.get("name") for m in meta.maintainers if m.get("name")), "unknown")
     return [RegistryMetaFinding(
         kind="low_bus_factor",
         dependency=dep,

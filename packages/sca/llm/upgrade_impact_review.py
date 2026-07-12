@@ -287,7 +287,7 @@ def _import_patterns(dep: Dependency) -> List[re.Pattern]:
             patterns.append(re.compile(rf"""(?:require\s*\(\s*|from\s+)['"]({re.escape(bare)})"""))
     elif dep.ecosystem in ("Maven", "Gradle"):
         parts = name.split(":")
-        if len(parts) == 2:
+        if len(parts) >= 2:
             patterns.append(re.compile(rf"\bimport\s+{re.escape(parts[0])}\."))
     elif dep.ecosystem == "Go":
         patterns.append(re.compile(rf'"{re.escape(name)}'))

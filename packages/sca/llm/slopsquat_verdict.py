@@ -192,10 +192,10 @@ def _format_metadata(
             lines.append(
                 f"  - {name}" + (f" <{email}>" if email else "")
             )
-    repo = meta.get("repository_url", "")
+    repo = meta.get("repository_url")
     if repo:
         lines.append(f"Repository URL (claimed): {repo}")
-    else:
+    elif "repository_url" in meta:
         lines.append("Repository URL: (none declared)")
     downloads = meta.get("download_count")
     if downloads is not None:

@@ -227,6 +227,8 @@ def _extract_versions(data: dict) -> List[str]:
     We sort by publish time (newest-first) using ``time``; if absent,
     fall back to the ``versions`` map order.
     """
+    if not isinstance(data, dict):
+        return []
     versions = data.get("versions") or {}
     if not isinstance(versions, dict):
         return []
@@ -245,10 +247,12 @@ def _extract_versions(data: dict) -> List[str]:
             continue
         candidates.append(ver)
 
-    # Sort by publish time descending; fall back to lexical sort if
-    # ``time`` is missing.
+    # Sort by publish time descending; versions without a publish
+    # time fall back to lexical sort among themselves, after all
+    # timed versions.
     def _sort_key(v: str):
-        return times.get(v, "")
+        t = times.get(v)
+        return (1, t) if t else (0, v)
     candidates.sort(key=_sort_key, reverse=True)
     return candidates
 

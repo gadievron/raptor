@@ -118,7 +118,7 @@ def _build_dep(
     # Skip the project's own row (``virtual``) and local
     # editables / directories — these aren't registry-published
     # deps.
-    if any(k in source for k in ("virtual", "editable", "directory")):
+    if any(k in source for k in ("virtual", "editable", "directory", "url", "path")):
         return None
 
     # Git sources keep the version (some commit SHA or tag) but

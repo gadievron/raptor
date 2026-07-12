@@ -66,6 +66,7 @@ def main(argv: Sequence[str]) -> int:
     sarif_path = Path(args.out_sarif).resolve() if args.out_sarif else (
         base_dir / "findings.sarif"
     )
+    all_rows = rows
     try:
         rows = _apply_reachability_filters(rows, args)
     except ValueError as e:
@@ -97,7 +98,7 @@ def main(argv: Sequence[str]) -> int:
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
-        passed, fails = eval_thresholds(rows, cfg)
+        passed, fails = eval_thresholds(all_rows, cfg)
         print_result(passed, fails, prog="raptor-sca render")
         return 0 if passed else 1
 
@@ -258,7 +259,7 @@ def _render_markdown(rows: List[Dict[str, Any]], *, target: Path) -> str:
 
     buf.write("## Summary\n\n")
     buf.write("| Severity | Count |\n|---|---|\n")
-    for sev in ("critical", "high", "medium", "low", "info"):
+    for sev in ("critical", "high", "medium", "low", "info", "none"):
         n = severity_counts.get(sev, 0)
         if n:
             buf.write(f"| {_SEV_LABEL[sev]} | {n} |\n")

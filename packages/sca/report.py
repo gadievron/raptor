@@ -572,7 +572,7 @@ def _render_one_vuln(
         )
         if primary.summary:
             bullets.append(
-                f"- Summary: {escape_nonprintable(primary.summary)}"
+                f"- Summary: {sanitise_string(primary.summary)}"
             )
 
     badges = _badges(f)
@@ -607,9 +607,9 @@ def _render_one_vuln(
 
     if not omit_source:
         if dep.is_lockfile:
-            bullets.append(f"- Source: lockfile (`{dep.declared_in}`)")
+            bullets.append(f"- Source: lockfile (`{escape_nonprintable(str(dep.declared_in))}`)")
         else:
-            bullets.append(f"- Source: manifest (`{dep.declared_in}`)")
+            bullets.append(f"- Source: manifest (`{escape_nonprintable(str(dep.declared_in))}`)")
         # Source-specific context — Dockerfile FROM rows surface
         # the base image + stage so operators can group findings
         # by build stage in their review.

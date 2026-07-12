@@ -42,7 +42,7 @@ def _split(version: str) -> Tuple[List[int], List[str]]:
 
     Strips leading ``v`` and any ``+build`` metadata.
     """
-    s = version.strip().lstrip("v")
+    s = version.strip().lstrip("vV")
     s = s.split("+", 1)[0]                  # drop build metadata
     if "-" in s:
         base, pre = s.split("-", 1)
@@ -56,6 +56,8 @@ def _split(version: str) -> Tuple[List[int], List[str]]:
             # Non-numeric segment in the base — treat as 0 with a
             # tail-string penalty.
             nums.append(0)
+            if not pre:
+                pre = piece.lower()
     pre_segs = [p.lower() for p in pre.split(".")] if pre else []
     return nums, pre_segs
 

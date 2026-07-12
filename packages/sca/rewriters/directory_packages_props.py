@@ -127,7 +127,8 @@ def rewrite_directory_packages_props(
             return [RewriteResult(
                 edit=r.edit, applied=False,
                 reason=f"error: write failed: {e}",
-            ) for r in results]
+            ) if r.applied else r
+            for r in results]
     return results
 
 
@@ -137,10 +138,12 @@ def _apply_one(text: str, edit: RewriteEdit) -> Tuple[str, RewriteResult]:
     (one file usually picks a convention) but we tolerate
     both."""
     pat = _build_attr_pattern(edit.locator)
-    match = pat.search(text)
+    matches = list(pat.finditer(text))
+    match = matches[-1] if matches else None
     if match is None:
         pat = _build_child_pattern(edit.locator)
-        match = pat.search(text)
+        matches = list(pat.finditer(text))
+        match = matches[-1] if matches else None
     if match is None:
         return text, RewriteResult(
             edit=edit, applied=False, reason="not_found",

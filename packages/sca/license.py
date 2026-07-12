@@ -710,9 +710,11 @@ def _spdx_from_pom(pom_bytes: bytes) -> Optional[str]:
                 if spdx:
                     return spdx
                 # Fallback: if the free-text already looks SPDX-like
-                # (single token, no spaces), accept it.
+                # (short identifier or compound expression), accept it.
                 text = child.text.strip()
                 if " " not in text and len(text) < 40:
+                    return text
+                if _looks_like_spdx_expression(text):
                     return text
                 return None
         break

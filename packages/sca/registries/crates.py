@@ -133,6 +133,8 @@ def _extract_versions(data: dict) -> List[str]:
           ]
         }
     """
+    if not isinstance(data, dict):
+        return []
     versions = data.get("versions") or []
     if not isinstance(versions, list):
         return []

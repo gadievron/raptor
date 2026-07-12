@@ -175,7 +175,9 @@ def _parse_file(path: Path, depth: int, visited: Set[Path]) -> List[Dependency]:
             line = _strip_comment(raw_line).strip()
             if not line:
                 continue
-        if line.startswith(("-r ", "--requirement ", "-c ", "--constraint ")):
+        if commented and line.startswith(("-r ", "--requirement ", "--requirement=", "-c ", "--constraint ", "--constraint=")):
+            continue
+        if line.startswith(("-r ", "--requirement ", "--requirement=", "-c ", "--constraint ", "--constraint=")):
             include_path = _include_path(line, resolved.parent)
             if include_path is None:
                 continue
@@ -270,9 +272,13 @@ def _is_pip_option(line: str) -> bool:
 def _include_path(line: str, parent_dir: Path) -> Optional[Path]:
     """Extract the path argument from ``-r``/``--requirement``/``-c`` lines."""
     parts = line.split(maxsplit=1)
-    if len(parts) != 2:
+    if len(parts) == 1 and "=" in parts[0]:
+        _, _, candidate = parts[0].partition("=")
+        candidate = candidate.strip()
+    elif len(parts) != 2:
         return None
-    candidate = parts[1].strip()
+    else:
+        candidate = parts[1].strip()
     # Drop trailing inline options if any (rare; pip accepts e.g. --hash
     # only for top-level requirements, not includes — we still split on
     # whitespace to be safe).
@@ -356,7 +362,7 @@ def _looks_like_url_only(line: str) -> bool:
     head = line.split(" ", 1)[0]
     if head.startswith(_VCS_PREFIXES):
         return True
-    if head.startswith(("http://", "https://", "file:", "./", "../", "/")):
+    if head.startswith(("http://", "https://", "file:", "./", "../", "/", "~/")):
         return True
     return False
 

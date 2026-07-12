@@ -103,6 +103,10 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
         severity=severity,
         confidence=Confidence(
             "high",
-            reason="PyPI requires_dist diff across parent versions",
+            reason=(
+                "PyPI requires_dist diff: dep moved behind optional extra"
+                if d.transitive_status_in_latest == "extras-gated"
+                else "PyPI requires_dist diff across parent versions"
+            ),
         ),
     )

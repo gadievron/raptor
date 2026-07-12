@@ -40,8 +40,6 @@ def compare(a: str, b: str) -> int:
     ``versions.compare`` so callers can catch the package-wide error
     rather than the underlying library's exception.
     """
-    if a == b:
-        return 0
     if _HAS_PACKAGING:
         try:
             va = Version(a)

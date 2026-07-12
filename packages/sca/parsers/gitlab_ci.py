@@ -208,7 +208,7 @@ def _build_dep(
         declared_in=declared_in,
         scope="main",
         is_lockfile=False,
-        pin_style=PinStyle.EXACT if version else PinStyle.WILDCARD,
+        pin_style=_classify_pin_style(version),
         direct=True,
         purl=purl,
         parser_confidence=Confidence(
@@ -218,6 +218,19 @@ def _build_dep(
         source_kind="gitlab_ci",
         source_extra={"context": context, "image_ref": image_ref},
     )
+
+
+_FLOATING_TAGS = frozenset({"latest", "stable", "edge", "nightly", "dev", "beta", "alpha", "rc", "canary", "main", "master"})
+
+
+def _classify_pin_style(version: Optional[str]) -> PinStyle:
+    if not version:
+        return PinStyle.WILDCARD
+    if version.startswith("sha256:"):
+        return PinStyle.EXACT
+    if version.lower() in _FLOATING_TAGS:
+        return PinStyle.WILDCARD
+    return PinStyle.EXACT
 
 
 def _split_image_ref(ref: str) -> tuple:

@@ -220,7 +220,8 @@ def _apply_inherited_view(
         if not resolved:
             continue
         dep.version = resolved
-        # Reflect the new version in the purl.
+        dep.pin_style = _classify_version(resolved)[0]
+        dep.parser_confidence = _confidence(True, resolved, dep.scope == "build")
         dep.purl = _build_purl(group, artifact, resolved)
 
 
@@ -245,6 +246,8 @@ def _resolve_local_dep_management(deps: List[Dependency]) -> None:
         inherited = managed_version.get(d.name)
         if inherited:
             d.version = inherited
+            d.pin_style = _classify_version(inherited)[0]
+            d.parser_confidence = _confidence(True, inherited, False)
             if ":" in d.name:
                 g, a = d.name.split(":", 1)
                 d.purl = f"pkg:maven/{g}/{a}@{inherited}"

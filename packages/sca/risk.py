@@ -227,12 +227,9 @@ def compute_risk_estimate(
     # 2-bis. Exploit evidence (EDB / MSF / GitHub PoC). Independent of
     # in_kev: a CVE can have a public Metasploit module without being
     # in CISA's KEV, and that's still a "working exploit exists"
-    # signal we want to surface. KEV-listed findings ALSO get this
-    # bonus on top — multipliers compose, matching the design where
-    # each independent signal nudges the score upward. The floor is
-    # only applied when KEV's floor wasn't (KEV strictly dominates;
-    # we don't want a non-KEV PoC to push above an actually-exploited
-    # KEV vuln on tied CVSS).
+    # signal we want to surface. KEV-listed findings already get a
+    # boost via kev_mult; the exploit-evidence branch is gated by
+    # ``not in_kev`` so the two don't compound.
     has_evidence = (
         finding.exploit_evidence is not None
         and finding.exploit_evidence.has_any

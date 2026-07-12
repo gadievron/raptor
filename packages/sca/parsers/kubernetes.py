@@ -171,12 +171,24 @@ def _extract_images(
     if not isinstance(spec, dict):
         return
     # Higher-level workload wrappers nest under ``template.spec``.
+    # CronJob nests one level deeper: ``spec.jobTemplate.spec.template.spec``.
     template_spec = spec
-    template = spec.get("template")
-    if isinstance(template, dict):
-        ts = template.get("spec")
-        if isinstance(ts, dict):
-            template_spec = ts
+    if kind == "CronJob":
+        jt = spec.get("jobTemplate")
+        if isinstance(jt, dict):
+            jt_spec = jt.get("spec")
+            if isinstance(jt_spec, dict):
+                jt_template = jt_spec.get("template")
+                if isinstance(jt_template, dict):
+                    ts = jt_template.get("spec")
+                    if isinstance(ts, dict):
+                        template_spec = ts
+    else:
+        template = spec.get("template")
+        if isinstance(template, dict):
+            ts = template.get("spec")
+            if isinstance(ts, dict):
+                template_spec = ts
 
     metadata = doc.get("metadata") or {}
     workload_name = (

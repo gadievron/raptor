@@ -57,6 +57,9 @@ def _valid_name(name: str) -> bool:
         return False
     if any(c in name for c in (" ", "\t", "\n", "\r")):
         return False
+    _SHELL_METACHAR = set(";|&$`<>*?(){}[]!#~")
+    if any(c in _SHELL_METACHAR for c in name):
+        return False
     if "/" in name:
         # Only npm-scoped (@scope/name) is allowed to contain a slash.
         if not (name.startswith("@") and name.count("/") == 1):

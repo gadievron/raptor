@@ -24,6 +24,7 @@ corpus, so cheap to run on every commit.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import List
@@ -82,24 +83,23 @@ def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
                 f"{rel}: failed to read/parse JSON ({e})"
             )
             continue
-        if not isinstance(data, dict):
-            # Lists are valid for some snapshot shapes but the
-            # corpus convention is dict-with-_source. Tighten as
-            # needed; for now lists are permitted.
-            continue
-        # Rule 1: ``_source`` block.
-        src = data.get("_source")
-        if not isinstance(src, dict):
-            violations.append(
-                f"{rel}: missing or non-dict ``_source`` block"
-            )
-        else:
-            missing = _REQUIRED_SOURCE_FIELDS - set(src.keys())
-            if missing:
+        # Lists are valid for some snapshot shapes but the
+        # corpus convention is dict-with-_source. Tighten as
+        # needed; for now lists are permitted.
+        if isinstance(data, dict):
+            # Rule 1: ``_source`` block.
+            src = data.get("_source")
+            if not isinstance(src, dict):
                 violations.append(
-                    f"{rel}: ``_source`` missing fields: "
-                    f"{sorted(missing)}"
+                    f"{rel}: missing or non-dict ``_source`` block"
                 )
+            else:
+                missing = _REQUIRED_SOURCE_FIELDS - set(src.keys())
+                if missing:
+                    violations.append(
+                        f"{rel}: ``_source`` missing fields: "
+                        f"{sorted(missing)}"
+                    )
         # Rule 2: forbidden fields (anywhere in the document).
         bad = _walk_for_forbidden(data, path=())
         for trail in bad:
@@ -108,11 +108,14 @@ def check(corpus_dir: Path, attribution_md: Path) -> List[str]:
                 f"(license-restricted content)"
             )
         # Rule 3: ATTRIBUTION.md mentions the file.
-        if attribution_text and rel.name not in attribution_text:
+        if attribution_text and not re.search(
+            r'(?<![a-zA-Z0-9._\-])' + re.escape(rel.name) + r'(?![a-zA-Z0-9._\-])',
+            attribution_text,
+        ):
             # Project-sample files are bulky; reference the
             # parent directory in ATTRIBUTION.md, individual
             # filenames not required.
-            if "project_samples" not in str(rel):
+            if "project_samples" not in rel.parts:
                 violations.append(
                     f"{rel}: not referenced in ATTRIBUTION.md "
                     f"(add a section citing source + license)"

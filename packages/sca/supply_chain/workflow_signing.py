@@ -199,12 +199,17 @@ def scan_target(
         # Norm is to sign — flag individual unsigned commits as
         # anomalies. Anomalous unsigned commits in a signing-norm
         # repo are the Megalodon-attack signature.
-        return _per_commit_anomaly_findings(walked, host)
+        findings = _per_commit_anomaly_findings(walked, host)
+        if unsigned > _MAX_PER_COMMIT_FINDINGS:
+            findings.append(_summary_finding(stats, host))
+        return findings
 
     # Either no unsigned commits (perfect signing) or norm is
     # mixed-or-unsigned. Emit a single summary finding.
     if unsigned == 0:
         return []  # 100% signed — no signal to surface
+    if rate == 0.0:
+        return [_governance_finding(stats, host)]
     return [_summary_finding(stats, host)]
 
 
@@ -304,6 +309,23 @@ def _summary_finding(
         confidence=Confidence(
             "high",
             reason="git log signing-rate aggregate",
+        ),
+        stats=stats,
+    )
+
+
+def _governance_finding(
+    stats: WorkflowSigningStats, host: Dependency,
+) -> WorkflowSigningFinding:
+    """Zero-signing regime: no workflow commits are signed at all.
+    Distinct from the mixed-hygiene summary — recommends enabling
+    commit signing as a governance measure."""
+    return WorkflowSigningFinding(
+        dependency=host,
+        severity="info",
+        confidence=Confidence(
+            "high",
+            reason="no workflow commits signed — governance gap",
         ),
         stats=stats,
     )

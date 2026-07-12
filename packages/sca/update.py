@@ -519,8 +519,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                    help="validate an externally-supplied proposed "
                         "manifest (e.g. Dependabot's PR) by running the "
                         "ecosystem's resolver against it. Reports OK / "
-                        "conflict / unresolvable + any findings the "
-                        "proposed plan would introduce.")
+                        "conflict.")
     p.add_argument("--format", choices=["plain", "pr-comment"],
                    default="plain",
                    help="output format for the human-readable report. "
@@ -779,7 +778,7 @@ def _pin_styles_by_finding(rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str, s
         if row.get("vuln_type") != "sca:vulnerable_dependency":
             continue
         sca = row.get("sca") or {}
-        key = (sca.get("ecosystem"), sca.get("name"), row.get("file"))
+        key = (sca.get("ecosystem"), sca.get("name"), str(Path(row.get("file"))) if row.get("file") else None)
         if all(key) and "pin_style" in sca:
             out[key] = sca["pin_style"]      # type: ignore[index]
     return out

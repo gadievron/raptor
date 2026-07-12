@@ -214,7 +214,8 @@ def _parse_berry(text: str, path: Path) -> List[Dependency]:
         name = _name_from_descriptor(first_descriptor)
         if not name:
             continue
-        version = entry.get("version") if isinstance(entry.get("version"), str) else None
+        v = entry.get("version")
+        version = v if isinstance(v, str) and v else None
         resolution = entry.get("resolution")
         pin_style = _pin_from_berry_resolution(resolution, version)
 

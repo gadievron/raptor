@@ -55,6 +55,7 @@ def rewrite_chart_yaml(
         except OSError as e:
             return [RewriteResult(edit=r.edit, applied=False,
                                   reason=f"error: write failed: {e}")
+                    if r.applied else r
                     for r in results]
     return results
 
@@ -79,7 +80,7 @@ def _apply_one_chart(
     #
     # Shape A: name-then-version
     pat_name_first = re.compile(
-        rf"^(?P<indent>\s+)- name:\s*{locator}\s*\n"   # locator line
+        rf"^(?P<indent>\s+)- name:\s*{locator}\s*(?:#[^\n]*)?\n"   # locator line
         rf"(?P<between>(?:\s*(?!-).+\n)*?)"             # optional intermediate lines
         rf"(?P<prefix>(?P=indent)\s+version:\s*[\"']?)"
         rf"(?P<ver>[^\s\"'#]+)"
@@ -88,10 +89,11 @@ def _apply_one_chart(
     )
     # Shape B: version-then-name
     pat_version_first = re.compile(
-        rf"^(?P<indent>\s+)- version:\s*[\"']?(?P<ver>[^\s\"'#]+)"
-        rf"[\"']?\s*(?:#[^\n]*)?\n"
+        rf"^(?P<indent>\s+)(?P<vprefix>- version:\s*[\"']?)"
+        rf"(?P<ver>[^\s\"'#]+)"
+        rf"(?P<vsuffix>[\"']?\s*(?:#[^\n]*)?\n)"
         rf"(?P<between>(?:\s*(?!-).+\n)*?)"
-        rf"(?P=indent)\s+name:\s*{locator}\s*\n",
+        rf"(?P<nline>(?P=indent)\s+name:\s*{locator}\s*(?:#[^\n]*)?\n)",
         re.MULTILINE,
     )
     match = pat_name_first.search(text)
@@ -128,9 +130,9 @@ def _apply_one_chart(
     else:
         new_text = pat_version_first.sub(
             (
-                rf"\g<indent>- version: {edit.new_value}\n"
+                rf"\g<indent>\g<vprefix>{edit.new_value}\g<vsuffix>"
                 rf"\g<between>"
-                rf"\g<indent>  name: {edit.locator}\n"
+                rf"\g<nline>"
             ),
             text, count=1,
         )

@@ -339,13 +339,20 @@ def _build_vulnerabilities(
                 "source": {"name": "OSV"},
                 "score": primary.severity.score,
                 "severity": primary.severity.severity,
-                "method": "CVSSv3",
+                "method": "CVSSv31",
                 "vector": primary.severity.vector,
             }]
         if bom_ref:
             entry["affects"] = [{"ref": bom_ref}]
         analysis: Dict[str, Any] = {}
-        if f.reachability.verdict == "imported":
+        if f.reachability.verdict == "likely_called":
+            analysis["state"] = "exploitable"
+            analysis["justification"] = "in_triage"
+            analysis["detail"] = (
+                "function-level reachability: vulnerable symbol called "
+                "on a live execution path"
+            )
+        elif f.reachability.verdict == "imported":
             analysis["state"] = "exploitable"
             analysis["justification"] = "in_triage"
             analysis["detail"] = (

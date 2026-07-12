@@ -32,7 +32,7 @@ _TEST_DIR_NAMES = {"tests", "test", "Tests", "Test"}
 
 # C#: ``using Foo.Bar;`` / ``using Alias = Foo.Bar;``
 _CS_USING_RE = re.compile(
-    r"^\s*using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
+    r"^\s*(?:global\s+)?using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*;",
     re.MULTILINE,
 )
@@ -43,7 +43,7 @@ _FS_OPEN_RE = re.compile(
 )
 # VB: ``Imports Foo.Bar``
 _VB_IMPORTS_RE = re.compile(
-    r"^\s*Imports\s+([A-Za-z_][A-Za-z0-9_.]*)",
+    r"^\s*Imports\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_.]*)",
     re.MULTILINE,
 )
 
@@ -147,7 +147,7 @@ def _walk_dotnet_sources(
 
 def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
-    if any(p in _TEST_DIR_NAMES for p in rel_parts):
+    if any(p.lower() in {"tests", "test"} for p in rel_parts):
         return True
     if path.stem.lower().endswith(("tests", "test")):
         return True

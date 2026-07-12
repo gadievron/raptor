@@ -224,7 +224,7 @@ def resolve_intree_targets(
     out: List[IntreeTarget] = []
     for sub in _split_compound(body):
         try:
-            tokens = shlex.split(sub, posix=True, comments=True)
+            tokens = shlex.split(sub, posix=True, comments=False)
         except ValueError:
             # Unterminated quote — uninterpretable.  Skip rather
             # than misclassify.
